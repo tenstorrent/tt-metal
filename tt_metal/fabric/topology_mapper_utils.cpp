@@ -44,12 +44,9 @@ TopologyMappingResult map_mesh_to_physical(
     MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> constraints;
 
     // Add mesh host rank constraints (trait-based constraint)
-    // Catch exceptions from constraint validation and convert to failure result
-    try {
-        constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank);
-    } catch (const std::exception& e) {
+    if (!constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank)) {
         result.success = false;
-        result.error_message = e.what();
+        result.error_message = "Failed to add required trait constraint for mesh host rank";
         return result;
     }
 
@@ -142,7 +139,12 @@ TopologyMappingResult map_mesh_to_physical(
             }
 
             // Add required trait constraint for pinning
-            constraints.add_required_trait_constraint(fabric_node_traits, asic_traits);
+            if (!constraints.add_required_trait_constraint(fabric_node_traits, asic_traits)) {
+                result.success = false;
+                result.error_message = fmt::format(
+                    "Failed to add required trait constraint for pinned ASIC positions in mesh {}", mesh_id.get());
+                return result;
+            }
 
             // Log pinnings
             std::string pinnings_str;
@@ -550,7 +552,9 @@ namespace {
     // Use placeholder mesh id 1:1 mapping for physical to logical constraints for now
     if (!config.disable_rank_bindings) {
         for (const auto& mesh_id : mesh_physical_graph.get_nodes()) {
-            inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id);
+            if (!inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id)) {
+                TT_THROW("Failed to add required constraint for mesh {}", mesh_id.get());
+            }
         }
     }
     return inter_mesh_constraints;
@@ -608,8 +612,10 @@ void add_rank_binding_constraints(
         // Check that rank mappings are provided
         if (fabric_node_id_to_mesh_rank.find(logical_mesh_id) != fabric_node_id_to_mesh_rank.end() &&
             asic_id_to_mesh_rank.find(logical_mesh_id) != asic_id_to_mesh_rank.end()) {
-            intra_mesh_constraints.add_required_trait_constraint(
-                fabric_node_id_to_mesh_rank.at(logical_mesh_id), asic_id_to_mesh_rank.at(logical_mesh_id));
+            if (!intra_mesh_constraints.add_required_trait_constraint(
+                    fabric_node_id_to_mesh_rank.at(logical_mesh_id), asic_id_to_mesh_rank.at(logical_mesh_id))) {
+                TT_THROW("Failed to add required trait constraint for rank bindings in mesh {}", logical_mesh_id.get());
+            }
         }
     }
 }
@@ -645,7 +651,12 @@ void add_pinning_constraints(
         }
 
         if (!asic_ids.empty()) {
-            intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids);
+            if (!intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids)) {
+                TT_THROW(
+                    "Failed to add required constraint for fabric node (mesh={}, chip={})",
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id);
+            }
         }
     }
 }
@@ -653,38 +664,34 @@ void add_pinning_constraints(
 // Helper function to add exit node constraints
 // Constrains certain exit node ASICs on the physical graph to be mappable to exit node fabric nodes in the logical
 // graph
-void add_exit_node_constraints(
+// Returns true if constraints were successfully added, false if constraints cannot be satisfied
+// (e.g., no valid physical exit nodes or over-constrained)
+bool add_exit_node_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
-    const ::tt::tt_fabric::AdjacencyGraph<MeshId>& mesh_logical_graph,
-    const MeshId logical_mesh_id,
     const std::unordered_map<MeshId, MeshId>& mesh_mappings,
     const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_graph,
-    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
     const ::tt::tt_fabric::AdjacencyGraph<LogicalExitNode>& logical_exit_node_graph,
     const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph) {
-    // Use parameters to avoid unused parameter warnings
-    (void)intra_mesh_constraints;
-    (void)mesh_logical_graph;
-    (void)logical_mesh_id;
-    (void)mesh_mappings;
-    (void)logical_graph;
-    (void)physical_graph;
-    (void)logical_exit_node_graph;
-    (void)physical_exit_node_graph;
-
     std::unordered_map<MeshId, std::set<tt::tt_metal::AsicID>> valid_physical_exit_nodes_by_mesh;
-    std::unordered_map<MeshId, std::set<FabricNodeId>> valid_logical_exit_nodes_by_mesh;
+    std::set<FabricNodeId> valid_logical_exit_nodes(logical_graph.get_nodes().begin(), logical_graph.get_nodes().end());
 
     // Get the valid physical exit nodes for each mesh direction
+    // Map them by physical mesh ID (not logical mesh ID) since we'll look them up by physical mesh ID later
     for (const auto& src_exit_node : physical_exit_node_graph.get_nodes()) {
         // Get the valid logical exit nodes for this source exit node
         const auto& dst_exit_nodes = physical_exit_node_graph.get_neighbors(src_exit_node);
 
-        // There should only be one valid logical exit node for each source exit node
-        TT_FATAL(dst_exit_nodes.size() == 1, "Multiple valid logical exit nodes found for source exit node");
-        const auto& dst_exit_node = dst_exit_nodes.front();
-
-        valid_physical_exit_nodes_by_mesh[dst_exit_node.mesh_id].insert(src_exit_node.asic_id);
+        // Loop through all destination exit nodes (can be multiple)
+        for (const auto& dst_exit_node : dst_exit_nodes) {
+            // Map the logical mesh ID to physical mesh ID, then use physical mesh ID as the key
+            // Error if the mesh mapping doesn't include the destination exit node mesh ID
+            auto mesh_mapping_it = mesh_mappings.find(dst_exit_node.mesh_id);
+            TT_ASSERT(
+                mesh_mapping_it != mesh_mappings.end(),
+                "Mesh mapping missing for logical mesh ID {} (destination exit node mesh ID)",
+                dst_exit_node.mesh_id.get());
+            valid_physical_exit_nodes_by_mesh[mesh_mapping_it->second].insert(src_exit_node.asic_id);
+        }
     }
 
     // Add cardinal constraints for each mesh
@@ -692,17 +699,51 @@ void add_exit_node_constraints(
         // Get the valid logical exit nodes for this source exit node
         const auto& dst_exit_nodes = logical_exit_node_graph.get_neighbors(src_exit_node);
 
-        // There should only be one valid logical exit node for each source exit node
-        TT_FATAL(dst_exit_nodes.size() == 1, "Multiple valid logical exit nodes found for source exit node");
-        const auto& dst_exit_node = dst_exit_nodes.front();
+        // Loop through all destination exit nodes (can be multiple) and add a constraint for each
+        for (const auto& dst_exit_node : dst_exit_nodes) {
+            // Error if the mesh mapping doesn't include the destination exit node mesh ID
+            auto mesh_mapping_it = mesh_mappings.find(dst_exit_node.mesh_id);
+            TT_ASSERT(
+                mesh_mapping_it != mesh_mappings.end(),
+                "Mesh mapping missing for logical mesh ID {} (destination exit node mesh ID)",
+                dst_exit_node.mesh_id.get());
 
-        // Get the valid physical exit nodes for this source exit node
-        const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_exit_node.mesh_id);
-        const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_by_mesh.at(mapped_physical_dst_mesh_id);
+            // Get the valid physical exit nodes for this destination exit node
+            const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_exit_node.mesh_id);
 
-        // Add cardinal constraints for this source exit node
-        // TODO: implement this
+            // Check if there are valid physical exit nodes for this destination mesh
+            auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
+            if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
+                // No physical exit nodes found for this destination mesh - constraints cannot be satisfied
+                // Return false to indicate failure, allowing caller to try next combination
+                return false;
+            }
+
+            const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
+
+            // Add cardinal constraints for this source exit node and destination exit node pair
+            // The API guarantees that if constraint addition fails, no partial state is added
+            bool constraint_success = false;
+            // If source exit node is fabric node-level, add cardinal constraint for the logical exit node
+            if (src_exit_node.fabric_node_id.has_value()) {
+                constraint_success = intra_mesh_constraints.add_required_constraint(
+                    src_exit_node.fabric_node_id.value(), valid_physical_exit_nodes);
+                // If source exit node is mesh-level, add cardinal constraint for all logical exit nodes
+            } else {
+                constraint_success = intra_mesh_constraints.add_cardinality_constraint(
+                    valid_logical_exit_nodes, valid_physical_exit_nodes, 1);
+            }
+
+            if (!constraint_success) {
+                // Constraint addition failed (e.g., over-constrained) - return false to try next combination
+                // The API guarantees no partial state was added, so intra_mesh_constraints remains unchanged
+                return false;
+            }
+        }
     }
+
+    // All constraints successfully added
+    return true;
 }
 
 // Helper function to build detailed inter-mesh mapping error message
@@ -820,7 +861,9 @@ TopologyMappingResult map_multi_mesh_to_physical(
     if (config.disable_rank_bindings) {
         std::set<MeshId> physical_mesh_set(physical_meshes.begin(), physical_meshes.end());
         for (const auto& logical_mesh_id : logical_meshes) {
-            inter_mesh_constraints.add_required_constraint(logical_mesh_id, physical_mesh_set);
+            if (!inter_mesh_constraints.add_required_constraint(logical_mesh_id, physical_mesh_set)) {
+                TT_THROW("Failed to add required constraint for logical mesh {}", logical_mesh_id.get());
+            }
         }
         log_debug(tt::LogFabric, "Rank bindings disabled - all logical meshes can map to any physical mesh");
     }
@@ -942,15 +985,35 @@ TopologyMappingResult map_multi_mesh_to_physical(
             // Add exit node constraints (only if exit node graphs are not empty)
             // Since we initialize empty graphs for all meshes, we check if they have nodes before adding constraints
             if (!logical_exit_node_graph.get_nodes().empty() && !physical_exit_node_graph.get_nodes().empty()) {
-                add_exit_node_constraints(
+                bool exit_node_constraints_success = add_exit_node_constraints(
                     intra_mesh_constraints,
-                    mesh_logical_graph,
-                    logical_mesh_id,
                     mesh_mappings,
                     logical_graph,
-                    physical_graph,
                     logical_exit_node_graph,
                     physical_exit_node_graph);
+
+                // If exit node constraints cannot be satisfied (no valid physical exit nodes or over-constrained),
+                // treat this as a mapping failure and try next combination
+                if (!exit_node_constraints_success) {
+                    log_info(
+                        tt::LogFabric,
+                        "Attempt {}: Exit node constraints cannot be satisfied for mesh {} -> {}",
+                        retry_attempt,
+                        logical_mesh_id.get(),
+                        physical_mesh_id.get());
+                    if (!inter_mesh_constraints.add_forbidden_constraint(logical_mesh_id, physical_mesh_id)) {
+                        // If adding forbidden constraint causes overconstrained nodes (no valid mappings left),
+                        // this means we've exhausted all possibilities for this logical mesh.
+                        failed_mesh_pairs.insert(
+                            failed_mesh_pairs.end(),
+                            current_attempt_failed_pairs.begin(),
+                            current_attempt_failed_pairs.end());
+                        failed_mesh_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+                    } else {
+                        current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+                    }
+                    continue;  // Skip to next physical mesh
+                }
             }
 
             // Build ASIC positions map and add pinning constraints
@@ -972,14 +1035,11 @@ TopologyMappingResult map_multi_mesh_to_physical(
                     retry_attempt,
                     logical_mesh_id.get(),
                     physical_mesh_id.get());
-                try {
-                    inter_mesh_constraints.add_forbidden_constraint(logical_mesh_id, physical_mesh_id);
-                    current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
-                } catch (const std::exception& e) {
+                if (!inter_mesh_constraints.add_forbidden_constraint(logical_mesh_id, physical_mesh_id)) {
                     // If adding forbidden constraint causes overconstrained nodes (no valid mappings left),
                     // this means we've exhausted all possibilities for this logical mesh.
                     // Treat this as a failure and return with an appropriate error message.
-                    // Update failed pairs to include the current one that caused the exception
+                    // Update failed pairs to include the current one that caused the failure
                     failed_mesh_pairs.insert(
                         failed_mesh_pairs.end(),
                         current_attempt_failed_pairs.begin(),
@@ -1014,12 +1074,13 @@ TopologyMappingResult map_multi_mesh_to_physical(
                         fmt::format(
                             "All mapping possibilities exhausted for logical mesh {} after trying {} different mesh "
                             "configurations. "
-                            "Constraint error: {}",
+                            "Constraint error: failed to add forbidden constraint",
                             logical_mesh_id.get(),
-                            failed_mesh_pairs.size(),
-                            e.what()),
+                            failed_mesh_pairs.size()),
                         failed_mesh_pairs);
                     return result;
+                } else {
+                    current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
                 }
             } else {
                 mapped_mesh_pairs++;

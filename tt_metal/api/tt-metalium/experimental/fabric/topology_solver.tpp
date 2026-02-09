@@ -73,7 +73,7 @@ void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name) 
 // MappingConstraints trait constraint template method implementations
 template <typename TargetNode, typename GlobalNode>
 template <typename TraitType>
-void MappingConstraints<TargetNode, GlobalNode>::add_required_trait_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_required_trait_constraint(
     const std::map<TargetNode, TraitType>& target_traits, const std::map<GlobalNode, TraitType>& global_traits) {
     // Build reverse map: trait value -> set of global nodes with that trait
     std::map<TraitType, std::set<GlobalNode>> trait_to_globals;
@@ -106,8 +106,8 @@ void MappingConstraints<TargetNode, GlobalNode>::add_required_trait_constraint(
         }
     }
 
-    // Validate automatically and throw if invalid
-    validate_and_throw();
+    // Validate automatically and return false if invalid
+    return validate();
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -158,13 +158,20 @@ MappingConstraints<TargetNode, GlobalNode>::MappingConstraints(
         preferred_mappings_[target].insert(global);
     }
 
-    // Validate automatically and throw if invalid
-    validate_and_throw();
+    // Note: Validation is not performed in constructor - it will be validated when constraints are added
+    // via add_required_constraint() or other methods that return bool
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     TargetNode target_node, GlobalNode global_node) {
+    // Save current state before modifying (for rollback if validation fails)
+    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    auto it = valid_mappings_.find(target_node);
+    if (it != valid_mappings_.end()) {
+        saved_state[target_node] = it->second;
+    }
+
     // If this global node is already reserved, add target_node to the reserved set
     auto reserved_it = reserved_global_nodes_.find(global_node);
     if (reserved_it != reserved_global_nodes_.end()) {
@@ -181,13 +188,20 @@ void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
         valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], singleton);
     }
 
-    // Validate automatically and throw if invalid
-    validate_and_throw();
+    // Validate automatically and return false if invalid (will restore saved_state on failure)
+    return validate(&saved_state);
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
+    // Save current state before modifying (for rollback if validation fails)
+    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    auto it = valid_mappings_.find(target_node);
+    if (it != valid_mappings_.end()) {
+        saved_state[target_node] = it->second;
+    }
+
     // If any of these global nodes are already reserved, add target_node to the reserved set
     for (const auto& global_node : global_nodes) {
         auto reserved_it = reserved_global_nodes_.find(global_node);
@@ -205,13 +219,22 @@ void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
         valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], global_nodes);
     }
 
-    // Validate automatically and throw if invalid
-    validate_and_throw();
+    // Validate automatically and return false if invalid (will restore saved_state on failure)
+    return validate(&saved_state);
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
+    // Save current state before modifying (for rollback if validation fails)
+    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    for (const auto& target_node : target_nodes) {
+        auto it = valid_mappings_.find(target_node);
+        if (it != valid_mappings_.end()) {
+            saved_state[target_node] = it->second;
+        }
+    }
+
     // If this global node is already reserved, add all target_nodes to the reserved set
     auto reserved_it = reserved_global_nodes_.find(global_node);
     if (reserved_it != reserved_global_nodes_.end()) {
@@ -230,13 +253,22 @@ void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
         }
     }
 
-    // Validate automatically and throw if invalid
-    validate_and_throw();
+    // Validate automatically and return false if invalid (will restore saved_state on failure)
+    return validate(&saved_state);
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes) {
+    // Save current state before modifying (for rollback if validation fails)
+    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    for (const auto& target_node : target_nodes) {
+        auto it = valid_mappings_.find(target_node);
+        if (it != valid_mappings_.end()) {
+            saved_state[target_node] = it->second;
+        }
+    }
+
     // For each target node, ensure it can map to any of the global nodes
     // This creates a many-to-many relationship: any target can map to any global
     for (const auto& target_node : target_nodes) {
@@ -257,8 +289,8 @@ void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
         reserved_global_nodes_[global_node].insert(target_nodes.begin(), target_nodes.end());
     }
 
-    // Validate automatically and throw if invalid
-    validate_and_throw();
+    // Validate automatically and return false if invalid (will restore saved_state on failure)
+    return validate(&saved_state);
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -298,7 +330,7 @@ void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::validate_and_throw(
+bool MappingConstraints<TargetNode, GlobalNode>::validate(
     const std::map<TargetNode, std::set<GlobalNode>>* saved_state) {
     // Filter out invalid mappings (e.g., those that conflict with reserved global nodes)
     // This ensures that valid_mappings_ only contains mappings that pass is_valid_mapping
@@ -352,14 +384,20 @@ void MappingConstraints<TargetNode, GlobalNode>::validate_and_throw(
         oss << "  Target nodes with valid mappings: " << (valid_mappings_.size() - conflicted_targets.size()) << "\n";
         oss << "  Overconstrained target nodes: " << conflicted_targets.size() << "\n";
 
-        TT_THROW("{}", oss.str());
+        // Log info message instead of throwing
+        log_info(tt::LogFabric, "{}", oss.str());
+        return false;
     }
 
     // Validate cardinality constraints are still satisfiable with current required constraints
     // (only if we didn't restore saved state, as that means validation passed before)
     if (saved_state == nullptr) {
-        validate_cardinality_constraints();
+        if (!validate_cardinality_constraints()) {
+            return false;
+        }
     }
+
+    return true;
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -423,35 +461,35 @@ MappingConstraints<TargetNode, GlobalNode>::get_cardinality_constraints() const 
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     TargetNode target_node, GlobalNode global_node) {
     auto it = valid_mappings_.find(target_node);
     if (it == valid_mappings_.end()) {
-        return;  // No constraints exist for this target
+        return true;  // No constraints exist for this target, nothing to forbid
     }
 
     std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
     it->second.erase(global_node);
-    validate_and_throw(&saved_state);
+    return validate(&saved_state);
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
     auto it = valid_mappings_.find(target_node);
     if (it == valid_mappings_.end()) {
-        return;  // No constraints exist for this target
+        return true;  // No constraints exist for this target, nothing to forbid
     }
 
     std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
     for (const auto& global_node : global_nodes) {
         it->second.erase(global_node);
     }
-    validate_and_throw(&saved_state);
+    return validate(&saved_state);
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
     std::map<TargetNode, std::set<GlobalNode>> saved_state;
     for (const auto& target_node : target_nodes) {
@@ -463,21 +501,25 @@ void MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     }
 
     if (!saved_state.empty()) {
-        validate_and_throw(&saved_state);
+        return validate(&saved_state);
     }
+    return true;  // No constraints exist for any target, nothing to forbid
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
     const std::set<std::pair<TargetNode, GlobalNode>>& mapping_pairs, size_t min_count) {
     if (mapping_pairs.empty()) {
-        TT_THROW("Cardinality constraint requires at least one mapping pair");
+        log_info(tt::LogFabric, "Cardinality constraint requires at least one mapping pair");
+        return false;
     }
     if (min_count > mapping_pairs.size()) {
-        TT_THROW("Cardinality constraint min_count ({}) cannot be greater than number of pairs ({})", min_count, mapping_pairs.size());
+        log_info(tt::LogFabric, "Cardinality constraint min_count ({}) cannot be greater than number of pairs ({})", min_count, mapping_pairs.size());
+        return false;
     }
     if (min_count == 0) {
-        TT_THROW("Cardinality constraint min_count must be at least 1");
+        log_info(tt::LogFabric, "Cardinality constraint min_count must be at least 1");
+        return false;
     }
 
     // Validate compatibility with existing required constraints
@@ -527,7 +569,8 @@ void MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
             }
         }
 
-        TT_THROW("{}", oss.str());
+        log_info(tt::LogFabric, "{}", oss.str());
+        return false;
     }
 
     // Warn if some pairs were filtered but constraint is still satisfiable
@@ -541,23 +584,30 @@ void MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
             min_count);
     }
 
-    // Store the cardinality constraint (only with valid pairs)
+    // Validate that all cardinality constraints together are satisfiable BEFORE adding
+    // Create a temporary constraint to test validation
     cardinality_constraints_.emplace_back(valid_pairs, min_count);
+    if (!validate_cardinality_constraints()) {
+        // Validation failed - remove the constraint we just added
+        cardinality_constraints_.pop_back();
+        return false;
+    }
 
-    // Validate that all cardinality constraints together are satisfiable
-    validate_cardinality_constraints();
+    return true;
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
     const std::set<TargetNode>& target_nodes,
     const std::set<GlobalNode>& global_nodes,
     size_t min_count) {
     if (target_nodes.empty()) {
-        TT_THROW("Cardinality constraint requires at least one target node");
+        log_info(tt::LogFabric, "Cardinality constraint requires at least one target node");
+        return false;
     }
     if (global_nodes.empty()) {
-        TT_THROW("Cardinality constraint requires at least one global node");
+        log_info(tt::LogFabric, "Cardinality constraint requires at least one global node");
+        return false;
     }
 
     // Generate all pairs from the Cartesian product of target_nodes × global_nodes
@@ -569,7 +619,7 @@ void MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
     }
 
     // Delegate to the existing implementation
-    add_cardinality_constraint(mapping_pairs, min_count);
+    return add_cardinality_constraint(mapping_pairs, min_count);
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -581,10 +631,10 @@ std::set<GlobalNode> MappingConstraints<TargetNode, GlobalNode>::intersect_sets(
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::validate_cardinality_constraints() const {
+bool MappingConstraints<TargetNode, GlobalNode>::validate_cardinality_constraints() const {
     // Validate cardinality constraints are satisfiable with current required constraints
     if (cardinality_constraints_.empty()) {
-        return;
+        return true;
     }
 
     // Check each cardinality constraint has enough valid pairs
@@ -625,9 +675,13 @@ void MappingConstraints<TargetNode, GlobalNode>::validate_cardinality_constraint
                 }
             }
 
-            TT_THROW("{}", oss.str());
+            // Log info message instead of throwing
+            log_info(tt::LogFabric, "{}", oss.str());
+            return false;
         }
     }
+
+    return true;
 }
 
 // solve_topology_mapping template implementation

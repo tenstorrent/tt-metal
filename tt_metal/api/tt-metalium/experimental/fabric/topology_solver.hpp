@@ -118,15 +118,14 @@ public:
      *
      * Constrains target nodes with trait value T to only map to global nodes with same trait value T.
      * All constraints are intersected - a target node must satisfy ALL required constraints simultaneously.
-     * Throws TT_THROW if constraint causes conflicts (empty valid mappings).
      *
      * @tparam TraitType The type of the trait value (must be explicitly specified)
      * @param target_traits Map from target nodes to their trait values
      * @param global_traits Map from global nodes to their trait values
-     * @throws std::runtime_error If constraint causes empty valid mappings for any target node
+     * @return true if constraint was successfully added, false if constraint causes empty valid mappings
      */
     template <typename TraitType>
-    void add_required_trait_constraint(
+    bool add_required_trait_constraint(
         const std::map<TargetNode, TraitType>& target_traits, const std::map<GlobalNode, TraitType>& global_traits);
 
     /**
@@ -151,33 +150,33 @@ public:
      *
      * @param target_node The target node to constrain
      * @param global_node The global node it must map to
-     * @throws std::runtime_error If constraint causes empty valid mappings
+     * @return true if constraint was successfully added, false if constraint causes empty valid mappings
      */
-    void add_required_constraint(TargetNode target_node, GlobalNode global_node);
+    bool add_required_constraint(TargetNode target_node, GlobalNode global_node);
 
     /**
      * @brief Add explicit required constraint (one-to-many for target node)
      *
      * Constrains a specific target node to map to any of the provided global nodes.
-     * Intersects with existing constraints. Throws TT_THROW if constraint causes conflicts.
+     * Intersects with existing constraints.
      *
      * @param target_node The target node to constrain
      * @param global_nodes The set of global nodes it can map to
-     * @throws std::runtime_error If constraint causes empty valid mappings
+     * @return true if constraint was successfully added, false if constraint causes empty valid mappings
      */
-    void add_required_constraint(TargetNode target_node, const std::set<GlobalNode>& global_nodes);
+    bool add_required_constraint(TargetNode target_node, const std::set<GlobalNode>& global_nodes);
 
     /**
      * @brief Add explicit required constraint (one-to-many for global node)
      *
      * Constrains multiple target nodes to map to a specific global node.
-     * Intersects with existing constraints. Throws TT_THROW if constraint causes conflicts.
+     * Intersects with existing constraints.
      *
      * @param target_nodes The set of target nodes to constrain
      * @param global_node The global node they must map to
-     * @throws std::runtime_error If constraint causes empty valid mappings
+     * @return true if constraint was successfully added, false if constraint causes empty valid mappings
      */
-    void add_required_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
+    bool add_required_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
 
     /**
      * @brief Add explicit required constraint (many-to-many)
@@ -185,13 +184,12 @@ public:
      * Constrains multiple target nodes to map to any of the provided global nodes.
      * This creates a many-to-many relationship: any target node from the set can map
      * to any global node from the set. Intersects with existing constraints for each target.
-     * Throws TT_THROW if constraint causes conflicts.
      *
      * @param target_nodes The set of target nodes to constrain
      * @param global_nodes The set of global nodes they can map to
-     * @throws std::runtime_error If constraint causes empty valid mappings
+     * @return true if constraint was successfully added, false if constraint causes empty valid mappings
      */
-    void add_required_constraint(const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes);
+    bool add_required_constraint(const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes);
 
     /**
      * @brief Add explicit preferred constraint (one-to-one)
@@ -230,40 +228,40 @@ public:
      * @brief Add explicit forbidden constraint (one-to-one)
      *
      * Forbids a specific target node from mapping to a specific global node.
-     * Removes the mapping from valid mappings. Throws TT_THROW if constraint contradicts
-     * a required constraint or causes empty valid mappings.
+     * Removes the mapping from valid mappings.
      *
      * @param target_node The target node to constrain
      * @param global_node The global node it cannot map to
-     * @throws std::runtime_error If constraint contradicts required constraint or causes empty valid mappings
+     * @return true if constraint was successfully added, false if constraint contradicts required constraint or causes
+     * empty valid mappings
      */
-    void add_forbidden_constraint(TargetNode target_node, GlobalNode global_node);
+    bool add_forbidden_constraint(TargetNode target_node, GlobalNode global_node);
 
     /**
      * @brief Add explicit forbidden constraint (one-to-many for target node)
      *
      * Forbids a specific target node from mapping to any of the provided global nodes.
-     * Removes the mappings from valid mappings. Throws TT_THROW if constraint contradicts
-     * a required constraint or causes empty valid mappings.
+     * Removes the mappings from valid mappings.
      *
      * @param target_node The target node to constrain
      * @param global_nodes The set of global nodes it cannot map to
-     * @throws std::runtime_error If constraint contradicts required constraint or causes empty valid mappings
+     * @return true if constraint was successfully added, false if constraint contradicts required constraint or causes
+     * empty valid mappings
      */
-    void add_forbidden_constraint(TargetNode target_node, const std::set<GlobalNode>& global_nodes);
+    bool add_forbidden_constraint(TargetNode target_node, const std::set<GlobalNode>& global_nodes);
 
     /**
      * @brief Add explicit forbidden constraint (one-to-many for global node)
      *
      * Forbids multiple target nodes from mapping to a specific global node.
-     * Removes the mappings from valid mappings. Throws TT_THROW if constraint contradicts
-     * a required constraint or causes empty valid mappings.
+     * Removes the mappings from valid mappings.
      *
      * @param target_nodes The set of target nodes to constrain
      * @param global_node The global node they cannot map to
-     * @throws std::runtime_error If constraint contradicts required constraint or causes empty valid mappings
+     * @return true if constraint was successfully added, false if constraint contradicts required constraint or causes
+     * empty valid mappings
      */
-    void add_forbidden_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
+    bool add_forbidden_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
 
     /**
      * @brief Add cardinality constraint (at-least-N constraint)
@@ -278,9 +276,9 @@ public:
      *
      * @param mapping_pairs Set of (target_node, global_node) pairs that form the constraint group
      * @param min_count Minimum number of pairs that must be satisfied (default: 1)
-     * @throws std::runtime_error If min_count is greater than the number of pairs
+     * @return true if constraint was successfully added, false if constraint is invalid or unsatisfiable
      */
-    void add_cardinality_constraint(
+    bool add_cardinality_constraint(
         const std::set<std::pair<TargetNode, GlobalNode>>& mapping_pairs, size_t min_count = 1);
 
     /**
@@ -299,9 +297,9 @@ public:
      * @param target_nodes Set of target nodes
      * @param global_nodes Set of global nodes
      * @param min_count Minimum number of pairs that must be satisfied (default: 1)
-     * @throws std::runtime_error If min_count is greater than the number of possible pairs
+     * @return true if constraint was successfully added, false if constraint is invalid or unsatisfiable
      */
-    void add_cardinality_constraint(
+    bool add_cardinality_constraint(
         const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes, size_t min_count = 1);
 
     /**
@@ -352,6 +350,16 @@ public:
     const std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>>& get_cardinality_constraints()
         const;
 
+    /**
+     * @brief Validate constraints - returns false if invalid
+     *
+     * If saved_state is provided and validation fails, restores the saved state before returning false
+     *
+     * @param saved_state Optional pointer to saved state to restore on failure
+     * @return true if constraints are valid, false otherwise
+     */
+    bool validate(const std::map<TargetNode, std::set<GlobalNode>>* saved_state = nullptr);
+
 private:
     // Internal representation: intersection of all constraints
     std::map<TargetNode, std::set<GlobalNode>> valid_mappings_;      // Required constraints
@@ -368,13 +376,9 @@ private:
     // Helper to intersect two sets
     static std::set<GlobalNode> intersect_sets(const std::set<GlobalNode>& set1, const std::set<GlobalNode>& set2);
 
-    // Internal validation - throws if invalid
-    // If saved_state is provided and validation fails, restores the saved state before throwing
-    void validate_and_throw(const std::map<TargetNode, std::set<GlobalNode>>* saved_state = nullptr);
-
     // Validate that all cardinality constraints are compatible with required constraints
     // and that they are satisfiable together
-    void validate_cardinality_constraints() const;
+    bool validate_cardinality_constraints() const;
 };
 
 /**

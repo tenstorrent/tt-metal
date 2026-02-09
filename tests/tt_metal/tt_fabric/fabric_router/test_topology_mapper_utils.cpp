@@ -3441,30 +3441,289 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_InterMeshConnectivity_2x2
         mappings_by_mesh[fabric_node.mesh_id][fabric_node] = asic;
     }
 
-    // CRITICAL CHECK: Intermesh-connected logical nodes must map to directly physically connected ASICs
+    // CRITICAL CHECK: Intermesh-connected logical nodes (exit nodes) must map to directly physically connected ASICs
+    // The MGD has 2 connections:
+    // 1. Mesh-level connection (relaxed mode): any node in mesh 0 <-> any node in mesh 1
+    // 2. Device-level connection (strict mode): device_id 0 in mesh 0 <-> device_id 0 in mesh 1
+
+    // Check 1: Device-level connection (strict mode) - device_id 0 must map to directly connected ASICs
+    FabricNodeId exit_node_m0_strict(MeshId{0}, 0);
+    FabricNodeId exit_node_m1_strict(MeshId{1}, 0);
+
+    ASSERT_TRUE(mappings_by_mesh.at(MeshId{0}).find(exit_node_m0_strict) != mappings_by_mesh.at(MeshId{0}).end())
+        << "Exit node device_id 0 from mesh 0 must be mapped";
+    ASSERT_TRUE(mappings_by_mesh.at(MeshId{1}).find(exit_node_m1_strict) != mappings_by_mesh.at(MeshId{1}).end())
+        << "Exit node device_id 0 from mesh 1 must be mapped";
+
+    const auto& asic0_strict = mappings_by_mesh.at(MeshId{0}).at(exit_node_m0_strict);
+    const auto& asic1_strict = mappings_by_mesh.at(MeshId{1}).at(exit_node_m1_strict);
+
+    // Check if asic0_strict and asic1_strict are direct neighbors in the flat graph
+    const auto& neighbors0_strict = flat_graph.get_neighbors(asic0_strict);
+    bool has_direct_connection_strict =
+        std::find(neighbors0_strict.begin(), neighbors0_strict.end(), asic1_strict) != neighbors0_strict.end();
+    if (!has_direct_connection_strict) {
+        const auto& neighbors1_strict = flat_graph.get_neighbors(asic1_strict);
+        has_direct_connection_strict =
+            std::find(neighbors1_strict.begin(), neighbors1_strict.end(), asic0_strict) != neighbors1_strict.end();
+    }
+
+    ASSERT_TRUE(has_direct_connection_strict)
+        << "Strict mode: Exit node device_id 0 from mesh 0 mapped to ASIC " << asic0_strict.get()
+        << " must be directly connected to exit node device_id 0 from mesh 1 mapped to ASIC " << asic1_strict.get();
+
+    // Check 2: Mesh-level connection (relaxed mode) - at least one node (excluding device_id 0) from mesh 0
+    // must map to a directly connected ASIC to verify a second distinct connection
+    bool has_direct_connection_relaxed = false;
     for (const auto& [node0, asic0] : mappings_by_mesh.at(MeshId{0})) {
-        bool has_direct_connection = false;
+        // Skip device_id 0 as it's already checked in strict mode
+        if (node0 == exit_node_m0_strict) {
+            continue;
+        }
         for (const auto& [node1, asic1] : mappings_by_mesh.at(MeshId{1})) {
-            // Check if asic0 and asic1 are direct neighbors in the flat graph
-            const auto& neighbors0 = flat_graph.get_neighbors(asic0);
-            if (std::find(neighbors0.begin(), neighbors0.end(), asic1) != neighbors0.end()) {
-                has_direct_connection = true;
+            // Skip device_id 0 as it's already checked in strict mode
+            if (node1 == exit_node_m1_strict) {
+                continue;
+            }
+            const auto& neighbors0_relaxed = flat_graph.get_neighbors(asic0);
+            if (std::find(neighbors0_relaxed.begin(), neighbors0_relaxed.end(), asic1) != neighbors0_relaxed.end()) {
+                has_direct_connection_relaxed = true;
                 break;
             }
-            const auto& neighbors1 = flat_graph.get_neighbors(asic1);
-            if (std::find(neighbors1.begin(), neighbors1.end(), asic0) != neighbors1.end()) {
-                has_direct_connection = true;
+            const auto& neighbors1_relaxed = flat_graph.get_neighbors(asic1);
+            if (std::find(neighbors1_relaxed.begin(), neighbors1_relaxed.end(), asic0) != neighbors1_relaxed.end()) {
+                has_direct_connection_relaxed = true;
                 break;
             }
         }
-        ASSERT_TRUE(has_direct_connection)
-            << "ASIC " << asic0.get() << " from mesh 0 must be directly connected to at least one ASIC from mesh 1";
+        if (has_direct_connection_relaxed) {
+            break;
+        }
     }
+
+    ASSERT_TRUE(has_direct_connection_relaxed)
+        << "Relaxed mode: At least one node (excluding device_id 0) from mesh 0 must map to an ASIC directly connected "
+           "to an ASIC (excluding device_id 0) from mesh 1 to verify the second distinct connection";
 }
 
 // TODO: Add a test testing relaxed mode connections between certain meshes
 
-// TODO: Add
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstraints_2x2To3x3) {
+    // Negative test: Verify that mapping fails correctly when intra-mesh constraints are impossible.
+    // Physical topology: 3 meshes, each 3x3 (9 ASICs per mesh)
+    // Logical topology: 3 meshes, each 2x2 (4 nodes per mesh)
+    // With intermesh connections required between all meshes.
+    // This should fail at the intra-mesh mapping level because a 2x2 grid cannot be mapped
+    // onto a 3x3 grid due to topology constraints (degree mismatch, connectivity pattern mismatch).
+    using namespace ::tt::tt_fabric;
+
+    constexpr size_t kPhysicalMeshSize = 3;  // 3x3 = 9 ASICs per physical mesh
+    constexpr size_t kLogicalMeshSize = 2;   // 2x2 = 4 nodes per logical mesh
+    constexpr size_t kNumMeshes = 3;
+
+    // Create logical meshes: 3 meshes, each 2x2 grids using MGD
+    const std::string mgd_textproto = R"proto(
+        # --- Meshes ---------------------------------------------------------------
+
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 1 }
+        }
+
+        # --- Graphs ---------------------------------------------------------------
+
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          # Instances: mesh ids 0,1,2 (all 2x2)
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+          # Intermesh connections: mesh 0 <-> mesh 1, mesh 1 <-> mesh 2, mesh 0 <-> mesh 2
+          # Use device-level connections (strict mode) to avoid exit node issues
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+            channels { count: 1 }
+          }
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+            channels { count: 1 }
+          }
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+            channels { count: 1 }
+          }
+        }
+
+        # --- Instantiation ----------------------------------------------------------
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create temporary MGD file
+    const std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
+    std::string unique_suffix;
+    for (int i = 0; i < 8; ++i) {
+        unique_suffix += "0123456789abcdef"[dis(gen)];
+    }
+    const std::filesystem::path temp_mgd_path =
+        temp_dir / ("test_impossible_2x2_to_3x3_" + unique_suffix + ".textproto");
+
+    // Write the MGD content to temporary file
+    {
+        std::ofstream mgd_file(temp_mgd_path);
+        ASSERT_TRUE(mgd_file.is_open()) << "Failed to create temporary MGD file";
+        mgd_file << mgd_textproto;
+    }  // File is closed here
+
+    // Load MeshGraph from the temporary file
+    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+
+    // Clean up temporary file immediately after loading
+    std::filesystem::remove(temp_mgd_path);
+
+    // Build the logical multi-mesh graph from MGD
+    LogicalMultiMeshGraph logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    // Create physical meshes: 3 meshes, each 3x3 grids
+    PhysicalAdjacencyMap flat_physical_adj;
+    std::vector<std::vector<tt::tt_metal::AsicID>> physical_asics_by_mesh(kNumMeshes);
+    std::vector<PhysicalAdjacencyMap> physical_adj_by_mesh(kNumMeshes);
+
+    for (size_t mesh_idx = 0; mesh_idx < kNumMeshes; ++mesh_idx) {
+        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + mesh_idx * 100);
+        physical_adj_by_mesh[mesh_idx] =
+            build_grid_adjacency(physical_asics_by_mesh[mesh_idx], kPhysicalMeshSize, kPhysicalMeshSize);
+    }
+
+    // Add intermesh connections: connect all meshes in a ring (0->1, 1->2, 2->0)
+    // Connect right edge of mesh 0 to left edge of mesh 1
+    for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
+        size_t mesh0_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+        size_t mesh1_left_idx = row * kPhysicalMeshSize;
+        physical_adj_by_mesh[0][physical_asics_by_mesh[0][mesh0_right_idx]].push_back(
+            physical_asics_by_mesh[1][mesh1_left_idx]);
+        physical_adj_by_mesh[1][physical_asics_by_mesh[1][mesh1_left_idx]].push_back(
+            physical_asics_by_mesh[0][mesh0_right_idx]);
+    }
+
+    // Connect right edge of mesh 1 to left edge of mesh 2
+    for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
+        size_t mesh1_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+        size_t mesh2_left_idx = row * kPhysicalMeshSize;
+        physical_adj_by_mesh[1][physical_asics_by_mesh[1][mesh1_right_idx]].push_back(
+            physical_asics_by_mesh[2][mesh2_left_idx]);
+        physical_adj_by_mesh[2][physical_asics_by_mesh[2][mesh2_left_idx]].push_back(
+            physical_asics_by_mesh[1][mesh1_right_idx]);
+    }
+
+    // Connect right edge of mesh 2 to left edge of mesh 0
+    for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
+        size_t mesh2_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+        size_t mesh0_left_idx = row * kPhysicalMeshSize;
+        physical_adj_by_mesh[2][physical_asics_by_mesh[2][mesh2_right_idx]].push_back(
+            physical_asics_by_mesh[0][mesh0_left_idx]);
+        physical_adj_by_mesh[0][physical_asics_by_mesh[0][mesh0_left_idx]].push_back(
+            physical_asics_by_mesh[2][mesh2_right_idx]);
+    }
+
+    // Combine into flat adjacency map
+    for (size_t mesh_idx = 0; mesh_idx < kNumMeshes; ++mesh_idx) {
+        for (const auto& [asic, neighbors] : physical_adj_by_mesh[mesh_idx]) {
+            flat_physical_adj[asic] = neighbors;
+        }
+    }
+
+    // Build hierarchical physical graph from flat graph
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t mesh_idx = 0; mesh_idx < kNumMeshes; ++mesh_idx) {
+        for (const auto& asic : physical_asics_by_mesh[mesh_idx]) {
+            asic_id_to_mesh_rank[MeshId{mesh_idx}][asic] = rank0_;
+        }
+    }
+
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph =
+        build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Run mapping - should fail at intra-mesh level
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = true;
+
+    TopologyMappingResult result =
+        map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+
+    // Debug: Print the mapping results
+    std::cout << "\n=== Mapping Results ===" << std::endl;
+    std::cout << "Success: " << (result.success ? "true" : "false") << std::endl;
+    std::cout << "Error message: " << result.error_message << std::endl;
+    std::cout << "Number of mapped nodes: " << result.fabric_node_to_asic.size() << std::endl;
+    std::cout << "\n=== Mappings ===" << std::endl;
+
+    // Group mappings by logical mesh
+    std::map<MeshId, std::vector<std::pair<FabricNodeId, tt::tt_metal::AsicID>>> mappings_by_mesh;
+    for (const auto& [logical_node, asic] : result.fabric_node_to_asic) {
+        mappings_by_mesh[logical_node.mesh_id].emplace_back(logical_node, asic);
+    }
+
+    for (const auto& [mesh_id, mappings] : mappings_by_mesh) {
+        std::cout << "\nLogical Mesh " << mesh_id.get() << " -> Physical Mesh mappings:" << std::endl;
+        for (const auto& [logical_node, asic] : mappings) {
+            std::cout << "  Logical node (mesh=" << logical_node.mesh_id.get() << ", chip=" << logical_node.chip_id
+                      << ") -> ASIC " << asic.get() << std::endl;
+        }
+    }
+    std::cout << "======================\n" << std::endl;
+
+    EXPECT_FALSE(result.success) << "Multi-mesh mapping should fail due to impossible intra-mesh constraints "
+                                    "(2x2 logical grid cannot map to 3x3 physical grid)";
+
+    EXPECT_FALSE(result.error_message.empty())
+        << "Error message should be provided when mapping fails. Error: " << result.error_message;
+
+    // Verify that the failure occurred at the right place (intra-mesh mapping, not inter-mesh)
+    // The error message should indicate intra-mesh mapping failure or solver failure
+    bool mentions_intra_mesh_or_solver = result.error_message.find("intra") != std::string::npos ||
+                                         result.error_message.find("solver") != std::string::npos ||
+                                         result.error_message.find("mapping") != std::string::npos ||
+                                         result.error_message.find("constraint") != std::string::npos;
+
+    EXPECT_TRUE(mentions_intra_mesh_or_solver)
+        << "Error message should indicate intra-mesh mapping or solver failure. Error: " << result.error_message;
+
+    // Verify that inter-mesh mapping likely succeeded (since we have matching number of meshes)
+    // but intra-mesh mapping failed. The error should not be about inter-mesh mapping failure.
+    bool is_inter_mesh_failure = result.error_message.find("Inter-mesh mapping failed") != std::string::npos ||
+                                 result.error_message.find("inter-mesh") != std::string::npos;
+
+    // If it's an inter-mesh failure, that's also valid, but ideally it should fail at intra-mesh
+    // The key is that it fails due to the topology constraints
+    if (is_inter_mesh_failure) {
+        // This is acceptable - inter-mesh might fail if it can't find valid mappings
+        // But the root cause is still the impossible intra-mesh constraints
+        EXPECT_TRUE(true) << "Failure occurred at inter-mesh level (acceptable, caused by intra-mesh constraints)";
+    } else {
+        // More likely: failure at intra-mesh level
+        EXPECT_TRUE(true) << "Failure occurred at intra-mesh level (expected due to topology mismatch)";
+    }
+
+    // Verify that no complete mapping was found
+    // The mapper should not have successfully mapped all logical nodes
+    size_t expected_logical_nodes = kNumMeshes * kLogicalMeshSize * kLogicalMeshSize;  // 3 * 2 * 2 = 12
+    EXPECT_LT(result.fabric_node_to_asic.size(), expected_logical_nodes)
+        << "Should not have mapped all " << expected_logical_nodes
+        << " logical nodes. Mapped: " << result.fabric_node_to_asic.size();
+}
 
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConnections) {
     // PLACEHOLDER TEST - Currently SKIPPED

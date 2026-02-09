@@ -280,7 +280,7 @@ TEST_F(TopologySolverTest, MappingConstraintsTraitConstraints) {
     MappingConstraints<TestTargetNode, TestGlobalNode> required_constraints;
     std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host0"}, {3, "host1"}};
     std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}, {21, "host1"}};
-    required_constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_TRUE(required_constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
 
     EXPECT_EQ(required_constraints.get_valid_mappings(1).size(), 2u);
     EXPECT_EQ(required_constraints.get_valid_mappings(1).count(10), 1u);
@@ -303,11 +303,11 @@ TEST_F(TopologySolverTest, MappingConstraintsIntersection) {
     // Test multiple trait constraints intersection (using uint8_t) - validation happens automatically
     std::map<TestTargetNode, uint8_t> target_host = {{1, 0}, {2, 0}};
     std::map<TestGlobalNode, uint8_t> global_host = {{10, 0}, {11, 0}, {20, 1}};
-    constraints.add_required_trait_constraint<uint8_t>(target_host, global_host);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<uint8_t>(target_host, global_host));
 
     std::map<TestTargetNode, uint8_t> target_rack = {{1, 0}, {2, 1}};
     std::map<TestGlobalNode, uint8_t> global_rack = {{10, 0}, {11, 1}, {20, 0}};
-    constraints.add_required_trait_constraint<uint8_t>(target_rack, global_rack);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<uint8_t>(target_rack, global_rack));
 
     EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);  // host=0 AND rack=0 -> {10}
     EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
@@ -334,14 +334,13 @@ TEST_F(TopologySolverTest, MappingConstraintsConflictHandling) {
     // Test conflict in required constraint - should throw automatically
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     constraints.add_required_constraint(1, 10);
-    EXPECT_THROW(constraints.add_required_constraint(1, 20), std::runtime_error);
+    EXPECT_FALSE(constraints.add_required_constraint(1, 20)) << "Conflicting constraint should return false";
 
     // Test conflict in trait constraint - should throw (no matching global nodes)
     MappingConstraints<TestTargetNode, TestGlobalNode> trait_constraints;
     std::map<TestTargetNode, size_t> target_traits = {{1, 999}};
     std::map<TestGlobalNode, size_t> global_traits = {{10, 100}, {20, 200}};
-    EXPECT_THROW(
-        trait_constraints.add_required_trait_constraint<size_t>(target_traits, global_traits), std::runtime_error);
+    EXPECT_FALSE(trait_constraints.add_required_trait_constraint<size_t>(target_traits, global_traits));
 
     // Test conflict in trait constraint - conflicting trait values
     MappingConstraints<TestTargetNode, TestGlobalNode> conflict_constraints;
@@ -351,15 +350,15 @@ TEST_F(TopologySolverTest, MappingConstraintsConflictHandling) {
 
     std::map<TestTargetNode, uint8_t> target_host2 = {{1, 1}};
     std::map<TestGlobalNode, uint8_t> global_host2 = {{20, 1}, {21, 1}};
-    EXPECT_THROW(
-        conflict_constraints.add_required_trait_constraint<uint8_t>(target_host2, global_host2), std::runtime_error);
+    EXPECT_FALSE(conflict_constraints.add_required_trait_constraint<uint8_t>(target_host2, global_host2));
 
-    // Test conflict in constructor - should throw
+    // Test conflict in constructor - constructor doesn't throw, but validation should fail
     std::set<std::pair<TestTargetNode, TestGlobalNode>> conflicting_required = {{1, 10}, {1, 20}};
     std::set<std::pair<TestTargetNode, TestGlobalNode>> empty_preferred;
-    EXPECT_THROW(
-        (MappingConstraints<TestTargetNode, TestGlobalNode>(conflicting_required, empty_preferred)),
-        std::runtime_error);
+    MappingConstraints<TestTargetNode, TestGlobalNode> conflict_constraints_ctor(conflicting_required, empty_preferred);
+    // After construction with conflicting constraints, validation should fail
+    EXPECT_FALSE(conflict_constraints_ctor.validate())
+        << "Conflicting constraints in constructor should fail validation";
 }
 
 TEST_F(TopologySolverTest, GraphIndexDataBasic) {
@@ -549,7 +548,7 @@ TEST_F(TopologySolverTest, ConstraintIndexDataTraitConstraints) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host1"}};
     std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}};
-    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
 
     ConstraintIndexData constraint_data(constraints, graph_data);
 
@@ -740,7 +739,7 @@ TEST_F(TopologySolverTest, ConstraintIndexDataMissingNodes) {
         {20, "group1"},   // Missing from graph
         {11, "group2"},   // Exists in graph
         {30, "group2"}};  // Missing from graph
-    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
 
     // Add preferred constraints with missing nodes
     constraints.add_preferred_constraint(1, 20);  // Node 20 is NOT in global graph
@@ -1569,7 +1568,7 @@ TEST_F(TopologySolverTest, RequiredConstraints_4x8MeshOn8x8Mesh_CornersToCorners
     // Create constraints with trait-based required mappings (one-to-many)
     // This constrains mesh corners to map to ANY of the 8 specified positions
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
 
     // Solve the mapping
     auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
@@ -2467,7 +2466,7 @@ TEST_F(TopologySolverTest, MappingConstraintsOneToManyRequired) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
     std::set<TestTargetNode> target_nodes2 = {1, 2};
     constraints3.add_required_constraint(target_nodes2, 10);
-    EXPECT_THROW(constraints3.add_required_constraint(1, 20), std::runtime_error);
+    EXPECT_FALSE(constraints3.add_required_constraint(1, 20)) << "Conflicting constraint should return false";
 }
 
 TEST_F(TopologySolverTest, MappingConstraintsOneToManyPreferred) {
@@ -2551,7 +2550,7 @@ TEST_F(TopologySolverTest, MappingConstraintsOneToManyIntersection) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
     std::map<TestTargetNode, uint8_t> target_traits = {{1, 0}};
     std::map<TestGlobalNode, uint8_t> global_traits = {{10, 0}, {11, 0}, {20, 1}};
-    constraints3.add_required_trait_constraint<uint8_t>(target_traits, global_traits);
+    EXPECT_TRUE(constraints3.add_required_trait_constraint<uint8_t>(target_traits, global_traits));
     EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 2u);  // {10, 11}
 
     std::set<TestGlobalNode> global_nodes3 = {10, 12};
@@ -2665,7 +2664,8 @@ TEST_F(TopologySolverTest, MappingConstraintsManyToManyConflict) {
     std::set<TestGlobalNode> global_nodes = {11, 12};
 
     // This should cause a conflict for target 1: {10} ∩ {11, 12} = {}
-    EXPECT_THROW(constraints.add_required_constraint(target_nodes, global_nodes), std::runtime_error);
+    EXPECT_FALSE(constraints.add_required_constraint(target_nodes, global_nodes))
+        << "Conflicting constraint should return false";
 }
 
 TEST_F(TopologySolverTest, MappingConstraintsForbiddenOneToMany) {
@@ -2711,8 +2711,8 @@ TEST_F(TopologySolverTest, MappingConstraintsForbiddenContradiction) {
     EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
     EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
 
-    // Try to forbid the required mapping - should throw
-    EXPECT_THROW(constraints.add_forbidden_constraint(1, 10), std::runtime_error);
+    // Try to forbid the required mapping - should return false
+    EXPECT_FALSE(constraints.add_forbidden_constraint(1, 10)) << "Forbidding required mapping should return false";
 
     // Verify the constraint is still valid after the failed attempt
     EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
@@ -2724,7 +2724,7 @@ TEST_F(TopologySolverTest, MappingConstraintsForbiddenAfterTrait) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host0"}};
     std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}};
-    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
     EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);  // {10, 11}
 
     // Forbid one of the valid mappings
@@ -2748,8 +2748,8 @@ TEST_F(TopologySolverTest, MappingConstraintsForbiddenEmptyValidMappings) {
     constraints.add_forbidden_constraint(1, 11);
     EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
 
-    // Forbid the remaining mapping - should throw (empty valid mappings)
-    EXPECT_THROW(constraints.add_forbidden_constraint(1, 10), std::runtime_error);
+    // Forbid the remaining mapping - should return false (empty valid mappings)
+    EXPECT_FALSE(constraints.add_forbidden_constraint(1, 10)) << "Forbidding last valid mapping should return false";
 }
 
 TEST_F(TopologySolverTest, SolveTopologyMapping_WithForbiddenConstraints) {
@@ -2942,8 +2942,8 @@ TEST_F(TopologySolverTest, CardinalityConstraint_ConflictWithRequired) {
     // Add cardinality constraint: at least 1 of {(1,10), (1,11)} must be satisfied
     // This should fail because 1 can only map to 20, not 10 or 11
     std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}};
-    EXPECT_THROW(constraints.add_cardinality_constraint(cardinality_pairs, 1), std::runtime_error)
-        << "Cardinality constraint incompatible with required constraints should throw";
+    EXPECT_FALSE(constraints.add_cardinality_constraint(cardinality_pairs, 1))
+        << "Cardinality constraint incompatible with required constraints should return false";
 }
 
 TEST_F(TopologySolverTest, CardinalityConstraint_MultipleConstraints) {
@@ -2994,22 +2994,20 @@ TEST_F(TopologySolverTest, CardinalityConstraint_Validation) {
     // Test that cardinality constraint validation works correctly
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
 
-    // Test empty pairs - should throw
+    // Test empty pairs - should return false
     std::set<std::pair<TestTargetNode, TestGlobalNode>> empty_pairs;
-    EXPECT_THROW(constraints.add_cardinality_constraint(empty_pairs, 1), std::runtime_error)
-        << "Empty cardinality constraint should throw";
+    EXPECT_FALSE(constraints.add_cardinality_constraint(empty_pairs, 1))
+        << "Empty cardinality constraint should return false";
 
-    // Test min_count > pairs.size() - should throw
+    // Test min_count > pairs.size() - should return false
     std::set<std::pair<TestTargetNode, TestGlobalNode>> pairs = {{1, 10}, {2, 11}};
-    EXPECT_THROW(constraints.add_cardinality_constraint(pairs, 3), std::runtime_error)
-        << "min_count > pairs.size() should throw";
+    EXPECT_FALSE(constraints.add_cardinality_constraint(pairs, 3)) << "min_count > pairs.size() should return false";
 
-    // Test min_count = 0 - should throw
-    EXPECT_THROW(constraints.add_cardinality_constraint(pairs, 0), std::runtime_error) << "min_count = 0 should throw";
+    // Test min_count = 0 - should return false
+    EXPECT_FALSE(constraints.add_cardinality_constraint(pairs, 0)) << "min_count = 0 should return false";
 
     // Test valid constraint
-    EXPECT_NO_THROW(constraints.add_cardinality_constraint(pairs, 1))
-        << "Valid cardinality constraint should not throw";
+    EXPECT_TRUE(constraints.add_cardinality_constraint(pairs, 1)) << "Valid cardinality constraint should return true";
 }
 
 TEST_F(TopologySolverTest, CardinalityConstraint_IntegrationWithSolver) {
@@ -3699,20 +3697,24 @@ TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_Validation) {
     // Test empty target nodes - should throw
     std::set<TestTargetNode> empty_targets;
     std::set<TestGlobalNode> global_nodes = {10, 11};
-    EXPECT_THROW(constraints.add_cardinality_constraint(empty_targets, global_nodes, 1), std::runtime_error);
+    EXPECT_FALSE(constraints.add_cardinality_constraint(empty_targets, global_nodes, 1))
+        << "Empty target nodes should return false";
 
-    // Test empty global nodes - should throw
+    // Test empty global nodes - should return false
     std::set<TestTargetNode> target_nodes = {1, 2};
     std::set<TestGlobalNode> empty_globals;
-    EXPECT_THROW(constraints.add_cardinality_constraint(target_nodes, empty_globals, 1), std::runtime_error);
+    EXPECT_FALSE(constraints.add_cardinality_constraint(target_nodes, empty_globals, 1))
+        << "Empty global nodes should return false";
 
-    // Test min_count greater than number of pairs - should throw
+    // Test min_count greater than number of pairs - should return false
     std::set<TestTargetNode> small_targets = {1};
     std::set<TestGlobalNode> small_globals = {10};
-    EXPECT_THROW(constraints.add_cardinality_constraint(small_targets, small_globals, 2), std::runtime_error);
+    EXPECT_FALSE(constraints.add_cardinality_constraint(small_targets, small_globals, 2))
+        << "min_count > pairs.size() should return false";
 
-    // Test min_count = 0 - should throw
-    EXPECT_THROW(constraints.add_cardinality_constraint(target_nodes, global_nodes, 0), std::runtime_error);
+    // Test min_count = 0 - should return false
+    EXPECT_FALSE(constraints.add_cardinality_constraint(target_nodes, global_nodes, 0))
+        << "min_count = 0 should return false";
 }
 
 TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_EquivalentToExplicitPairs) {

@@ -649,7 +649,9 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> constraints;
 
     // Add mesh host rank constraints (trait-based constraint)
-    constraints.add_required_trait_constraint(fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
+    if (!constraints.add_required_trait_constraint(fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank)) {
+        TT_THROW("Failed to add required trait constraint for mesh host rank in mesh {}", mesh_id.get());
+    }
 
     // Collect pinnings for this mesh
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> mesh_pinnings;
@@ -694,7 +696,12 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                 }
                 valid_asic_ids.insert(it->second.begin(), it->second.end());
             }
-            constraints.add_required_constraint(fabric_node, valid_asic_ids);
+            if (!constraints.add_required_constraint(fabric_node, valid_asic_ids)) {
+                TT_THROW(
+                    "Failed to add required constraint for fabric node (mesh={}, chip={})",
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id);
+            }
         }
 
         // Log pinnings
@@ -1761,7 +1768,9 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         // Build constraints and solve directly
         using namespace ::tt::tt_fabric;
         MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> constraints;
-        constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank);
+        if (!constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank)) {
+            TT_THROW("Failed to add required trait constraint for mesh host rank in mesh {}", mesh_id.get());
+        }
 
         auto solver_result =
             solve_topology_mapping(logical_adj, physical_adj, constraints, ConnectionValidationMode::RELAXED, true);
