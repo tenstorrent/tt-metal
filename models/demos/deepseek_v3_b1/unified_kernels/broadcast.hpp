@@ -76,12 +76,10 @@ struct Broadcast {
         uint32_t coreNocY,
         uint32_t isSecondarySender,
         uint32_t hasSecondaryTarget,
-        uint32_t hasReverseSecondaryConnection,
         uint32_t startDistanceInHopsForward,
         uint32_t rangeHopsForward,
         uint32_t startDistanceInHopsBackward,
-        uint32_t rangeHopsBackward,
-        uint32_t usingPersistentBuffers>
+        uint32_t rangeHopsBackward>
     struct WriterCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t packet_size_in_pages = packetSizeInPages;
