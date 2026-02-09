@@ -3,21 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <api/debug/dprint.h>
-#include <compute_kernel_api/reg_api.h>
+#include <api/compute/reg_api.h>
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/softplus.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 constexpr uint32_t onetile = 1U;
