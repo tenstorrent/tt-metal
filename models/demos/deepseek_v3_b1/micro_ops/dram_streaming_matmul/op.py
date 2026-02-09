@@ -302,48 +302,24 @@ class DRAMStreamingMatmul:
             mul_tile_size = mul_tile_16x16.get_tile_size(mul_dtype)
 
             # CB 4: output with 16x16 tile format, backed by output_tensor's memory
-            cb4_format = ttnn.CBFormatDescriptor(
-                buffer_index=4,
-                data_format=mul_dtype,
-                page_size=mul_tile_size,
-                tile=mul_tile_desc,
-            )
-            cb4_descriptor = ttnn.CBDescriptor(
-                total_size=mul_tile_size,  # 1 tile of 16x16
-                core_ranges=compute_cores,
-                format_descriptors=[cb4_format],
-            )
-            cb4_descriptor.set_buffer_from_tensor(output_tensor)
+            cb4_descriptor = ttnn.cb_descriptor_from_sharded_tensor(4, output_tensor)
+            cb4_descriptor.total_size = mul_tile_size  # 1 tile of 16x16
+            cb4_descriptor.format_descriptors[0].tile = mul_tile_desc
+            cb4_descriptor.format_descriptors[0].page_size = mul_tile_size
             cb_descriptors.append(cb4_descriptor)
 
             # CB 6: mul_in1 with 16x16 tile format, backed by mul_tensor's memory
-            cb6_format = ttnn.CBFormatDescriptor(
-                buffer_index=cb_id_mul_in1,
-                data_format=mul_dtype,
-                page_size=mul_tile_size,
-                tile=mul_tile_desc,
-            )
-            cb6_descriptor = ttnn.CBDescriptor(
-                total_size=mul_tile_size,  # 1 tile of 16x16
-                core_ranges=compute_cores,
-                format_descriptors=[cb6_format],
-            )
-            cb6_descriptor.set_buffer_from_tensor(mul_tensor)
+            cb6_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_mul_in1, mul_tensor)
+            cb6_descriptor.total_size = mul_tile_size  # 1 tile of 16x16
+            cb6_descriptor.format_descriptors[0].tile = mul_tile_desc
+            cb6_descriptor.format_descriptors[0].page_size = mul_tile_size
             cb_descriptors.append(cb6_descriptor)
 
             # CB 7: mul_in0 with 16x16 tile format, backed by mm_out_tensor's memory
-            cb7_format = ttnn.CBFormatDescriptor(
-                buffer_index=cb_id_mul_in0,
-                data_format=mul_dtype,
-                page_size=mul_tile_size,
-                tile=mul_tile_desc,
-            )
-            cb7_descriptor = ttnn.CBDescriptor(
-                total_size=mul_tile_size,  # 1 tile of 16x16
-                core_ranges=compute_cores,
-                format_descriptors=[cb7_format],
-            )
-            cb7_descriptor.set_buffer_from_tensor(mm_out_tensor)
+            cb7_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_mul_in0, mm_out_tensor)
+            cb7_descriptor.total_size = mul_tile_size  # 1 tile of 16x16
+            cb7_descriptor.format_descriptors[0].tile = mul_tile_desc
+            cb7_descriptor.format_descriptors[0].page_size = mul_tile_size
             cb_descriptors.append(cb7_descriptor)
 
             # CB 8: mm_out - matmul writes here (1x32 tiles, same as tensor)

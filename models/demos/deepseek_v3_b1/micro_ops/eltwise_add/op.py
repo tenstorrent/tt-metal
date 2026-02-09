@@ -123,48 +123,24 @@ class EltwiseAdd:
         # total_size = actual data size, tile = 32x32 view (just changes interpretation)
 
         # CB 0: down_proj_out - 32x32 view, backed by tensor
-        cb0_format = ttnn.CBFormatDescriptor(
-            buffer_index=cb_in0,
-            data_format=down_proj_dtype,
-            page_size=down_proj_size_bytes,
-            tile=tile_32x32_desc,
-        )
-        cb0_descriptor = ttnn.CBDescriptor(
-            total_size=down_proj_size_bytes,
-            core_ranges=compute_core_grid,
-            format_descriptors=[cb0_format],
-        )
-        cb0_descriptor.set_buffer_from_tensor(down_proj_out_tensor)
+        cb0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, down_proj_out_tensor)
+        cb0_descriptor.total_size = down_proj_size_bytes
+        cb0_descriptor.format_descriptors[0].tile = tile_32x32_desc
+        cb0_descriptor.format_descriptors[0].page_size = down_proj_size_bytes
 
         # CB 1: fused_add - 32x32 view, backed by tensor
         # TRISC will update read pointer to indexed offset (no copy needed!)
-        cb1_format = ttnn.CBFormatDescriptor(
-            buffer_index=cb_in1,
-            data_format=down_proj_dtype,
-            page_size=down_proj_size_bytes,  # page_size = slice size for reading
-            tile=tile_32x32_desc,
-        )
-        cb1_descriptor = ttnn.CBDescriptor(
-            total_size=fused_add_size_bytes,  # full fused_add tensor size
-            core_ranges=compute_core_grid,
-            format_descriptors=[cb1_format],
-        )
-        cb1_descriptor.set_buffer_from_tensor(fused_add_tensor)
+        cb1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1, fused_add_tensor)
+        cb1_descriptor.total_size = fused_add_size_bytes  # full fused_add tensor size
+        cb1_descriptor.format_descriptors[0].tile = tile_32x32_desc
+        cb1_descriptor.format_descriptors[0].page_size = down_proj_size_bytes  # page_size = slice size for reading
 
         # CB 2: output - 32x32 tile, backed by tensor
         # pack_tile writes full 32x32 tile, so CB needs 2048 bytes
-        cb2_format = ttnn.CBFormatDescriptor(
-            buffer_index=cb_out,
-            data_format=down_proj_dtype,
-            page_size=tile_32x32_size_bytes,
-            tile=tile_32x32_desc,
-        )
-        cb2_descriptor = ttnn.CBDescriptor(
-            total_size=tile_32x32_size_bytes,
-            core_ranges=compute_core_grid,
-            format_descriptors=[cb2_format],
-        )
-        cb2_descriptor.set_buffer_from_tensor(output_tensor)
+        cb2_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out, output_tensor)
+        cb2_descriptor.total_size = tile_32x32_size_bytes
+        cb2_descriptor.format_descriptors[0].tile = tile_32x32_desc
+        cb2_descriptor.format_descriptors[0].page_size = tile_32x32_size_bytes
 
         # ========== Per-core sender_index values ==========
         sender_index_core_values = []
