@@ -42,7 +42,6 @@ uint8_t my_relative_y_ __attribute__((used));
 
 namespace ckernel {
 
-enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4 };
 // Transition shim
 #if defined(__PTR_CONST)
 #define PTR_CONST const
@@ -130,12 +129,6 @@ extern "C" uint32_t _start1() {
                     *trisc_run = RUN_SYNC_MSG_DONE;
                 }
             }
-#if defined(ARCH_WORMHOLE)
-            // Avoid hammering L1 while other cores are trying to work. Seems not to
-            // be needed on Blackhole, probably because invalidate_l1_cache takes
-            // time.
-            asm volatile("nop; nop; nop; nop; nop");
-#endif
             invalidate_l1_cache();
         }
         DeviceZoneScopedMainN("TRISC-FW");
