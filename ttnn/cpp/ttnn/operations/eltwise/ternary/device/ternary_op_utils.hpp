@@ -32,14 +32,15 @@ enum class KernelName {
     ReaderRowBcastTTS,
     WriterNoBcastTernary,
     WriterColBcastTTT,
-    ComputeNoBcastTTT,       // TTT: no bcast, outer dim and row bcast cases
-    ComputeBcastTTT,         // TTT : column and scalar bcast cases
-    ComputeRowBcastTTT,      // TTT : row bcast cases : bfloat16 only
-    ComputeBcastTTS_TST,     // TTS, TST: column and scalar bcast cases
-    ComputeNoBcastTTS_TST,   // TTS, TST: no bcast, outer dim and row bcast cases
-    ComputeNoBcastAddcmul,   // ADDCMUL: no bcast, uses existing add/mul operations
-    ComputeBcastAddcmul,     // ADDCMUL: column and scalar bcast cases
-    ComputeRowBcastAddcmul,  // ADDCMUL: row bcast cases : bfloat16 only
+    ComputeNoBcastTTT,      // TTT: no bcast, outer dim and row bcast cases
+    ComputeBcastTTT,        // TTT : column and scalar bcast cases
+    ComputeRowBcastTTT,     // TTT : row bcast cases : bfloat16 only
+    ComputeBcastTTS_TST,    // TTS, TST: column and scalar bcast cases
+    ComputeNoBcastTTS_TST,  // TTS, TST: no bcast, outer dim and row bcast cases
+    // Shared by ADDCMUL and ADDCDIV (same kernel files, op-specific defines)
+    ComputeNoBcastAddcOp,   // no bcast: ternary_addc_ops_sfpu.cpp
+    ComputeBcastAddcOp,     // column/scalar bcast: ternary_addc_ops_sfpu_bcast.cpp
+    ComputeRowBcastAddcOp,  // row bcast: ternary_addc_ops_fpu_rowbcast.cpp or ternary_addc_ops_sfpu.cpp
 };
 
 struct TernaryKernelConfig {

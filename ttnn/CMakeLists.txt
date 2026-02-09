@@ -138,6 +138,7 @@ target_sources(
         core/events.cpp
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp
+        core/operation.cpp
         core/graph/graph_argument_serializer.cpp
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp

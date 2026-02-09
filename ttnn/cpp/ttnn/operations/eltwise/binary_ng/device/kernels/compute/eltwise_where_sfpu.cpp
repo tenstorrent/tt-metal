@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/where.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
