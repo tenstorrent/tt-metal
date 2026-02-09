@@ -779,6 +779,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     use_prefetcher=False,
+    use_hf_rope=True,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
@@ -794,6 +795,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         prefetcher=prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     if num_layers is not None:
