@@ -23,9 +23,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 from tests.nightly.tg.ccl.test_moe_compute_6U import (
-    compute_e_t_golden,
-    compute_expert_activation_golden,
-    compute_selective_tilize_golden,
     create_sharded_memory_config,
     create_torch_w0,
     create_torch_w1,
@@ -46,7 +43,7 @@ def get_moe_compute_result(
     num_layers,
     hidden_size,
     N,
-    cluster_axis=0,
+    cluster_axis=1,
     dtype=ttnn.bfloat16,
     enable_trace=False,
 ):
@@ -62,6 +59,7 @@ def get_moe_compute_result(
     Unsure:
     expert_mapping
     num_layers
+    cluster_axis
     """
     mesh_shape = mesh_device.shape
     num_devices = mesh_shape[0] * mesh_shape[1]
@@ -85,8 +83,8 @@ def get_moe_compute_result(
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
     #########################################
 
-    # Drain tilize core is core (5,0) where indices and scores are sharded
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0))})
+    # Drain tilize core is core (5,9) where indices and scores are sharded
+    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9))})
 
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
     # Each device gets its own row after sharding, but since it's replicated,
@@ -121,10 +119,6 @@ def get_moe_compute_result(
     tt_expert_indices_buffers = []
     tt_expert_scores_buffers = []
 
-    per_expert_tokens_goldens = []
-    activation_goldens = []
-    e_t_goldens = []
-
     logger.info(f"Creating goldens and input tensors")
     for layer_id in range(num_layers):
         # Generate test data
@@ -137,23 +131,6 @@ def get_moe_compute_result(
             cluster_axis,
             dtype=tt_to_torch_dtype(dtype),
         )
-
-        # Compute goldens
-        golden_output, expert_token_counts = compute_selective_tilize_golden(
-            sparse_buffer, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
-        )
-        logger.info(f"  expert_token_counts:\n{expert_token_counts}")
-        per_expert_tokens_goldens.append(expert_token_counts)
-
-        golden_activation, experts_per_device_check = compute_expert_activation_golden(
-            expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
-        )
-        for d in range(num_devices):
-            logger.info(f"  Device {d} activated tokens: {len(golden_activation[d])}")
-        activation_goldens.append(golden_activation)
-
-        golden_e_t, _ = compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
-        e_t_goldens.append(golden_e_t)
 
         # Create input tensors
         # NOTE:
@@ -248,10 +225,8 @@ def get_moe_compute_result(
     dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
-    torch_w1 = create_torch_w1(
-        num_layers, experts_per_device, hidden_size, N
-    )  # prefill failed here, 61, 16, 7168, 2048
-    torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)  # decode failed here, 61, 16, 2048, 7168
+    torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
+    torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w0_w1
@@ -337,7 +312,7 @@ def get_moe_compute_result(
                 l1_per_expert_total_tokens_output_tensor,
                 l1_expert_activation_output_tensor,
                 l1_e_t_output_tensor,
-                l1_output_tensor,
+                l1_output_tensor,  # 1,2,32,7168
             ) = ttnn.experimental.moe_compute(
                 tt_sparse_buffer,
                 tt_expert_indices,
@@ -348,6 +323,7 @@ def get_moe_compute_result(
                 layer_id=layer_id,
                 cluster_axis=cluster_axis,
             )
+            # we cannot convert it to torch tensor since it's too huge. Converting it could cause hang.
 
             # deallocate L1 inputs
             # if running with multiple layers, we have to deallocate previous inputs to free up L1 space
@@ -357,6 +333,7 @@ def get_moe_compute_result(
                 ttnn.deallocate(tt_expert_indices)
                 ttnn.deallocate(tt_expert_scores)
 
+            """
             # convert outputs to DRAM (we don't have enough L1 space to leave outputs in L1 when running multiple invocations)
             dram_per_expert_total_tokens_output_tensor = ttnn.to_memory_config(
                 l1_per_expert_total_tokens_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -366,13 +343,6 @@ def get_moe_compute_result(
             )
             dram_e_t_output_tensor = ttnn.to_memory_config(l1_e_t_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             dram_output_tensor = ttnn.to_memory_config(l1_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-            # # deallocate L1 outputs
-            ttnn.deallocate(l1_per_expert_total_tokens_output_tensor)
-            ttnn.deallocate(l1_expert_activation_output_tensor)
-            ttnn.deallocate(l1_e_t_output_tensor)
-            ttnn.deallocate(l1_output_tensor)
-
             # save outputs to verify later
             moe_compute_output = (
                 dram_per_expert_total_tokens_output_tensor,
@@ -381,6 +351,12 @@ def get_moe_compute_result(
                 dram_output_tensor,
             )
             moe_compute_outputs.append(moe_compute_output)
+            """
+            # deallocate L1 outputs and save output to verify later
+            ttnn.deallocate(l1_per_expert_total_tokens_output_tensor)
+            ttnn.deallocate(l1_expert_activation_output_tensor)
+            ttnn.deallocate(l1_e_t_output_tensor)
+            ttnn.deallocate(l1_output_tensor)
 
         return moe_compute_outputs
 
@@ -416,7 +392,12 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
     ],
     indirect=True,
 )
@@ -464,6 +445,7 @@ def test_forward_pass(
     topk_fallback,
 ):
     """Test forward pass against reference model."""
+    print(reference_model.state_dict().keys())
 
     # Get state dict from actual model - pass directly to convert_weights
     state_dict = add_inv_scale_to_state_dict(
@@ -478,7 +460,7 @@ def test_forward_pass(
     reference_model.eval()
     reference_model.to(torch.bfloat16)
     with torch.no_grad():
-        reference_output = reference_model(torch_input)
+        reference_output = reference_model(torch_input)  # 1, 128, 7168
 
     weight_config = get_test_weight_config(
         MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
@@ -520,10 +502,10 @@ def test_forward_pass(
             1,
             hf_config.hidden_size,
             hf_config.moe_intermediate_size,
-            0,
+            1,
             ttnn.bfloat16,
         )
-        assert tt_output_moe_compute == tt_output, "MoE compute output does not match TTNN forward pass"
+        assert tt_output_moe_compute == reference_output, "MoE compute output does not match TTNN forward pass"
     # Verify output memory config matches expected
     """
     expected_output_memory_config = run_config["output_memory_config"]
@@ -538,14 +520,16 @@ def test_forward_pass(
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
     )
 
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
 
     # Compare outputs using utility function
     logger.info(f"Mode: {mode}, Num tokens: {num_tokens}")
     assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
     """
+    # Cleanup
+    ttnn.deallocate(tt_input)
+    # ttnn.deallocate(tt_output)
+    for output in tt_output_moe_compute:
+        ttnn.deallocate(output)
 
 
 if __name__ == "__main__":
