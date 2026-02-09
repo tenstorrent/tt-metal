@@ -72,7 +72,16 @@ def test_resnet_50(
     math_fidelity,
     use_pretrained_weight,
     model_location_generator,
+    is_watcher_enabled,
 ):
+    if (
+        is_watcher_enabled
+        and not use_pretrained_weight
+        and batch_size == 16
+        and math_fidelity == ttnn.MathFidelity.HiFi2
+    ):
+        pytest.skip("Skipping test with watcher enabled. See github issue #37097")
+
     run_resnet_50(
         device,
         batch_size,
