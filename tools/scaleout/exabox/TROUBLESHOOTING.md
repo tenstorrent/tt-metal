@@ -658,7 +658,21 @@ Either relax pinnings or modify the MGD.
 
 The error originates from `tt_metal/fabric/topology_mapper.cpp` during `TopologyMapper::build_mapping()`.
 
-**Cause**: Host ordering mismatch between MPI ranks and physical connectivity.
+**Cause**: This error can have two root causes:
+
+1. **Missing physical connections** - Physical validation reported missing connections, meaning the cluster doesn't have all expected links. This is the most common cause.
+
+2. **Host ordering mismatch** - If physical validation passed but fabric tests fail with this error, hosts were passed in the wrong order to MPI.
+
+**Diagnosing the cause**:
+```bash
+# Run physical validation first
+./run_validation_4x32.sh <hosts> <docker-image>
+```
+- If validation shows missing connections → Fix the hardware/cabling issue first
+- If validation passes (all links healthy) → It's a host ordering issue, continue below
+
+**Host Ordering Explanation (Cause #2)**:
 
 In a 4x32 pod, the 4 Galaxies are connected in a ring: `1 <-> 2 <-> 3 <-> 4 <-> 1`. Hosts 1 & 3 are **not** directly connected, and neither are hosts 2 & 4.
 

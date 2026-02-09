@@ -177,10 +177,13 @@ If you see this error:
 TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology
 ```
 
-It means hosts were passed in the wrong order. Fix by:
-1. Identifying which host is "Host 1" in your pod
-2. Logging onto that host
-3. Passing hosts in ring order: `host1,host2,host3,host4`
+This can mean one of two things:
+
+1. **Physical validation reported missing connections** - Run physical validation first to check cluster health
+2. **Hosts passed in wrong order** - Only if physical validation passed, fix by:
+   - Identifying which host is "Host 1" in your pod
+   - Logging onto that host
+   - Passing hosts in ring order: `host1,host2,host3,host4`
 
 See [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for details.
 
