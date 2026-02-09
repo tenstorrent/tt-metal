@@ -98,7 +98,7 @@ Note: The model is evaluated with 500 samples.
 **N300**
 | Resolution  | PCC (threshold: 0.999) | Performance (FPS, N300)  | Demo Status |
 |-------------|------------------------|--------------------------|-------------|
-| 640x640     | 0.9998796              | 174                      | Passed      |
+| 640x640     | 0.9998796              | 180                      | Passed      |
 
 
 ### Details
