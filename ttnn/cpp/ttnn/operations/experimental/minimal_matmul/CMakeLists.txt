@@ -4,8 +4,15 @@ add_library(TTNN::Ops::Experimental::MinimalMatmul ALIAS ttnn_op_experimental_mi
 target_precompile_headers(ttnn_op_experimental_minimal_matmul REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_minimal_matmul)
 
+file(GLOB_RECURSE kernels device/kernels/*)
+
 target_sources(
     ttnn_op_experimental_minimal_matmul
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         minimal_matmul.cpp
         minimal_matmul_split.cpp
@@ -30,6 +37,15 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_minimal_matmul
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/minimal_matmul
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_experimental_minimal_matmul LIBRARY COMPONENT tar)

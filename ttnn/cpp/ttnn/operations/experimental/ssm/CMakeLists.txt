@@ -4,8 +4,20 @@ add_library(TTNN::Ops::Experimental::SSM ALIAS ttnn_op_experimental_ssm)
 target_precompile_headers(ttnn_op_experimental_ssm REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ssm)
 
+file(
+    GLOB_RECURSE kernels
+    hc_sum_reduce/device/kernels/*
+    prefix_scan/device/kernels/*
+    repeat_and_interleave_eltwise_mul/device/kernels/*
+)
+
 target_sources(
     ttnn_op_experimental_ssm
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         hc_sum_reduce/device/hc_sum_reduce_device_operation.cpp
         hc_sum_reduce/device/hc_sum_reduce_program_factory.cpp
@@ -24,6 +36,15 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_ssm
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ssm
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_experimental_ssm LIBRARY COMPONENT tar)

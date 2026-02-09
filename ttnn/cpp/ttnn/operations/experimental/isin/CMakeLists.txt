@@ -8,6 +8,11 @@ file(GLOB_RECURSE kernels device/kernels/*)
 
 target_sources(
     ttnn_op_experimental_isin
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         device/isin_device_operation.cpp
         device/isin_program_factory.cpp
@@ -20,6 +25,15 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_isin
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/isin
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_experimental_isin LIBRARY COMPONENT tar)
