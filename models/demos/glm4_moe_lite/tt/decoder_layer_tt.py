@@ -183,20 +183,28 @@ def prepare_decode_rope_and_positions_tt(
     # embedding([1, B], [1,1,S,D]) -> [1, B, D]
     cos_rows = ttnn.embedding(rot_idxs, rope["cos_matrix"], layout=ttnn.TILE_LAYOUT)
     sin_rows = ttnn.embedding(rot_idxs, rope["sin_matrix"], layout=ttnn.TILE_LAYOUT)
-    ttnn.deallocate(rot_idxs)
 
-    cos_batch = ttnn.unsqueeze_to_4D(cos_rows)  # [1,1,B_pad,D]
-    sin_batch = ttnn.unsqueeze_to_4D(sin_rows)  # [1,1,B_pad,D]
-    ttnn.deallocate(cos_rows)
-    ttnn.deallocate(sin_rows)
+    # `ttnn.unsqueeze_to_4D` is a reshape which can behave like a view. Some
+    # TTNN view-like ops do not refcount underlying buffers, so aggressively
+    # deallocating the source tensor can lead to use-after-free and corrupt
+    # RoPE inputs (observed as nondeterministic / garbled text output).
+    # Materialize (clone) the final cos/sin batches before freeing intermediates.
+    cos_batch_view = ttnn.unsqueeze_to_4D(cos_rows)  # [1,1,B_pad,D]
+    sin_batch_view = ttnn.unsqueeze_to_4D(sin_rows)  # [1,1,B_pad,D]
 
     if padded_batch != batch:
-        cos_sliced = ttnn.slice(cos_batch, [0, 0, 0, 0], [1, 1, batch, rope_dim])
-        sin_sliced = ttnn.slice(sin_batch, [0, 0, 0, 0], [1, 1, batch, rope_dim])
-        ttnn.deallocate(cos_batch)
-        ttnn.deallocate(sin_batch)
-        cos_batch = cos_sliced
-        sin_batch = sin_sliced
+        cos_batch_view = ttnn.slice(cos_batch_view, [0, 0, 0, 0], [1, 1, batch, rope_dim])
+        sin_batch_view = ttnn.slice(sin_batch_view, [0, 0, 0, 0], [1, 1, batch, rope_dim])
+
+    cos_batch = ttnn.clone(cos_batch_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sin_batch = ttnn.clone(sin_batch_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    # Best-effort cleanup of intermediate buffers (do not deallocate the cloned outputs).
+    for t in (rot_idxs, cos_rows, sin_rows, cos_batch_view, sin_batch_view):
+        try:
+            ttnn.deallocate(t, force=False)
+        except Exception:
+            pass
 
     return tt_positions, cos_batch, sin_batch
 
@@ -210,8 +218,17 @@ def _shard_kvpe_update_tensor(
 ) -> ttnn.Tensor:
     """Transform KVPE update tensor into the sharded layout required by paged_update_cache."""
     # `paged_update_cache` expects the update tensor to be sharded.
-    kvpe_new = ttnn.pad(kvpe_new, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # [1,32,B,kvpe_dim]
-    kvpe_new = ttnn.permute(kvpe_new, (0, 2, 1, 3))  # [1,B,32,kvpe_dim]
+    #
+    # Correctness: `ttnn.pad` and some view-like ops can alias the input buffer without
+    # increasing refcounts. Make the padded/permuted update tensor own its buffer to
+    # avoid intermittent use-after-free corruption in decode.
+    kvpe_padded_view = ttnn.pad(kvpe_new, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # [1,32,B,kvpe_dim]
+    kvpe_padded = ttnn.clone(kvpe_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # NOTE: kvpe_padded_view may alias kvpe_new; do not deallocate it separately.
+    kvpe_perm_view = ttnn.permute(kvpe_padded, (0, 2, 1, 3))  # [1,B,32,kvpe_dim]
+    kvpe_perm = ttnn.clone(kvpe_perm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # NOTE: kvpe_perm_view may alias kvpe_padded; do not deallocate it separately.
+    ttnn.deallocate(kvpe_padded, force=False)
 
     # Shard across the (B*32) height dimension so each user gets one 32xkvpe_dim shard.
     grid_size = device.compute_with_storage_grid_size()
@@ -223,7 +240,11 @@ def _shard_kvpe_update_tensor(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    return ttnn.to_memory_config(kvpe_new, kvpe_sharded_cfg)
+    kvpe_sharded_view = ttnn.to_memory_config(kvpe_perm, kvpe_sharded_cfg)
+    kvpe_sharded = ttnn.clone(kvpe_sharded_view, memory_config=kvpe_sharded_cfg)
+    # NOTE: kvpe_sharded_view may alias kvpe_perm; do not deallocate it separately.
+    ttnn.deallocate(kvpe_perm, force=False)
+    return kvpe_sharded
 
 
 @torch.no_grad()
@@ -371,7 +392,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         """
         a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
         out = _mlp_linear(a_tp, b)
-        ttnn.deallocate(a_tp)
+        ttnn.deallocate(a_tp, force=False)
         out_reduced = ttnn.all_reduce(
             out,
             num_links=1,
@@ -379,7 +400,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             cluster_axis=tp_axis,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(out)
+        ttnn.deallocate(out, force=False)
         return out_reduced
 
     residual = x_embed_tok
@@ -391,27 +412,41 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     t0 = time.perf_counter() if profile is not None else 0.0
     q_a = None
     kv = None
+    qkv = None
     w_q_kv_a = getattr(w, "w_q_kv_a", None)
     if w_q_kv_a is not None:
         if tp_enabled:
             qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
         else:
             qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
-        q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
-        kv = ttnn.slice(
+
+        # `slice` may return a view that aliases the `qkv` buffer (no refcounting).
+        # Materialize slices before freeing `qkv` to avoid intermittent corruption.
+        q_a_view = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
+        kv_view = ttnn.slice(
             qkv,
             [0, 0, 0, int(hparams.q_lora_rank)],
             [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
         )
-        ttnn.deallocate(qkv)
+        q_a = ttnn.clone(q_a_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kv = ttnn.clone(kv_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # NOTE: `q_a_view`/`kv_view` may alias `qkv`; do not deallocate them separately.
+        ttnn.deallocate(qkv, force=False)
+        qkv = None
     else:
         if tp_enabled:
             kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
         else:
             kv = _mlp_linear(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
-    kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
-    kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
-    ttnn.deallocate(kv)
+
+    # `slice` may alias `kv`. Clone slices before freeing `kv`.
+    kv_nope_view = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
+    kv_rope_view = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
+    kv_nope = ttnn.clone(kv_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    kv_rope = ttnn.clone(kv_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # NOTE: `kv_nope_view`/`kv_rope_view` may alias `kv`; do not deallocate them separately.
+    ttnn.deallocate(kv, force=False)
+    kv = None
 
     kv_nope = w.kv_a_layernorm(kv_nope, mode="decode")
 
@@ -430,8 +465,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         )  # [1,1,B,rope_dim]
 
     kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [1,1,B,kvpe_dim]
-    ttnn.deallocate(kv_nope)
-    ttnn.deallocate(kv_rope)
+    ttnn.deallocate(kv_nope, force=False)
+    ttnn.deallocate(kv_rope, force=False)
 
     # Important: paged_update_cache requires the update tensor to be BF16/FP32,
     # even if the cache itself is BF8.
@@ -443,11 +478,11 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         update_idxs_tensor=tt_positions,
         page_table=page_table_tt,
     )
-    ttnn.deallocate(kvpe_new_sharded)
+    ttnn.deallocate(kvpe_new_sharded, force=False)
     # NOTE: `ttnn.pad` can return a view which may alias the `kvpe_new` buffer.
     # Keep `kvpe_new` alive until after the update kernel is enqueued to avoid
     # use-after-free on some runtimes.
-    ttnn.deallocate(kvpe_new)
+    ttnn.deallocate(kvpe_new, force=False)
     _profile_add(profile, "kv_cache_update_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- Q path ----
@@ -462,17 +497,23 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
     else:
         q = _mlp_linear(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
-    ttnn.deallocate(q_a)
+    ttnn.deallocate(q_a, force=False)
 
     q = ttnn.reshape(q, (1, batch, int(hparams.num_attention_heads), int(hparams.qk_head_dim)))
     q = ttnn.permute(q, (0, 2, 1, 3))  # [1,H,B,qk_head_dim]
-    q_nope = ttnn.slice(q, [0, 0, 0, 0], [1, int(hparams.num_attention_heads), batch, int(hparams.qk_nope_head_dim)])
-    q_rope = ttnn.slice(
+
+    # `slice` may alias `q` (no refcounting). Clone slices before freeing `q`.
+    q_nope_view = ttnn.slice(q, [0, 0, 0, 0], [1, int(hparams.num_attention_heads), batch, int(hparams.qk_nope_head_dim)])
+    q_rope_view = ttnn.slice(
         q,
         [0, 0, 0, int(hparams.qk_nope_head_dim)],
         [1, int(hparams.num_attention_heads), batch, int(hparams.qk_head_dim)],
     )
-    ttnn.deallocate(q)
+    q_nope = ttnn.clone(q_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    q_rope = ttnn.clone(q_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # NOTE: `q_nope_view`/`q_rope_view` may alias `q`; do not deallocate them separately.
+    ttnn.deallocate(q, force=False)
+    q = None
 
     use_tp_kv_b1 = tp_enabled
     if use_tp_kv_b1:
@@ -501,20 +542,25 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     if use_decode_rope:
         if owns_decode_rope_inputs:
             assert cos_decode is not None and sin_decode is not None and trans_decode is not None
-            ttnn.deallocate(cos_decode)
-            ttnn.deallocate(sin_decode)
-            ttnn.deallocate(trans_decode)
+            ttnn.deallocate(cos_decode, force=False)
+            ttnn.deallocate(sin_decode, force=False)
+            ttnn.deallocate(trans_decode, force=False)
 
     q_kvpe = ttnn.concat([q_nope, q_rope], dim=-1)  # [1,H,B,kvpe_dim]
-    ttnn.deallocate(q_nope)
-    ttnn.deallocate(q_rope)
+    ttnn.deallocate(q_nope, force=False)
+    ttnn.deallocate(q_rope, force=False)
 
     # x no longer needed.
-    ttnn.deallocate(x)
+    ttnn.deallocate(x, force=False)
 
     # ---- FlashMLA decode ----
-    q_for_decode = ttnn.permute(q_kvpe, (0, 2, 1, 3))  # [1,B,H,kvpe_dim]
-    ttnn.deallocate(q_kvpe)
+    # `permute` may return a view that aliases `q_kvpe` (no refcounting). Clone the
+    # permuted tensor before freeing `q_kvpe` to avoid use-after-free in attention.
+    q_for_decode_view = ttnn.permute(q_kvpe, (0, 2, 1, 3))  # [1,B,H,kvpe_dim]
+    q_for_decode = ttnn.clone(q_for_decode_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # NOTE: `q_for_decode_view` may alias `q_kvpe`; do not deallocate it separately.
+    ttnn.deallocate(q_kvpe, force=False)
+    q_kvpe = None
     _profile_add(profile, "q_path_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # MLA attention scores are computed from dot(q_kvpe, kvpe) where the dot-product
@@ -572,7 +618,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             compute_kernel_config=compute_kernel_config,
             memory_config=flash_mla_memcfg,
         )  # [1,B,H_padded,kv_lora_rank]
-        ttnn.deallocate(v_cache)
+        ttnn.deallocate(v_cache, force=False)
     else:
         attn_latent = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             q_for_decode,
@@ -585,11 +631,19 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             compute_kernel_config=compute_kernel_config,
             memory_config=flash_mla_memcfg,
         )  # [1,B,H_padded,kv_lora_rank]
-    ttnn.deallocate(q_for_decode)
+    ttnn.deallocate(q_for_decode, force=False)
     _profile_add(profile, "flash_mla_decode_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # Slice padded heads back to num_heads.
-    attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [1, batch, int(hparams.num_attention_heads), int(hparams.kv_lora_rank)])
+    #
+    # Correctness: `ttnn.slice` may return a view without refcounting. Keep a live
+    # reference to the padded output until the sliced view is fully consumed.
+    attn_latent_padded = attn_latent
+    attn_latent = ttnn.slice(
+        attn_latent_padded,
+        [0, 0, 0, 0],
+        [1, batch, int(hparams.num_attention_heads), int(hparams.kv_lora_rank)],
+    )
     attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
 
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -597,7 +651,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
     else:
         v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
-    ttnn.deallocate(attn_latent)
+    ttnn.deallocate(attn_latent, force=False)
+    ttnn.deallocate(attn_latent_padded, force=False)
 
     v = ttnn.permute(v, (0, 2, 1, 3))  # [1,B,H,v_head_dim]
     v = ttnn.reshape(v, (1, batch, 1, int(hparams.num_attention_heads * hparams.v_head_dim)))
@@ -607,10 +662,10 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         attn_out = _tp_row_parallel_linear_from_replicated(v, w.w_o)  # [1,1,B,hidden]
     else:
         attn_out = _mlp_linear(v, w.w_o)  # [1,1,B,hidden]
-    ttnn.deallocate(v)
+    ttnn.deallocate(v, force=False)
 
     x_attn_out = residual + attn_out
-    ttnn.deallocate(attn_out)
+    ttnn.deallocate(attn_out, force=False)
     _profile_add(profile, "attn_out_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- MLP (dense for layer0; MoE for routed layers) ----
@@ -624,13 +679,13 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         t0 = time.perf_counter() if profile is not None else 0.0
         gate = _mlp_linear(x, w.w_mlp_gate)
         up = _mlp_linear(x, w.w_mlp_up)
-        ttnn.deallocate(x)
+        ttnn.deallocate(x, force=False)
         gate = ttnn.silu(gate)
         x_ff = gate * up
-        ttnn.deallocate(gate)
-        ttnn.deallocate(up)
+        ttnn.deallocate(gate, force=False)
+        ttnn.deallocate(up, force=False)
         mlp_out = _mlp_linear(x_ff, w.w_mlp_down)
-        ttnn.deallocate(x_ff)
+        ttnn.deallocate(x_ff, force=False)
         if tp_enabled:
             mlp_out_reduced = ttnn.all_reduce(
                 mlp_out,
@@ -639,12 +694,12 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 cluster_axis=tp_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            ttnn.deallocate(mlp_out)
+            ttnn.deallocate(mlp_out, force=False)
             mlp_out = mlp_out_reduced
 
         x_mlp_out = residual + mlp_out
-        ttnn.deallocate(mlp_out)
-        ttnn.deallocate(residual)
+        ttnn.deallocate(mlp_out, force=False)
+        ttnn.deallocate(residual, force=False)
         _profile_add(profile, "mlp_dense_s", time.perf_counter() - t0 if profile is not None else 0.0)
         _profile_add(profile, "total_s", time.perf_counter() - t_layer0 if profile is not None else 0.0)
         return x_mlp_out
@@ -676,7 +731,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             x_padded_view = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
             x_padded = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             # NOTE: x_padded_view may alias `x`; do not deallocate it separately.
-            ttnn.deallocate(x)
+            ttnn.deallocate(x, force=False)
             x = x_padded
 
     # Shared expert (dense MLP).
@@ -685,10 +740,10 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     up_shared = _mlp_linear(x, w.w_mlp_up)
     gate_shared = ttnn.silu(gate_shared)
     x_ff_shared = gate_shared * up_shared
-    ttnn.deallocate(gate_shared)
-    ttnn.deallocate(up_shared)
+    ttnn.deallocate(gate_shared, force=False)
+    ttnn.deallocate(up_shared, force=False)
     shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down)
-    ttnn.deallocate(x_ff_shared)
+    ttnn.deallocate(x_ff_shared, force=False)
     if tp_enabled:
         shared_out_reduced = ttnn.all_reduce(
             shared_out,
@@ -697,7 +752,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             cluster_axis=tp_axis,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(shared_out)
+        ttnn.deallocate(shared_out, force=False)
         shared_out = shared_out_reduced
     _profile_add(profile, "moe_shared_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
@@ -741,18 +796,21 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
 
     t0 = time.perf_counter() if profile is not None else 0.0
     mlp_out = shared_out + routed_out
-    ttnn.deallocate(shared_out)
-    ttnn.deallocate(routed_out)
+    ttnn.deallocate(shared_out, force=False)
+    ttnn.deallocate(routed_out, force=False)
 
     # Slice back to the real token count if we padded.
     if pad_tokens:
-        mlp_out_sliced = ttnn.slice(mlp_out, [0, 0, 0, 0], [1, 1, tokens, int(hparams.hidden_size)])
-        ttnn.deallocate(mlp_out)
+        # `slice` may return a view that aliases `mlp_out` (no refcounting).
+        # Materialize before freeing the padded tensor to avoid decode corruption.
+        mlp_out_view = ttnn.slice(mlp_out, [0, 0, 0, 0], [1, 1, tokens, int(hparams.hidden_size)])
+        mlp_out_sliced = ttnn.clone(mlp_out_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(mlp_out, force=False)
         mlp_out = mlp_out_sliced
 
     x_mlp_out = residual + mlp_out
-    ttnn.deallocate(mlp_out)
-    ttnn.deallocate(residual)
+    ttnn.deallocate(mlp_out, force=False)
+    ttnn.deallocate(residual, force=False)
     _profile_add(profile, "moe_merge_s", time.perf_counter() - t0 if profile is not None else 0.0)
     _profile_add(profile, "total_s", time.perf_counter() - t_layer0 if profile is not None else 0.0)
     return x_mlp_out
@@ -815,7 +873,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     def _tp_row_parallel_linear_from_replicated(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
         a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
         out = _mlp_linear(a_tp, b)
-        ttnn.deallocate(a_tp)
+        ttnn.deallocate(a_tp, force=False)
         out_reduced = ttnn.all_reduce(
             out,
             num_links=1,
@@ -823,7 +881,7 @@ def run_decoder_layer_prefill_update_cache_tt(
             cluster_axis=tp_axis,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(out)
+        ttnn.deallocate(out, force=False)
         return out_reduced
 
     residual = x_embed
@@ -847,7 +905,7 @@ def run_decoder_layer_prefill_update_cache_tt(
             [0, 0, 0, int(hparams.q_lora_rank)],
             [1, 1, seq_len, int(hparams.q_lora_rank) + kvpe_dim],
         )
-        ttnn.deallocate(qkv)
+        ttnn.deallocate(qkv, force=False)
     else:
         if tp_enabled:
             q_a = _tp_row_parallel_linear_from_replicated(x, w.w_q_a)  # [1,1,S,q_lora_rank]
@@ -858,13 +916,13 @@ def run_decoder_layer_prefill_update_cache_tt(
         q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,S,H*qk_head_dim]
     else:
         q = _mlp_linear(q_a, w.w_q_b)  # [1,1,S,H*qk_head_dim]
-    ttnn.deallocate(q_a)
+    ttnn.deallocate(q_a, force=False)
 
     q = ttnn.reshape(q, (1, seq_len, num_heads, int(hparams.qk_head_dim)))
     q = ttnn.permute(q, (0, 2, 1, 3))  # [1,H,S,qk_head_dim]
     q_nope = ttnn.slice(q, [0, 0, 0, 0], [1, num_heads, seq_len, int(hparams.qk_nope_head_dim)])
     q_rope = ttnn.slice(q, [0, 0, 0, int(hparams.qk_nope_head_dim)], [1, num_heads, seq_len, int(hparams.qk_head_dim)])
-    ttnn.deallocate(q)
+    ttnn.deallocate(q, force=False)
 
     # Project q_nope into KV latent space (per-head).
     use_tp_kv_b1 = tp_enabled
@@ -886,11 +944,11 @@ def run_decoder_layer_prefill_update_cache_tt(
             kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,S,kvpe_dim]
         else:
             kv = _mlp_linear(x, w.w_kv_a)  # [1,1,S,kvpe_dim]
-    ttnn.deallocate(x)
+    ttnn.deallocate(x, force=False)
 
     kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, seq_len, int(hparams.kv_lora_rank)])
     kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, seq_len, kvpe_dim])
-    ttnn.deallocate(kv)
+    ttnn.deallocate(kv, force=False)
 
     kv_nope = w.kv_a_layernorm(kv_nope, mode="prefill")
 
@@ -916,12 +974,12 @@ def run_decoder_layer_prefill_update_cache_tt(
     )  # [1,1,S,rope_dim]
 
     q_kvpe = ttnn.concat([q_nope, q_rope], dim=-1)  # [1,H,S,kvpe_dim]
-    ttnn.deallocate(q_nope)
-    ttnn.deallocate(q_rope)
+    ttnn.deallocate(q_nope, force=False)
+    ttnn.deallocate(q_rope, force=False)
 
     kvpe = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [1,1,S,kvpe_dim]
-    ttnn.deallocate(kv_nope)
-    ttnn.deallocate(kv_rope)
+    ttnn.deallocate(kv_nope, force=False)
+    ttnn.deallocate(kv_rope, force=False)
 
     # Fill KV cache only for the valid prefix tokens (prompt_len). Padding after
     # the prompt must not be written unless vLLM actually allocated those blocks.
@@ -937,9 +995,9 @@ def run_decoder_layer_prefill_update_cache_tt(
     ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe_fill_cast, page_table=page_table_tt, batch_idx=0)
 
     if kvpe_fill_cast is not kvpe_fill:
-        ttnn.deallocate(kvpe_fill_cast)
+        ttnn.deallocate(kvpe_fill_cast, force=False)
     if kvpe_fill is not kvpe:
-        ttnn.deallocate(kvpe_fill)
+        ttnn.deallocate(kvpe_fill, force=False)
     _profile_add(profile, "kv_cache_fill_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- FlashMLA prefill ----
@@ -984,8 +1042,8 @@ def run_decoder_layer_prefill_update_cache_tt(
         attn_mask=None,
         is_causal=True,
     )  # [1,H_padded,S,kv_lora_rank]
-    ttnn.deallocate(q_kvpe)
-    ttnn.deallocate(kvpe)
+    ttnn.deallocate(q_kvpe, force=False)
+    ttnn.deallocate(kvpe, force=False)
     _profile_add(profile, "flash_mla_prefill_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # flash_mla_prefill pads heads up to q_chunk_size. Slice back to num_heads.
@@ -996,7 +1054,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)  # [1,H,S,v_head_dim]
     else:
         v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,S,v_head_dim]
-    ttnn.deallocate(attn_latent)
+    ttnn.deallocate(attn_latent, force=False)
 
     v = ttnn.permute(v, (0, 2, 1, 3))  # [1,S,H,v_head_dim]
     v = ttnn.reshape(v, (1, 1, seq_len, int(num_heads * hparams.v_head_dim)))  # [1,1,S,H*v_head_dim]
@@ -1004,10 +1062,10 @@ def run_decoder_layer_prefill_update_cache_tt(
         attn_out = _tp_row_parallel_linear_from_replicated(v, w.w_o)  # [1,1,S,hidden]
     else:
         attn_out = _mlp_linear(v, w.w_o)  # [1,1,S,hidden]
-    ttnn.deallocate(v)
+    ttnn.deallocate(v, force=False)
 
     x_attn_out = residual + attn_out
-    ttnn.deallocate(attn_out)
+    ttnn.deallocate(attn_out, force=False)
     _profile_add(profile, "attn_out_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- MLP (dense or shared-expert-as-dense) ----
@@ -1021,15 +1079,15 @@ def run_decoder_layer_prefill_update_cache_tt(
         t0 = time.perf_counter() if profile is not None else 0.0
         gate = _mlp_linear(x, w.w_mlp_gate)
         up = _mlp_linear(x, w.w_mlp_up)
-        ttnn.deallocate(x)
+        ttnn.deallocate(x, force=False)
 
         gate = ttnn.silu(gate)
         x_ff = gate * up
-        ttnn.deallocate(gate)
-        ttnn.deallocate(up)
+        ttnn.deallocate(gate, force=False)
+        ttnn.deallocate(up, force=False)
 
         mlp_out = _mlp_linear(x_ff, w.w_mlp_down)
-        ttnn.deallocate(x_ff)
+        ttnn.deallocate(x_ff, force=False)
         if tp_enabled:
             mlp_out_reduced = ttnn.all_reduce(
                 mlp_out,
@@ -1038,7 +1096,7 @@ def run_decoder_layer_prefill_update_cache_tt(
                 cluster_axis=tp_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            ttnn.deallocate(mlp_out)
+            ttnn.deallocate(mlp_out, force=False)
             mlp_out = mlp_out_reduced
         _profile_add(profile, "mlp_dense_s", time.perf_counter() - t0 if profile is not None else 0.0)
     else:
@@ -1060,7 +1118,7 @@ def run_decoder_layer_prefill_update_cache_tt(
             x_padded_view = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
             x_padded = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             # NOTE: x_padded_view may alias `x`; do not deallocate it separately.
-            ttnn.deallocate(x)
+            ttnn.deallocate(x, force=False)
             x = x_padded
 
         # Shared expert (dense MLP).
@@ -1069,10 +1127,10 @@ def run_decoder_layer_prefill_update_cache_tt(
         up_shared = _mlp_linear(x, w.w_mlp_up)
         gate_shared = ttnn.silu(gate_shared)
         x_ff_shared = gate_shared * up_shared
-        ttnn.deallocate(gate_shared)
-        ttnn.deallocate(up_shared)
+        ttnn.deallocate(gate_shared, force=False)
+        ttnn.deallocate(up_shared, force=False)
         shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down)
-        ttnn.deallocate(x_ff_shared)
+        ttnn.deallocate(x_ff_shared, force=False)
         if tp_enabled:
             shared_out_reduced = ttnn.all_reduce(
                 shared_out,
@@ -1081,7 +1139,7 @@ def run_decoder_layer_prefill_update_cache_tt(
                 cluster_axis=tp_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            ttnn.deallocate(shared_out)
+            ttnn.deallocate(shared_out, force=False)
             shared_out = shared_out_reduced
         _profile_add(profile, "moe_shared_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
@@ -1112,19 +1170,22 @@ def run_decoder_layer_prefill_update_cache_tt(
 
         t0 = time.perf_counter() if profile is not None else 0.0
         mlp_out = shared_out + routed_out
-        ttnn.deallocate(shared_out)
-        ttnn.deallocate(routed_out)
+        ttnn.deallocate(shared_out, force=False)
+        ttnn.deallocate(routed_out, force=False)
 
         # Slice back to the real token count if we padded.
         if pad_tokens:
-            mlp_out_sliced = ttnn.slice(mlp_out, [0, 0, 0, 0], [1, 1, tokens, int(hparams.hidden_size)])
-            ttnn.deallocate(mlp_out)
+            # `slice` may return a view that aliases `mlp_out` (no refcounting).
+            # Materialize before freeing the padded tensor to avoid prefill corruption.
+            mlp_out_view = ttnn.slice(mlp_out, [0, 0, 0, 0], [1, 1, tokens, int(hparams.hidden_size)])
+            mlp_out_sliced = ttnn.clone(mlp_out_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(mlp_out, force=False)
             mlp_out = mlp_out_sliced
         _profile_add(profile, "moe_merge_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     x_mlp_out = residual + mlp_out
-    ttnn.deallocate(mlp_out)
-    ttnn.deallocate(residual)
+    ttnn.deallocate(mlp_out, force=False)
+    ttnn.deallocate(residual, force=False)
     _profile_add(profile, "total_s", time.perf_counter() - t_layer0 if profile is not None else 0.0)
 
     return x_mlp_out
