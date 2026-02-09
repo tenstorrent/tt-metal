@@ -159,7 +159,7 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
                const ttnn::Tensor& addcmul_input_tensor1,
                const ttnn::Tensor& addcmul_input_tensor2,
                const std::optional<ttnn::Tensor>& bias_tensor,
-               std::optional<unary::UnaryWithParam> fused_activation,
+               const std::optional<unary::UnaryWithParam>& fused_activation,
                const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<const DataType> dtype,
