@@ -995,6 +995,34 @@ def test_demo_text(
             generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
+        # Use device sampling for all cases when supported (prefill + decode)
+        device_sampling_params = (
+            SamplingParams(
+                temperature=sampling_params["temperature"],
+                top_k=sampling_params["top_k"],
+                top_p=sampling_params["top_p"],
+                seed=sampling_params["seed"] if "seed" in sampling_params else None,
+                frequency_penalty=sampling_params["frequency_penalty"]
+                if "frequency_penalty" in sampling_params
+                else 0.0,
+                presence_penalty=sampling_params["presence_penalty"] if "presence_penalty" in sampling_params else 0.0,
+                repetition_penalty=sampling_params["repetition_penalty"]
+                if "repetition_penalty" in sampling_params
+                else 1.0,
+                enable_log_probs=sampling_params["enable_log_probs"]
+                if "enable_log_probs" in sampling_params
+                else False,
+            )
+            if model[0]._supports_on_device_sampling
+            else None
+        )
+        if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
+            # host sampling only supports single sample param for all users in a batch
+            sampling_params["temperature"] = sampling_params["temperature"][0]
+            sampling_params["top_p"] = sampling_params["top_p"][0]
+            sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
+
+        prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
 
         if mode == "prefill" or mode == "full":
             logger.info("Starting prefill warmup...")
@@ -1004,19 +1032,25 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
+                sampling_params=prefill_sampling_params,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
 
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
+            prefill_out = generator.prefill_forward_text(
                 input_tokens_prefill_pt,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
+                sampling_params=prefill_sampling_params,
             )
-            prefilled_token = torch.argmax(logits, dim=-1)
+            if prefill_sampling_params is not None:
+                prefilled_token, prefill_log_probs = prefill_out
+            else:
+                logits = prefill_out
+                prefilled_token = torch.argmax(logits, dim=-1)
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Prefill finished")
         else:
@@ -1038,32 +1072,6 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # Use device sampling for all cases when supported
-
-        device_sampling_params = (
-            SamplingParams(
-                temperature=sampling_params["temperature"],
-                top_k=sampling_params["top_k"],
-                top_p=sampling_params["top_p"],
-                frequency_penalty=sampling_params["frequency_penalty"]
-                if "frequency_penalty" in sampling_params
-                else 0.0,
-                presence_penalty=sampling_params["presence_penalty"] if "presence_penalty" in sampling_params else 0.0,
-                repetition_penalty=sampling_params["repetition_penalty"]
-                if "repetition_penalty" in sampling_params
-                else 1.0,
-                enable_log_probs=sampling_params["enable_log_probs"]
-                if "enable_log_probs" in sampling_params
-                else False,
-            )
-            if model[0]._supports_on_device_sampling
-            else None
-        )
-        if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
-            # host sampling only supports single sample param for all users in a batch
-            sampling_params["temperature"] = sampling_params["temperature"][0]
-            sampling_params["top_p"] = sampling_params["top_p"][0]
-            sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] if mode == "full" else 0 for b in range(global_batch_size)])
 
@@ -1103,6 +1111,7 @@ def test_demo_text(
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
+                reset_batch=(iteration == 0),
                 sampling_params=device_sampling_params,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,

@@ -833,7 +833,9 @@ def test_qwen_demo_text(
                 tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
-
+                if isinstance(out_tok, tuple):
+                    # Skip logprobs
+                    out_tok = out_tok[0]
                 if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
                     out_tok = out_tok.repeat(32, 1)
                 # Check if iteration == 1, because that's when we compare outputs from iteration 0
