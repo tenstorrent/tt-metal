@@ -25,6 +25,15 @@
 
 #include <tools/profiler/kernel_profiler.hpp>
 
+// Define this macro to enable high-granularity DeviceZoneScopedN profiling in sdpa_inner_loop_8x4x16
+#define SDPA_HIGH_GRANULARITY_PROFILING
+
+#ifdef SDPA_HIGH_GRANULARITY_PROFILING
+#define SDPA_DeviceZoneScopedN(name) DeviceZoneScopedN(name)
+#else
+#define SDPA_DeviceZoneScopedN(name)
+#endif
+
 using std::uint32_t;
 template <uint32_t in0_cb, uint32_t scale_fp32, bool do_reduce = true, int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace_2x4(
@@ -49,7 +58,7 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     // }
 
     {
-        DeviceZoneScopedN("SUB");
+        SDPA_DeviceZoneScopedN("SUB");
         tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -63,7 +72,7 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     }
 
     {
-        DeviceZoneScopedN("EXP");
+        SDPA_DeviceZoneScopedN("EXP");
         tile_regs_wait();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -75,7 +84,7 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     }
 
     {
-        DeviceZoneScopedN("EXP PACK");
+        SDPA_DeviceZoneScopedN("EXP PACK");
         tile_regs_wait();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -204,6 +213,7 @@ template <
     uint32_t scale_fp32>
 void sdpa_inner_loop_8x4x16(
     const uint32_t cb_max_A, const uint32_t cb_max_B, const uint32_t cb_sum_A, const uint32_t cb_sum_B) {
+    DeviceZoneScopedN("sdpa_inner_loop_8x4x16");
     // Set up ping pong buffers
     // To be used (and swapped) later on, when we loop over Q chunks.
     uint32_t alias_prev_sum = cb_sum_A;
@@ -233,6 +243,7 @@ void sdpa_inner_loop_8x4x16(
     cb_wait_front(cb_kt_in, head_dim_t * Sk_chunk_t);
     cb_reserve_back(alias_cur_sum, Sq_chunk_t);
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
+        SDPA_DeviceZoneScopedN("Softmax(Q@KT) 2x4x16");
         cb_wait_front(cb_q_in, q_wait_tiles);
         kt_index_offset = 0;
 
@@ -241,12 +252,12 @@ void sdpa_inner_loop_8x4x16(
                 uint32_t prev_q_subblock = q_subblock - 1;
                 MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
                 sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
-                    cb_qkt_im, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
+                    alias_cur_max, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
             }
 
             {
                 {
-                    DeviceZoneScopedN("matmul_blocks 2x4 init");
+                    SDPA_DeviceZoneScopedN("matmul_blocks 2x4 init");
                     mm_block_init_short(
                         cb_q_in,
                         cb_kt_in,
@@ -258,7 +269,7 @@ void sdpa_inner_loop_8x4x16(
                 MATH(DPRINT << "Matmul for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
 
                 {
-                    DeviceZoneScopedN("matmul_blocks 2x4");
+                    SDPA_DeviceZoneScopedN("matmul_blocks 2x4");
 
                     tile_regs_acquire();
                     uint32_t dst_index = 0;
@@ -283,7 +294,7 @@ void sdpa_inner_loop_8x4x16(
                 }
             }
             {
-                DeviceZoneScopedN("Pack 2x4");
+                SDPA_DeviceZoneScopedN("Pack 2x4");
                 // Pack the subblock
                 tile_regs_wait();
                 PACK(DPRINT << "Pack for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
@@ -310,7 +321,7 @@ void sdpa_inner_loop_8x4x16(
         //  JUST TO ENSURE THE WORST-CASE IS MEASURED, DO THE ELTWISE MAX EVERY TIME
         static_assert(subblock_h == 2, "subblock_h must be 2");
         {
-            DeviceZoneScopedN("Reduce max 2x16");
+            SDPA_DeviceZoneScopedN("Reduce max 2x16");
             reduce_c_row_pair<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qkt_im, cb_identity_scale_in, Sk_chunk_t>(
                 alias_cur_max, alias_prev_max, q_subblock, true /*do_eltwise_max*/);
         }
@@ -348,20 +359,24 @@ void sdpa_inner_loop_8x4x16(
 
         for (uint32_t q_subblock = 0; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
             MATH(DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ENDL());
+            SDPA_DeviceZoneScopedN("Softmax(Q@KT)@V 2x16x4");
             cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
             // Drain: interleave sub_exp for last Q@KT row with first QKT@V matmul
-            if (q_subblock == 0) {
+            // if (q_subblock == 0)
+            {
                 MATH(
                     DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << "] during QKT@V q_subblock 0"
                            << ENDL());
-                for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-                    sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
-                        cb_qkt_im, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
-                }
+                // for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                //  Gradually drain the last Q@KT subblock's sub_exp across all 4 QKT@V subblocks, to best overlap exp
+                //  computation with matmul.
+                sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
+                    alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, q_subblock);
+                //}
                 // Reconfigure for matmul after sub_exp changed pack/unpack config
-                pack_reconfig_data_format(cb_out);
-                reconfig_data_format(cb_v_in, cb_qkt_im);
+                // pack_reconfig_data_format(cb_out);
+                // reconfig_data_format(cb_v_in, cb_qkt_im);
             }
 
             {
@@ -378,7 +393,7 @@ void sdpa_inner_loop_8x4x16(
             for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                 MATH(DPRINT << "QKT@V Matmul for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
                 {
-                    DeviceZoneScopedN("QKT@V matmul 2x4");
+                    SDPA_DeviceZoneScopedN("QKT@V matmul 2x4");
                     tile_regs_acquire();
 
                     uint32_t dst_index = 0;
@@ -403,7 +418,7 @@ void sdpa_inner_loop_8x4x16(
                 }
 
                 {
-                    DeviceZoneScopedN("QKT@V pack 2x4");
+                    SDPA_DeviceZoneScopedN("QKT@V pack 2x4");
                     tile_regs_wait();
                     PACK(DPRINT << "QKT@V Pack for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
                     uint32_t dst_idx = 0;
@@ -445,6 +460,7 @@ void sdpa_inner_loop_8x4x16(
     cb_wait_front(cb_out, Sq_chunk_t * head_dim_t);
     cb_pop_front(cb_out, Sq_chunk_t * head_dim_t);
     MATH(DPRINT << "Finished QKT @ V computation" << ENDL());
+    // tensix_sync();
 }
 
 void kernel_main() {
@@ -471,7 +487,6 @@ void kernel_main() {
     for (uint32_t iter = 0; iter < num_iter; iter++) {
         MATH(DPRINT << "Iteration " << iter << ENDL());
         {
-            DeviceZoneScopedN("sdpa_inner_loop_8x4x16");
             sdpa_inner_loop_8x4x16<
                 Sq_chunk_t,
                 Sk_chunk_t,
