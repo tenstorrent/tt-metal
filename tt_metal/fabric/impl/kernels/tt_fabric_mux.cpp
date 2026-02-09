@@ -112,7 +112,25 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        fabric_connection.wait_for_empty_write_slot();
+        // Bounded spin-wait for a downstream write slot. The bound must be
+        // SHORT (much less than the EDM's per-packet processing time of
+        // ~5-10us) so that when downstream is congested, no single channel
+        // monopolizes forwarding attempts. Without this, channel 0's spin
+        // captures every freed EDM slot before channel 1 gets a turn,
+        // starving channel 1's workers of credits and causing them to hang
+        // in wait_for_empty_write_slot(). A short bound ensures the main
+        // loop rotates through all channels with roughly equal access to
+        // EDM slots, preventing starvation-induced deadlock during teardown.
+        // Data stays in the buffer and is forwarded on a future iteration.
+        constexpr uint32_t MAX_WAIT_ITERS = 256;
+        uint32_t wait_count = 0;
+        while (!fabric_connection.edm_has_space_for_packet()) {
+            tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
+                worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
+            if (++wait_count >= MAX_WAIT_ITERS) {
+                return;
+            }
+        }
 
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
@@ -224,6 +242,12 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
+    // Bounded drain: after GRACEFULLY_TERMINATE, try to drain for at most
+    // MAX_DRAIN_ITERS outer loop iterations (~65ms with current config).
+    // If downstream is permanently blocked, continuing to retry is pointless
+    // and would cause the mux to never exit, blocking dispatch indefinitely.
+    constexpr uint32_t MAX_DRAIN_ITERS = 1000;
+    uint32_t drain_iter_count = 0;
     while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
@@ -237,6 +261,9 @@ void kernel_main() {
             }
 
             if (all_channels_drained) {
+                break;
+            }
+            if (++drain_iter_count >= MAX_DRAIN_ITERS) {
                 break;
             }
         }

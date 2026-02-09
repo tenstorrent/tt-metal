@@ -177,7 +177,19 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        fabric_connection.wait_for_empty_write_slot();
+        // Bounded spin-wait for a downstream write slot. Short bound ensures
+        // fair channel scheduling — see tt_fabric_mux.cpp for detailed comment.
+        constexpr uint32_t MAX_WAIT_ITERS = 256;
+        uint32_t wait_count = 0;
+        while (!fabric_connection.edm_has_space_for_packet()) {
+            if (!is_persistent_channel) {
+                tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
+                    worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
+            }
+            if (++wait_count >= MAX_WAIT_ITERS) {
+                return;
+            }
+        }
 
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
