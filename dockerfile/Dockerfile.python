@@ -59,7 +59,7 @@ ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Install base packages
-RUN umask 000 && uv pip install --no-cache build numpy setuptools==81 pkg_resources
+RUN umask 000 && uv pip install --no-cache build numpy setuptools wheel
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-build-venv
