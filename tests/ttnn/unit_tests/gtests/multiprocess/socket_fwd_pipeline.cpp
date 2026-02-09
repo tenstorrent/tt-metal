@@ -31,7 +31,8 @@ using MeshDeviceClosetBoxSendRecvFixture = tt::tt_fabric::fabric_router_tests::M
 
 // User builds a pipeline in physical space (Host Ranks, Tray IDs, ASIC Locations)
 struct PhysicalPipelineStageConfig {
-    uint32_t tray_id;
+    uint32_t entry_node_tray_id;
+    uint32_t exit_node_tray_id;
     uint32_t entry_node_asic_location;
     uint32_t exit_node_asic_location;
 };
@@ -108,21 +109,57 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
     // Setup pipeline stages in physical space (Host rank, Tray ID, ASIC Location)
     std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = {
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 1}};
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 5, .exit_node_asic_location = 6},
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 7, .exit_node_asic_location = 8},
+        {.entry_node_tray_id = 2, .exit_node_tray_id = 2, .entry_node_asic_location = 8, .exit_node_asic_location = 7},
+        {.entry_node_tray_id = 2, .exit_node_tray_id = 2, .entry_node_asic_location = 6, .exit_node_asic_location = 5},
 
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 5, .exit_node_asic_location = 6},
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 7, .exit_node_asic_location = 8},
+        {.entry_node_tray_id = 2, .exit_node_tray_id = 2, .entry_node_asic_location = 8, .exit_node_asic_location = 7},
+        {.entry_node_tray_id = 2, .exit_node_tray_id = 2, .entry_node_asic_location = 6, .exit_node_asic_location = 5},
+
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 5, .exit_node_asic_location = 6},
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 7, .exit_node_asic_location = 8},
+        {.entry_node_tray_id = 2, .exit_node_tray_id = 2, .entry_node_asic_location = 8, .exit_node_asic_location = 7},
+        {.entry_node_tray_id = 2, .exit_node_tray_id = 2, .entry_node_asic_location = 6, .exit_node_asic_location = 5},
+
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 5, .exit_node_asic_location = 6},
+        {.entry_node_tray_id = 1, .exit_node_tray_id = 1, .entry_node_asic_location = 7, .exit_node_asic_location = 8},
+        {.entry_node_tray_id = 2, .exit_node_tray_id = 2, .entry_node_asic_location = 8, .exit_node_asic_location = 7},
+        {.entry_node_tray_id = 2, .exit_node_tray_id = 2, .entry_node_asic_location = 6, .exit_node_asic_location = 5},
+    };
+
+    std::unordered_map<uint32_t, uint32_t> stage_to_rank_mapping = {
+        {0, 0},
+        {1, 1},
+        {2, 2},
+        {3, 3},
+        {4, 4},
+        {5, 5},
+        {6, 6},
+        {7, 7},
+        {8, 8},
+        {9, 9},
+        {10, 10},
+        {11, 11},
+        {12, 12},
+        {13, 13},
+        {14, 14},
+        {15, 15},
+    };
+
+    // const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
     std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
     for (auto stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
-        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index);
+        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_to_rank_mapping[stage_index]);
         auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
-            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].tray_id),
+            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].entry_node_tray_id),
             tt::tt_metal::ASICLocation(physical_pipeline_stage_configs[stage_index].entry_node_asic_location));
         auto exit_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
-            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].tray_id),
+            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].exit_node_tray_id),
             tt::tt_metal::ASICLocation(physical_pipeline_stage_configs[stage_index].exit_node_asic_location));
         logical_pipeline_stage_configs.emplace_back(LogicalPipelineStageConfig{
             .stage_index = stage_index,
@@ -238,6 +275,10 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             distributed::multihost::Rank(downstream_mesh_id));
         auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
+        std::cout << "Start Coord: " << start_coord << "Sender: " << my_sender
+                  << " Downstream Recv: " << downstream_recv << std::endl;
+        // return;
+
         auto input_tensor = ttnn::distributed::distribute_tensor(
                                 ttnn::experimental::view(
                                     ttnn::arange(0, num_elems, 1, tensor_spec.data_type()), tensor_spec.logical_shape())
@@ -247,8 +288,6 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
                                 .to_device(mesh_device_.get(), tensor_spec.memory_config());
 
         // Warmup iteration
-        std::cout << "Start on " << mesh_device_->get_device(start_coord)->id()
-                  << "to: " << mesh_device_->get_device(my_sender)->id() << std::endl;
         ttnn::experimental::send_async(input_tensor, intermed_send);
         ttnn::experimental::socket_forward(input_tensor, intermed_recv, send_socket, XFER_SIZE);
         barrier();
@@ -286,14 +325,15 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
             std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, my_sender);
+            std::cout << "Recv Coord: " << my_recv << " Send Coord: " << my_sender
+                      << " Downstream Recv: " << downstream_recv << std::endl;
         } else {
             // Pipeline end
             distributed::MeshCoordinate end_coord = pipeline_stages[*pipeline_end_rank].exit_node_coord;
-            std::cout << "Receive on: " << mesh_device_->get_device(my_recv)->id()
-                      << " to: " << mesh_device_->get_device(end_coord)->id() << std::endl;
             std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, end_coord);
+            std::cout << "Recv Coord: " << my_recv << " End Coord: " << end_coord << std::endl;
         }
-
+        // return;
         Tensor output_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
 
         // Warmup iteration
