@@ -2,6 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
+
+def pytest_collection_modifyitems(config, items):
+    """Apply 900s timeout to text_demo test in this directory (device init + model load + prefill can exceed default 300s)."""
+    for item in items:
+        if "text_demo.py::test_demo_text" in item.nodeid:
+            item.add_marker(pytest.mark.timeout(1200))
+
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.
 def pytest_addoption(parser):

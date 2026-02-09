@@ -660,6 +660,9 @@ def create_tt_model(
     ],
     indirect=True,
 )
+@pytest.mark.timeout(
+    900
+)  # Device init + model load + prefill warmup (compile/trace for support_seqlens x batch 1,32) can exceed default 300s
 def test_demo_text(
     input_prompts,
     instruct,

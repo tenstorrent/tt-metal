@@ -751,12 +751,15 @@ class TtModelArgs:
             )
 
             # For flexible chunked SDPA (chunk_start_idx_tensor): fixed program config so one trace
-            # works for any block-aligned chunk_start at replay. Chunk sizes must divide block_size (32).
-            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen: ttnn.SDPAProgramConfig(
+            # works for any block-aligned chunk_start at replay.
+            # Chunk sizes must equal KV cache page_size (block_size) so chunk boundaries align with cache blocks.
+            # page_size is 32 or 64 (vLLM page_block_size); pass from paged_attention_config.block_size at call site.
+            # seqlen not used here, since the padding is always at least 128.
+            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
-                q_chunk_size=32,
-                k_chunk_size=32,
+                q_chunk_size=min(page_size, 128),
+                k_chunk_size=min(page_size, 128),
             )
 
             def find_largest_divisor(n, max_divisor=8):

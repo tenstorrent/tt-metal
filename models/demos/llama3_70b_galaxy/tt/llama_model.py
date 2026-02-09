@@ -5,7 +5,6 @@
 import ttnn
 import torch
 from tqdm import tqdm
-from loguru import logger
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
@@ -245,16 +244,6 @@ class TtTransformer(LightweightModule):
         rows = 8
         user_id_column = user_id // rows  # 0 for user_id 0-7, 1 for user_id 8-15, etc.
 
-        def _table_preview(tensor):
-            if tensor is None:
-                return "None"
-            flat = tensor.flatten()
-            preview = flat[:8].tolist()
-            return f"shape={tuple(tensor.shape)}, first={preview}"
-
-        logger.info(
-            f"[PREFILL_TABLE_DEBUG] chunk_start_idx={chunk_start_idx} batch_size={batch_size} user_id={user_id}"
-        )
         if page_table is not None:
             # NOTE ON SENTINELS / SAFETY:
             # - For chunked SDPA (prefix caching, chunk_start_idx > 0), the SDPA reads the page table.
@@ -264,11 +253,6 @@ class TtTransformer(LightweightModule):
             #   Using -1 for inactive columns avoids unnecessary writes and potential race conditions.
             use_chunked_sdpa_path = chunk_start_idx is not None and chunk_start_idx > 0
             inactive_fill_value = 0 if use_chunked_sdpa_path else -1
-
-            def _fill_safe_row(row_1d: torch.Tensor) -> torch.Tensor:
-                # For chunked SDPA path, convert any 0s to inactive_fill_value to ensure consistency.
-                # For non-chunked path, keep original values (0s from vLLM are valid block IDs).
-                return row_1d.clone()
 
             # Chunked SDPA requires page_table "stick size" (row width) to be a multiple of 32 Bytes.
             # Page table entries are int32, so this means the number of columns must be a multiple of 8
@@ -293,8 +277,8 @@ class TtTransformer(LightweightModule):
                     torch.ones((columns, page_table.shape[1] * batch_size), dtype=torch.int32) * inactive_fill_value
                 )
                 for i in range(columns):
-                    row_block = _fill_safe_row(
-                        page_table[i * batch_size_per_column : (i + 1) * batch_size_per_column, :].reshape(1, -1)
+                    row_block = page_table[i * batch_size_per_column : (i + 1) * batch_size_per_column, :].reshape(
+                        1, -1
                     )
                     page_table_padded[
                         i,
@@ -312,15 +296,13 @@ class TtTransformer(LightweightModule):
                 page_table_padded = torch.ones((columns, num_blocks), dtype=torch.int32) * inactive_fill_value
                 # Note: For prefix caching, page_table is already extracted to a single row (shape: 1, num_blocks),
                 # so we always access row 0. The original user_id is used only to compute user_id_column.
-                row = _fill_safe_row(page_table[0, :])
-                page_table_padded[user_id_column, :num_blocks] = row
+                page_table_padded[user_id_column, :num_blocks] = page_table[0, :]
 
                 # Ensure row width (in bytes) divisible by 32 for chunked SDPA.
                 page_table_padded = _pad_table_cols_to_multiple_of_8_int32(
                     page_table_padded, pad_value=inactive_fill_value
                 )
 
-            logger.info(f"[PREFILL_TABLE_DEBUG] page_table { _table_preview(page_table_padded) }")
             tt_page_table = ttnn.from_torch(
                 page_table_padded,
                 device=None,
@@ -337,9 +319,8 @@ class TtTransformer(LightweightModule):
             assert batch_size == 1, "chunk_page_table is only supported for batch_size=1"
             # Use 0 for inactive columns so no reader ever sees -1.
             chunk_page_table_padded = torch.zeros((columns, chunk_page_table.shape[1]), dtype=torch.int32)
-            chunk_page_table_padded[user_id_column, :] = _fill_safe_row(chunk_page_table[0, :])
+            chunk_page_table_padded[user_id_column, :] = chunk_page_table[0, :]
 
-            logger.info(f"[PREFILL_TABLE_DEBUG] chunk_page_table { _table_preview(chunk_page_table_padded) }")
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table_padded,
                 device=None,
@@ -465,25 +446,6 @@ class TtTransformer(LightweightModule):
 
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
-        # Decode debug: show token ids + positions before going to device
-        try:
-            tok_preview = tokens[:8].tolist()
-        except Exception:
-            tok_preview = "unavailable"
-        try:
-            pos_preview = current_pos[:8].tolist() if hasattr(current_pos, "shape") else current_pos
-            pos_min = int(current_pos.min().item()) if hasattr(current_pos, "min") else "unavailable"
-            pos_max = int(current_pos.max().item()) if hasattr(current_pos, "max") else "unavailable"
-        except Exception:
-            pos_preview, pos_min, pos_max = "unavailable", "unavailable", "unavailable"
-        logger.info(
-            "[DECODE_HOST_INPUT_DEBUG] B={} tokens_first8={} current_pos_first8={} current_pos_min={} current_pos_max={}",
-            B,
-            tok_preview,
-            pos_preview,
-            pos_min,
-            pos_max,
-        )
         tokens = ttnn.from_torch(
             tokens,
             device=None,
@@ -495,16 +457,6 @@ class TtTransformer(LightweightModule):
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
         rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
-        # Debug: log rope_idxs values for comparison
-        try:
-            rope_preview = rope_idxs[:8].tolist() if hasattr(rope_idxs, "tolist") else str(rope_idxs)[:100]
-            logger.info(
-                "[DECODE_ROPE_DEBUG] rot_current_pos_first8={} rope_idxs_first8={}",
-                rot_current_pos[:8].tolist(),
-                rope_preview,
-            )
-        except Exception as e:
-            logger.info("[DECODE_ROPE_DEBUG] failed: {}", e)
         cur_pos_shard_dim = 0
         if is_cur_pos_sharded:
             cur_pos_shard_dim = 1
@@ -600,27 +552,7 @@ class TtTransformer(LightweightModule):
         # Device index for row 0 of each column: col 0 → dev 0, col 1 → dev 1, etc.
         output_device_idx = user_id // 8  # 0, 1, 2, or 3
 
-        logger.info(
-            "[PREFILL_PROCESS_DEBUG] tt_out shape={} last_token_idx={} user_id={}",
-            tt_out.shape,
-            last_token_idx,
-            user_id,
-        )
-        # Debug: sample raw model output before norm
-        try:
-            out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
-            last_idx = last_token_idx[0] if isinstance(last_token_idx, list) else last_token_idx
-            out_sample = out_torch[0, 0, last_idx, :8].tolist()
-            out_norm = float(out_torch[0, 0, last_idx, :].norm().item())
-            logger.info(
-                "[PREFILL_RAW_DEBUG] out_sample_at_last_token={} out_norm={:.4f}",
-                [f"{v:.4f}" for v in out_sample],
-                out_norm,
-            )
-        except Exception as e:
-            logger.info("[PREFILL_RAW_DEBUG] failed: {}", e)
         x, _ = self.norm(tt_out, res=None, mode="prefill")
-        logger.info("[PREFILL_PROCESS_DEBUG] after norm x shape={}", x.shape)
         if isinstance(last_token_idx, list):
             # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
             batch_size = len(last_token_idx)
@@ -635,14 +567,7 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
 
-            logger.info(
-                "[PREFILL_SLICE_DEBUG] slicing x at [{}:{}] from shape {}",
-                last_token_idx_i,
-                last_token_idx_i + 1,
-                x.shape,
-            )
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
-            logger.info("[PREFILL_SLICE_DEBUG] after slice x shape={}", x.shape)
             tt_logits = self.lm_head(x, None, mode="prefill")
             # Gather the output across all devices and untilize the tensor (for argmax)
             tt_logits = self.tt_ccl.line_all_gather(
@@ -662,32 +587,10 @@ class TtTransformer(LightweightModule):
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
 
-            # Debug: print top-k logits before argmax
-            try:
-                logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[output_device_idx]).float()[0, 0, 0, :]
-                topk_vals, topk_ids = torch.topk(logits_torch, k=5)
-                logger.info(
-                    "[PREFILL_LOGITS_DEBUG] last_token_idx={} logits_shape={} min={:.4f} max={:.4f} mean={:.4f}",
-                    last_token_idx_i,
-                    logits_torch.shape,
-                    logits_torch.min().item(),
-                    logits_torch.max().item(),
-                    logits_torch.mean().item(),
-                )
-                logger.info("[PREFILL_LOGITS_DEBUG] top5_ids={} top5_vals={}", topk_ids.tolist(), topk_vals.tolist())
-            except Exception as e:
-                logger.info("[PREFILL_LOGITS_DEBUG] failed to get logits: {}", e)
-
             tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
             if isinstance(tt_out, list):
                 tt_out = tt_out[0]
             toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[output_device_idx]).float()[0, 0, 0, :1]
-            # Validate token ID is within expected range
-            try:
-                toks_value = int(toks.item())
-            except Exception:
-                toks_value = "unavailable"
-            logger.info("[PREFILL_OUTPUT_DEBUG] last_token_idx={} token={}", last_token_idx_i, toks_value)
             toks_list.append(toks)
 
         if tt_out_logits_saved is not None:
@@ -734,32 +637,10 @@ class TtTransformer(LightweightModule):
     ):
         """
         Prefill forward. Expects rot_mats to be full (0..max_seq_len) from get_or_create_prefill_rot_mats(),
-        and chunk_start_idx to be a device tensor (e.g. shape (1,) int32) used only for rot mats slicing.
+        and chunk_start_idx to be a device tensor (e.g. shape (1,) int32) used for rot mats slicing and chunked SDPA.
         start_pos is a Python int used for attention decisions (SDPA path, program config); must match
         the value in chunk_start_idx.
         """
-        logger.info(
-            "[PREFILL_FORWARD_DEBUG] x_shape={} start_pos={} get_last_token={} batch_size={} page_table={}",
-            x.shape,
-            start_pos,
-            get_last_token,
-            batch_size,
-            "set" if page_table is not None else "None",
-        )
-        # Debug: sample input embedding to verify data is flowing correctly
-        try:
-            x_torch = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
-            x_sample = (
-                x_torch[0, 0, get_last_token, :8].tolist() if get_last_token >= 0 else x_torch[0, 0, 0, :8].tolist()
-            )
-            x_norm = float(x_torch.norm().item())
-            logger.info(
-                "[PREFILL_EMB_DEBUG] x_sample_at_last_token={} x_norm={:.4f}",
-                [f"{v:.4f}" for v in x_sample],
-                x_norm,
-            )
-        except Exception as e:
-            logger.info("[PREFILL_EMB_DEBUG] failed: {}", e)
         assert rot_mats is not None, "prefill requires rot_mats (full from get_or_create_prefill_rot_mats)"
         assert chunk_start_idx is not None and hasattr(
             chunk_start_idx, "shape"
@@ -778,19 +659,6 @@ class TtTransformer(LightweightModule):
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
-        # Debug: sample output logits for comparison
-        try:
-            logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()
-            last_idx = get_last_token[0] if isinstance(get_last_token, list) else get_last_token
-            logits_sample = logits_torch[0, 0, last_idx, :8].tolist()
-            logits_norm = float(logits_torch[0, 0, last_idx, :].norm().item())
-            logger.info(
-                "[PREFILL_LOGITS_DEBUG] logits_sample={} logits_norm={:.4f}",
-                [f"{v:.4f}" for v in logits_sample],
-                logits_norm,
-            )
-        except Exception as e:
-            logger.info("[PREFILL_LOGITS_DEBUG] failed: {}", e)
         return tt_logits
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs, is_cur_pos_sharded=False):
@@ -824,18 +692,6 @@ class TtTransformer(LightweightModule):
         """
         rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
         x_embd = self.embd(x)
-        # Debug: sample embedding values for comparison
-        try:
-            emb_torch = ttnn.to_torch(ttnn.get_device_tensors(x_embd)[0]).float()
-            emb_sample = emb_torch[0, 0, 0, :8].tolist()
-            emb_norm = float(emb_torch[0, 0, 0, :].norm().item())
-            logger.info(
-                "[DECODE_EMB_DEBUG] x_embd_sample={} emb_norm={:.4f}",
-                [f"{v:.4f}" for v in emb_sample],
-                emb_norm,
-            )
-        except Exception as e:
-            logger.info("[DECODE_EMB_DEBUG] failed: {}", e)
         tt_logits = self.forward(
             x_embd,
             current_pos,
@@ -844,20 +700,6 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
-        # Debug: sample logits values for comparison
-        try:
-            logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits[0])[0]).float()
-            logits_sample = logits_torch[0, 0, 0, :8].tolist()
-            logits_norm = float(logits_torch[0, 0, 0, :].norm().item())
-            logits_argmax = int(logits_torch[0, 0, 0, :].argmax().item())
-            logger.info(
-                "[DECODE_LOGITS_DEBUG] logits_sample={} logits_norm={:.4f} argmax={}",
-                [f"{v:.4f}" for v in logits_sample],
-                logits_norm,
-                logits_argmax,
-            )
-        except Exception as e:
-            logger.info("[DECODE_LOGITS_DEBUG] failed: {}", e)
         self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
 
         if return_logits:
@@ -954,15 +796,10 @@ class TtTransformer(LightweightModule):
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
-        # Prefill: slice full rot mats [chunk_start_idx, max_seq_len); _tt_seq_len_buffer holds max_seq_len (never updated).
-        # chunk_start_idx is 1D [N]; ttnn.slice needs start [0, 0, N, 0] - build from zeros buffer.
+        # Prefill: always slice full rot mats [chunk_start_idx, max_seq_len) so one trace graph works for
+        # both prefix-cached (chunk_start_idx > 0) and non-cached (chunk_start_idx == 0). When chunk_start_idx
+        # is 0, slice from 0 gives the full rot_mats. chunk_start_idx is 1D [N]; ttnn.slice needs start [0, 0, N, 0].
         if mode == "prefill":
-            logger.info(
-                "[PREFILL_ROPE_DEBUG] start_pos={} slice={}",
-                start_pos,
-                "yes" if start_pos > 0 else "no",
-            )
-        if mode == "prefill" and start_pos > 0:
             full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
             num_devices = self.args.cluster_shape[0] * self.args.cluster_shape[1]
             z = self._tt_slice_start_zeros_4

@@ -45,10 +45,9 @@ def get_padded_prefill_len(seq_len: int) -> int:
 def _get_max_blocks_prefill(kv_cache) -> int:
     """
     Return the maximum number of blocks to use for prefill trace page_table shape,
-    derived only from the KV cache tensor shape. Assumes paged layout where the
+    derived from the KV cache tensor shape. Assumes paged layout where the
     first dimension of the cache tensor is the number of blocks.
     """
-    # kv_cache[0] = keys for first layer; [0] = first device tensor if multi-device
     first_cache_tensor = kv_cache[0][0]
     return int(first_cache_tensor.shape[0])
 
@@ -111,11 +110,8 @@ class Generator:
         # Split sampling: decode trace captures transformer only, sampling runs separately
         self.enable_split_sampling = True  # Decode trace returns logits, sampling is separate
         self.model.enable_internal_trace = self.enable_split_sampling  # NEVER trace sampling - causes buffer corruption
-        self._disable_prefill_tracing = True  # Whether to disable prefill traces
+        self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
-        self._trace_debug_seq = 0  # Monotonic seq for hang-debug logs (trace capture/replay ordering)
-        # TEMPORARY: Force simplest prefill path for testing (no tracing, no prefix caching, no ring SDPA)
-        self._force_simple_prefill = True
 
     def warmup_prefill_traces(
         self,
@@ -147,10 +143,11 @@ class Generator:
                     logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
                     continue
                 if batch == 32:
-                    # For warmup, ALL rows need valid block indices (not -1)
-                    # because use_batched_prefill=False processes each user individually
-                    # and -1 page table entries cause device hangs
-                    warmup_page_table = torch.zeros(batch, page_table.shape[1], dtype=torch.int32)
+                    current_batch = page_table.shape[0]
+                    if current_batch < batch:
+                        pad_rows = batch - current_batch
+                        padding = torch.full((pad_rows, page_table.shape[1]), -1, dtype=torch.int32)
+                        warmup_page_table = torch.cat([page_table, padding], dim=0)
                 else:
                     warmup_page_table = page_table
                 warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
@@ -184,18 +181,6 @@ class Generator:
     ):
         if getattr(self, "_disable_prefill_tracing", False):
             enable_trace = False
-
-        # TEMPORARY: Force simplest prefill path for testing
-        if getattr(self, "_force_simple_prefill", False):
-            enable_trace = False
-            if start_pos is not None and any(x > 0 for x in start_pos):
-                logger.info("[SIMPLE_PREFILL_FORCE] Forcing start_pos=None to disable prefix caching")
-                start_pos = None
-            logger.info(
-                "[SIMPLE_PREFILL_FORCE] Using simplest path: enable_trace=False, start_pos={}, "
-                "will use non-chunked SDPA (ensure seq_len <= 1024 to avoid ring SDPA)",
-                start_pos,
-            )
 
         if self.prefill_traces_warmup is False:
             self.warmup_prefill_traces(
@@ -305,35 +290,12 @@ class Generator:
                 # Extract tokens skipping cached ones
                 num_cached_tokens = num_cached_tokens_list[id]
                 new_tokens_len = seq_len - num_cached_tokens
-                tail_start = max(0, seq_len - 8)
-                logger.info(
-                    "[PREFILL_INPUT_DEBUG] user_id={} seq_len={} last_token_idx={} tail_tokens={}",
-                    user_id,
-                    seq_len,
-                    last_token_idx,
-                    tokens[id, tail_start:seq_len].tolist(),
-                )
                 prefill_ids = torch.cat(
                     [
                         tokens[id : id + 1, num_cached_tokens:seq_len],  # Skip cached tokens
-                        torch.zeros(1, prefill_seq_len - new_tokens_len).long(),
+                        torch.zeros(1, prefill_seq_len - new_tokens_len).long(),  # Pad to prefill_seq_len
                     ],
                     dim=-1,
-                )
-                # Extra debug: sanity-check padding and checksum for non-traced debugging
-                try:
-                    pad_len = int(prefill_seq_len - new_tokens_len)
-                    checksum = int(prefill_ids.sum().item())
-                except Exception:
-                    pad_len = "unavailable"
-                    checksum = "unavailable"
-                logger.info(
-                    "[PREFILL_IDS_DEBUG] user_id={} new_tokens_len={} prefill_seq_len={} pad_len={} checksum={}",
-                    user_id,
-                    new_tokens_len,
-                    prefill_seq_len,
-                    pad_len,
-                    checksum,
                 )
 
             if page_table is not None:
@@ -341,28 +303,11 @@ class Generator:
                 page_table_user = self._get_prefill_user_page_table(
                     page_table,
                     kv_cache,
-                    num_cached_tokens + prefill_seq_len,
+                    num_cached_tokens + prefill_seq_len,  # Use full seq_len including cached and padding
                     user_id,
-                    use_batched_prefill,  # Use full seq_len including cached
+                    use_batched_prefill,
                 )
-                # Debug: summarize the active user's row (first few entries) for the prefill page table
-                try:
-                    row = page_table_user[user_id if not use_batched_prefill else 0, :].to(torch.int32)
-                    first = row[:16].tolist()
-                    neg = int((row < 0).sum().item())
-                    zero = int((row == 0).sum().item())
-                    logger.info(
-                        "[PREFILL_PAGETABLE_DEBUG] user_id={} prefill_len={} blocks={} first16={} neg={} zero={}",
-                        user_id if not use_batched_prefill else "batched",
-                        num_cached_tokens + prefill_seq_len,
-                        int(page_table_user.shape[1]),
-                        first,
-                        neg,
-                        zero,
-                    )
-                except Exception as e:
-                    logger.info("[PREFILL_PAGETABLE_DEBUG] failed to summarize page_table_user: {}", e)
-                # remove the first user from the page table
+                # remove the first user from the page table, since the function above always looks at the user at index 0
                 page_table = page_table[1:, :]
 
             prefill_kwargs = {
@@ -521,18 +466,6 @@ class Generator:
         seq_len = tokens.shape[-1]
         use_prefix_caching = num_cached_tokens > 0
 
-        # TEMPORARY: Log which path is being taken
-        if getattr(self, "_force_simple_prefill", False):
-            logger.info(
-                "[SIMPLE_PREFILL_PATH] seq_len={}, batch_size={}, num_cached_tokens={}, "
-                "use_prefix_caching={}, chunk_page_table={}",
-                seq_len,
-                batch_size,
-                num_cached_tokens,
-                use_prefix_caching,
-                "None" if not use_prefix_caching else "set",
-            )
-
         # If batch_size is 1, extract the single user's page table row.
         #    Page_table comes from _get_prefill_user_page_table which places user data at row user_id
         #    We extract to (1, num_blocks) so prepare_prefill_inputs_host can use page_table[0, :]
@@ -563,7 +496,7 @@ class Generator:
             assert (
                 num_cached_tokens % block_size == 0
             ), f"num_cached_tokens ({num_cached_tokens}) must be aligned to block_size ({block_size})."
-            # Assert that the end position (num_cached_tokens + seq_len) is also aligned to block_size
+            # Assert that the padded end position (num_cached_tokens + seq_len) is also aligned to block_size
             # to ensure the end block calculation using floor division is correct
             assert (num_cached_tokens + seq_len) % block_size == 0, (
                 f"End position (num_cached_tokens + seq_len = {num_cached_tokens + seq_len}) must be aligned to "
@@ -608,7 +541,7 @@ class Generator:
                 x=tt_prefill_input,
                 user_id=tt_user_id,
                 page_table=tt_page_table,
-                chunk_page_table=tt_chunk_page_table,  # Use converted ttnn tensor
+                chunk_page_table=tt_chunk_page_table,
                 chunk_start_idx=tt_chunk_start_idx,
                 start_pos=chunk_start_idx,  # Python int for attention (SDPA path, program config)
                 get_last_token=last_token_idx_relative,  # Use RELATIVE index for slicing within chunk
@@ -618,7 +551,7 @@ class Generator:
             )
             tt_toks = self.model.process_output_prefill(
                 tt_toks,
-                last_token_idx=(last_token_idx_relative),
+                last_token_idx=last_token_idx_relative,
                 tt_out_logits_saved=tt_out_logits_saved,
                 user_id=user_id,
             )
@@ -654,7 +587,7 @@ class Generator:
                 batch_size=batch_size,
             )
             tt_toks = self.model.process_output_prefill(
-                tt_toks, last_token_idx=(last_token_idx), tt_out_logits_saved=tt_out_logits_saved, user_id=user_id
+                tt_toks, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved, user_id=user_id
             )
             return tt_toks
 
@@ -672,74 +605,50 @@ class Generator:
     ):
         """
         Tracing with prefix caching support.
-        Trace key is (prefill_seq_len, batch_size) only; page_table/chunk_page_table
-        are padded to fixed shapes so one trace serves any num_cached_blocks.
+        Trace key is (prefill_seq_len, batch_size) - does not differentiate between num_cached_tokens.
+        page_table is padded to fixed max shape so one trace can be reused for any num_cached_blocks.
         """
-        is_last_token_list = isinstance(last_token_idx, (list, tuple))
-        if is_last_token_list and batch_size == 1:
-            last_token_idx = last_token_idx[user_id] if isinstance(user_id, int) else last_token_idx[0]
-
         # Extract single user's page table row for batch_size=1
         # page_table comes from _get_prefill_user_page_table which places user data at row user_id
         # We extract to (1, num_blocks) so prepare_prefill_inputs_host can use page_table[0, :]
         if page_table is not None and batch_size == 1:
             page_table = page_table[user_id : user_id + 1, :]
 
-        # Compute prefix caching values and fixed trace shapes (batch_size==1 only)
+        # Prefix caching and fixed trace shapes only for batch_size==1 (batched prefill never uses prefix caching)
         use_prefix_caching = num_cached_tokens > 0
         chunk_start_idx = num_cached_tokens  # 0 when not prefix caching
         block_size = get_block_size(kv_cache)
-        max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
-        chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
 
-        if use_prefix_caching:
-            chunk_start_block = num_cached_tokens // block_size
-            chunk_end_block = (num_cached_tokens + prefill_seq_len) // block_size
-            chunk_page_table = page_table[:, chunk_start_block:chunk_end_block]
-            page_table = _pad_or_create_page_table(
-                page_table, num_blocks_in_seq(prefill_seq_len + num_cached_tokens, block_size)
-            )
-        else:
-            chunk_page_table = None
-
-        # For batch_size==1: fixed shapes so one trace key works for any num_cached_blocks
+        chunk_page_table = None
         if batch_size == 1:
-            page_table = _pad_or_create_page_table(page_table, max_blocks_prefill)
+            max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
+            page_table = _pad_or_create_page_table(page_table, max_blocks_prefill)  # Pad to fixed shape
+            if use_prefix_caching:
+                chunk_start_block = num_cached_tokens // block_size
+                chunk_end_block = (num_cached_tokens + prefill_seq_len) // block_size
+                chunk_page_table = page_table[:, chunk_start_block:chunk_end_block]
+            chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
             chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
 
         use_ring_sdpa = should_use_ring_distributed_sdpa(prefill_seq_len, batch_size, chunk_start_idx)
+        # use_start_pos: sp0 = no prefix cache (chunk_start_idx 0), sp1 = prefix cache (chunk_start_idx > 0).
+        # Required because the attention path differs (regular/ring SDPA vs chunked SDPA + fill table).
         use_start_pos = "sp1" if (chunk_start_idx is not None and chunk_start_idx > 0) else "sp0"
         trace_key = f"{prefill_seq_len}_{batch_size}_{'ring' if use_ring_sdpa else 'no_ring'}_{use_start_pos}"
 
-        def _table_preview(tensor):
-            if tensor is None:
-                return "None"
-            flat = tensor.flatten()
-            preview = flat[:8].tolist()
-            return f"shape={tuple(tensor.shape)}, first={preview}"
-
-        logger.info(
-            "[PREFILL_TRACE_DEBUG] key={} start_pos={} ring_sdpa={} page_table={} chunk_page_table={}",
-            trace_key,
-            chunk_start_idx,
-            use_ring_sdpa,
-            _table_preview(page_table),
-            _table_preview(chunk_page_table),
-        )
-
         # For prefix caching, the model output has only prefill_seq_len positions (the chunk).
-        # get_last_token must be the relative index within the chunk (0..prefill_seq_len-1).
-        if is_last_token_list and batch_size > 1:
-            last_token_idx_for_trace = (
+        # Relative index within the chunk (0..prefill_seq_len-1) for get_last_token and output processing.
+        if batch_size > 1:
+            last_token_idx_relative = (
                 [idx - num_cached_tokens for idx in last_token_idx] if use_prefix_caching else list(last_token_idx)
             )
         else:
-            last_token_idx_for_trace = last_token_idx - num_cached_tokens
+            last_token_idx_relative = last_token_idx - num_cached_tokens if use_prefix_caching else last_token_idx
 
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 tokens,
-                last_token_idx_for_trace,  # Relative index for get_last_token (chunk has prefill_seq_len positions)
+                last_token_idx_relative,
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 kv_cache=kv_cache,
@@ -750,15 +659,7 @@ class Generator:
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
-        # Debug: print input tokens checksum before trace
-        tokens_checksum = tokens.sum().item() if hasattr(tokens, "sum") else "N/A"
-        logger.info(
-            "[PREFILL_TRACE_INPUT] trace_key={} tokens_shape={} tokens_checksum={} user_id={}",
-            trace_key,
-            tuple(tokens.shape),
-            tokens_checksum,
-            user_id,
-        )
+
         tt_out_trace = self._prefill_forward_trace_text(
             self.trace_id_prefill[trace_key],
             self.trace_inputs_prefill[trace_key],
@@ -787,14 +688,6 @@ class Generator:
         Captures a trace for the prefill_forward method with prefix caching support.
         Uses full rot mats + chunk_start_idx device tensor; slice is inside the trace.
         """
-        logger.info(
-            "[PREFILL_CAPTURE_DEBUG] tokens_shape={} last_token_idx={} user_id={} start_pos={} batch_size={}",
-            tuple(tokens.shape),
-            last_token_idx,
-            user_id,
-            start_pos,
-            batch_size,
-        )
         # Get host tensors (tokens, user_id, page_table, chunk_page_table, chunk_start_idx)
         host_inputs = self.model.prepare_prefill_inputs_host(
             tokens,
@@ -812,7 +705,7 @@ class Generator:
             mesh_device=self.mesh_device,
         )
 
-        # Transform inputs (no rot_mats computed here)
+        # Transform inputs
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_tokens, tt_user_id, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx = transformed_inputs
         full_rot_mats = self.model.get_or_create_prefill_rot_mats()
@@ -838,10 +731,6 @@ class Generator:
             (tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host, tt_chunk_start_idx_host),
             mesh_device=self.mesh_device,
         )
-        # Reset CCL indices so the captured trace sees the same state as replay (indices at 0).
-        # Otherwise capture runs after compile (indices advanced); replay runs after another
-        # trace + process_output_prefill (different indices) and can deadlock on 2048_1_0.
-        self.model.tt_ccl.reset_gather_and_buffer_idx()
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_tokens, tt_user_id, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx = transformed_inputs
@@ -878,17 +767,6 @@ class Generator:
         """
         Executes the trace for the prefill_forward method with prefix caching support.
         """
-        # Ensure all prior device work is done before running this trace. When warming up
-        # multiple keys in sequence (e.g. 4096_1_0 then 2048_1_0), the previous key's
-        # process_output_prefill (line_all_gather, etc.) may still be in flight; without
-        # this sync, the replayed trace can wait forever at synchronize_device.
-        ttnn.synchronize_device(self.mesh_device)
-        # Reset CCL indices so every replay starts from the same state as capture (indices at 0).
-        # Required when running multiple traces in sequence (e.g. 4096_1_0 then 2048_1_0):
-        # process_output_prefill after the first trace advances indices, so the second trace
-        # would otherwise see mismatched semaphore/buffer state and can deadlock.
-        self.model.tt_ccl.reset_gather_and_buffer_idx()
-
         # Get host tensors (tokens, user_id, page_table, chunk_page_table, chunk_start_idx)
         host_inputs = self.model.prepare_prefill_inputs_host(
             tokens,
@@ -909,10 +787,7 @@ class Generator:
         )
 
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
-        # Synchronize before process_output_prefill to prevent CCL state conflicts
-        # between trace's CCL operations and process_output_prefill's line_all_gather
-        logger.info("Executed trace")
-        ttnn.synchronize_device(self.mesh_device)
+
         return tt_out_trace
 
     def decode_forward_text(
@@ -935,58 +810,6 @@ class Generator:
     ):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
-
-        # Decode input debug (outside traced region)
-        try:
-            tok0 = tokens[:8, :].reshape(-1)[:8].tolist() if isinstance(tokens, torch.Tensor) else "unavailable"
-        except Exception:
-            tok0 = "unavailable"
-        try:
-            pos0 = start_pos[:8].tolist() if isinstance(start_pos, torch.Tensor) else start_pos
-        except Exception:
-            pos0 = "unavailable"
-        logger.info(
-            "[DECODE_INPUT_DEBUG] enable_trace={} tokens_shape={} tokens_first8={} start_pos_first8={}",
-            enable_trace,
-            tuple(tokens.shape) if hasattr(tokens, "shape") else "unavailable",
-            tok0,
-            pos0,
-        )
-        # Track decode step count for limited debug output
-        if not hasattr(self, "_decode_step_count"):
-            self._decode_step_count = 0
-        self._decode_step_count += 1
-        if page_table is not None and isinstance(page_table, torch.Tensor):
-            try:
-                row0 = page_table[0, :64].to(torch.int32)
-                logger.info(
-                    "[DECODE_PAGETABLE_DEBUG] page_table_shape={} row0_first16={} row0_neg={} row0_zero={} row0_max={}",
-                    tuple(page_table.shape),
-                    row0[:16].tolist(),
-                    int((row0 < 0).sum().item()),
-                    int((row0 == 0).sum().item()),
-                    int(row0.max().item()) if row0.numel() > 0 else "unavailable",
-                )
-            except Exception as e:
-                logger.info("[DECODE_PAGETABLE_DEBUG] failed to summarize page_table: {}", e)
-        # Compare decode start_pos[0] vs last prefill metadata, if available
-        try:
-            if (
-                hasattr(self, "_debug_last_prefill_meta")
-                and 0 in self._debug_last_prefill_meta
-                and isinstance(start_pos, torch.Tensor)
-            ):
-                meta = self._debug_last_prefill_meta[0]
-                logger.info(
-                    "[DECODE_PREFILL_XCHECK] start_pos0={} prefill_last_token_idx={} prefill_seq_len={} prompt_seq_len={} num_cached_tokens={}",
-                    int(start_pos[0].item()),
-                    meta.get("last_token_idx"),
-                    meta.get("prefill_seq_len"),
-                    meta.get("seq_len"),
-                    meta.get("num_cached_tokens"),
-                )
-        except Exception:
-            pass
 
         if sampling_params is None:
             return_logits = True
@@ -1305,25 +1128,8 @@ class Generator:
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len, user_id, use_batched_prefill=False):
         # Output shape: (32, num_blocks)
         # Either all 32 users or just the single user at the given user_id index
-        # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
-        # Debug: inspect incoming page_table row 0 (or first batch row) before slicing
-        try:
-            if isinstance(page_table, torch.Tensor):
-                row0 = page_table[0, : min(64, page_table.shape[1])].to(torch.int32)
-                logger.info(
-                    "[PREFILL_PAGETABLE_SRC_DEBUG] prefill_len={} block_size={} num_blocks={} src_shape={} row0_first16={} row0_neg={} row0_zero={}",
-                    int(prefill_len),
-                    int(block_size),
-                    int(num_blocks),
-                    tuple(page_table.shape),
-                    row0[:16].tolist(),
-                    int((row0 < 0).sum().item()),
-                    int((row0 == 0).sum().item()),
-                )
-        except Exception as e:
-            logger.info("[PREFILL_PAGETABLE_SRC_DEBUG] failed: {}", e)
         page_table = page_table[:, :num_blocks]
         if page_table.shape[1] < num_blocks:
             # Pad with 0 (read-safe); never use -1 so no code path reads from -1.
@@ -1331,25 +1137,15 @@ class Generator:
             page_table = torch.cat([page_table, padding], dim=1)
         # Pad page table to 32 users; use 0 for inactive rows (read-safe).
         padded_page_table = torch.zeros(32, page_table.shape[1], dtype=torch.int32)
+
         if use_batched_prefill:
             for i, user in enumerate(user_id):
                 padded_page_table[user, :] = page_table[i, :]
         else:
-            padded_page_table[user_id, :] = page_table[0, :]
-        # Debug: inspect resulting padded page_table for selected user
-        try:
-            if isinstance(padded_page_table, torch.Tensor) and (not use_batched_prefill) and isinstance(user_id, int):
-                row = padded_page_table[user_id, : min(64, padded_page_table.shape[1])].to(torch.int32)
-                logger.info(
-                    "[PREFILL_PAGETABLE_DST_DEBUG] user_id={} dst_shape={} row_first16={} row_neg={} row_zero={}",
-                    user_id,
-                    tuple(padded_page_table.shape),
-                    row[:16].tolist(),
-                    int((row < 0).sum().item()),
-                    int((row == 0).sum().item()),
-                )
-        except Exception:
-            pass
+            padded_page_table[user_id, :] = page_table[
+                0, :
+            ]  # 0 here because we remove previous users from the page table before calling this function
+
         return padded_page_table
 
     def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:

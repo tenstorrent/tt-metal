@@ -4,11 +4,12 @@
 
 import torch
 import ttnn
-from loguru import logger
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 
 
+# Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
+# ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
 def should_use_ring_distributed_sdpa(seq_len: int, batch_size: int, chunk_start_idx) -> bool:
     return seq_len > 1024 and batch_size == 1 and (chunk_start_idx is None or chunk_start_idx == 0)
 
@@ -87,8 +88,10 @@ class TtLlamaAttention(LightweightModule):
         # Column bounds for prefix caching: mask = (lower <= user_id < upper)
         # Column 0: [0, 8), Column 1: [8, 16), Column 2: [16, 24), Column 3: [24, 32)
         # Shape [8, 4, 1, 32]: last dim must be 32 for ttnn typecast compatibility (ROW_MAJOR requires %32)
-        # Use uint32 to match user_id dtype; ge/lt can be wrong when mixing uint32 and int32
+        # Use uint32 to match user_id dtype;
         if self.TG:
+            # Per-column user_id bounds for chunked SDPA mask: column col is active for user_id in [col*8, (col+1)*8).
+            # Sharded over 8x4 mesh (dims 0,1); each device gets (1, 1, 1, 32). Column 0: [0,8), 1: [8,16), 2: [16,24), 3: [24,32).
             lower = torch.zeros(8, 4, 1, 32, dtype=torch.int32)
             upper = torch.zeros(8, 4, 1, 32, dtype=torch.int32)
             for col in range(4):
@@ -773,14 +776,6 @@ class TtLlamaAttention(LightweightModule):
         if ring_distributed_sdpa:
             k_tensor = k_heads_1KSD_8b
             v_tensor = v_heads_1VSD_8b
-            logger.info(
-                "[PREFILL_SDPA_DEBUG] ring seq_len={} batch_size={} chunk_start_idx={} ring_sdpa={} chunked_sdpa={}",
-                seq_len,
-                batch_size,
-                chunk_start_idx,
-                ring_distributed_sdpa,
-                use_chunked_sdpa,
-            )
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_tensor,
@@ -788,9 +783,7 @@ class TtLlamaAttention(LightweightModule):
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](
-                    seq_len, chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0
-                ),
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=0),
                 page_table=None,
                 chunk_start_idx=None,
             )
@@ -798,18 +791,11 @@ class TtLlamaAttention(LightweightModule):
             # When using prefix caching (chunk_start_idx provided), use chunked SDPA with KV cache tensors.
             # Flexible path: chunk_start_idx_tensor so one trace works for any chunk_start at replay.
             if use_chunked_sdpa:
-                logger.info(
-                    "[PREFILL_SDPA_DEBUG] flexible seq_len={} batch_size={} chunk_start_idx={} ring_sdpa={} chunked_sdpa={}",
-                    seq_len,
-                    batch_size,
-                    chunk_start_idx,
-                    ring_distributed_sdpa,
-                    use_chunked_sdpa,
-                )
                 assert page_table is not None, "page_table must be provided for prefix caching"
                 assert (
                     chunk_start_idx_tensor is not None
                 ), "prefix caching requires chunk_start_idx_tensor for flexible SDPA"
+                page_size = self.paged_attention_config.block_size if self.paged_attention_config else 32
                 attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                     input_tensor_q=q_heads_1QSD_8b,
                     input_tensor_k=keys_BKSD,
@@ -817,23 +803,27 @@ class TtLlamaAttention(LightweightModule):
                     page_table_tensor=page_table,
                     chunk_start_idx_tensor=chunk_start_idx_tensor,
                     compute_kernel_config=self.compute_kernel_config_hifi4,
-                    program_config=self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"](seq_len),
+                    program_config=self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"](seq_len, page_size),
                 )
 
-                # Replicate active column's data to all columns for correct RMSNORM behavior
-                # Active column = user_id // 8. Zero inactive columns, then all-reduce to replicate.
+                # Replicate active column's data to all columns for correct RMSNORM behavior.
+                # Chunked SDPA writes only to the column for this user_id; we zero others and all-reduce so every column has the same output.
                 if self.column_lower is not None:
+                    # user_id_for_mask: [1, 1, 1, 1] — scalar user_id broadcast-friendly for comparison.
                     user_id_for_mask = ttnn.reshape(user_id, (1, 1, 1, 1))
-                    # Mask: (lower <= user_id) AND (user_id < upper) -> 1 for active column
-
-                    ge_lower = ttnn.ge(user_id_for_mask, self.column_lower)  # user_id >= lower
-                    lt_upper = ttnn.lt(user_id_for_mask, self.column_upper)  # user_id < upper
+                    # ge_lower: [1, 1, 1, 32] bool — True where user_id >= column lower bound (column belongs to this user or later).
+                    ge_lower = ttnn.ge(user_id_for_mask, self.column_lower)
+                    # lt_upper: [1, 1, 1, 32] bool — True where user_id < column upper bound (column is not past this user).
+                    lt_upper = ttnn.lt(user_id_for_mask, self.column_upper)
+                    # cond: [1, 1, 1, 32] bool — True only on the single active column (lower <= user_id < upper).
                     cond = ttnn.logical_and(ge_lower, lt_upper)
-                    mask = ttnn.where(cond, 1.0, 0.0)  # Shape [1, 1, 1, 32]
-                    # Slice back to [1, 1, 1, 1] for broadcasting with attention output (all 32 values are identical)
+                    # mask: [1, 1, 1, 32] float — 1.0 on active column, 0.0 on inactive columns.
+                    mask = ttnn.where(cond, 1.0, 0.0)
+                    # mask: [1, 1, 1, 1] — slice to one scalar per device (all 32 entries were identical).
                     mask = ttnn.slice(mask, [0, 0, 0, 0], [1, 1, 1, 1])
+                    # attn_output_84SD: zero out inactive columns (multiply by 0); active column unchanged (multiply by 1).
                     attn_output_84SD = ttnn.multiply(attn_output_84SD, mask)
-                    # All-reduce to replicate active column's data to all columns
+                    # line_all_reduce along columns: sum = active column's data (others 0); replicate to all columns so shape/values match for downstream.
                     attn_output_84SD = self.tt_ccl.line_all_reduce(
                         attn_output_84SD,
                         cluster_axis=1,
@@ -845,14 +835,6 @@ class TtLlamaAttention(LightweightModule):
                 # Reshape from [1, 1, seq_len, head_dim] to [1, n_local_heads, seq_len, head_dim]
                 attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
             else:
-                logger.info(
-                    "[PREFILL_SDPA_DEBUG] non-chunked seq_len={} batch_size={} chunk_start_idx={} ring_sdpa={} chunked_sdpa={}",
-                    seq_len,
-                    batch_size,
-                    chunk_start_idx,
-                    ring_distributed_sdpa,
-                    use_chunked_sdpa,
-                )
                 attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
                     q_heads_1QSD_8b,
                     k_heads_1KSD_8b,
