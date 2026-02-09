@@ -271,6 +271,11 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         page_table_stick_size,
         0  // use_attention_sink
     };
+    // Semaphore placeholders (not used in ring, but kernel expects them at indices 23-25)
+    reader_compile_time_args.push_back(0);  // sender_semaphore_id
+    reader_compile_time_args.push_back(0);  // receiver_semaphore_id
+    reader_compile_time_args.push_back(0);  // valid_semaphore_id
+
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);

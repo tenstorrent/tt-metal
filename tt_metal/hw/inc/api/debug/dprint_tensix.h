@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_debug.h"
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include "dprint.h"
 #include "tensix_types.h"
 
