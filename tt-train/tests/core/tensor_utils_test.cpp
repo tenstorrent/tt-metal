@@ -38,6 +38,22 @@ TEST_F(TensorUtilsTest, TestFloatToFromTensorEven) {
     }
 }
 
+TEST_F(TensorUtilsTest, TestFloat32Precision) {
+    /* This test fails if the numbers are converted to BFloat16 inside from_vector. */
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<float> test_data = {1.5F, 1.05F, 1.005F, 1.0005F, 1.00005F};
+
+    auto shape = ttnn::Shape({1, 1, 1, 5});
+    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device);
+
+    auto vec_back = ttml::core::to_vector<float>(tensor);
+
+    ASSERT_EQ(vec_back.size(), test_data.size());
+    for (size_t i = 0; i < test_data.size(); i++) {
+        EXPECT_EQ(vec_back[i], test_data[i]);
+    }
+}
+
 TEST_F(TensorUtilsTest, TestFloatToFromTensorGPT2Tokenizer) {
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t N = 50304;
