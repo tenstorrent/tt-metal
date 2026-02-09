@@ -10,30 +10,43 @@ The methods to verify numerical correctness depend on the op under consideration
 
 The next most direct way to verify accuracy is to compare the output tensor $T$ to a tensor $\hat{T}$ computed via the same (or analogous) op in a trusted reference framework, often PyTorch in tt-metal tests. There are many ways to check for fidelity to a reference solution. In order of strictness:
 
-1. Equality: \
-$T == \hat{T}$
-    - The best metric, but impractical for floating-point cases
-    - Can be computed with `comp_equal()` and asserted with `assert_equal()` in tt-metal
-2. Unit in the last place (ULP): \
-$\frac{|t_{ij} - \hat{t}_{ij}|}{ULP(\hat{t}_{ij})}$ $\forall$ $i,j$, where $ULP(x)$ is the distance between $x$ and the next representable value in that data format
-    - Says how close you are to the correctly-rounded result in that data format
-    - 1-2 ULP good for eltwise ops, but not clear what threshold to use for fused/composite ops consisting of many FP operations
-    - ULP at higher precisions like FP32 are difficult to reason about
-    - Can be computed with `comp_ulp()` and asserted with `assert_with_ulp` in tt-metal
-3. Allclose: \
- $\frac{|t_{ij} - \hat{t}_{ij}|}{\hat{t}_{ij}} \leq atol + rtol * |\hat{t}_{ij}|$ $\forall$ $i,j$
-    - Checks per-element closeness, not permitting any large deviations from reference solution
-    - Can be computed with `comp_allclose()` and  asserted with `assert_allclose()` in tt-metal
-4. Global error matrix norm (there are many, but Frobenius is common): \
-$\frac{||E||_F}{ ||\hat{T}||_F}$, where $E=T-\hat{T}$ and $|| \cdot ||_F$ is the Frobenius norm $||A||_F=\sqrt{\sum_{i=0}^{M-1}\sum_{j=0}^{N-1} |a_{ij}|^2}$
-    - Less strict than per-element comparison, but still captures the notion of error as a whole being small (less than 1%, say)
-    - Can be computed with `comp_relative_frobenious()` and asserted with `assert_relative_frobenius()` in tt-metal
-5. Pearson Correlation Coefficient (PCC): \
-$\frac{cov(vec(T)), vec(\hat{T}))}{\sigma_{vec(T)}\sigma_{vec(\hat{T})}}$, where $vec(\cdot)$ represents the matrix flattened into a vector, $cov$ represents the covariance, and $\sigma$ represents the standard deviation
-    - Measures the general correlation between the output and the reference (if one increases, so does the other). A value of 1 means perfect correlation
-    - Does not detect global bias (output can be scaled by a factor of 2 and PCC can still be 1)
-    - Not easy to reason with a threshold (e.g. 0.999 vs. 0.998)
-    - Can be computed with `comp_pcc()` and asserted with `assert_with_pcc()` in tt-metal
+1. Equality:
+
+$$T == \hat{T}$$
+
+   - The best metric, but impractical for floating-point cases
+   - Can be computed with `comp_equal()` and asserted with `assert_equal()` in tt-metal
+2. Unit in the last place (ULP):
+
+$$\frac{|t_{ij} - \hat{t}_{ij}|}{ULP(\hat{t}_{ij})} \quad \forall \, i,j$$
+
+   where $ULP(x)$ is the distance between $x$ and the next representable value in that data format
+   - Says how close you are to the correctly-rounded result in that data format
+   - 1-2 ULP good for eltwise ops, but not clear what threshold to use for fused/composite ops consisting of many FP operations
+   - ULP at higher precisions like FP32 are difficult to reason about
+   - Can be computed with `comp_ulp()` and asserted with `assert_with_ulp` in tt-metal
+3. Allclose:
+
+$$\frac{|t_{ij} - \hat{t}_{ij}|}{\hat{t}_{ij}} \leq atol + rtol \cdot |\hat{t}_{ij}| \quad \forall \, i,j$$
+
+   - Checks per-element closeness, not permitting any large deviations from reference solution
+   - Can be computed with `comp_allclose()` and  asserted with `assert_allclose()` in tt-metal
+4. Global error matrix norm (there are many, but Frobenius is common):
+
+$$\frac{\lVert E \rVert_F}{\lVert \hat{T} \rVert_F}$$
+
+   where $E=T-\hat{T}$ and $\lVert \cdot \rVert_F$ is the Frobenius norm $\lVert A \rVert_F=\sqrt{\sum_{i=0}^{M-1}\sum_{j=0}^{N-1} |a_{ij}|^2}$
+   - Less strict than per-element comparison, but still captures the notion of error as a whole being small (less than 1%, say)
+   - Can be computed with `comp_relative_frobenius()` and asserted with `assert_relative_frobenius()` in tt-metal
+5. Pearson Correlation Coefficient (PCC):
+
+$$\frac{cov(vec(T), vec(\hat{T}))}{\sigma_{vec(T)}\sigma_{vec(\hat{T})}}$$
+
+   where $vec(\cdot)$ represents the matrix flattened into a vector, $cov$ represents the covariance, and $\sigma$ represents the standard deviation
+   - Measures the general correlation between the output and the reference (if one increases, so does the other). A value of 1 means perfect correlation
+   - Does not detect global bias (output can be scaled by a factor of 2 and PCC can still be 1)
+   - Not easy to reason with a threshold (e.g. 0.999 vs. 0.998)
+   - Can be computed with `comp_pcc()` and asserted with `assert_with_pcc()` in tt-metal
 
 # Accumulation Precision
 Ops like matmul or those that compute statistics like GroupNorm or LayerNorm accumulate intermediate results en route to a final value. The precision in which these intermediate values are computed and (if needed) stored should be sufficiently high to not accumulate large errors during the running calculation. Typically, this means accumulating in a higher precision than the data type (for data formats with less precision than FP32). Failing to do this can lead to rapidly-deteriorating accuracy as seen in the gray, red (under gray), and orange lines in this plot of matmul accuracy vs. inner dimension length for bfloat16 input data (the pink line is under the greenish-yellow line):
