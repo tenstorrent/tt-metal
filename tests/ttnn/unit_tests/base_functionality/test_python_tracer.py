@@ -386,7 +386,11 @@ def test_from_torch_to_device_tracing(tmp_path, device):
         from_torch_data = json.load(f)
 
     assert from_torch_data["operation_name"] == OPERATION_NAME_TTNN_FROM_TORCH
+    assert len(from_torch_data["args"]) >= 1, "Expected at least 1 arg for from_torch"
+    # First arg should be a torch.Tensor
+    first_arg = from_torch_data["args"][0]["value"]
     assert first_arg["type"] == "torch.Tensor", f"Expected torch.Tensor, got {first_arg.get('type')}"
+    assert first_arg["shape"] == [2, 3], f"Expected shape [2, 3], got {first_arg.get('shape')}"
 
     # Check to_device trace
     with open(to_device_files[0], "r") as f:
