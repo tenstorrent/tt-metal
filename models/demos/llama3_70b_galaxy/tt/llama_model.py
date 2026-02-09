@@ -742,9 +742,6 @@ class TtTransformer(LightweightModule):
         lm_head_output = self.lm_head(
             x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
         )
-        # if mode is decode and Qwen model
-        if mode == "decode" and self.args.is_qwen:
-            ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)
         return lm_head_output
 
     def __del__(self):
