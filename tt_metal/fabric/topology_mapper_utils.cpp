@@ -817,6 +817,72 @@ std::string build_inter_mesh_mapping_error_message(
         failed_pairs_str);
 }
 
+// Helper function to handle adding forbidden constraint and check if mapping should continue
+// Returns false if mapping should return early (overconstrained), true if should continue
+bool handle_forbidden_constraint(
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints,
+    MeshId logical_mesh_id,
+    MeshId physical_mesh_id,
+    std::vector<std::pair<MeshId, MeshId>>& failed_mesh_pairs,
+    std::vector<std::pair<MeshId, MeshId>>& current_attempt_failed_pairs,
+    unsigned int retry_attempt,
+    const std::vector<MeshId>& logical_meshes,
+    const std::vector<MeshId>& physical_meshes,
+    ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode,
+    TopologyMappingResult& result,
+    const std::string& error_context) {
+    if (!inter_mesh_constraints.add_forbidden_constraint(logical_mesh_id, physical_mesh_id)) {
+        // If adding forbidden constraint causes overconstrained nodes (no valid mappings left),
+        // this means we've exhausted all possibilities for this logical mesh.
+        // Treat this as a failure and return with an appropriate error message.
+        // Update failed pairs to include the current one that caused the failure
+        failed_mesh_pairs.insert(
+            failed_mesh_pairs.end(), current_attempt_failed_pairs.begin(), current_attempt_failed_pairs.end());
+        failed_mesh_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+
+        // Count how many times this logical mesh failed to map
+        size_t failed_count_for_this_mesh = 0;
+        for (const auto& [log_id, phys_id] : failed_mesh_pairs) {
+            if (log_id == logical_mesh_id) {
+                failed_count_for_this_mesh++;
+            }
+        }
+
+        log_info(
+            tt::LogFabric,
+            "Multi-mesh mapping failed after {} attempt(s): Tried {} different mesh configurations. "
+            "Logical mesh {} failed to map to {} out of {} physical meshes. "
+            "Total failed mesh pair combinations: {}",
+            retry_attempt,
+            failed_mesh_pairs.size(),
+            logical_mesh_id.get(),
+            failed_count_for_this_mesh,
+            physical_meshes.size(),
+            failed_mesh_pairs.size());
+
+        std::string solver_error_message = fmt::format(
+            "All mapping possibilities exhausted for logical mesh {} after trying {} different mesh "
+            "configurations. "
+            "{}: failed to add forbidden constraint",
+            logical_mesh_id.get(),
+            failed_mesh_pairs.size(),
+            error_context);
+
+        result.success = false;
+        result.error_message = build_inter_mesh_mapping_error_message(
+            retry_attempt,
+            logical_meshes,
+            physical_meshes,
+            inter_mesh_validation_mode,
+            solver_error_message,
+            failed_mesh_pairs);
+        return false;  // Indicate that mapping should return early
+    } else {
+        current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+        return true;  // Indicate that mapping should continue
+    }
+}
+
 }  // anonymous namespace
 
 TopologyMappingResult map_multi_mesh_to_physical(
@@ -1001,16 +1067,19 @@ TopologyMappingResult map_multi_mesh_to_physical(
                         retry_attempt,
                         logical_mesh_id.get(),
                         physical_mesh_id.get());
-                    if (!inter_mesh_constraints.add_forbidden_constraint(logical_mesh_id, physical_mesh_id)) {
-                        // If adding forbidden constraint causes overconstrained nodes (no valid mappings left),
-                        // this means we've exhausted all possibilities for this logical mesh.
-                        failed_mesh_pairs.insert(
-                            failed_mesh_pairs.end(),
-                            current_attempt_failed_pairs.begin(),
-                            current_attempt_failed_pairs.end());
-                        failed_mesh_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
-                    } else {
-                        current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+                    if (!handle_forbidden_constraint(
+                            inter_mesh_constraints,
+                            logical_mesh_id,
+                            physical_mesh_id,
+                            failed_mesh_pairs,
+                            current_attempt_failed_pairs,
+                            retry_attempt,
+                            logical_meshes,
+                            physical_meshes,
+                            inter_mesh_validation_mode,
+                            result,
+                            "Exit node constraint error")) {
+                        return result;  // Mapping should return early
                     }
                     continue;  // Skip to next physical mesh
                 }
@@ -1035,52 +1104,19 @@ TopologyMappingResult map_multi_mesh_to_physical(
                     retry_attempt,
                     logical_mesh_id.get(),
                     physical_mesh_id.get());
-                if (!inter_mesh_constraints.add_forbidden_constraint(logical_mesh_id, physical_mesh_id)) {
-                    // If adding forbidden constraint causes overconstrained nodes (no valid mappings left),
-                    // this means we've exhausted all possibilities for this logical mesh.
-                    // Treat this as a failure and return with an appropriate error message.
-                    // Update failed pairs to include the current one that caused the failure
-                    failed_mesh_pairs.insert(
-                        failed_mesh_pairs.end(),
-                        current_attempt_failed_pairs.begin(),
-                        current_attempt_failed_pairs.end());
-                    failed_mesh_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
-
-                    // Count how many times this logical mesh failed to map
-                    size_t failed_count_for_this_mesh = 0;
-                    for (const auto& [log_id, phys_id] : failed_mesh_pairs) {
-                        if (log_id == logical_mesh_id) {
-                            failed_count_for_this_mesh++;
-                        }
-                    }
-
-                    log_info(
-                        tt::LogFabric,
-                        "Multi-mesh mapping failed after {} attempt(s): Tried {} different mesh configurations. "
-                        "Logical mesh {} failed to map to {} out of {} physical meshes. "
-                        "Total failed mesh pair combinations: {}",
-                        retry_attempt,
-                        failed_mesh_pairs.size(),
-                        logical_mesh_id.get(),
-                        failed_count_for_this_mesh,
-                        physical_meshes.size(),
-                        failed_mesh_pairs.size());
-                    result.success = false;
-                    result.error_message = build_inter_mesh_mapping_error_message(
+                if (!handle_forbidden_constraint(
+                        inter_mesh_constraints,
+                        logical_mesh_id,
+                        physical_mesh_id,
+                        failed_mesh_pairs,
+                        current_attempt_failed_pairs,
                         retry_attempt,
                         logical_meshes,
                         physical_meshes,
                         inter_mesh_validation_mode,
-                        fmt::format(
-                            "All mapping possibilities exhausted for logical mesh {} after trying {} different mesh "
-                            "configurations. "
-                            "Constraint error: failed to add forbidden constraint",
-                            logical_mesh_id.get(),
-                            failed_mesh_pairs.size()),
-                        failed_mesh_pairs);
-                    return result;
-                } else {
-                    current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+                        result,
+                        "Constraint error")) {
+                    return result;  // Mapping should return early
                 }
             } else {
                 mapped_mesh_pairs++;
