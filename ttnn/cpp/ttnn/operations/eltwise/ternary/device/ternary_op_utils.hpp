@@ -6,6 +6,7 @@
 
 #include "ternary_device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include <map>
 #include <optional>
@@ -86,6 +87,19 @@ struct AllShardVolumes {
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+
+tt::tt_metal::MemoryConfig compute_mem_config_actual(
+    const Tensor& input_tensor, const ttnn::Shape& output_logical_shape);
+
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
+
+bool is_uneven(const TensorSpec& t);
+
+bool is_native_L1_sharding(
+    const TensorSpec& predicate_spec,
+    const std::optional<TensorSpec>& true_spec,
+    const std::optional<TensorSpec>& false_spec,
+    const tt::tt_metal::MemoryConfig& output_memory_config);
 
 std::optional<AllShardVolumes> get_shard_volumes(
     const TensorSpec& predicate_spec,
