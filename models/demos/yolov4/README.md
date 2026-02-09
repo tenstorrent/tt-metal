@@ -95,6 +95,18 @@ pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::tes
   pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_coco_dp[wormhole_b0-resolution1-1-act_dtype0-weight_dtype0-device_params0]
   ```
 
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150** platform.
+
+| Resolution | Pretrained Weights | Boxes PCC (threshold: 0.99) | Confs PCC (threshold: 0.9) | Performance (FPS, N150) | Demo Status |
+|------------|-------------------|----------------------------|---------------------------|------------------------|-------------|
+| 640x640     | False             | 0.9999884         | 0.9871971         | 86.745                  | Passed   |
+| 640x640     | True              | 0.9990449         | 0.9370966         | 86.745                  | Passed   |
+| 320x320     | False             | 0.9999879         | 0.9937709         | 184.63                  | Passed   |
+| 320x320     | True              | 0.9976081         | 0.9537761         | 184.63                  | Passed   |
+
+
 #### Web Demo
 - Try the interactive web demo (35 FPS end-2-end) for 320x320 following the [./web_demo/README.md](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/web_demo/README.md)
 
