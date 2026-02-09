@@ -164,15 +164,15 @@ jobs:
       - name: Compute tool image tags
         id: tags
         run: |
-          # Extract versions from Dockerfile.tools
-          CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
-          MOLD_VERSION=$(grep -E "^ARG MOLD_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
-          DOXYGEN_VERSION=$(grep -E "^ARG DOXYGEN_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
-          CBA_VERSION=$(grep -E "^ARG CBA_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
-          GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
-          CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
-          YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
-          OMPI_TAG=$(grep -E "^ARG OMPI_TAG=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          # Extract versions from Dockerfile.tools (head -1 so multiple ARG lines don't produce multiline output)
+          CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          MOLD_VERSION=$(grep -E "^ARG MOLD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          DOXYGEN_VERSION=$(grep -E "^ARG DOXYGEN_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          CBA_VERSION=$(grep -E "^ARG CBA_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          OMPI_TAG=$(grep -E "^ARG OMPI_TAG=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
           # SFPI version comes from tt_metal/sfpi-version (single source of truth)
           SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 
