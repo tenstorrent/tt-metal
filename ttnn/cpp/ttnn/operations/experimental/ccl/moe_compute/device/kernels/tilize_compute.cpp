@@ -123,6 +123,9 @@ void kernel_main() {
         // }));
 
         cb_push_back(tilize_output_cb_id, tiles_per_chunk);
+
+        // Pop input from reader (tokens_per_chunk pages)
+        cb_pop_front(tilize_input_cb_id, tokens_per_chunk);
     }
 
     fast_tilize_uninit(tilize_input_cb_id, tilize_output_cb_id);
