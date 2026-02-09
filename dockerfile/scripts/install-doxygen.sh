@@ -24,7 +24,10 @@ else
 fi
 
 # Verify hash
-echo "${DOXYGEN_SHA256}  ${TMPDIR}/doxygen.tar.gz" | sha256sum -c -
+if ! echo "${DOXYGEN_SHA256}  ${TMPDIR}/doxygen.tar.gz" | sha256sum -c - ; then
+    echo "[ERROR] SHA256 checksum verification failed for doxygen.tar.gz. Aborting." >&2
+    exit 1
+fi
 
 # Extract
 tar -xzf "${TMPDIR}/doxygen.tar.gz" -C "${TMPDIR}" --strip-components=1

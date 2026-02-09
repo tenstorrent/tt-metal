@@ -21,7 +21,10 @@ else
 fi
 
 # Verify hash
-echo "${MOLD_SHA256}  ${TMPFILE}" | sha256sum -c -
+if ! echo "${MOLD_SHA256}  ${TMPFILE}" | sha256sum -c - ; then
+    echo "[ERROR] SHA256 checksum verification failed for ${TMPFILE}. Aborting." >&2
+    exit 1
+fi
 
 # Extract to install directory
 # The tarball contains mold-X.Y.Z-x86_64-linux/{bin/mold, lib/mold/...}

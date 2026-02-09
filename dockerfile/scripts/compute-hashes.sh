@@ -76,6 +76,16 @@ curl -fsSL -o "$TMPDIR/yq_linux_amd64" \
 echo "YQ_SHA256=$($SHA_CMD "$TMPDIR/yq_linux_amd64" | cut -d' ' -f1)"
 echo ""
 
+# OpenMPI
+OMPI_TAG="${OMPI_TAG:-v5.0.7}"
+OMPI_VERSION="${OMPI_TAG#v}"
+OMPI_SERIES="v${OMPI_VERSION%.*}"
+echo "Downloading OpenMPI ${OMPI_TAG}..."
+curl -fsSL -o "$TMPDIR/openmpi.tar.bz2" \
+    "https://download.open-mpi.org/release/open-mpi/${OMPI_SERIES}/openmpi-${OMPI_VERSION}.tar.bz2"
+echo "OMPI_SHA256=$($SHA_CMD "$TMPDIR/openmpi.tar.bz2" | cut -d' ' -f1)"
+echo ""
+
 # SFPI - Note: version comes from tt_metal/sfpi-version, not hardcoded here
 echo "SFPI: Version and hash come from tt_metal/sfpi-version (single source of truth)"
 echo "       Run: grep sfpi_x86_64_debian_deb_hash tt_metal/sfpi-version"

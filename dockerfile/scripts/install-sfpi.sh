@@ -66,7 +66,10 @@ else
 fi
 
 # Verify hash using the hash type from sfpi-version (typically sha256)
-echo "${SFPI_HASH}  ${DEB_FILE}" | "${sfpi_hashtype}sum" -c -
+if ! echo "${SFPI_HASH}  ${DEB_FILE}" | "${sfpi_hashtype}sum" -c - ; then
+    echo "[ERROR] ${sfpi_hashtype} checksum verification failed for ${DEB_FILE}. Aborting." >&2
+    exit 1
+fi
 
 # Extract the deb package
 # deb packages are ar archives containing:

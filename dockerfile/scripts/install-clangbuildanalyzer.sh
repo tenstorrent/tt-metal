@@ -24,7 +24,10 @@ else
 fi
 
 # Verify hash
-echo "${CBA_SHA256}  ${TMPDIR}/cba.tar.gz" | sha256sum -c -
+if ! echo "${CBA_SHA256}  ${TMPDIR}/cba.tar.gz" | sha256sum -c - ; then
+    echo "[ERROR] SHA256 checksum verification failed for cba.tar.gz. Aborting." >&2
+    exit 1
+fi
 
 # Extract
 tar -xzf "${TMPDIR}/cba.tar.gz" -C "${TMPDIR}" --strip-components=1

@@ -22,7 +22,10 @@ else
 fi
 
 # Verify hash
-echo "${CCACHE_SHA256}  ${TMPFILE}" | sha256sum -c -
+if ! echo "${CCACHE_SHA256}  ${TMPFILE}" | sha256sum -c - ; then
+    echo "[ERROR] SHA256 checksum verification failed for ${TMPFILE}. Aborting." >&2
+    exit 1
+fi
 
 # Extract to install directory
 # The tarball contains ccache-X.Y.Z-linux-x86_64/ccache (binary at root, no bin/ subdir)

@@ -37,6 +37,7 @@ ARG YQ_VERSION=v4.44.6
 ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
 
 ARG OMPI_TAG=v5.0.7
+ARG OMPI_SHA256=119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd
 
 # NOTE: SFPI version/hash are NOT defined here as ARGs.
 # The single source of truth for SFPI version information is:
@@ -225,6 +226,7 @@ COPY --from=sfpi-builder /install/ /install/
 
 FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-builder
 ARG OMPI_TAG
+ARG OMPI_SHA256
 
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
   sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
@@ -258,6 +260,7 @@ RUN dnf install -y \
 
 COPY dockerfile/scripts/install-openmpi.sh /tmp/install-openmpi.sh
 RUN OMPI_TAG=${OMPI_TAG} \
+    OMPI_SHA256=${OMPI_SHA256} \
     INSTALL_DIR=/opt \
     /bin/bash /tmp/install-openmpi.sh
 

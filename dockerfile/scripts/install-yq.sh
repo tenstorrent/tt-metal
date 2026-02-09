@@ -22,7 +22,10 @@ else
 fi
 
 # Verify hash
-echo "${YQ_SHA256}  ${TMPFILE}" | sha256sum -c -
+if ! echo "${YQ_SHA256}  ${TMPFILE}" | sha256sum -c - ; then
+    echo "[ERROR] SHA256 checksum verification failed for ${TMPFILE}. Aborting." >&2
+    exit 1
+fi
 
 # Install to bin directory
 mkdir -p "${INSTALL_DIR}/bin"

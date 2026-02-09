@@ -24,7 +24,10 @@ else
 fi
 
 # Verify hash
-echo "${GDB_SHA256}  ${TMPDIR}/gdb.tar.xz" | sha256sum -c -
+if ! echo "${GDB_SHA256}  ${TMPDIR}/gdb.tar.xz" | sha256sum -c - ; then
+    echo "[ERROR] SHA256 checksum verification failed for gdb.tar.xz. Aborting." >&2
+    exit 1
+fi
 
 # Extract
 tar -xf "${TMPDIR}/gdb.tar.xz" -C "${TMPDIR}" --strip-components=1

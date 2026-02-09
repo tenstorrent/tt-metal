@@ -11,6 +11,9 @@
 set -euo pipefail
 
 OMPI_TAG="${OMPI_TAG:-v5.0.7}"
+# SHA256 for openmpi-5.0.7.tar.bz2 from https://download.open-mpi.org/release/open-mpi/v5.0/
+# Update via: OMPI_TAG=v5.0.7 dockerfile/scripts/compute-hashes.sh
+OMPI_SHA256="${OMPI_SHA256:-119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd}"
 INSTALL_DIR="${INSTALL_DIR:-/opt}"
 OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_TAG}-ulfm"
 
@@ -27,6 +30,10 @@ rm -rf "${WORKDIR}"
 mkdir -p "${WORKDIR}"
 cd "${WORKDIR}"
 wget -q -O "${OMPI_TARBALL}" "${OMPI_URL}"
+if ! echo "${OMPI_SHA256}  ${OMPI_TARBALL}" | sha256sum -c - ; then
+    echo "[ERROR] SHA256 checksum verification failed for ${OMPI_TARBALL}. Aborting." >&2
+    exit 1
+fi
 tar xf "${OMPI_TARBALL}"
 cd "openmpi-${OMPI_VERSION}"
 
