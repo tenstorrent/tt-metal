@@ -177,28 +177,26 @@ void kernel_main() {
             MATH((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
 
             tile_regs_commit();
-            tile_regs_wait();
             // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
             // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
-            // TTI_SEMWAIT(
-            //                 p_stall::STALL_TDMA | p_stall::STALL_CFG,
-            //                 semaphore::t6_sem(semaphore::MATH_PACK),
-            //                 p_stall::STALL_ON_ZERO);
-            //
-            //             // Make SFPU access the appropriate half of the destination registers
-            //             PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32,
-            //             ckernel::packer::get_packer_dest_offset()));
-            //
-            //             //---------------------------------------------------------------------
-            //             // Apply SILU activation and then eltwise multiply
-            //             //---------------------------------------------------------------------
-            //             PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            //             PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-            //
-            //             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-            //             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
-            //
-            //             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            TTI_SEMWAIT(
+                p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                semaphore::t6_sem(semaphore::MATH_PACK),
+                p_stall::STALL_ON_ZERO);
+
+            // Make SFPU access the appropriate half of the destination registers
+            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+            //---------------------------------------------------------------------
+            // Apply SILU activation and then eltwise multiply
+            //---------------------------------------------------------------------
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+
+            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
             pack_reconfig_data_format(cb_s2c_in2);
 
