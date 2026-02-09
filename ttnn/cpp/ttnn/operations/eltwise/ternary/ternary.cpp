@@ -340,8 +340,6 @@ Tensor LerpOperation::invoke(
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Lerp LLK - TTS (scalar weight)");
-
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
@@ -351,11 +349,11 @@ Tensor LerpOperation::invoke(
     bool is_input_int32 = (input.dtype() == DataType::INT32) && (end.dtype() == DataType::INT32);
 
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
-        log_debug(tt::LogOp, "Lerp Fallback - TTS");
+        log_debug(tt::LogOp, "Lerp Fallback - TTS (scalar weight)");
         return _lerp_overload(input, end, weight, memory_config);
     }
 
-    log_debug(tt::LogOp, "Lerp LLK - TTS");
+    log_debug(tt::LogOp, "Lerp LLK - TTS (scalar weight)");
     return ttnn::prim::ternary(
         TernaryOpType::LERP,
         input,
@@ -373,8 +371,6 @@ Tensor LerpOperation::invoke(
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Lerp LLK - TTT (tensor weight)");
-
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
         input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
@@ -387,11 +383,11 @@ Tensor LerpOperation::invoke(
         (input.dtype() == DataType::INT32) && (end.dtype() == DataType::INT32) && (weight.dtype() == DataType::INT32);
 
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
-        log_debug(tt::LogOp, "Lerp Fallback - TTT");
+        log_debug(tt::LogOp, "Lerp Fallback - TTT (tensor weight)");
         return _lerp(input, end, weight, memory_config);
     }
 
-    log_debug(tt::LogOp, "Lerp LLK - TTT");
+    log_debug(tt::LogOp, "Lerp LLK - TTT (tensor weight)");
     return ttnn::prim::ternary(
         TernaryOpType::LERP,
         input,
