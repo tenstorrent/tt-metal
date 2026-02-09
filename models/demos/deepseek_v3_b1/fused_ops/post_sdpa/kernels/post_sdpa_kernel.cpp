@@ -123,7 +123,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_num_standard_tiles"),
         get_named_compile_time_arg_val("ccl_receiver_cb_residual"),
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
-        get_named_compile_time_arg_val("ccl_receiver_using_persistent_buffer"),
         get_named_compile_time_arg_val("ccl_receiver_skip_local_push")>;
 // ============================================================================
 // BRISC (Writer)
@@ -194,8 +193,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_sender_remote_receiver_noc_x"),
         get_named_compile_time_arg_val("ccl_sender_remote_receiver_noc_y"),
         get_named_compile_time_arg_val("ccl_sender_dst_num_hops"),
-        get_named_compile_time_arg_val("ccl_sender_num_connections"),
-        get_named_compile_time_arg_val("ccl_sender_using_persistent_buffer")>;
+        get_named_compile_time_arg_val("ccl_sender_num_connections")>;
 // ============================================================================
 // TRISC (Compute)
 // - Matmul1 compute (8x8 grid)
@@ -360,7 +358,7 @@ void kernel_main() {
         noc_semaphore_set(gather2_completion_semaphore_addr, 0);
 
         // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
-        using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
         ccl_sender_args.tensor_address = get_common_arg_val<uint32_t>(0);
@@ -403,7 +401,7 @@ void kernel_main() {
     if constexpr (Core::is_ccl_receiver_core) {
         DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
         // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
-        using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
         size_t fabric_arg_idx = 0;
