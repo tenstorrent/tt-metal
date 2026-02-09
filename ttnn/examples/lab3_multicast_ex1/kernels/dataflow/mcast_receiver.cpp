@@ -6,9 +6,12 @@
 
 // Multicast receiver kernel: receives multicast tiles from sender core.
 // This kernel runs on receiver cores (e.g., logical cores 1,0 through 3,0).
-// It receives tiles into the input circular buffer (c_0) where they will be
-// consumed by the compute kernel.
+// It receives tiles_per_batch tiles at a time into the input circular buffer (c_0)
+// where they will be consumed by the compute kernel.
 void kernel_main() {
+    ////////// COMPILE-TIME ARGS //////////
+    constexpr uint32_t tiles_per_batch = get_compile_time_arg_val(0);
+
     ////////// RUNTIME ARGS //////////
     uint32_t sender_x = get_arg_val<uint32_t>(0);
     uint32_t sender_y = get_arg_val<uint32_t>(1);
@@ -23,25 +26,20 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* tile_sent_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_sent_semaphore_addr);
 
-    // Get the NOC address of the sender's semaphore so we can signal readiness
     uint64_t receivers_ready_sem_noc_addr = get_noc_addr(sender_x, sender_y, receivers_ready_semaphore_addr);
 
-    ////////// MAIN LOOP: RECEIVE EACH TILE //////////
-    for (uint32_t tile_idx = 0; tile_idx < n_tiles; tile_idx++) {
-        // Reserve space in input CB for incoming tile
-        cb_reserve_back(cb_id_in0, 1);
+    ////////// MAIN LOOP: RECEIVE EACH BATCH OF TILES //////////
+    const uint32_t num_batches = n_tiles / tiles_per_batch;
+    for (uint32_t batch_idx = 0; batch_idx < num_batches; batch_idx++) {
+        // Reserve space in input CB for incoming batch
+        cb_reserve_back(cb_id_in0, tiles_per_batch);
 
-        // Reset tile_sent semaphore to INVALID before signaling ready
         noc_semaphore_set(tile_sent_sem_ptr, INVALID);
 
-        // Signal sender that we're ready to receive the next tile
         noc_semaphore_inc(receivers_ready_sem_noc_addr, 1);
 
-        // Wait for sender to multicast the tile (semaphore becomes VALID)
         noc_semaphore_wait(tile_sent_sem_ptr, VALID);
 
-        // Tile has been received into our L1 at the CB write pointer.
-        // Mark it as available in the input CB for the compute kernel to consume.
-        cb_push_back(cb_id_in0, 1);
+        cb_push_back(cb_id_in0, tiles_per_batch);
     }
 }
