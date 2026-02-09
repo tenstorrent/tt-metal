@@ -328,8 +328,6 @@ def run_flash_mla_prefill_impl(
         signpost(header="Original v_out matmul")
         tt_out = ttnn.linear(tt_flash_mla_prefill_out, tt_v_out)
 
-        # print("tt_out_original is: ", ttnn.to_torch(tt_out))
-
         print("q shape is: ", q.shape)
         print("k shape is: ", k.shape)
         print("v shape is: ", v.shape)
@@ -441,6 +439,47 @@ def test_flash_mla_prefill(
         dtype,
         v_head_dim,
     )
+
+
+@pytest.mark.parametrize(
+    "num_heads, seq_len, kv_lora_rank, v_head_dim",
+    [
+        (16, 4096, 512, 128),
+        (32, 4096, 512, 128),
+    ],
+)
+def test_batched_mla_mm(
+    device,
+    num_heads,
+    seq_len,
+    kv_lora_rank,
+    v_head_dim,
+):
+    in0_shape = [1, 1, seq_len, kv_lora_rank]
+    in1_shape = [1, num_heads, kv_lora_rank, v_head_dim]
+
+    in0 = torch.randn(in0_shape).float()
+    in1 = torch.randn(in1_shape).float()
+
+    in0_t = ttnn.from_torch(
+        in0,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    in0_t = ttnn.repeat(in0_t, [1, num_heads, 1, 1])  # get rid of this repeat
+    out_t = ttnn.linear(in0_t, in1_t)
+    out_t = ttnn.to_torch(out_t)
+    out_ref = in0 @ in1
+    out_pass, out_pcc = comp_pcc(out_ref, out_t, 0.99)
+    print(f"Output PCC: {out_pcc}")
+    assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 
 
 # @pytest.mark.parametrize(
