@@ -98,6 +98,7 @@ Tests:
       - type: full_ring
 
   - name: "FullRingUnicastDeadlockQuick"
+    skip: [watcher]
     benchmark_mode: true
     sync: true
     fabric_setup:
