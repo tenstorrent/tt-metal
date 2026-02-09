@@ -16,7 +16,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn::operations::ccl::moe {
+namespace ttnn::operations::experimental::ccl::moe {
 
 struct SelectiveReduceCombineDeviceOperation {
     struct operation_attributes_t {
@@ -133,7 +133,7 @@ struct SelectiveReduceCombineDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
-}  // namespace ttnn::operations::ccl::moe
+}  // namespace ttnn::operations::experimental::ccl::moe
 
 namespace ttnn::prim {
 ttnn::Tensor selective_reduce_combine(
@@ -151,8 +151,8 @@ ttnn::Tensor selective_reduce_combine(
     const uint32_t num_links,
     const uint32_t num_token_parallel_cores,
     const uint32_t num_data_parallel_cores,
-    const CoreRangeSet worker_core_range_set,
-    const CoreRangeSet mux_core_range_set,
+    const CoreRangeSet& worker_core_range_set,
+    const CoreRangeSet& mux_core_range_set,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore);

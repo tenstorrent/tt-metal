@@ -8,7 +8,6 @@ import math
 
 import pytest
 import torch
-import torch.nn.functional as F
 import ttnn
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import (
@@ -18,7 +17,6 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     gen_tensors as gen_tensors_combine,
 )
 
-from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_mesh_mapper
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from tracy import signpost
