@@ -15,6 +15,7 @@
 constexpr uint32_t data_txq_id = get_compile_time_arg_val(0);
 constexpr uint32_t ack_txq_id = get_compile_time_arg_val(1);
 constexpr uint32_t PAYLOAD_SIZE = get_compile_time_arg_val(2);
+// mesh_id and device_id are not used in this test, but are required by the handshake API
 constexpr uint16_t my_mesh_id = 0;
 constexpr uint8_t my_device_id = 0;
 
