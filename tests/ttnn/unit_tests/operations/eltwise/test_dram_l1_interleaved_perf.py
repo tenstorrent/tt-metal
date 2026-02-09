@@ -17,26 +17,42 @@ Tile counts chosen to mirror the original issue chart (~100..12800 tiles).
 
 Root cause analysis (Wormhole B0, 2 NOCs, 12 DRAM banks, 64 L1 banks):
 
-  Reader uses NOC_0, writer uses NOC_1 (separate physical networks).
-  L1-interleaved tiles are round-robin distributed across 64 L1 banks
-  (one per compute core) via bank_id = tile_id % 64.  Each core processes
-  a contiguous tile range so ~98% of L1 reads are REMOTE (via NOC).
+  TWO INTERACTING EFFECTS cause the issue:
 
-  L1->L1: Each destination core's L1 is simultaneously accessed by:
-    - NOC_0 read requests from reader cores fetching input tiles
-    - NOC_1 write requests from writer cores storing output tiles
-  This creates L1 slave port contention at destination cores.
+  1) L1 slave port contention (affects L1->L1):
+     Reader uses NOC_0, writer uses NOC_1 (separate physical networks).
+     L1-interleaved tiles are round-robin: bank_id = tile_id % 64.
+     Each core processes a contiguous tile range so ~98% of L1 reads are
+     REMOTE (via NOC).  In L1->L1 mode, each destination core's L1 is
+     simultaneously accessed by NOC_0 reads + NOC_1 writes, creating
+     slave port contention.  The per-tile noc_async_read_barrier()
+     serializes this contention into per-tile latency.
 
-  DRAM->L1: Reader traffic goes to 12 DRAM banks via NOC2AXI bridge,
-  bypassing the L1 fabric entirely.  Destination L1 cores only receive
-  NOC_1 write traffic -- no L1 slave port contention on the read path.
+  2) DRAM bank access pattern uniformity (affects DRAM->L1):
+     DRAM bank_id = tile_id % 12.  Tile IDs are assigned in row-major
+     order: tile_id = tile_row * num_tile_cols + tile_col.  The row-to-row
+     bank offset is (num_tile_cols % 12).  When gcd(num_tile_cols, 12) is
+     large, the bank access pattern has short cycles, causing temporal
+     clustering of requests to the same DRAM bank and NOC2AXI bridge
+     contention.
 
-  At ~156 tiles/core (9984 tiles), the sustained bidirectional L1 traffic
-  saturates the L1 slave interface, making L1->L1 slower than DRAM->L1.
-  The crossover is confined to a narrow window (~9984-10048 tiles);
-  at 11264+ tiles L1->L1 returns to being faster.
-  The per-tile noc_async_read_barrier() in the reader kernel amplifies
-  this: contention-induced read latency is serialized per tile.
+     Experiment B (sweep cols%12 at ~10k tiles) shows:
+       gcd=1 (cols%12=1,5,7,11): DRAM->L1 ~105-115k ns (best)
+       gcd=2 (cols%12=2,10):     DRAM->L1 ~105-113k ns
+       gcd=3 (cols%12=3,9):      DRAM->L1 ~109-115k ns
+       gcd=4 (cols%12=4,8):      DRAM->L1 ~118-169k ns (worst!)
+       gcd=6 (cols%12=6):        DRAM->L1 ~135k ns
+       gcd=12 (cols%12=0):       DRAM->L1 ~118k ns
+
+     The original issue's test shapes used W=2048 (64 tile-cols, cols%12=4,
+     gcd=4), which is the WORST case for DRAM bank uniformity.  This made
+     DRAM->L1 abnormally slow, masking the L1 contention effect at low tile
+     counts.  At ~156+ tiles/core the L1 contention overtakes even the
+     degraded DRAM performance, revealing the crossover.
+
+     With better DRAM bank access patterns (e.g. cols%12=1, gcd=1),
+     DRAM->L1 is ~105k ns at ~10k tiles -- consistently faster than
+     L1->L1 (~124k ns).
 
   Key code paths:
     Reader kernel: unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
@@ -46,7 +62,8 @@ Root cause analysis (Wormhole B0, 2 NOCs, 12 DRAM banks, 64 L1 banks):
       -> preferred_noc_for_dram_write() = NOC_1
     Grid selection: tt_metal/common/work_split.cpp::split_work_to_cores()
     Tile-to-bank mapping: tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h
-      -> bank_id = tile_id % NUM_L1_BANKS (64)
+      -> bank_id = tile_id % NUM_L1_BANKS (64) for L1
+      -> bank_id = tile_id % NUM_DRAM_BANKS (12) for DRAM
 """
 
 import json
@@ -91,6 +108,31 @@ TILE_COUNT_SHAPES = [
     ((1, 1, 6144, 2048), 12288),
     ((1, 1, 3200, 4096), 12800),
     ((1, 1, 7168, 2048), 14336),
+]
+
+# Experiment A: Same tile counts as 9984/10048 but with W=2048 (cols%12=4)
+# to control for shape/aspect-ratio effects on DRAM bank access patterns.
+EXPERIMENT_A_SHAPES = [
+    ((1, 1, 4992, 2048), 9984),  # 156 tiles/core, cols%12=4 (was 3072x3328, cols%12=8)
+    ((1, 1, 5024, 2048), 10048),  # 157 tiles/core, cols%12=4 (was 2048x5024, cols%12=1)
+]
+
+# Experiment B: Fixed H=2048 (~10k tiles), vary W to sweep cols%12 from 0 to 11.
+# Isolates the effect of DRAM bank access uniformity on DRAM->L1 duration.
+# bank_id = tile_id % 12; row offset = num_tile_cols % 12.
+EXPERIMENT_B_SHAPES = [
+    ((1, 1, 2048, 4992), 9984),  # 156/core, cols=156, cols%12=0
+    ((1, 1, 2048, 5024), 10048),  # 157/core, cols=157, cols%12=1
+    ((1, 1, 2048, 5056), 10112),  # 158/core, cols=158, cols%12=2
+    ((1, 1, 2048, 5088), 10176),  # 159/core, cols=159, cols%12=3
+    ((1, 1, 2048, 5120), 10240),  # 160/core, cols=160, cols%12=4
+    ((1, 1, 2048, 5152), 10304),  # 161/core, cols=161, cols%12=5
+    ((1, 1, 2048, 5184), 10368),  # 162/core, cols=162, cols%12=6
+    ((1, 1, 2048, 5216), 10432),  # 163/core, cols=163, cols%12=7
+    ((1, 1, 2048, 5248), 10496),  # 164/core, cols=164, cols%12=8
+    ((1, 1, 2048, 5280), 10560),  # 165/core, cols=165, cols%12=9
+    ((1, 1, 2048, 5312), 10624),  # 166/core, cols=166, cols%12=10
+    ((1, 1, 2048, 5344), 10688),  # 167/core, cols=167, cols%12=11
 ]
 
 
@@ -261,3 +303,80 @@ def test_relu_memory_layout_kernel_duration(shape, num_tiles, monkeypatch, tmp_p
             f"Root cause: L1 slave port contention from simultaneous NOC_0 "
             f"read + NOC_1 write traffic to same L1 banks."
         )
+
+
+def _run_shape_experiment(shape, num_tiles, monkeypatch, label_prefix=""):
+    """Shared logic for experiment A and B: measure all 4 combos, print results."""
+    _check_profiler_available()
+    _enable_profiler(monkeypatch)
+
+    if ttnn.GetNumAvailableDevices() < 1:
+        pytest.skip("No devices available")
+
+    num_tile_cols = shape[3] // 32
+    cols_mod_12 = num_tile_cols % 12
+
+    device = ttnn.open_device(device_id=0)
+    try:
+        try:
+            ttnn.get_all_programs_perf_data()
+        except RuntimeError as exc:
+            if "profiler_state_manager is nullptr" in str(exc):
+                pytest.skip("Profiler state manager not initialized")
+            raise
+
+        torch.manual_seed(0)
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+        durations = {}
+        core_counts = {}
+        for in_name, in_mem_config in MEMORY_CONFIGS.items():
+            input_tensor = ttnn.from_torch(
+                torch_input,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=in_mem_config,
+            )
+            for out_name, out_mem_config in MEMORY_CONFIGS.items():
+                label = f"{in_name}->{out_name}"
+                duration, cores = _measure_relu(device, input_tensor, out_mem_config)
+                durations[label] = duration
+                core_counts[label] = cores
+
+            ttnn.deallocate(input_tensor)
+
+        compute_grid = device.compute_with_storage_grid_size()
+        max_cores = compute_grid.x * compute_grid.y
+    finally:
+        ttnn.close_device(device)
+
+    tiles_per_core = num_tiles / 64
+    print(
+        f"\n{label_prefix}Shape: {shape}  ({num_tiles} tiles, "
+        f"{tiles_per_core:.0f} tiles/core, cols={num_tile_cols}, cols%12={cols_mod_12})"
+    )
+    for label in durations:
+        print(f"  {label:12s} duration: {durations[label]:>8d} ns, " f"cores: {core_counts[label]:>3d}")
+
+    return durations, core_counts
+
+
+@pytest.mark.parametrize(
+    "shape, num_tiles",
+    EXPERIMENT_A_SHAPES,
+    ids=[f"expA_{nt}_tiles_W2048" for _, nt in EXPERIMENT_A_SHAPES],
+)
+def test_experiment_a_fixed_width(shape, num_tiles, monkeypatch):
+    """Experiment A: Same tile counts as crossover region but with fixed W=2048."""
+    _run_shape_experiment(shape, num_tiles, monkeypatch, label_prefix="[Exp A] ")
+
+
+@pytest.mark.parametrize(
+    "shape, num_tiles",
+    EXPERIMENT_B_SHAPES,
+    ids=[f"expB_{s[3]//32}cols_mod12eq{(s[3]//32)%12}" for s, _ in EXPERIMENT_B_SHAPES],
+)
+def test_experiment_b_vary_cols_mod12(shape, num_tiles, monkeypatch):
+    """Experiment B: Fixed H=2048, vary W to sweep cols%12 from 0 to 11."""
+    _run_shape_experiment(shape, num_tiles, monkeypatch, label_prefix="[Exp B] ")
