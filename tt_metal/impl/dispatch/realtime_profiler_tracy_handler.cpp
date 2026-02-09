@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "perf_telemetry_tracy_handler.hpp"
+#include "realtime_profiler_tracy_handler.hpp"
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -17,17 +17,17 @@ namespace {
 
 #if defined(TRACY_ENABLE)
 tracy::TTDeviceMarker make_marker(
-    const tt::ProgramPerfRecord& record,
+    const tt::ProgramRealtimeRecord& record,
     uint64_t timestamp,
     tracy::TTDeviceMarkerType type,
     const std::string& file_str) {
-    constexpr uint32_t kTelemetryCore_X = 100;
-    constexpr uint32_t kTelemetryCore_Y = 100;
+    constexpr uint32_t kRealtimeProfilerCore_X = 100;
+    constexpr uint32_t kRealtimeProfilerCore_Y = 100;
 
     tracy::TTDeviceMarker marker;
     marker.chip_id = record.chip_id;
-    marker.core_x = kTelemetryCore_X;
-    marker.core_y = kTelemetryCore_Y;
+    marker.core_x = kRealtimeProfilerCore_X;
+    marker.core_y = kRealtimeProfilerCore_Y;
     marker.risc = tracy::RiscType::NONE;
     marker.timestamp = timestamp;
     marker.runtime_host_id = record.program_id;
@@ -41,13 +41,13 @@ tracy::TTDeviceMarker make_marker(
 
 }  // namespace
 
-PerfTelemetryTracyHandler::PerfTelemetryTracyHandler() {
+RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() {
     callback_handle_ =
-        tt::RegisterProgramPerfCallback([this](const tt::ProgramPerfRecord& record) { HandleRecord(record); });
+        tt::RegisterProgramRealtimeCallback([this](const tt::ProgramRealtimeRecord& record) { HandleRecord(record); });
 }
 
-PerfTelemetryTracyHandler::~PerfTelemetryTracyHandler() {
-    tt::UnregisterProgramPerfCallback(callback_handle_);
+RealtimeProfilerTracyHandler::~RealtimeProfilerTracyHandler() {
+    tt::UnregisterProgramRealtimeCallback(callback_handle_);
 
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& [chip_id, ctx] : tracy_contexts_) {
@@ -56,11 +56,11 @@ PerfTelemetryTracyHandler::~PerfTelemetryTracyHandler() {
     tracy_contexts_.clear();
 }
 
-void PerfTelemetryTracyHandler::AddDevice(
+void RealtimeProfilerTracyHandler::AddDevice(
     uint32_t chip_id, int64_t host_start, double first_timestamp, double frequency) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (tracy_contexts_.count(chip_id)) {
-        log_warning(tt::LogMetal, "PerfTelemetryTracyHandler: device {} already added, skipping", chip_id);
+        log_warning(tt::LogMetal, "RealtimeProfilerTracyHandler: device {} already added, skipping", chip_id);
         return;
     }
 
@@ -72,7 +72,7 @@ void PerfTelemetryTracyHandler::AddDevice(
     tracy_contexts_[chip_id] = ctx;
 }
 
-void PerfTelemetryTracyHandler::RemoveDevice(uint32_t chip_id) {
+void RealtimeProfilerTracyHandler::RemoveDevice(uint32_t chip_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = tracy_contexts_.find(chip_id);
     if (it == tracy_contexts_.end()) {
@@ -82,13 +82,13 @@ void PerfTelemetryTracyHandler::RemoveDevice(uint32_t chip_id) {
     tracy_contexts_.erase(it);
 }
 
-TracyTTCtx PerfTelemetryTracyHandler::GetContext(uint32_t chip_id) {
+TracyTTCtx RealtimeProfilerTracyHandler::GetContext(uint32_t chip_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = tracy_contexts_.find(chip_id);
     return it != tracy_contexts_.end() ? it->second : nullptr;
 }
 
-void PerfTelemetryTracyHandler::HandleRecord(const tt::ProgramPerfRecord& record) {
+void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord& record) {
 #if defined(TRACY_ENABLE)
     TracyTTCtx ctx = GetContext(record.chip_id);
     if (!ctx) {
@@ -97,7 +97,7 @@ void PerfTelemetryTracyHandler::HandleRecord(const tt::ProgramPerfRecord& record
 
     std::string file_str = record.program_id > 0 ? tt::GetKernelSourcesForRuntimeId(record.program_id) : "";
     if (file_str.empty()) {
-        file_str = "perf_telemetry";
+        file_str = "realtime_profiler";
     }
 
     auto start = make_marker(record, record.start_timestamp, tracy::TTDeviceMarkerType::ZONE_START, file_str);

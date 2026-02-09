@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf Telemetry Socket Test
-// This test demonstrates using the perf telemetry D2H socket that is initialized
-// during device init to stream data from device to host in real-time.
+// Real-time profiler socket test
+// This test demonstrates using the real-time profiler D2H socket that is initialized
+// during device init to stream data from device to host.
 
 #include <tt-metalium/distributed.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -22,11 +22,11 @@
 namespace tt::tt_metal::distributed {
 
 // Use GenericMeshDeviceFixture so this works on any system (including single device)
-class PerfTelemetrySocketTest : public GenericMeshDeviceFixture {};
+class RealtimeProfilerSocketTest : public GenericMeshDeviceFixture {};
 
 // Thread-safe queue to pass received pages from receiver thread to main thread
 template <typename T>
-class TelemetryQueue {
+class RealtimeProfilerQueue {
 public:
     void push(T value) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -58,18 +58,19 @@ private:
     std::condition_variable cv_;
 };
 
-// Background receiver thread function for telemetry data
-void telemetry_receiver_thread_func(
+// Background receiver thread function for real-time profiler data
+void realtime_profiler_receiver_thread_func(
     D2HSocket* socket,
     uint32_t page_size,
     uint32_t total_pages,
-    TelemetryQueue<std::vector<uint32_t>>* output_queue,
+    RealtimeProfilerQueue<std::vector<uint32_t>>* output_queue,
     std::atomic<bool>* done) {
     ZoneScoped;
     uint32_t pages_received = 0;
     uint32_t page_size_words = page_size / sizeof(uint32_t);
 
-    std::cout << "[Telemetry Receiver] Started, expecting " << total_pages << " pages of " << page_size << " bytes\n";
+    std::cout << "[Realtime Profiler Receiver] Started, expecting " << total_pages << " pages of " << page_size
+              << " bytes\n";
 
     while (pages_received < total_pages) {
         // Wait for a page to be available
@@ -90,7 +91,7 @@ void telemetry_receiver_thread_func(
 
         // Print progress every 10 pages
         if (pages_received % 10 == 0 || pages_received == total_pages) {
-            std::cout << "[Telemetry Receiver] Received page " << pages_received << "/" << total_pages << "\n";
+            std::cout << "[Realtime Profiler Receiver] Received page " << pages_received << "/" << total_pages << "\n";
         }
     }
 
@@ -98,28 +99,28 @@ void telemetry_receiver_thread_func(
     socket->barrier();
 
     done->store(true);
-    std::cout << "[Telemetry Receiver] Done, received all " << pages_received << " pages\n";
+    std::cout << "[Realtime Profiler Receiver] Done, received all " << pages_received << " pages\n";
 }
 
-TEST_F(PerfTelemetrySocketTest, StreamTelemetryData) {
+TEST_F(RealtimeProfilerSocketTest, StreamRealtimeProfilerData) {
     // Configuration: 64 bytes is the minimum PCIe-aligned page size on Blackhole
     constexpr std::size_t page_size = 64;
-    constexpr std::size_t num_pages = 100;                    // Send 100 pages of telemetry data
+    constexpr std::size_t num_pages = 100;                    // Send 100 pages
     constexpr std::size_t data_size = page_size * num_pages;  // 6400 bytes total
 
-    std::cout << "\n=== Perf Telemetry Socket Test ===\n";
+    std::cout << "\n=== Real-time profiler socket test ===\n";
     std::cout << "Streaming " << num_pages << " pages of " << page_size << " bytes (" << data_size
               << " bytes total)\n\n";
 
-    // Get the perf telemetry socket that was initialized during device init
-    D2HSocket* telemetry_socket = mesh_device_->get_perf_telemetry_socket();
-    ASSERT_NE(telemetry_socket, nullptr) << "Perf telemetry socket was not initialized";
+    // Get the real-time profiler socket that was initialized during device init
+    D2HSocket* realtime_profiler_socket = mesh_device_->get_realtime_profiler_socket();
+    ASSERT_NE(realtime_profiler_socket, nullptr) << "Real-time profiler socket was not initialized";
 
     // Set the page size for this transfer
-    telemetry_socket->set_page_size(page_size);
+    realtime_profiler_socket->set_page_size(page_size);
 
-    std::cout << "[Main Thread] Using perf telemetry socket with config buffer at 0x" << std::hex
-              << telemetry_socket->get_config_buffer_address() << std::dec << "\n";
+    std::cout << "[Main Thread] Using real-time profiler socket with config buffer at 0x" << std::hex
+              << realtime_profiler_socket->get_config_buffer_address() << std::dec << "\n";
 
     // Create a buffer on device to hold the source data
     const ReplicatedBufferConfig buffer_config{.size = data_size};
@@ -134,7 +135,7 @@ TEST_F(PerfTelemetrySocketTest, StreamTelemetryData) {
     };
     auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device_.get());
 
-    // Create a kernel that sends telemetry data through the socket
+    // Create a kernel that sends real-time profiler data through the socket
     // Running on core (0,0) BRISC (RISCV_0)
     auto send_program = CreateProgram();
     CreateKernel(
@@ -145,7 +146,7 @@ TEST_F(PerfTelemetrySocketTest, StreamTelemetryData) {
             .processor = DataMovementProcessor::RISCV_0,  // BRISC
             .noc = NOC::RISCV_0_default,
             .compile_args = {
-                static_cast<uint32_t>(telemetry_socket->get_config_buffer_address()),
+                static_cast<uint32_t>(realtime_profiler_socket->get_config_buffer_address()),
                 static_cast<uint32_t>(sender_data_buffer->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
@@ -165,12 +166,17 @@ TEST_F(PerfTelemetrySocketTest, StreamTelemetryData) {
     WriteShard(mesh_device_->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
     // Set up the receiver thread
-    TelemetryQueue<std::vector<uint32_t>> received_pages;
+    RealtimeProfilerQueue<std::vector<uint32_t>> received_pages;
     std::atomic<bool> receiver_done{false};
 
     // Start the receiver thread BEFORE launching the kernel
     std::thread receiver_thread(
-        telemetry_receiver_thread_func, telemetry_socket, page_size, num_pages, &received_pages, &receiver_done);
+        realtime_profiler_receiver_thread_func,
+        realtime_profiler_socket,
+        page_size,
+        num_pages,
+        &received_pages,
+        &receiver_done);
 
     std::cout << "[Main Thread] Launching kernel on core (0,0) BRISC...\n";
 
@@ -180,7 +186,7 @@ TEST_F(PerfTelemetrySocketTest, StreamTelemetryData) {
     mesh_workload.add_program(devices, std::move(send_program));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
 
-    std::cout << "[Main Thread] Kernel launched, receiving telemetry data...\n";
+    std::cout << "[Main Thread] Kernel launched, receiving real-time profiler data...\n";
 
     // Main thread collects received pages from the queue and prints them
     std::vector<uint32_t> dst_vec;

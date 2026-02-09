@@ -11,7 +11,7 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include <tt-metalium/experimental/perf_telemetry.hpp>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include "program/program_impl.hpp"
 
 namespace tt {
@@ -28,9 +28,9 @@ enum data_collector_t {
 };
 
 // Aliases to the public experimental types for internal use.
-using ProgramPerfRecord = tt::tt_metal::experimental::ProgramPerfRecord;
-using ProgramPerfCallback = tt::tt_metal::experimental::ProgramPerfCallback;
-using ProgramPerfCallbackHandle = tt::tt_metal::experimental::ProgramPerfCallbackHandle;
+using ProgramRealtimeRecord = tt::tt_metal::experimental::ProgramRealtimeRecord;
+using ProgramRealtimeCallback = tt::tt_metal::experimental::ProgramRealtimeCallback;
+using ProgramRealtimeCallbackHandle = tt::tt_metal::experimental::ProgramRealtimeCallbackHandle;
 
 /* Record a single dispatch write, to be dumped with stats on program exit. Should only be called once per transaction
  * per program (if a program is enqueued multiple times, don't call this multiple times).
@@ -68,16 +68,16 @@ std::string GetKernelSourcesForRuntimeId(uint64_t runtime_id);
 // Look up the kernel source paths for a given runtime_id as a vector.
 std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id);
 
-// Register a callback to be invoked when program perf telemetry data arrives.
+// Register a callback to be invoked when real-time profiler data arrives.
 // Multiple callbacks can be registered; they are called in order of registration.
 // Returns a handle that can be used to unregister the callback.
-ProgramPerfCallbackHandle RegisterProgramPerfCallback(ProgramPerfCallback callback);
+ProgramRealtimeCallbackHandle RegisterProgramRealtimeCallback(ProgramRealtimeCallback callback);
 
 // Unregister a previously registered callback by its handle.
-void UnregisterProgramPerfCallback(ProgramPerfCallbackHandle handle);
+void UnregisterProgramRealtimeCallback(ProgramRealtimeCallbackHandle handle);
 
-// Invoke all registered program perf callbacks with the given record.
-// Called internally by the perf telemetry receiver thread.
-void InvokeProgramPerfCallbacks(const ProgramPerfRecord& record);
+// Invoke all registered real-time profiler callbacks with the given record.
+// Called internally by the real-time profiler receiver thread.
+void InvokeProgramRealtimeCallbacks(const ProgramRealtimeRecord& record);
 
 }  // end namespace tt
