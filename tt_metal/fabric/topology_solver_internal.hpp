@@ -151,7 +151,7 @@ public:
      * @brief Check if candidate satisfies all hard constraints
      *
      * @return true if candidate should be included, false if should be filtered out
-     * 
+     *
      * Public so ConsistencyChecker can use it for forward consistency checking.
      */
     template <typename TargetNode, typename GlobalNode>
