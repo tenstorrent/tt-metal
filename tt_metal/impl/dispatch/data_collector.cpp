@@ -167,26 +167,27 @@ std::vector<std::string> DataCollector::GetKernelSourcesVecForRuntimeId(uint64_t
     return it->second;
 }
 
-tt::ProgramRealtimeCallbackHandle DataCollector::RegisterProgramRealtimeCallback(tt::ProgramRealtimeCallback callback) {
-    std::lock_guard<std::mutex> lock(program_realtime_callbacks_mutex_);
+tt::ProgramRealtimeProfilerCallbackHandle DataCollector::RegisterProgramRealtimeProfilerCallback(
+    tt::ProgramRealtimeProfilerCallback callback) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
     auto handle = next_callback_handle_++;
-    program_realtime_callbacks_.emplace_back(handle, std::move(callback));
+    program_realtime_profiler_callbacks_.emplace_back(handle, std::move(callback));
     return handle;
 }
 
-void DataCollector::UnregisterProgramRealtimeCallback(tt::ProgramRealtimeCallbackHandle handle) {
-    std::lock_guard<std::mutex> lock(program_realtime_callbacks_mutex_);
-    program_realtime_callbacks_.erase(
+void DataCollector::UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    program_realtime_profiler_callbacks_.erase(
         std::remove_if(
-            program_realtime_callbacks_.begin(),
-            program_realtime_callbacks_.end(),
+            program_realtime_profiler_callbacks_.begin(),
+            program_realtime_profiler_callbacks_.end(),
             [handle](const auto& entry) { return entry.first == handle; }),
-        program_realtime_callbacks_.end());
+        program_realtime_profiler_callbacks_.end());
 }
 
-void DataCollector::InvokeProgramRealtimeCallbacks(const tt::ProgramRealtimeRecord& record) {
-    std::lock_guard<std::mutex> lock(program_realtime_callbacks_mutex_);
-    for (const auto& [handle, callback] : program_realtime_callbacks_) {
+void DataCollector::InvokeProgramRealtimeProfilerCallbacks(const tt::ProgramRealtimeRecord& record) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    for (const auto& [handle, callback] : program_realtime_profiler_callbacks_) {
         callback(record);
     }
 }

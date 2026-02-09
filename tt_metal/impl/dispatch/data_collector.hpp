@@ -60,11 +60,12 @@ public:
     std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) const;
     // Register a callback to be invoked when real-time profiler data arrives.
     // Returns a handle that can be used to unregister the callback.
-    tt::ProgramRealtimeCallbackHandle RegisterProgramRealtimeCallback(tt::ProgramRealtimeCallback callback);
+    tt::ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
+        tt::ProgramRealtimeProfilerCallback callback);
     // Unregister a previously registered callback by its handle.
-    void UnregisterProgramRealtimeCallback(tt::ProgramRealtimeCallbackHandle handle);
+    void UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle);
     // Invoke all registered callbacks with the given record.
-    void InvokeProgramRealtimeCallbacks(const tt::ProgramRealtimeRecord& record);
+    void InvokeProgramRealtimeProfilerCallbacks(const tt::ProgramRealtimeRecord& record);
     void DumpData();
 
 private:
@@ -82,9 +83,10 @@ private:
     // runtime_id -> list of kernel source paths for that program
     std::map<uint64_t, std::vector<std::string>> runtime_id_to_kernel_sources;
     // Registered real-time profiler callbacks (called from receiver thread)
-    std::mutex program_realtime_callbacks_mutex_;
-    std::vector<std::pair<tt::ProgramRealtimeCallbackHandle, tt::ProgramRealtimeCallback>> program_realtime_callbacks_;
-    tt::ProgramRealtimeCallbackHandle next_callback_handle_{0};
+    std::mutex program_realtime_profiler_callbacks_mutex_;
+    std::vector<std::pair<tt::ProgramRealtimeProfilerCallbackHandle, tt::ProgramRealtimeProfilerCallback>>
+        program_realtime_profiler_callbacks_;
+    tt::ProgramRealtimeProfilerCallbackHandle next_callback_handle_{0};
 };
 
 }  // namespace tt::tt_metal

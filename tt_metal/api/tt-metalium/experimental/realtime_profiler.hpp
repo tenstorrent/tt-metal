@@ -22,10 +22,10 @@ struct ProgramRealtimeRecord {
 };
 
 // Callback type for real-time profiler data.
-using ProgramRealtimeCallback = std::function<void(const ProgramRealtimeRecord& record)>;
+using ProgramRealtimeProfilerCallback = std::function<void(const ProgramRealtimeRecord& record)>;
 
-// Opaque handle returned by RegisterProgramRealtimeCallback, used to unregister.
-using ProgramRealtimeCallbackHandle = uint64_t;
+// Opaque handle returned by RegisterProgramRealtimeProfilerCallback, used to unregister.
+using ProgramRealtimeProfilerCallbackHandle = uint64_t;
 
 // clang-format off
 /**
@@ -33,15 +33,15 @@ using ProgramRealtimeCallbackHandle = uint64_t;
  * Multiple callbacks can be registered; they are called in order of registration from the
  * real-time profiler receiver thread.
  *
- * Return value: ProgramRealtimeCallbackHandle - handle that can be passed to
- *               UnregisterProgramRealtimeCallback to remove the callback.
+ * Return value: ProgramRealtimeProfilerCallbackHandle - handle that can be passed to
+ *               UnregisterProgramRealtimeProfilerCallback to remove the callback.
  */
 // clang-format on
-ProgramRealtimeCallbackHandle RegisterProgramRealtimeCallback(ProgramRealtimeCallback callback);
+ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallback callback);
 
 /**
  * Unregister a previously registered callback by its handle.
  */
-void UnregisterProgramRealtimeCallback(ProgramRealtimeCallbackHandle handle);
+void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
 
 }  // namespace tt::tt_metal::experimental

@@ -42,7 +42,7 @@ def test_realtime_callback_json(device, tmp_path):
         with lock:
             records.append(entry)
 
-    handle = ttnn.device.RegisterProgramRealtimeCallback(collect_record)
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_record)
 
     # -- 2. Run a small matmul workload ----------------------------------------
     torch.manual_seed(0)
@@ -67,7 +67,7 @@ def test_realtime_callback_json(device, tmp_path):
     time.sleep(0.5)
 
     # -- 3. Unregister and dump to JSON ----------------------------------------
-    ttnn.device.UnregisterProgramRealtimeCallback(handle)
+    ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
 
     out_file = tmp_path / "realtime_profiler.json"
     with lock:

@@ -247,7 +247,7 @@ SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 
 # Real-time profiler callbacks (experimental)
 ProgramRealtimeRecord = ttnn._ttnn.device.ProgramRealtimeRecord
-RegisterProgramRealtimeCallback = ttnn._ttnn.device.RegisterProgramRealtimeCallback
-UnregisterProgramRealtimeCallback = ttnn._ttnn.device.UnregisterProgramRealtimeCallback
+RegisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.RegisterProgramRealtimeProfilerCallback
+UnregisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.UnregisterProgramRealtimeProfilerCallback
 
 __all__ = []

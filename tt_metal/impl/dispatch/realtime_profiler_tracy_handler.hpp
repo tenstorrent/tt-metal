@@ -13,7 +13,7 @@
 namespace tt::tt_metal {
 
 // Manages Tracy contexts for real-time profiler.
-// Registers itself as a ProgramRealtimeCallback and routes records to the correct
+// Registers itself as a ProgramRealtimeProfilerCallback and routes records to the correct
 // Tracy context based on chip_id. Thread-safe for AddDevice/RemoveDevice.
 class RealtimeProfilerTracyHandler {
 public:
@@ -37,7 +37,7 @@ private:
 
     std::mutex mutex_;
     std::unordered_map<uint32_t, TracyTTCtx> tracy_contexts_;
-    tt::ProgramRealtimeCallbackHandle callback_handle_;
+    tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;
 };
 
 }  // namespace tt::tt_metal

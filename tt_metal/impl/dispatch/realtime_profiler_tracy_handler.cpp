@@ -42,12 +42,12 @@ tracy::TTDeviceMarker make_marker(
 }  // namespace
 
 RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() {
-    callback_handle_ =
-        tt::RegisterProgramRealtimeCallback([this](const tt::ProgramRealtimeRecord& record) { HandleRecord(record); });
+    callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback(
+        [this](const tt::ProgramRealtimeRecord& record) { HandleRecord(record); });
 }
 
 RealtimeProfilerTracyHandler::~RealtimeProfilerTracyHandler() {
-    tt::UnregisterProgramRealtimeCallback(callback_handle_);
+    tt::UnregisterProgramRealtimeProfilerCallback(callback_handle_);
 
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& [chip_id, ctx] : tracy_contexts_) {

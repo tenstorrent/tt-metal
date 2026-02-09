@@ -1601,7 +1601,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                         record.chip_id = dev_state.chip_id;
                         record.kernel_sources =
                             start_id > 0 ? tt::GetKernelSourcesVecForRuntimeId(start_id) : std::vector<std::string>{};
-                        tt::InvokeProgramRealtimeCallbacks(record);
+                        tt::InvokeProgramRealtimeProfilerCallbacks(record);
                     }
 
                     dev_state.socket->pop_pages(1);

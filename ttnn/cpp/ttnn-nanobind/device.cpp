@@ -48,8 +48,8 @@ namespace nb = nanobind;
 
 namespace {
 
-// Prevent Python callback GC while registered.  Keyed by handle returned from C++ RegisterProgramRealtimeCallback.
-// Access only from the Python thread (always under GIL), so no mutex needed.
+// Prevent Python callback GC while registered.  Keyed by handle returned from C++
+// RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
 std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 
 void ttnn_device(nb::module_& mod) {
@@ -515,14 +515,14 @@ void device_module(nb::module_& m_device) {
         "Return the maximum size of the worker L1 unreserved memory.");
 
     m_device.def(
-        "RegisterProgramRealtimeCallback",
+        "RegisterProgramRealtimeProfilerCallback",
         [](nb::callable callback) -> uint64_t {
             // Hold a strong ref to the Python callable so it isn't garbage-collected
             // while the C++ callback is alive.
             PyObject* raw_cb = callback.ptr();
             Py_INCREF(raw_cb);
 
-            auto handle = tt::tt_metal::experimental::RegisterProgramRealtimeCallback(
+            auto handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
                 [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                     nb::gil_scoped_acquire gil;
                     (nb::handle(raw_cb))(nb::cast(record, nb::rv_policy::copy));
@@ -543,18 +543,18 @@ void device_module(nb::module_& m_device) {
                 callback: A callable that accepts a single ProgramRealtimeRecord argument.
 
             Returns:
-                int: A handle that can be passed to UnregisterProgramRealtimeCallback.
+                int: A handle that can be passed to UnregisterProgramRealtimeProfilerCallback.
 
             Example:
                 >>> def my_callback(record):
                 ...     print(f"Program {record.program_id} on chip {record.chip_id}")
-                >>> handle = ttnn.device.RegisterProgramRealtimeCallback(my_callback)
+                >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
         )doc");
 
     m_device.def(
-        "UnregisterProgramRealtimeCallback",
+        "UnregisterProgramRealtimeProfilerCallback",
         [](uint64_t handle) {
-            tt::tt_metal::experimental::UnregisterProgramRealtimeCallback(handle);
+            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
             auto it = python_realtime_callback_refs.find(handle);
             if (it != python_realtime_callback_refs.end()) {
                 Py_DECREF(it->second);
@@ -566,7 +566,7 @@ void device_module(nb::module_& m_device) {
             Unregister a previously registered real-time profiler callback.
 
             Args:
-                handle (int): The handle returned by RegisterProgramRealtimeCallback.
+                handle (int): The handle returned by RegisterProgramRealtimeProfilerCallback.
         )doc");
 }
 
