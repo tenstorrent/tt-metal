@@ -8,12 +8,12 @@ TTNN Post SDPA Fused Op Test with CCL All-Reduce
 Tests the full post_sdpa fused operation with CCL all-reduce which implements:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
 - Gather1: Collect to [1, 8192] on gather core (12, 9)
-- Mcast: Broadcast [1, 8192] to 117 cores (13x9 rectangular grid)
+- Mcast: Broadcast [1, 8192] to 130 cores (13x10 rectangular grid)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
 - Gather2: Collect to [1, 7168] on gather core (12, 9)
 - CCL All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 
-The mcast grid (13x9=117 cores) includes 5 inactive cores (row 8, cols 8-12)
+The mcast grid (13x10=130 cores) includes 18 inactive cores (row 8 cols 8-12, row 9 cols 0-12)
 that receive mcast data but skip matmul2 via is_matmul2_core=false.
 
 CCL All-Reduce uses:
@@ -105,10 +105,10 @@ def test_post_sdpa(
     MATMUL1_GRID_Y = 8
     num_matmul1_cores = MATMUL1_GRID_X * MATMUL1_GRID_Y  # 64
 
-    # Mcast grid: 13x9 = 117 cores (rectangular for efficient mcast)
+    # Mcast grid: 13x10 = 130 cores (rectangular for efficient mcast)
     MCAST_GRID_X = 13
-    MCAST_GRID_Y = 9
-    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 117
+    MCAST_GRID_Y = 10
+    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 130
 
     # Active Matmul2 cores: 112 (rows 0-7 full 13 cols + row 8 cols 0-7)
     # Non-rectangular grid: 13*8 + 8 = 104 + 8 = 112
@@ -120,7 +120,7 @@ def test_post_sdpa(
 
     logger.info(f"Testing full post_sdpa fused op with CCL all-reduce:")
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
-    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (13x9 grid)")
+    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (13x10 grid)")
     logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
     logger.info(f"  CCL All-Reduce: [{M}, {output_size}] across {num_devices} devices")
     logger.info(f"  Output: [{M}, {output_size}] (fuse_residual_add={fuse_residual_add})")
