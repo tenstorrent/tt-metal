@@ -103,6 +103,7 @@ void add_bias_and_addcmul_block(
 
             tile_regs_acquire();
             add_tiles_bcast<BroadcastType::ROW>(intermediate_cb, bias_cb, tile_id, n, DST_ID);
+
             tile_regs_commit();
 
             tile_regs_wait();

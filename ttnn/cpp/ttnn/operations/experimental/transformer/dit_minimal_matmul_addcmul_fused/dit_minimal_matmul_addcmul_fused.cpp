@@ -14,7 +14,6 @@ ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
     const ttnn::Tensor& addcmul_input_tensor1,
     const ttnn::Tensor& addcmul_input_tensor2,
     const std::optional<ttnn::Tensor>& bias_tensor,
-    std::optional<unary::UnaryWithParam> fused_activation,
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
@@ -25,7 +24,7 @@ ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
         matmul_input_tensor,
         matmul_weight_tensor,
         bias_tensor,
-        std::move(fused_activation),
+        std::nullopt,  // no fused_activation for dit_minimal_matmul_addcmul_fused
         config,
         memory_config,
         dtype,
