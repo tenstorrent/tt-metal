@@ -39,10 +39,21 @@ std::vector<std::string> expected = {
 
 namespace {
 
+struct WatcherRBTestParams {
+    std::string name;
+    HalProcessorIdentifier processor;
+};
+
+class WatcherRBTest : public MeshWatcherFixture,
+                      public ::testing::WithParamInterface<WatcherRBTestParams> {};
+
 void RunTest(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    HalProcessorIdentifier processor) {
+    const WatcherRBTestParams& params) {
+
+    HalProcessorIdentifier processor = params.processor;
+
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -61,17 +72,13 @@ void RunTest(
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM: {
                     DataMovementConfig dm_config{};
-                    switch (processor.processor_type) {
-                        case 0:
-                            dm_config.processor = tt_metal::DataMovementProcessor::RISCV_0;
-                            dm_config.noc = tt_metal::NOC::RISCV_0_default;
-                            break;
-                        case 1:
-                            dm_config.processor = tt_metal::DataMovementProcessor::RISCV_1;
-                            dm_config.noc = tt_metal::NOC::RISCV_1_default;
-                            break;
-                        default: TT_THROW("Unsupported DM processor type {}", processor.processor_type);
-                    }
+                    dm_config.processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type);
+                    // NOC selection: DM1 uses NOC_1 on BH/WH, all DMs on quasar use NOC_0
+                    dm_config.noc = (processor.processor_type ==
+                                         enchantum::to_underlying(tt::tt_metal::DataMovementProcessor::RISCV_1) &&
+                                     MetalContext::instance().hal().get_num_nocs() > 1)
+                                        ? tt_metal::NOC::RISCV_1_default
+                                        : tt_metal::NOC::NOC_0;
                     CreateKernel(
                         program,
                         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
@@ -135,78 +142,64 @@ void RunTest(
 using enum HalProgrammableCoreType;
 using enum HalProcessorClassType;
 
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferBrisc) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, {TENSIX, DM, 0});
-            },
-            mesh_device);
-    }
-}
+// Single parameterized test
+TEST_P(WatcherRBTest, TestWatcherRingBuffer) {
+    const auto& params = GetParam();
 
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferNCrisc) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, {TENSIX, DM, 1});
-            },
-            mesh_device);
+    // Skip if processor type is not available on this architecture
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t core_type_index = hal.get_programmable_core_type_index(params.processor.core_type);
+    uint32_t available_processors = hal.get_processor_types_count(
+        core_type_index, static_cast<uint32_t>(params.processor.processor_class));
+    if (params.processor.processor_type >= available_processors) {
+        log_info(tt::LogTest, "Test {} requires processor type {} but only {} available.",
+                 params.name, params.processor.processor_type, available_processors);
+        GTEST_SKIP();
     }
-}
 
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc0) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 0});
-            },
-            mesh_device);
-    }
-}
-
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc1) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 1});
-            },
-            mesh_device);
-    }
-}
-
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc2) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 2});
-            },
-            mesh_device);
-    }
-}
-
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferErisc) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, {ACTIVE_ETH, DM, 0});
-            },
-            mesh_device);
-    }
-}
-
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferIErisc) {
-    if (!this->IsSlowDispatch()) {
+    // Skip idle ethernet test if not slow dispatch
+    if (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH && !this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
+
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, {IDLE_ETH, DM, 0});
+            [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunTest(fixture, mesh_device, params);
             },
             mesh_device);
     }
 }
+
+// Instantiate all test cases
+// Tests are automatically skipped if the processor type is not available on the current architecture
+INSTANTIATE_TEST_SUITE_P(
+    WatcherRingBufferTests,
+    WatcherRBTest,
+    ::testing::Values(
+        // DM processors
+        WatcherRBTestParams{"Brisc", {TENSIX, DM, 0}},
+        WatcherRBTestParams{"NCrisc", {TENSIX, DM, 1}},
+        // DM2 to DM7 only run on Quasar
+        WatcherRBTestParams{"DM2", {TENSIX, DM, 2}},
+        WatcherRBTestParams{"DM3", {TENSIX, DM, 3}},
+        WatcherRBTestParams{"DM4", {TENSIX, DM, 4}},
+        WatcherRBTestParams{"DM5", {TENSIX, DM, 5}},
+        WatcherRBTestParams{"DM6", {TENSIX, DM, 6}},
+        WatcherRBTestParams{"DM7", {TENSIX, DM, 7}},
+        // Compute processors
+        WatcherRBTestParams{"Trisc0", {TENSIX, COMPUTE, 0}},
+        WatcherRBTestParams{"Trisc1", {TENSIX, COMPUTE, 1}},
+        WatcherRBTestParams{"Trisc2", {TENSIX, COMPUTE, 2}},
+        WatcherRBTestParams{"Trisc3", {TENSIX, COMPUTE, 3}}, //Trisc3 only Runs on Quasar
+        // Ethernet processors
+        WatcherRBTestParams{"Erisc", {ACTIVE_ETH, DM, 0}},
+        WatcherRBTestParams{"IErisc", {IDLE_ETH, DM, 0}}
+    ),
+    [](const ::testing::TestParamInfo<WatcherRBTestParams>& info) {
+        return info.param.name;  // Use name as test suffix
+    }
+);
 
 }  // namespace

@@ -72,7 +72,6 @@ union subordinate_map_t {
 
 constexpr uint8_t MaxProcessorsPerCoreType = 24;
 constexpr uint8_t MaxDMProcessorsPerCoreType = 8;
-constexpr uint8_t NumTensixDispatchClasses = 3;
 constexpr uint8_t NumEthDispatchClasses = 2;
 constexpr uint8_t NumDramDispatchClasses = 1;
 constexpr uint8_t noc_size_x = 8;

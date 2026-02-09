@@ -426,6 +426,7 @@ KernelGroup::KernelGroup(
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
     // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
     const auto& hal = MetalContext::instance().hal();
+    this->rta_sizes.resize(hal.get_dispatch_class_count());
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         kernel_config.kernel_config_base()[index] =
             hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
@@ -1731,9 +1732,12 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const SemaphoresGetter& semaphores_getter,
     const DataflowBuffersGetter& dataflow_buffers_getter,
     tt::stl::Span<ProgramImpl*> programs) {
-    ProgramOffsetsState state;
-
     const auto& hal = MetalContext::instance().hal();
+    const uint32_t dispatch_class_count = hal.get_dispatch_class_count();
+
+    ProgramOffsetsState state;
+    state.crta_offsets.resize(dispatch_class_count);
+    state.crta_sizes.resize(dispatch_class_count);
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);

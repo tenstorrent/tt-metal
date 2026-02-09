@@ -54,15 +54,16 @@ class MeshWorkloadImpl;
 
 enum dispatch_core_processor_classes {
     // Tensix processor classes
+    // On Quasar, all DMs share DISPATCH_CLASS_TENSIX_DM0 (class 0)
+    // On WH/BH, DM0 and DM1 have separate classes (0 and 1)
+    // See hal.get_dm_dispatch_class() and hal.get_compute_dispatch_class()
+    // for architecture-specific dispatch class assignment
     DISPATCH_CLASS_TENSIX_DM0 = 0,
     DISPATCH_CLASS_TENSIX_DM1 = 1,
-    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
 
     // Ethernet processor classes
     DISPATCH_CLASS_ETH_DM0 = 0,
     DISPATCH_CLASS_ETH_DM1 = 1,
-
-    DISPATCH_CLASS_MAX = 3,
 };
 
 namespace experimental {
@@ -84,7 +85,7 @@ struct KernelGroup {
     CoreRangeSet core_ranges;
     // kernel_ids are ordered by dispatch class
     std::vector<KernelHandle> kernel_ids;
-    uint32_t rta_sizes[DISPATCH_CLASS_MAX]{};
+    std::vector<uint32_t> rta_sizes;
     uint32_t total_rta_size{};
     // kernel_text_offsets is indexed by processor index within core.
     std::vector<uint32_t> kernel_text_offsets;
@@ -105,18 +106,18 @@ struct KernelGroup {
 
 // Contains the program's worker memory map
 struct ProgramConfig {
-    uint32_t rta_offset;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
-    uint32_t sem_offset;
-    uint32_t sem_size;
-    uint32_t cb_offset;
-    uint32_t cb_size;
-    uint32_t dfb_offset;
-    uint32_t dfb_size;
-    uint32_t local_cb_size;
-    uint32_t kernel_text_offset;  // offset of first kernel bin
-    uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
+    uint32_t rta_offset{};
+    std::vector<uint32_t> crta_offsets;
+    std::vector<uint32_t> crta_sizes;
+    uint32_t sem_offset{};
+    uint32_t sem_size{};
+    uint32_t cb_offset{};
+    uint32_t cb_size{};
+    uint32_t dfb_offset{};
+    uint32_t dfb_size{};
+    uint32_t local_cb_size{};
+    uint32_t kernel_text_offset{};  // offset of first kernel bin
+    uint32_t kernel_text_size{};    // max size of all kernel bins across all kernel groups
 };
 
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
@@ -136,9 +137,8 @@ struct ProgramOffsetsState {
     uint32_t offset = 0;
     // Unique RTA offset.
     uint32_t rta_offset = 0;
-    // Common RTA offsets and sizes.
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets{};
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes{};
+    std::vector<uint32_t> crta_offsets;
+    std::vector<uint32_t> crta_sizes;
     // Semaphore offsets and sizes.
     uint32_t sem_offset = 0;
     uint32_t sem_size = 0;

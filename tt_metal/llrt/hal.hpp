@@ -487,6 +487,26 @@ public:
     uint32_t get_total_num_risc_processors() const;
     uint32_t get_max_processors_per_core() const { return max_processors_per_core_; }
 
+    // Returns the dispatch class for a DM processor
+    // On Quasar, all DMs share DISPATCH_CLASS_TENSIX_DM0 (class 0)
+    // On WH/BH, DM0 and DM1 have separate classes (0 and 1)
+    uint32_t get_dm_dispatch_class(uint32_t processor_type) const {
+        return (arch_ == tt::ARCH::QUASAR) ? 0 : processor_type;
+    }
+
+    // Returns the number of dispatch classes for the current architecture
+    // Quasar: DM shared, COMPUTE
+    // WH/BH: DM0, DM1, COMPUTE
+    uint32_t get_dispatch_class_count() const {
+        return (arch_ == tt::ARCH::QUASAR) ? 2 : 3;
+    }
+
+    // Returns the dispatch class for COMPUTE processors.
+    // COMPUTE is always the last dispatch class.
+    uint32_t get_compute_dispatch_class() const {
+        return get_dispatch_class_count() - 1;
+    }
+
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 

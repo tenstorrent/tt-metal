@@ -1101,9 +1101,19 @@ KernelHandle CreateDataMovementKernel(
         "cores because both NOCs are in use!",
         kernel_name);
 
+    // Get the number of DM processors for TENSIX cores
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t num_dm_processors = hal.get_processor_types_count(
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX),
+        static_cast<uint32_t>(HalProcessorClassType::DM));
+
+    // Validate the processor type
     TT_FATAL(
-        config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
-        "DataMovementKernel creation failure: Data movement kernels can only be created on DM0 or DM1 processors.");
+        enchantum::to_underlying(config.processor) < num_dm_processors,
+        "DataMovementKernel creation failure: Invalid DM processor {}. Valid range is DM0-DM{}.",
+        enchantum::to_underlying(config.processor),
+        num_dm_processors - 1
+    );
 
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
 
