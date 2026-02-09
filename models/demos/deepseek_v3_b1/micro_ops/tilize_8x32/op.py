@@ -23,50 +23,21 @@ def golden(input_tensor: torch.Tensor) -> torch.Tensor:
     """
     Golden reference implementation of tilize 8x32 operation.
 
-    Converts row-major 8xN tensor to tiled format with 8x32 blocks.
-    This simulates what tilize_block does: reorganizes data within each 8x32 block
-    from row-major to tiled format.
-
-    The tilize operation reorganizes data so that within each tile block,
-    data is accessed column-first rather than row-first.
+    Since ttnn.to_torch() automatically untilizes tiled tensors back to row-major,
+    the output after tilize + untilize should be identical to the input.
 
     Args:
         input_tensor: Input tensor [8, N] in row-major format (N must be divisible by 32)
 
     Returns:
-        Tiled tensor [8, N] in tiled format
+        Reference output tensor [8, N] in row-major format (same as input)
     """
     H, W = input_tensor.shape
     assert H == 8, f"Expected height=8, got {H}"
     assert W % 32 == 0, f"Width must be divisible by 32, got {W}"
 
-    tile_H = 8
-    tile_W = 32
-    num_blocks = W // tile_W
-
-    # Create output tensor
-    output = torch.zeros_like(input_tensor)
-
-    # For each 8x32 block (column block)
-    for block_col in range(num_blocks):
-        ws = block_col * tile_W  # Starting column of this block
-
-        # Tilize reorganizes: for each column in the block, then each row
-        # This is the standard tilize pattern: column-major within the tile
-        for col_in_block in range(tile_W):
-            for row_in_block in range(tile_H):
-                # Source: row-major layout
-                src_row = row_in_block
-                src_col = ws + col_in_block
-                src_idx = src_row * W + src_col
-
-                # Destination: tiled layout (column-first within tile)
-                # Within the block, data is organized column by column
-                dst_idx = ws * tile_H + col_in_block * tile_H + row_in_block
-
-                output.view(-1)[dst_idx] = input_tensor.view(-1)[src_idx]
-
-    return output
+    # Tilize + untilize is a reversible operation, so output equals input
+    return input_tensor.clone()
 
 
 def tilize_8x32_kernel(input_tensor, output_tensor):
@@ -94,8 +65,7 @@ def tilize_8x32_kernel(input_tensor, output_tensor):
     assert H == 8, f"Expected height=8, got {H}"
     assert W % 32 == 0, f"Width must be divisible by 32, got {W}"
 
-    # Tilize 8x256 at a time
-    num_blocks = max(1, W // 256)
+    # Tilize up to 8x256 at a time
     block_size = min(8, W // 32)
 
     # CB indices
@@ -126,7 +96,6 @@ def tilize_8x32_kernel(input_tensor, output_tensor):
     trisc_named_compile_time_args = [
         ("in_cb", in_cb),
         ("out_cb", out_cb),
-        ("num_blocks", num_blocks),
         ("block_size", block_size),
     ]
 
