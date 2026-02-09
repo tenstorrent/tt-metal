@@ -100,7 +100,7 @@ def prepare_program_cache_for_comparison(device) -> None:
 
     Clears:
     1. Disk kernel cache (persistent)
-    2. In-memory HashLookup cache (process-lifetime)
+    2. In-memory JIT build cache (process-lifetime)
     3. Program cache (keeps it enabled for next run)
     """
     import ttnn
@@ -108,8 +108,8 @@ def prepare_program_cache_for_comparison(device) -> None:
     # Clear disk cache
     clear_disk_kernel_cache()
 
-    # Clear in-memory HashLookup cache
-    logger.info("Clearing in-memory HashLookup cache")
+    # Clear in-memory JIT build cache
+    logger.info("Clearing in-memory JIT build cache")
     ttnn.device.ClearKernelCache()
 
     # Clear program cache (but keep it enabled)

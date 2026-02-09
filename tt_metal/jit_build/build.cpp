@@ -4,6 +4,8 @@
 
 #include "build.hpp"
 
+#include "jit_build_cache.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -730,5 +732,11 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events) {
         event.get();
     }
 }
+
+void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
+    JitBuildCache::inst().build_once(hash, build_fn);
+}
+
+void jit_build_cache_clear() { JitBuildCache::inst().clear(); }
 
 }  // namespace tt::tt_metal

@@ -38,7 +38,7 @@ struct KernelCacheStatus {
 
 void ClearKernelCache(const std::string& kernel_root_path) {
     std::filesystem::remove_all(kernel_root_path);
-    detail::HashLookup::inst().clear();
+    detail::ClearKernelCache();
 }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
