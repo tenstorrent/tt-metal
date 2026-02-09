@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/experimental/mul_reduce_scalar.h"
+#include "api/compute/experimental/mul_reduce_scalar.h"
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {

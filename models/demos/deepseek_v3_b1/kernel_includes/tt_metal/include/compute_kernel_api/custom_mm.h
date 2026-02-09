@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_custom_mm_api.h"
 #endif
