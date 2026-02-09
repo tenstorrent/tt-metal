@@ -1517,116 +1517,68 @@ class MoeSharedExpertOp:
         Build shared expert compile-time args to append to routed expert args.
 
         Args:
-            shared_ctx: _MoeSharedExpertContext (or None for defaults)
+            shared_ctx: _MoeSharedExpertContext
             input_mcast_dst_cb: The CB index for the mcast destination (shared with routed)
 
         Returns:
             (ncrisc_args, brisc_args, trisc_args) - lists of named compile-time arg tuples
         """
-        if shared_ctx is not None:
-            ctx = shared_ctx
-            ncrisc_args = [
-                # Gate/Up weights setup
-                ("shared_gu_weights_cb", ctx.gu_weights_cb),
-                ("shared_gu_weights_num_pages", ctx.gu_weights_num_pages),
-                # Gate gather (A) sender
-                ("shared_ag_dest_noc_x", ctx.gather_dest_noc_core.x),
-                ("shared_ag_dest_noc_y", ctx.gather_dest_noc_core.y),
-                ("shared_ag_data_size_bytes", ctx.gu_gather_data_size_bytes),
-                ("shared_ag_receiver_semaphore_id", ctx.ag_receiver_semaphore_id),
-                ("shared_ag_src_cb", ctx.gu_out_cb),
-                ("shared_ag_src_num_pages", 1),
-                ("shared_ag_receiver_data_addr", ctx.ag_receiver_data_addr),
-                # Up gather (B) sender
-                ("shared_bg_dest_noc_x", ctx.gather_dest_noc_core.x),
-                ("shared_bg_dest_noc_y", ctx.gather_dest_noc_core.y),
-                ("shared_bg_data_size_bytes", ctx.gu_gather_data_size_bytes),
-                ("shared_bg_receiver_semaphore_id", ctx.bg_receiver_semaphore_id),
-                ("shared_bg_src_cb", ctx.gu_out_cb),
-                ("shared_bg_src_num_pages", 1),
-                ("shared_bg_receiver_data_addr", ctx.bg_receiver_data_addr),
-            ]
-            brisc_args = [
-                # Gate gather (A) receiver
-                ("shared_ag_noc0_num_senders", ctx.num_compute_cores),
-                ("shared_ag_noc0_receiver_semaphore_id", ctx.ag_receiver_semaphore_id),
-                ("shared_ag_noc1_receiver_semaphore_id", ctx.ag_noc1_receiver_semaphore_id),
-                ("shared_ag_dst_cb", ctx.group1_cb),
-                ("shared_ag_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
-                # Up gather (B) receiver
-                ("shared_bg_noc0_num_senders", ctx.num_compute_cores),
-                ("shared_bg_noc0_receiver_semaphore_id", ctx.bg_receiver_semaphore_id),
-                ("shared_bg_noc1_receiver_semaphore_id", ctx.bg_noc1_receiver_semaphore_id),
-                ("shared_bg_dst_cb", ctx.group2_cb),
-                ("shared_bg_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
-            ]
-            trisc_args = [
-                # Gate/Up matmul
-                ("shared_gu_act_cb", input_mcast_dst_cb),
-                ("shared_gu_weights_cb", ctx.gu_weights_cb),
-                ("shared_gu_out_cb", ctx.gu_out_cb),
-                ("shared_gu_k_per_core", ctx.gu_k_per_core),
-                ("shared_gu_act_total_tiles", ctx.gu_act_total_tiles),
-                # Gated reduce
-                ("shared_gated_reduce_group1_cb", ctx.group1_cb),
-                ("shared_gated_reduce_group2_cb", ctx.group2_cb),
-                ("shared_gated_reduce_intermed_cb", ctx.intermed_cb),
-                ("shared_gated_reduce_mcast_src_cb", ctx.mcast_src_cb),
-                ("shared_gated_reduce_tiles_per_k", ctx.kernel_tiles_per_k),
-                ("shared_gated_reduce_k_num_tiles", ctx.kernel_k_num_tiles),
-            ]
-        else:
-            # Defaults when not fusing shared expert
-            ncrisc_args = [
-                ("shared_gu_weights_cb", 0),
-                ("shared_gu_weights_num_pages", 0),
-                ("shared_ag_dest_noc_x", 0),
-                ("shared_ag_dest_noc_y", 0),
-                ("shared_ag_data_size_bytes", 0),
-                ("shared_ag_receiver_semaphore_id", 0),
-                ("shared_ag_src_cb", 0),
-                ("shared_ag_src_num_pages", 0),
-                ("shared_ag_receiver_data_addr", 0),
-                ("shared_bg_dest_noc_x", 0),
-                ("shared_bg_dest_noc_y", 0),
-                ("shared_bg_data_size_bytes", 0),
-                ("shared_bg_receiver_semaphore_id", 0),
-                ("shared_bg_src_cb", 0),
-                ("shared_bg_src_num_pages", 0),
-                ("shared_bg_receiver_data_addr", 0),
-            ]
-            brisc_args = [
-                ("shared_ag_noc0_num_senders", 0),
-                ("shared_ag_noc0_receiver_semaphore_id", 0),
-                ("shared_ag_noc1_receiver_semaphore_id", 0),
-                ("shared_ag_dst_cb", 0),
-                ("shared_ag_dst_num_pages", 0),
-                ("shared_bg_noc0_num_senders", 0),
-                ("shared_bg_noc0_receiver_semaphore_id", 0),
-                ("shared_bg_noc1_receiver_semaphore_id", 0),
-                ("shared_bg_dst_cb", 0),
-                ("shared_bg_dst_num_pages", 0),
-            ]
-            trisc_args = [
-                ("shared_gu_act_cb", 0),
-                ("shared_gu_weights_cb", 0),
-                ("shared_gu_out_cb", 0),
-                ("shared_gu_k_per_core", 0),
-                ("shared_gu_act_total_tiles", 0),
-                ("shared_gated_reduce_group1_cb", 0),
-                ("shared_gated_reduce_group2_cb", 0),
-                ("shared_gated_reduce_intermed_cb", 0),
-                ("shared_gated_reduce_mcast_src_cb", 0),
-                ("shared_gated_reduce_tiles_per_k", 0),
-                ("shared_gated_reduce_k_num_tiles", 0),
-            ]
+        ctx = shared_ctx
+        ncrisc_args = [
+            # Gate/Up weights setup
+            ("shared_gu_weights_cb", ctx.gu_weights_cb),
+            ("shared_gu_weights_num_pages", ctx.gu_weights_num_pages),
+            # Gate gather (A) sender
+            ("shared_ag_dest_noc_x", ctx.gather_dest_noc_core.x),
+            ("shared_ag_dest_noc_y", ctx.gather_dest_noc_core.y),
+            ("shared_ag_data_size_bytes", ctx.gu_gather_data_size_bytes),
+            ("shared_ag_receiver_semaphore_id", ctx.ag_receiver_semaphore_id),
+            ("shared_ag_src_cb", ctx.gu_out_cb),
+            ("shared_ag_src_num_pages", 1),
+            ("shared_ag_receiver_data_addr", ctx.ag_receiver_data_addr),
+            # Up gather (B) sender
+            ("shared_bg_dest_noc_x", ctx.gather_dest_noc_core.x),
+            ("shared_bg_dest_noc_y", ctx.gather_dest_noc_core.y),
+            ("shared_bg_data_size_bytes", ctx.gu_gather_data_size_bytes),
+            ("shared_bg_receiver_semaphore_id", ctx.bg_receiver_semaphore_id),
+            ("shared_bg_src_cb", ctx.gu_out_cb),
+            ("shared_bg_src_num_pages", 1),
+            ("shared_bg_receiver_data_addr", ctx.bg_receiver_data_addr),
+        ]
+        brisc_args = [
+            # Gate gather (A) receiver
+            ("shared_ag_noc0_num_senders", ctx.num_compute_cores),
+            ("shared_ag_noc0_receiver_semaphore_id", ctx.ag_receiver_semaphore_id),
+            ("shared_ag_noc1_receiver_semaphore_id", ctx.ag_noc1_receiver_semaphore_id),
+            ("shared_ag_dst_cb", ctx.group1_cb),
+            ("shared_ag_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
+            # Up gather (B) receiver
+            ("shared_bg_noc0_num_senders", ctx.num_compute_cores),
+            ("shared_bg_noc0_receiver_semaphore_id", ctx.bg_receiver_semaphore_id),
+            ("shared_bg_noc1_receiver_semaphore_id", ctx.bg_noc1_receiver_semaphore_id),
+            ("shared_bg_dst_cb", ctx.group2_cb),
+            ("shared_bg_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
+        ]
+        trisc_args = [
+            # Gate/Up matmul
+            ("shared_gu_act_cb", input_mcast_dst_cb),
+            ("shared_gu_weights_cb", ctx.gu_weights_cb),
+            ("shared_gu_out_cb", ctx.gu_out_cb),
+            ("shared_gu_k_per_core", ctx.gu_k_per_core),
+            ("shared_gu_act_total_tiles", ctx.gu_act_total_tiles),
+            # Gated reduce
+            ("shared_gated_reduce_group1_cb", ctx.group1_cb),
+            ("shared_gated_reduce_group2_cb", ctx.group2_cb),
+            ("shared_gated_reduce_intermed_cb", ctx.intermed_cb),
+            ("shared_gated_reduce_mcast_src_cb", ctx.mcast_src_cb),
+            ("shared_gated_reduce_tiles_per_k", ctx.kernel_tiles_per_k),
+            ("shared_gated_reduce_k_num_tiles", ctx.kernel_k_num_tiles),
+        ]
         return ncrisc_args, brisc_args, trisc_args
 
     @staticmethod
     def _build_cb_descriptors(shared_ctx):
-        """Build CB descriptors for shared expert (empty list if not fusing)."""
-        if shared_ctx is None:
-            return []
+        """Build CB descriptors for shared expert."""
         return [
             shared_ctx.gu_weights_cb_descriptor,
             shared_ctx.gu_out_cb_descriptor,
@@ -1637,107 +1589,60 @@ class MoeSharedExpertOp:
         ]
 
     @staticmethod
-    def _build_core_descriptors(shared_ctx, fallback_grid, sender_core_grid):
+    def _build_core_descriptors(shared_ctx, sender_core_grid):
         """
         Build core descriptors for shared expert.
 
         Args:
-            shared_ctx: _MoeSharedExpertContext (or None)
-            fallback_grid: A valid core grid to use when not fusing (for default value=0)
+            shared_ctx: _MoeSharedExpertContext
             sender_core_grid: CoreRangeSet for sender/gated_reduce core
 
         Returns:
             (unified_descs, per_core_descs) - lists to append to routed expert descriptors
         """
-        if shared_ctx is not None:
-            unified = [
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_shared_compute_core",
-                    core_range=shared_ctx.compute_core_grid,
-                    value=1,
-                    other_value=0,
-                ),
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_shared_gate_compute_core",
-                    core_range=shared_ctx.a_compute_grid,
-                    value=1,
-                    other_value=0,
-                ),
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_shared_up_compute_core",
-                    core_range=shared_ctx.b_compute_grid,
-                    value=1,
-                    other_value=0,
-                ),
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_shared_gated_reduce_core",
-                    core_range=sender_core_grid,
-                    value=1,
-                    other_value=0,
-                ),
-            ]
-            per_core = [
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="shared_gu_k_offset",
-                    core_values=shared_ctx.gu_k_offset_core_values,
-                    other_value=0,
-                ),
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="shared_ag_sender_idx",
-                    core_values=shared_ctx.ag_sender_idx_core_values,
-                    other_value=0,
-                ),
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="shared_bg_sender_idx",
-                    core_values=shared_ctx.bg_sender_idx_core_values,
-                    other_value=0,
-                ),
-            ]
-        else:
-            # Not fusing: all cores get 0 for all shared flags
-            unified = [
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_shared_compute_core",
-                    core_range=fallback_grid,
-                    value=0,
-                    other_value=0,
-                ),
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_shared_gate_compute_core",
-                    core_range=fallback_grid,
-                    value=0,
-                    other_value=0,
-                ),
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_shared_up_compute_core",
-                    core_range=fallback_grid,
-                    value=0,
-                    other_value=0,
-                ),
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_shared_gated_reduce_core",
-                    core_range=fallback_grid,
-                    value=0,
-                    other_value=0,
-                ),
-            ]
-            per_core = [
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="shared_gu_k_offset",
-                    core_values=[],
-                    other_value=0,
-                ),
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="shared_ag_sender_idx",
-                    core_values=[],
-                    other_value=0,
-                ),
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="shared_bg_sender_idx",
-                    core_values=[],
-                    other_value=0,
-                ),
-            ]
+        unified = [
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_shared_compute_core",
+                core_range=shared_ctx.compute_core_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_shared_gate_compute_core",
+                core_range=shared_ctx.a_compute_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_shared_up_compute_core",
+                core_range=shared_ctx.b_compute_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_shared_gated_reduce_core",
+                core_range=sender_core_grid,
+                value=1,
+                other_value=0,
+            ),
+        ]
+        per_core = [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="shared_gu_k_offset",
+                core_values=shared_ctx.gu_k_offset_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="shared_ag_sender_idx",
+                core_values=shared_ctx.ag_sender_idx_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="shared_bg_sender_idx",
+                core_values=shared_ctx.bg_sender_idx_core_values,
+                other_value=0,
+            ),
+        ]
         return unified, per_core
 
 
@@ -1778,17 +1683,14 @@ class MoeOp:
         up_proj_in1_buf_tensor,
         down_proj_in1_buf_tensor,
         mul_scalar_buf_tensor,
-        # Shared expert tensors (optional)
-        shared_gate_up_weights_tensor=None,
-        shared_k_parallel=8,
-        shared_n_parallel=8,
+        # Shared expert tensors
+        shared_gate_up_weights_tensor,
+        shared_k_parallel,
+        shared_n_parallel,
         use_hardcoded_expert_index=False,
     ):
         """
-        Execute the full MoE fused operation (routed + optional shared expert).
-
-        When shared_gate_up_weights_tensor is None, runs routed expert only.
-        When provided, fuses shared expert Gate/Up KN-sliced matmul into the kernel.
+        Execute the full fused MoE operation (routed + shared expert).
 
         Returns:
             (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor)
@@ -1827,28 +1729,26 @@ class MoeOp:
         )
 
         # ==================================================================
-        # Setup shared expert context (optional)
+        # Setup shared expert context
         # ==================================================================
-        shared_ctx = None
-        if shared_gate_up_weights_tensor is not None:
-            # Get input tile info from the input tensor
-            device_tensor = ttnn.get_device_tensors(input_tensor)[0]
-            input_tile = device_tensor.get_tile()
-            input_tile_size = input_tile.get_tile_size(routed_ctx.data_format)
+        # Get input tile info from the input tensor
+        device_tensor = ttnn.get_device_tensors(input_tensor)[0]
+        input_tile = device_tensor.get_tile()
+        input_tile_size = input_tile.get_tile_size(routed_ctx.data_format)
 
-            shared_ctx = MoeSharedExpertOp._setup_dimensions(
-                device=routed_ctx.device,
-                shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
-                num_tiles_k=routed_ctx.num_tiles_k,
-                tile_1x32_size=routed_ctx.tile_1x32_size,
-                data_format=routed_ctx.data_format,
-                input_tile=input_tile,
-                input_tile_size=input_tile_size,
-                sender_core=routed_ctx.sender_core,
-                sender_core_grid=routed_ctx.input_core_grid,
-                k_parallel=shared_k_parallel,
-                n_parallel=shared_n_parallel,
-            )
+        shared_ctx = MoeSharedExpertOp._setup_dimensions(
+            device=routed_ctx.device,
+            shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
+            num_tiles_k=routed_ctx.num_tiles_k,
+            tile_1x32_size=routed_ctx.tile_1x32_size,
+            data_format=routed_ctx.data_format,
+            input_tile=input_tile,
+            input_tile_size=input_tile_size,
+            sender_core=routed_ctx.sender_core,
+            sender_core_grid=routed_ctx.input_core_grid,
+            k_parallel=shared_k_parallel,
+            n_parallel=shared_n_parallel,
+        )
 
         # ==================================================================
         # Build CB descriptors (routed + shared)
@@ -1861,7 +1761,7 @@ class MoeOp:
         # ==================================================================
         unified_core_descs, per_core_descs = MoeRoutedExpertOp._build_core_descriptors(routed_ctx)
         shared_unified, shared_per_core = MoeSharedExpertOp._build_core_descriptors(
-            shared_ctx, fallback_grid=routed_ctx.input_core_grid, sender_core_grid=routed_ctx.input_core_grid
+            shared_ctx, sender_core_grid=routed_ctx.input_core_grid
         )
         unified_core_descs += shared_unified
         per_core_descs += shared_per_core
@@ -1901,30 +1801,29 @@ class MoeOp:
                 initial_value=0,
             ),
         ]
-        # Add shared expert gather semaphores
-        if shared_ctx is not None:
-            semaphore_descriptors += [
-                ttnn.SemaphoreDescriptor(
-                    id=shared_ctx.ag_receiver_semaphore_id,
-                    core_ranges=routed_ctx.full_device_grid,
-                    initial_value=0,
-                ),
-                ttnn.SemaphoreDescriptor(
-                    id=shared_ctx.bg_receiver_semaphore_id,
-                    core_ranges=routed_ctx.full_device_grid,
-                    initial_value=0,
-                ),
-                ttnn.SemaphoreDescriptor(
-                    id=shared_ctx.ag_noc1_receiver_semaphore_id,
-                    core_ranges=routed_ctx.full_device_grid,
-                    initial_value=0,
-                ),
-                ttnn.SemaphoreDescriptor(
-                    id=shared_ctx.bg_noc1_receiver_semaphore_id,
-                    core_ranges=routed_ctx.full_device_grid,
-                    initial_value=0,
-                ),
-            ]
+        # Shared expert gather semaphores
+        semaphore_descriptors += [
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.ag_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.bg_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.ag_noc1_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.bg_noc1_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+        ]
 
         # ==================================================================
         # IO tensors
@@ -1957,11 +1856,11 @@ class MoeOp:
             up_proj_in1_buf_tensor,
             down_proj_in1_buf_tensor,
             mul_scalar_buf_tensor,
+            # Shared expert tensors
+            shared_gate_up_weights_tensor,
+            shared_ctx.ag_dummy_tensor,
+            shared_ctx.bg_dummy_tensor,
         ]
-        if shared_gate_up_weights_tensor is not None:
-            io_tensors.append(shared_gate_up_weights_tensor)
-            io_tensors.append(shared_ctx.ag_dummy_tensor)
-            io_tensors.append(shared_ctx.bg_dummy_tensor)
 
         # ==================================================================
         # Create per-device programs (mesh loop)
