@@ -62,8 +62,8 @@ static inline CBHandle create_circular_buffer(
 constexpr bool ENABLE_UNTILIZE_DOUBLE_BUFFERING = true;
 
 UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory::create(
-    const sliding_window::halo::operation_attributes_t& operation_attributes,
-    const sliding_window::halo::tensor_args_t& tensor_args,
+    const sliding_window::halo::HaloParams& operation_attributes,
+    const sliding_window::halo::HaloInputs& tensor_args,
     sliding_window::halo::tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& pad_val = operation_attributes.pad_val;
@@ -425,8 +425,8 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
 
 void UntilizeWithHaloProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const sliding_window::halo::operation_attributes_t& /*operation_attributes*/,
-    const sliding_window::halo::tensor_args_t& tensor_args,
+    const sliding_window::halo::HaloParams& /*operation_attributes*/,
+    const sliding_window::halo::HaloInputs& tensor_args,
     sliding_window::halo::tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;
 

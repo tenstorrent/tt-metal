@@ -121,8 +121,8 @@ void set_runtime_args_hc_rm(
 }  // namespace
 
 TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::create(
-    const transpose::operation_attributes_t& /*operation_attributes*/,
-    const transpose::tensor_args_t& tensor_args,
+    const transpose::TransposeParams& /*operation_attributes*/,
+    const transpose::TransposeInputs& tensor_args,
     transpose::tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = tensor_return_value;
@@ -220,8 +220,8 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
 
 void TransposeHCRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::operation_attributes_t& /*operation_attributes*/,
-    const transpose::tensor_args_t& tensor_args,
+    const transpose::TransposeParams& /*operation_attributes*/,
+    const transpose::TransposeInputs& tensor_args,
     transpose::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;

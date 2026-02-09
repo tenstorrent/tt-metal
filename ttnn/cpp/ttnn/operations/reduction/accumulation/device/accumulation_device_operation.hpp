@@ -24,8 +24,8 @@ using namespace tt::tt_metal;
 using namespace tt::stl;
 
 struct AccumulationDeviceOperation {
-    using operation_attributes_t = accumulation::operation_attributes_t;
-    using tensor_args_t = accumulation::tensor_args_t;
+    using operation_attributes_t = AccumulationParams;
+    using tensor_args_t = AccumulationInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<accumulation::AccumulationProgramFactory>;

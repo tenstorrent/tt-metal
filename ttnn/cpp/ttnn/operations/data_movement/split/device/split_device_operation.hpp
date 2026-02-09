@@ -11,8 +11,8 @@
 namespace ttnn::operations::data_movement::split {
 
 struct SplitDeviceOperation {
-    using operation_attributes_t = split::operation_attributes_t;
-    using tensor_args_t = split::tensor_args_t;
+    using operation_attributes_t = SplitParams;
+    using tensor_args_t = SplitInputs;
     using spec_return_value_t = split::spec_return_value_t;
     using tensor_return_value_t = split::tensor_return_value_t;
     using program_factory_t = std::variant<program::SplitProgramFactory>;

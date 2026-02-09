@@ -128,11 +128,10 @@ static_assert(
     "START_DISTANCE_FIELD_BIT_WIDTH + RANGE_HOPS_FIELD_BIT_WIDTH must equal 8");
 
 struct MulticastRoutingCommandHeader {
-    uint8_t start_distance_in_hops : RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
-    uint8_t range_hops : RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH;  // 0 implies unicast
+    uint8_t start_distance_in_hops;
+    uint8_t range_hops;  // 0 implies unicast
 };
-static_assert(
-    sizeof(MulticastRoutingCommandHeader) <= sizeof(RoutingFields), "MulticastRoutingCommandHeader size is not 1 byte");
+static_assert(sizeof(MulticastRoutingCommandHeader) == 2, "MulticastRoutingCommandHeader size is not 2 bytes");
 
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
@@ -689,11 +688,11 @@ struct LowLatencyRoutingFieldsT {
     // Template-specific constants
     static constexpr uint32_t MAX_NUM_ENCODINGS = LowLatencyFields::BASE_HOPS * (1 + ExtensionWords);
 
-    // Block >32 hops until memory map is updated
+    // Block >64 hops until memory map is updated
     static_assert(
-        ExtensionWords <= 1,
-        "ERROR: 1D routing with >32 hops (ExtensionWords > 1) requires memory map updates.\n"
-        "Current L1 allocation (ROUTING_PATH_SIZE_1D = 256 bytes) supports max 32 hops.");
+        ExtensionWords <= 3,
+        "ERROR: 1D routing with >64 hops (ExtensionWords > 3) requires memory map updates.\n"
+        "Current L1 allocation (ROUTING_PATH_SIZE_1D = 1024 bytes) supports max 64 hops.");
 
     uint32_t value;                         // Active routing field (always read by router)
     uint32_t route_buffer[ExtensionWords];  // Extension storage
@@ -834,6 +833,8 @@ public:
 // Validate expected sizes with detailed checks
 static_assert(sizeof(LowLatencyPacketHeaderT<0>) == 48, "16-hop total must be 48B");
 static_assert(sizeof(LowLatencyPacketHeaderT<1>) == 64, "32-hop total must be 64B");
+static_assert(sizeof(LowLatencyPacketHeaderT<2>) == 64, "48-hop total must be 64B");  // NEW for 4×64
+static_assert(sizeof(LowLatencyPacketHeaderT<3>) == 64, "64-hop total must be 64B");  // NEW for 4×64
 
 // Conditional type selection based on injected define
 #ifndef FABRIC_1D_PKT_HDR_EXTENSION_WORDS
@@ -871,6 +872,12 @@ struct LowLatencyMeshRoutingFields {
 // Primary template for 2D routing headers with variable route buffer size
 template <int RouteBufferSize = 35>
 struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteBufferSize>> {
+    // Block route buffers >67 bytes until memory map is updated
+    static_assert(
+        RouteBufferSize <= 67,
+        "ERROR: 2D routing with >67-byte route buffer requires memory map updates.\n"
+        "Current L1 allocation (ROUTING_PATH_SIZE_2D = 1024 bytes) supports max 67 hops.");
+
     LowLatencyMeshRoutingFields routing_fields;
     uint8_t route_buffer[RouteBufferSize];
     union {
@@ -898,6 +905,8 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 //              routing_fields:4 + dst_start:4 + mcast_params:8 + is_mcast_active:1)
 static_assert(sizeof(HybridMeshPacketHeaderT<19>) == 80, "19B buffer must result in 80B header (max capacity)");
 static_assert(sizeof(HybridMeshPacketHeaderT<35>) == 96, "35B buffer must result in 96B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<51>) == 112, "51B buffer must result in 112B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<67>) == 128, "67B buffer must result in 128B header (max capacity)");
 
 // Conditional type selection based on injected define
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE

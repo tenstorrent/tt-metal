@@ -8,11 +8,11 @@
 
 namespace ttnn::operations::data_movement::nonzero {
 
-struct operation_attributes_t {
+struct NonzeroParams {
     tt::tt_metal::MemoryConfig output_memory_config;
 };
 
-struct tensor_args_t {
+struct NonzeroInputs {
     Tensor input;
 };
 

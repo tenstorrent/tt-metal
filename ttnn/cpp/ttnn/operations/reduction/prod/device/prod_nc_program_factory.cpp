@@ -16,9 +16,7 @@ namespace ttnn::operations::reduction::prod_nc::program {
 using namespace tt::constants;
 
 ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    Tensor& /*tensor_return_value*/) {
+    const ProdNcParams& operation_attributes, const ProdNcInputs& tensor_args, Tensor& /*tensor_return_value*/) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
     const int64_t dim = operation_attributes.dim;
@@ -191,8 +189,8 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
 
 void ProdNcProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const ProdNcParams& /*operation_attributes*/,
+    const ProdNcInputs& tensor_args,
     Tensor& /*tensor_return_value*/) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;

@@ -19,6 +19,7 @@ on:
           - wan22
           - flux1-dev
           - motif
+          - qwenimage
           - gemma-3-27b-it
   schedule:
     - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours

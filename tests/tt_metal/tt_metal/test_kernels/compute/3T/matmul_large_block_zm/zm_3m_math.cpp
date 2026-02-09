@@ -75,7 +75,7 @@ void math_main() {
     constexpr bool spill = num_blocks > 1U;
     bool enable_reload = false;
 
-    llk_math_hw_configure(0, 1);
+    llk_math_hw_configure<DST_ACCUM_MODE>(0, 1);
 
     for (uint32_t block = 0U; block < num_blocks; block++) {
         bool last_out = block == num_blocks - 1U;

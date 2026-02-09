@@ -16,8 +16,8 @@ namespace ttnn::operations::data_movement::reshard::program {
 
 template <bool local_is_output>
 ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFactory<local_is_output>::create(
-    const reshard::operation_attributes_t& /*operation_attributes*/,
-    const reshard::tensor_args_t& tensor_args,
+    const reshard::ReshardParams& /*operation_attributes*/,
+    const reshard::ReshardInputs& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
@@ -157,8 +157,8 @@ ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFacto
 template <bool is_reader>
 void ReshardSameWidthFactory<is_reader>::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::operation_attributes_t& /*operation_attributes*/,
-    const reshard::tensor_args_t& tensor_args,
+    const reshard::ReshardParams& /*operation_attributes*/,
+    const reshard::ReshardInputs& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;

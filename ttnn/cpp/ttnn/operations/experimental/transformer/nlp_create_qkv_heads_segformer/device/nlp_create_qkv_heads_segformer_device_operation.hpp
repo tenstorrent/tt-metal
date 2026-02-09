@@ -14,8 +14,8 @@
 namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer {
 
 struct NlpCreateHeadsSegformerDeviceOperation {
-    using operation_attributes_t = nlp_create_qkv_heads_segformer::operation_attributes_t;
-    using tensor_args_t = nlp_create_qkv_heads_segformer::tensor_args_t;
+    using operation_attributes_t = NlpCreateQkvHeadsSegformerParams;
+    using tensor_args_t = NlpCreateQkvHeadsSegformerInputs;
     using spec_return_value_t = nlp_create_qkv_heads_segformer::spec_return_value_t;
     using tensor_return_value_t = nlp_create_qkv_heads_segformer::tensor_return_value_t;
     using program_factory_t = std::variant<program::NlpCreateQkvHeadsSegformerProgramFactory>;

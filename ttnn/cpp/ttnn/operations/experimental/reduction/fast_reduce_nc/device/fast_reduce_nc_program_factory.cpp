@@ -50,7 +50,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 }  // namespace
 
 FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const DetailParams& operation_attributes, const DetailInputs& tensor_args, Tensor& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -291,8 +291,8 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
 
 void FastReduceNCProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
+    const DetailParams&,
+    const DetailInputs& tensor_args,
     Tensor& tensor_return_value) {
     const auto* input_buffer = tensor_args.input.buffer();
     const auto* output_buffer = tensor_return_value.buffer();

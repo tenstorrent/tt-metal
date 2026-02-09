@@ -36,9 +36,9 @@ namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::progr
 
 DeepseekMinimalBroadcastProgramFactory::cached_mesh_workload_t
 DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const DeepseekMinimalBroadcastParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const DeepseekMinimalBroadcastInputs& tensor_args,
     Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -70,9 +70,9 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
 }
 
 DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcastProgramFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const DeepseekMinimalBroadcastParams& operation_attributes,
     const MeshCoordinate& self_coord,
-    const tensor_args_t& tensor_args,
+    const DeepseekMinimalBroadcastInputs& tensor_args,
     Tensor& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
@@ -308,8 +308,8 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
 
 void DeepseekMinimalBroadcastProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const DeepseekMinimalBroadcastParams& /*operation_attributes*/,
+    const DeepseekMinimalBroadcastInputs& tensor_args,
     Tensor& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = tensor_return_value;

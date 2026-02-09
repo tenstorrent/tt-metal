@@ -174,8 +174,8 @@ struct BilinearIndexAdvancer {
         uint16_t& weight_bottom_left_bf16,
         uint16_t& weight_bottom_right_bf16) const {
         // Convert fixed-point coordinates to integer pixel positions
-        uint32_t y1_raw = fixed_to_int(y_coordinate);
-        uint32_t x1_raw = fixed_to_int(x_coordinate);
+        uint32_t y1_raw = fixed_point_arithmetic::fixed_to_int(y_coordinate);
+        uint32_t x1_raw = fixed_point_arithmetic::fixed_to_int(x_coordinate);
 
         // Compute the 4 neighbor positions with boundary clamping
         // The halo padding means actual data starts at index 1, not 0

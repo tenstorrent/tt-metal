@@ -14,7 +14,7 @@
 namespace ttnn::operations::experimental::conv3d::program {
 
 Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
@@ -661,8 +661,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
 void Conv3dProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const Conv3dParams& /*operation_attributes*/,
+    const Conv3dInputs& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 

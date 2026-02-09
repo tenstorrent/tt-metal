@@ -27,14 +27,14 @@ struct TransposeCNProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const transpose::operation_attributes_t& operation_attributes,
-        const transpose::tensor_args_t& tensor_args,
+        const transpose::TransposeParams& operation_attributes,
+        const transpose::TransposeInputs& tensor_args,
         transpose::tensor_return_value_t& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const transpose::operation_attributes_t& operation_attributes,
-        const transpose::tensor_args_t& tensor_args,
+        const transpose::TransposeParams& operation_attributes,
+        const transpose::TransposeInputs& tensor_args,
         transpose::tensor_return_value_t& tensor_return_value);
 };
 

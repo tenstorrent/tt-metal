@@ -187,6 +187,10 @@ run_t3000_motif_tests() {
   run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_performance_motif.py"
 }
 
+run_t3000_qwenimage_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k 2x4"
+}
+
 run_t3000_model_perf_tests() {
   # Run model performance tests
   run_t3000_sentence_bert_tests

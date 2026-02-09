@@ -14,7 +14,7 @@
 
 namespace ttnn::operations::experimental::paged_cache::update {
 
-struct operation_attributes_t {
+struct UpdateParams {
     const std::vector<uint32_t> update_idxs;
     const uint32_t batch_offset;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
@@ -22,7 +22,7 @@ struct operation_attributes_t {
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
 };
 
-struct tensor_args_t {
+struct UpdateInputs {
     Tensor cache_tensor;
     Tensor input_tensor;
     std::optional<Tensor> update_idxs_tensor;

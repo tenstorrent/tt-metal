@@ -11,7 +11,7 @@
 namespace ttnn::operations::data_movement::gather::program {
 // Single row - single core
 GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySingleRowSingleCore::create(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    const GatherParams& attributes, const GatherInputs& tensor_args, tensor_return_value_t& output_tensor) {
     tt::tt_metal::Program program{};
 
     // Tensor config info
@@ -159,8 +159,8 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
 
 void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*attributes*/,
-    const tensor_args_t& tensor_args,
+    const GatherParams& /*attributes*/,
+    const GatherInputs& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
     auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
@@ -180,7 +180,7 @@ void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
 
 // Single row - multi core
 GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySingleRowMultiCore::create(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    const GatherParams& attributes, const GatherInputs& tensor_args, tensor_return_value_t& output_tensor) {
     tt::tt_metal::Program program{};
 
     // Tensor config info
@@ -327,8 +327,8 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
 
 void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*attributes*/,
-    const tensor_args_t& tensor_args,
+    const GatherParams& /*attributes*/,
+    const GatherInputs& tensor_args,
     tensor_return_value_t& output_tensor) {
     // Get tensor buffers
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();

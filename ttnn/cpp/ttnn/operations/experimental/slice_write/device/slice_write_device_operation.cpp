@@ -96,28 +96,12 @@ TensorSpec SliceWriteDeviceOperation::compute_output_specs(
 
 tt::stl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& output_tensor = tensor_args.output;
-    const auto& input_shape = input_tensor.padded_shape();
+    log_trace(tt::LogOp, "SliceWriteDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(args, tensor_args);
 
-    operation::Hash hash = operation::hash_operation<SliceWriteDeviceOperation>(
-        args,                            // Includes slice_start, slice_end, step
-        program_factory.index(),         // ✅ CRITICAL: Factory variant index (3 factories)
-        input_tensor.dtype(),            // Affects CB data formats
-        input_tensor.element_size(),     // Affects compile-time args, CB configs
-        input_tensor.memory_config(),    // Affects factory selection, num_cores_channels
-        input_tensor.layout(),           // Affects factory selection
-        input_shape,                     // Affects CB sizes, num_unpadded_sticks
-        input_tensor.physical_volume(),  // Affects num_unpadded_sticks → CB sizes
-        input_tensor.shard_spec(),       // Affects core ranges, CB sizes (if sharded)
-        output_tensor.dtype(),           // Affects compile-time args (RMInterleaved)
-        output_tensor.element_size(),    // Affects compile-time args (RMInterleaved)
-        output_tensor.padded_shape()     // Affects defines (TiledSharded)
-    );
-
-    return hash;
+    return tt::tt_metal::operation::hash_operation<SliceWriteDeviceOperation>(
+        args, tensor_args, program_factory.index());
 }
 
 Tensor SliceWriteDeviceOperation::create_output_tensors(

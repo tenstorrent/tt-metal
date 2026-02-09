@@ -189,18 +189,17 @@ AllGatherAsyncDeviceOperation::tensor_return_value_t AllGatherAsyncDeviceOperati
 
 tt::stl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "compute_program_hash is called");
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
+    log_trace(tt::LogOp, "AllGatherAsyncDeviceOperation::compute_program_hash is called");
 
-    bool has_sub_device_id = args.sub_device_id.has_value();
-    auto worker_cores = has_sub_device_id
-                            ? input_tensor.device()->worker_cores(
-                                  tt::tt_metal::HalProgrammableCoreType::TENSIX, args.sub_device_id.value())
-                            : CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    auto subdevice_id = args.sub_device_id;
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    if (args.sub_core_grid.has_value()) {
+        subdevice_core_range_set = subdevice_core_range_set.intersection(args.sub_core_grid.value());
+    }
+
+    auto program_factory = select_program_factory(args, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<AllGatherAsyncDeviceOperation>(
         args.dim,
@@ -209,8 +208,6 @@ tt::stl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
         args.output_mem_config,
         args.topology,
         args.cluster_axis,
-        has_sub_device_id,
-        worker_cores,
         args.barrier_semaphore.has_value(),
         args.using_persistent_buffers,
         args.chunks_per_sync,
@@ -219,10 +216,9 @@ tt::stl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
         args.use_all_gather_async_llama_sharded,
         args.use_optimal_ccl_for_llama,
         args.reverse_order,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
 std::tuple<AllGatherAsyncDeviceOperation::operation_attributes_t, AllGatherAsyncDeviceOperation::tensor_args_t>

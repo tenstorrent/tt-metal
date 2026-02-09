@@ -9,8 +9,11 @@
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "internal/debug/stack_usage.h"
+#include "internal/debug/sanitize.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 uint8_t noc_index;
+constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));

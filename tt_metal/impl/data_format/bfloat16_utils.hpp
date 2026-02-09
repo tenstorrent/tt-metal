@@ -12,7 +12,7 @@
 
 std::pair<bfloat16, bfloat16> unpack_two_bfloat16_from_uint32(uint32_t uint32_data);
 
-std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bfloat16_values, bool print = true);
+std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bool print = true);
 
 std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in);
 

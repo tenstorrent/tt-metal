@@ -13,8 +13,8 @@
 namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
 
 struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
-    using operation_attributes_t = rotary_embedding_llama_fused_qk::operation_attributes_t;
-    using tensor_args_t = rotary_embedding_llama_fused_qk::tensor_args_t;
+    using operation_attributes_t = RotaryEmbeddingLlamaFusedQkParams;
+    using tensor_args_t = RotaryEmbeddingLlamaFusedQkInputs;
     using spec_return_value_t = rotary_embedding_llama_fused_qk::spec_return_value_t;
     using tensor_return_value_t = rotary_embedding_llama_fused_qk::tensor_return_value_t;
     using program_factory_t = std::variant<program::RotaryEmbeddingLlamaFusedQKProgramFactory>;

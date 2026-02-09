@@ -8,8 +8,8 @@
 namespace ttnn::operations::embedding::program {
 
 EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::create(
-    const embedding::operation_attributes_t& operation_attributes,
-    const embedding::tensor_args_t& tensor_args,
+    const embedding::EmbeddingParams& operation_attributes,
+    const embedding::EmbeddingInputs& tensor_args,
     embedding::tensor_return_value_t& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
@@ -299,8 +299,8 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
 
 void EmbeddingsFusedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const embedding::operation_attributes_t& /*operation_attributes*/,
-    const embedding::tensor_args_t& tensor_args,
+    const embedding::EmbeddingParams& /*operation_attributes*/,
+    const embedding::EmbeddingInputs& tensor_args,
     embedding::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;

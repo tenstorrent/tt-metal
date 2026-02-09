@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::pool::grid_sample {
 
-struct operation_attributes_t {
+struct GridSampleParams {
     std::string mode = "bilinear";
     std::string padding_mode = "zeros";
     bool align_corners = false;
@@ -29,7 +29,7 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct GridSampleInputs {
     Tensor input_tensor;
     Tensor grid;
 };

@@ -1,0 +1,27 @@
+name: Analyze ND Failures
+
+on:
+  workflow_dispatch:
+    inputs:
+      starting_date:
+        description: "Starting date to analyze failures (YYYY-MM-DD)"
+        required: true
+        type: string
+
+
+jobs:
+  analyze-nd-failures:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run analyze nd failures
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack-output-analysis@main
+        with:
+          starting_date: ${{ inputs.starting_date }}

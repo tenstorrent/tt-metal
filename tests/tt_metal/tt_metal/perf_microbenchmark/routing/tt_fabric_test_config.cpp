@@ -345,6 +345,10 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
         fabric_setup.num_links = 1;
     }
 
+    if (fabric_setup_yaml["max_packet_size"]) {
+        fabric_setup.max_packet_size = parse_scalar<uint32_t>(fabric_setup_yaml["max_packet_size"]);
+    }
+
     // Handle torus_config for Torus topology
     if (fabric_setup.topology == Topology::Torus) {
         if (fabric_setup_yaml["torus_config"]) {

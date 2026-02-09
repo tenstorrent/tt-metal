@@ -84,7 +84,7 @@ jobs:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
@@ -120,8 +120,10 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
           clean: true
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
 
       - name: Determine merge base
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
@@ -139,7 +141,6 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
           clean: true
 
       - name: Create shim
@@ -177,7 +178,6 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
           clean: false
 
       - name: Restore shim
@@ -211,7 +211,7 @@ jobs:
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - ${{ github.workspace }}/../../_actions:${{ github.workspace }}/../../_actions # HACK: make actions available inside container
       options: --tmpfs /tmp
     defaults:
@@ -224,7 +224,6 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
       - name: 🔧 CMake configure
         run: cmake --preset clang-static-analyzer

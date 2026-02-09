@@ -44,10 +44,13 @@ RecvAsyncDeviceOperation::tensor_return_value_t RecvAsyncDeviceOperation::create
 
 tt::stl::hash::hash_t RecvAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& mesh_socket = args.mesh_socket;
-    const auto& output_tensor = tensor_args.output_tensor;
+    log_trace(tt::LogOp, "RecvAsyncDeviceOperation::compute_program_hash is called");
+    const ttnn::Tensor& output_tensor = tensor_args.output_tensor;
 
-    return tt::tt_metal::operation::hash_operation<RecvAsyncDeviceOperation>(mesh_socket, output_tensor);
+    auto program_factory = select_program_factory(args, tensor_args);
+
+    return tt::tt_metal::operation::hash_operation<RecvAsyncDeviceOperation>(
+        args.mesh_socket, output_tensor, program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::recv_async

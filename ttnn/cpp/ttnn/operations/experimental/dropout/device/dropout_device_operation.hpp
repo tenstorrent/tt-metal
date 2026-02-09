@@ -18,8 +18,8 @@
 namespace ttnn::operations::experimental::dropout {
 
 struct DropoutDeviceOperation {
-    using operation_attributes_t = dropout::operation_attributes_t;
-    using tensor_args_t = dropout::tensor_args_t;
+    using operation_attributes_t = DropoutParams;
+    using tensor_args_t = DropoutInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::DropoutProgramFactory, program::DropoutMeshWorkloadFactory>;

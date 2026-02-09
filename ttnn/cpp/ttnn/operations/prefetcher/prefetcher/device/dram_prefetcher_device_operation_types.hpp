@@ -11,13 +11,13 @@
 
 namespace ttnn::operations::dram_prefetcher {
 
-struct operation_attributes_t {
+struct DramPrefetcherParams {
     uint32_t num_layers = 0;
     bool enable_performance_mode = false;
     std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
 };
 
-struct tensor_args_t {
+struct DramPrefetcherInputs {
     std::vector<Tensor> input_tensors;
 };
 

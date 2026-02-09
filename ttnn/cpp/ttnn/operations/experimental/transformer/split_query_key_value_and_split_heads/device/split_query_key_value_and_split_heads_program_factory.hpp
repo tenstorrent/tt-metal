@@ -26,14 +26,14 @@ struct SplitFusedQKVAndSplitHeadsProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const split_query_key_value_and_split_heads::operation_attributes_t& operation_attributes,
-        const split_query_key_value_and_split_heads::tensor_args_t& tensor_args,
+        const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsParams& operation_attributes,
+        const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
         std::vector<Tensor>& output_tensors);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const split_query_key_value_and_split_heads::operation_attributes_t& operation_attributes,
-        const split_query_key_value_and_split_heads::tensor_args_t& tensor_args,
+        const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsParams& operation_attributes,
+        const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
         std::vector<Tensor>& output_tensors);
 };
 

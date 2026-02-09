@@ -11,13 +11,13 @@ enum class TransposeOpDim { WH, HC, CN, NH, NW, CW };
 
 enum class TransposeOpParallelizationStrategy { MULTI_CORE_WH, MULTI_CORE_HC, MULTI_CORE_CN };
 
-struct operation_attributes_t {
+struct TransposeParams {
     TransposeOpDim dim{};
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<float> pad_value;
 };
 
-struct tensor_args_t {
+struct TransposeInputs {
     Tensor input;
 };
 

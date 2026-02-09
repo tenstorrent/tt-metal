@@ -166,7 +166,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     expected_peak_size += compute_tensor_size(mul_result) + 10240;
     expected_peak_size += compute_tensor_size(matmul_result) + 18432;
     expected_peak_size +=
-        compute_tensor_size(sdpa_result->get_value()) + 1828864;  // All the intermediate tensors / activations
+        compute_tensor_size(sdpa_result->get_value()) + 1830912;  // All the intermediate tensors / activations
 
     expected_size = expected_peak_size - 983040;  // Some intermediates are deallocated
 

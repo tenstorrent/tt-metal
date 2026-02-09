@@ -13,8 +13,8 @@
 namespace ttnn::operations::data_movement::reshape_on_device {
 
 struct ReshapeDeviceOperation {
-    using operation_attributes_t = reshape_on_device::operation_attributes_t;
-    using tensor_args_t = reshape_on_device::tensor_args_t;
+    using operation_attributes_t = ReshapeOnDeviceParams;
+    using tensor_args_t = ReshapeOnDeviceInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = reshape_on_device::tensor_return_value_t;
     using program_factory_t =

@@ -6,6 +6,8 @@
 
 #define ALWI inline __attribute__((always_inline))
 
+namespace fixed_point_arithmetic {
+
 // Fixed-point math constants and helpers for Q16.16 format
 constexpr int32_t FIXED_POINT_SHIFT = 16;
 constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;         // 1.0 in Q16.16
@@ -75,3 +77,5 @@ ALWI constexpr uint16_t fixed_to_bf16(int32_t fixed_val) {
 
     return static_cast<uint16_t>(float32_bits >> 16);
 }
+
+}  // namespace fixed_point_arithmetic

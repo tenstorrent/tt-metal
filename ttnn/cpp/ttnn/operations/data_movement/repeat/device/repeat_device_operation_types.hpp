@@ -8,13 +8,13 @@
 
 namespace ttnn::operations::data_movement::repeat {
 
-struct operation_attributes_t {
+struct RepeatParams {
     uint32_t m_num_repeats{};
     bool m_is_last_dim{};
     tt::tt_metal::MemoryConfig m_output_mem_config;
 };
 
-struct tensor_args_t {
+struct RepeatInputs {
     Tensor input;
 };
 

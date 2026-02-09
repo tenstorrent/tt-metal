@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::data_movement::slice {
 
-struct operation_attributes_t {
+struct SliceParams {
     ttnn::Shape slice_start;
     ttnn::Shape slice_end;
     ttnn::Shape step;
@@ -21,7 +21,7 @@ struct operation_attributes_t {
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
-struct tensor_args_t {
+struct SliceInputs {
     Tensor input;
     std::optional<Tensor> start_tensor;
     std::optional<Tensor> end_tensor;

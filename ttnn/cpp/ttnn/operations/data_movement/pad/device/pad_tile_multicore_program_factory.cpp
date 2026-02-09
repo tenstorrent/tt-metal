@@ -26,7 +26,7 @@ static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::S
 }
 
 PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output) {
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
@@ -71,12 +71,24 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
     Buffer* output_buffer = output.buffer();
     TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
-    } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    bfloat16 bfloat_pad_value = bfloat16(pad_value);
+    switch (a.dtype()) {
+        case DataType::INT32:
+        case DataType::UINT32: packed_pad_value = pad_value; break;
+        case DataType::BFLOAT16:
+            packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+            break;
+        case DataType::UINT16:
+            packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+            break;
+        case DataType::FLOAT32: packed_pad_value = std::bit_cast<uint32_t>(pad_value); break;
+        default:
+            packed_pad_value = 0;
+            TT_ASSERT(
+                false,
+                "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
+                "FLOAT32");
     }
 
     std::vector<uint32_t> reader_ct_args = {
@@ -220,8 +232,8 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
 
 void PadTileMulticoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const PadParams& /*operation_attributes*/,
+    const PadInputs& tensor_args,
     Tensor& output) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();

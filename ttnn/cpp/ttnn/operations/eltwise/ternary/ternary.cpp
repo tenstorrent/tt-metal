@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/ternary_device_operation.hpp"
 #include "device/ternary_op_utils.hpp"
@@ -75,6 +76,20 @@ inline std::optional<DataType> determine_output_dtype(
 inline MemoryConfig determine_memory_config(
     const std::optional<MemoryConfig>& memory_config, const MemoryConfig& default_config) {
     return memory_config.value_or(default_config);
+}
+
+// Helper function to determine memory config for broadcast operations
+// This properly adjusts the shard spec when the output shape differs from the input tensor's shape
+inline MemoryConfig determine_memory_config_for_broadcast(
+    const std::optional<MemoryConfig>& memory_config, const Tensor& sharded_tensor, const ttnn::Shape& other_shape) {
+    if (memory_config.has_value()) {
+        return *memory_config;
+    }
+    // If the sharded tensor's memory config is sharded, adjust the shard spec for the broadcast output shape
+    if (sharded_tensor.memory_config().is_sharded()) {
+        return ttnn::operations::binary_ng::compute_mem_config_actual(sharded_tensor, other_shape);
+    }
+    return sharded_tensor.memory_config();
 }
 
 }  // namespace ternary_utils
@@ -145,7 +160,7 @@ Tensor invoke_impl(
         condition,
         t_true,
         scalar_false,
-        ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
+        ternary_utils::determine_memory_config_for_broadcast(memory_config, t_true, condition.logical_shape()),
         output,
         sub_core_grids);
 }
@@ -168,7 +183,7 @@ Tensor invoke_impl(
         condition,
         t_false,
         scalar_true,
-        ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
+        ternary_utils::determine_memory_config_for_broadcast(memory_config, t_false, condition.logical_shape()),
         output,
         sub_core_grids);
 }

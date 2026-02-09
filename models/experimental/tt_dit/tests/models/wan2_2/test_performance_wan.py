@@ -19,7 +19,7 @@ from ....utils.test import line_params, ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(1, 4), (1, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         [(1, 8), (1, 8), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
@@ -28,7 +28,7 @@ from ....utils.test import line_params, ring_params
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
-        "1x4sp0tp1",
+        "2x2sp0tp1",
         "2x4sp0tp1",
         "1x8sp0tp1",
         "wh_4x8sp1tp0",
@@ -257,21 +257,14 @@ def test_pipeline_performance(
                 "vae": 8.0,
                 "total": 463.0,
             }
-    elif tuple(mesh_device.shape) == (1, 4) and height == 480:
-        assert is_blackhole(), "1x4 is only supported for blackhole"
+    elif tuple(mesh_device.shape) == (2, 2):
+        assert height == 480, "2x2 is only supported for 480p"
+        assert is_blackhole(), "2x2 is only supported for blackhole"
         expected_metrics = {
             "encoder": 27.0,
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
-        }
-    elif tuple(mesh_device.shape) == (1, 4) and height == 720:
-        assert is_blackhole(), "1x4 is only supported for blackhole"
-        expected_metrics = {
-            "encoder": 27.0,
-            "denoising": 3200.0,
-            "vae": 200.0,
-            "total": 3415.0,
         }
     elif tuple(mesh_device.shape) == (1, 8) and height == 480:
         assert is_blackhole(), "1x8 is only supported for blackhole"
@@ -298,7 +291,7 @@ def test_pipeline_performance(
                     target=expected_metrics["total" if step_name == "run" else step_name],
                 )
         device_name_map = {
-            (1, 4): "BH_QB",
+            (2, 2): "BH_QB",
             (2, 4): "WH_T3K",
             (1, 8): "BH_LB",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",

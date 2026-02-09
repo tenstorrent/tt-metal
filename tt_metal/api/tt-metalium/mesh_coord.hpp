@@ -205,6 +205,7 @@ private:
 
 bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
 bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
+bool operator<(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
 std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range);
 
 // Represents a set of non-overlapping MeshCoordinateRanges.

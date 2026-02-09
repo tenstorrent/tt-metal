@@ -27,6 +27,7 @@ on:
           - qwen3_32b
           - qwen3_32b_long_context
           - deepseek_v3
+          - qwenimage
   schedule:
     - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
 jobs:

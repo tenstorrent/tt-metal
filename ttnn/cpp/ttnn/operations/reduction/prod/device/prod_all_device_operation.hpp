@@ -12,8 +12,8 @@
 namespace ttnn::operations::reduction::prod_all {
 
 struct ProdAllDeviceOperation {
-    using operation_attributes_t = prod_all::operation_attributes_t;
-    using tensor_args_t = prod_all::tensor_args_t;
+    using operation_attributes_t = ProdAllParams;
+    using tensor_args_t = ProdAllInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::ProdAllProgramFactory>;

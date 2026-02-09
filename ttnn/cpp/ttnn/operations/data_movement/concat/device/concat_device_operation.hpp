@@ -20,8 +20,8 @@
 namespace ttnn::operations::data_movement::concat {
 
 struct ConcatDeviceOperation {
-    using operation_attributes_t = concat::operation_attributes_t;
-    using tensor_args_t = concat::tensor_args_t;
+    using operation_attributes_t = ConcatParams;
+    using tensor_args_t = ConcatInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<

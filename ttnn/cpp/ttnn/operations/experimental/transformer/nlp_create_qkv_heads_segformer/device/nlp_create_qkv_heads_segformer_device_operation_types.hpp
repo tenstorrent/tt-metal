@@ -8,11 +8,11 @@
 
 namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer {
 
-struct operation_attributes_t {
+struct NlpCreateQkvHeadsSegformerParams {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct NlpCreateQkvHeadsSegformerInputs {
     Tensor input_tensor;
     std::vector<std::optional<Tensor>> optional_output_tensors;
 };

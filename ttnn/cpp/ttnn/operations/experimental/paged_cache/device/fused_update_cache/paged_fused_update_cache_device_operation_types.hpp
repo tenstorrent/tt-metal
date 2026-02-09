@@ -15,7 +15,7 @@
 
 namespace ttnn::operations::experimental::paged_cache::fused_update {
 
-struct operation_attributes_t {
+struct FusedUpdateParams {
     const std::vector<uint32_t> update_idxs;
     const uint32_t batch_offset;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
@@ -23,7 +23,7 @@ struct operation_attributes_t {
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
 };
 
-struct tensor_args_t {
+struct FusedUpdateInputs {
     Tensor cache_tensor1;
     Tensor input_tensor1;
     Tensor cache_tensor2;

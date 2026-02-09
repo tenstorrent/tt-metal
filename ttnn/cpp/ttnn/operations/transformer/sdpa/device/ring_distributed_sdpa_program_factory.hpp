@@ -50,7 +50,9 @@ private:
         std::size_t q_chunk_size,
         std::size_t k_chunk_size,
         DeviceComputeKernelConfig compute_kernel_config,
-        std::optional<SDPAProgramConfig> program_config);
+        std::optional<SDPAProgramConfig> program_config,
+        const std::optional<Tensor>& page_table = std::nullopt,
+        std::optional<int64_t> chunk_start_idx = std::nullopt);
 };
 
 }  // namespace ttnn::operations::transformer::ring_distributed_sdpa::program

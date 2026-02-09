@@ -170,14 +170,20 @@ jobs:
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
         with:
           name: ${{ needs.build.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
@@ -195,9 +201,11 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           fetch-depth: 500
           fetch-tags: true # Need tags for `git describe`
-          path: docker-job
           sparse-checkout: |
             tt-train
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
 
       - name: Submodules
         run: |
