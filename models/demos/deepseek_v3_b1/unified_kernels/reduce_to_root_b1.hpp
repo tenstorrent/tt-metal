@@ -34,9 +34,9 @@
 #include "api/dataflow/dataflow_api.h"
 
 #elif defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
 #endif
 
 namespace deepseek_b1_ops {
