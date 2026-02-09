@@ -16,8 +16,10 @@
 #   ... etc
 #
 # And Python venv images:
-#   docker build -f dockerfile/Dockerfile.python --target ci-build-venv-2204 -t python-ci-build-venv:2204 .
-#   docker build -f dockerfile/Dockerfile.python --target ci-test-venv-2204 -t python-ci-test-venv:2204 .
+#   docker build -f dockerfile/Dockerfile.python --target ci-build-venv \
+#     --build-arg UBUNTU_VERSION=22.04 -t python-ci-build-venv:2204 .
+#   docker build -f dockerfile/Dockerfile.python --target ci-test-venv \
+#     --build-arg UBUNTU_VERSION=22.04 -t python-ci-test-venv:2204 .
 #
 # Then build with:
 #   docker build --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \

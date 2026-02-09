@@ -410,7 +410,7 @@ jobs:
         id: tags
         run: |
           VERSION="${{ steps.platform.outputs.version }}"
-          # Remove dots from version for target name (22.04 -> 2204)
+          # Remove dots from version for image tag (22.04 -> 2204)
           VERSION_NODOT="${VERSION//.}"
 
           # Hash Dockerfile.python + its COPY source files (requirements files)
@@ -477,9 +477,11 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.python
-          target: ci-build-venv-${{ needs.check-python-venv-images.outputs.ubuntu-version == '22.04' && '2204' || '2404' }}
+          target: ci-build-venv
           push: true
           tags: ${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-python-venv-images.outputs.ubuntu-version }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
@@ -489,9 +491,11 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.python
-          target: ci-test-venv-${{ needs.check-python-venv-images.outputs.ubuntu-version == '22.04' && '2204' || '2404' }}
+          target: ci-test-venv
           push: true
           tags: ${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-python-venv-images.outputs.ubuntu-version }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
