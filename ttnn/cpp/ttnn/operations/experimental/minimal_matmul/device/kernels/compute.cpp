@@ -124,28 +124,25 @@ void add_bias_and_addcmul_block(
 #endif  // FUSE_BIAS
 
     // ============================================
-    // STEP 2: Multiply by ternary_b and scalar
+    // STEP 2: Multiply by ternary_b (broadcast) and scalar
     // Read from intermediate_cb and write back to intermediate_cb
     // ============================================
 
     cb_wait_front(intermediate_cb, out_block_num_tiles);
-    cb_wait_front(ternary_a_cb, N_block_tiles);
+    cb_wait_front(ternary_b_cb, N_block_tiles);
 
-    mul_tiles_init(intermediate_cb, ternary_b_cb);
+    mul_bcast_rows_init_short(intermediate_cb, ternary_b_cb);
     binop_with_scalar_tile_init();
     reconfig_data_format(intermediate_cb, ternary_b_cb);
     pack_reconfig_data_format(intermediate_cb);
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
-        // Wait for one row of ternary_b tiles
-        cb_wait_front(ternary_b_cb, N_block_tiles);
-
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
 
-            // ternary_b_cb is pushed one row at a time, so use column index n
-            mul_tiles(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
+            // ternary_b_cb is [1, N], broadcast across M rows
+            mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 
             mul_unary_tile(DST_ID, scalar_value);
 
@@ -157,10 +154,9 @@ void add_bias_and_addcmul_block(
             tile_regs_release();
             tile_id++;
         }
-
-        cb_pop_front(ternary_b_cb, N_block_tiles);
     }
 
+    cb_pop_front(ternary_b_cb, N_block_tiles);
     cb_pop_front(intermediate_cb, out_block_num_tiles);
 
     // 'refill' intermediate_cb (also synchronize packer/unpacker)
@@ -168,18 +164,21 @@ void add_bias_and_addcmul_block(
     cb_push_back(intermediate_cb, out_block_num_tiles);
 
     cb_wait_front(intermediate_cb, out_block_num_tiles);
-    cb_wait_front(ternary_a_cb, N_block_tiles);
 
-    add_bcast_rows_init_short(intermediate_cb, out_cb);
+    add_tiles_init(intermediate_cb, out_cb);
     reconfig_data_format(intermediate_cb, out_cb);
     pack_reconfig_data_format(out_cb);
 
     tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
+        // Wait for one row of ternary_a tiles
+        cb_wait_front(ternary_a_cb, N_block_tiles);
+
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
 
-            add_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_a_cb, tile_id, n, DST_ID);
+            // ternary_a_cb is pushed one row at a time, so use column index n
+            add_tiles(intermediate_cb, ternary_a_cb, tile_id, n, DST_ID);
 
             tile_regs_commit();
 
@@ -188,11 +187,12 @@ void add_bias_and_addcmul_block(
             tile_regs_release();
             tile_id++;
         }
+
+        cb_pop_front(ternary_a_cb, N_block_tiles);
         cb_push_back(out_cb, N_block_tiles);
     }
 
     cb_pop_front(intermediate_cb, out_block_num_tiles);
-    cb_pop_front(ternary_a_cb, N_block_tiles);
 }
 
 // Slightly modified from compute_common.hpp
