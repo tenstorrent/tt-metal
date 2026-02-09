@@ -14,6 +14,37 @@ Tests all 4 memory layout combinations (input x output):
 
 Expected ordering: L1->L1 is fastest, DRAM->DRAM is slowest.
 Tile counts chosen to mirror the original issue chart (~100..12800 tiles).
+
+Root cause analysis (Wormhole B0, 2 NOCs, 12 DRAM banks, 64 L1 banks):
+
+  Reader uses NOC_0, writer uses NOC_1 (separate physical networks).
+  L1-interleaved tiles are round-robin distributed across 64 L1 banks
+  (one per compute core) via bank_id = tile_id % 64.  Each core processes
+  a contiguous tile range so ~98% of L1 reads are REMOTE (via NOC).
+
+  L1->L1: Each destination core's L1 is simultaneously accessed by:
+    - NOC_0 read requests from reader cores fetching input tiles
+    - NOC_1 write requests from writer cores storing output tiles
+  This creates L1 slave port contention at destination cores.
+
+  DRAM->L1: Reader traffic goes to 12 DRAM banks via NOC2AXI bridge,
+  bypassing the L1 fabric entirely.  Destination L1 cores only receive
+  NOC_1 write traffic -- no L1 slave port contention on the read path.
+
+  At high tiles/core (~156+), the sustained bidirectional L1 traffic
+  saturates the L1 slave interface, making L1->L1 slower than DRAM->L1.
+  The per-tile noc_async_read_barrier() in the reader kernel amplifies
+  this: contention-induced read latency is serialized per tile.
+
+  Key code paths:
+    Reader kernel: unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
+    Writer kernel: unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    NOC assignment: tt_metal/impl/kernels/kernel_types.cpp
+      -> preferred_noc_for_dram_read() = NOC_0
+      -> preferred_noc_for_dram_write() = NOC_1
+    Grid selection: tt_metal/common/work_split.cpp::split_work_to_cores()
+    Tile-to-bank mapping: tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h
+      -> bank_id = tile_id % NUM_L1_BANKS (64)
 """
 
 import json
@@ -166,10 +197,11 @@ def test_relu_memory_layout_kernel_duration(shape, num_tiles, monkeypatch, tmp_p
     # Print results
     print(f"\nShape: {shape}  ({num_tiles} tiles, device grid: {max_cores} cores)")
     for label in durations:
-        tiles_per_core = num_tiles / core_counts[label] if core_counts[label] else 0
+        cores = core_counts[label]
+        tiles_per_core = num_tiles / cores if cores else 0
         print(
             f"  {label:12s} duration: {durations[label]:>8d} ns, "
-            f"cores: {core_counts[label]:>3d}, tiles/core: {tiles_per_core:.1f}"
+            f"cores: {cores:>3d}, tiles/core: {tiles_per_core:.1f}"
         )
 
     # Dump JSON for plotting
@@ -186,9 +218,10 @@ def test_relu_memory_layout_kernel_duration(shape, num_tiles, monkeypatch, tmp_p
         json.dump(result, f)
 
     # Assertions: L1->L1 should be strictly faster than the other 3 combinations.
-    # The DRAM->L1 comparison is the core of issue #14421 — at larger tile counts
-    # (e.g. 10000) L1->L1 can be equal to or slower than DRAM->L1, which is the
-    # reported bug. We use xfail-style soft assertion to document this.
+    # The DRAM->L1 comparison is the core of issue #14421 -- at larger tile counts
+    # (e.g. 10000) L1->L1 can be equal to or slower than DRAM->L1 due to L1 slave
+    # port contention when both NOC_0 (reader) and NOC_1 (writer) target the same
+    # L1 banks simultaneously.  See module docstring for full root cause analysis.
     issue_url = "https://github.com/tenstorrent/tt-metal/issues/14421"
 
     assert durations["L1->L1"] < durations["DRAM->DRAM"], (
@@ -198,10 +231,14 @@ def test_relu_memory_layout_kernel_duration(shape, num_tiles, monkeypatch, tmp_p
     if durations["L1->L1"] >= durations["DRAM->L1"]:
         pytest.xfail(
             f"Known issue #14421: L1->L1 ({durations['L1->L1']} ns) >= "
-            f"DRAM->L1 ({durations['DRAM->L1']} ns) at {num_tiles} tiles"
+            f"DRAM->L1 ({durations['DRAM->L1']} ns) at {num_tiles} tiles. "
+            f"Root cause: L1 slave port contention from simultaneous NOC_0 "
+            f"read + NOC_1 write traffic to same L1 banks."
         )
     if durations["L1->L1"] >= durations["L1->DRAM"]:
         pytest.xfail(
             f"Known issue #14421: L1->L1 ({durations['L1->L1']} ns) >= "
-            f"L1->DRAM ({durations['L1->DRAM']} ns) at {num_tiles} tiles"
+            f"L1->DRAM ({durations['L1->DRAM']} ns) at {num_tiles} tiles. "
+            f"Root cause: L1 slave port contention from simultaneous NOC_0 "
+            f"read + NOC_1 write traffic to same L1 banks."
         )
