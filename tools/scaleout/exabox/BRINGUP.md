@@ -1,4 +1,4 @@
-# Cluster Bringup Guide
+# Exabox Bringup Guide: From Managing Deployments to Running Workloads
 
 This guide covers how to add new hardware to an existing Exabox cluster by merging cabling descriptors and validating the expanded configuration.
 
@@ -10,6 +10,8 @@ This guide covers how to add new hardware to an existing Exabox cluster by mergi
 
 A **Galaxy** is a 6U server housing 32 Blackhole (or Wormhole but in the context of this document we are talking about Blackhole chips exclusively) chips arranged across 4 UBB Trays. Each chip connects to its neighbors via internal mesh links, with external ethernet ports on all four sides for inter-Galaxy connectivity.
 
+> **Note:** The tray layout shown below is specific to BH Galaxy Rev A and Rev B. Rev C will have a different layout, which will be documented separately.
+
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/galaxy_chasis.png?raw=true" width="500"/>
 
 *Galaxy chassis: 32 chips across 4 UBB Trays (top: Trays 1 & 3, bottom: Trays 2 & 4). Diamond-shaped ports on the edges are external ethernet connections used for inter-Galaxy cabling.*
@@ -17,23 +19,27 @@ A **Galaxy** is a 6U server housing 32 Blackhole (or Wormhole but in the context
 ### Cluster Hierarchy
 
 ```
-SuperPod (9 pods)
+SuperPod (2, 4, or 9 pods)
   └─ Pod (4 Galaxies = 128 chips)
        └─ Galaxy (1 host = 32 Blackhole chips)
 ```
 
-A **Pod** combines 4 Galaxies (128 chips) into a unified compute mesh using TT-Fabric. A **SuperPod** connects 9 pods for large-scale workloads.
+A **Pod** combines 4 Galaxies (128 chips) into a unified compute mesh using TT-Fabric. A **SuperPod** connects multiple pods (2, 4, or 9 — different product definitions, but each is considered a SuperPod) for large-scale workloads.
 
-### Supported Topologies
+### Supported Pod Configurations
 
 For the full list of officially supported topologies with cable lengths and configurations, see the [Top Level Topologies spreadsheet](https://docs.google.com/spreadsheets/d/1mnZJueW4BKZGNvrtGiCQZa12hxQbg49Aref2FDrRBsQ/edit?gid=0#gid=0).
 
-| Topology | Hosts | Chips | Host Layout | Connectivity | Use Case |
-|----------|-------|-------|-------------|--------------|----------|
-| **Single Galaxy** | 1 | 32 | Single host | Torus XY | Single-host workloads, development |
-| **4×32** | 4 | 128 | 4×1 line | Torus XY | 1D data flow: video gen, decode, ring allreduce |
-| **8×16** | 4 | 128 | 2×2 grid | Torus XY | 2D data flow: all-to-all, 2D tensor parallelism |
-| **16×8** | 4 | 128 | 1×4 column | Torus XY | 2D data flow: alternative orientation to 8×16 |
+> **TODO:** SuperPod descriptors and cutsheets will be added here once they are available in the Top Level Topologies spreadsheet.
+
+| Topology | Hosts | Chips | Host Layout | Connectivity |
+|----------|-------|-------|-------------|--------------|
+| **Single Galaxy** | 1 | 32 | Single host | Torus XY |
+| **4×32** | 4 | 128 | 4×1 line | Torus XY |
+| **8×16** | 4 | 128 | 2×2 grid | Torus XY |
+| **16×8** | 4 | 128 | 1×4 column | Torus XY |
+
+The pod shape is a function of the workload — choose the topology that best matches your application's communication patterns.
 
 All multi-Galaxy topologies use **2D Torus** connectivity (wrap-around on both X and Y), enabling shorter hop counts and multiple routing paths. The **cabling differs** between topologies — each has its own cutsheet, cable lengths, and physical layout.
 
@@ -47,7 +53,7 @@ One Galaxy (32 chips) as a self-contained mesh. Used for single-host development
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/8x4_cabling.png?raw=true" width="700"/>
 
-*Cabling web tool view of a single Galaxy (8×4). Shows 1 host (node_0) with 4 trays (T1–T4) and internal torus connections (orange curves) wrapping between trays.*
+*[Cabling web tool](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_8x4_torus-2d.textproto) (8×4 torus-2d configuration pre-loaded): Shows 1 host (node_0) with 4 trays (T1–T4) and internal torus connections (orange curves) wrapping between trays.*
 
 ---
 
@@ -57,11 +63,11 @@ Four Galaxies arranged in a horizontal line, forming an elongated 32-column × 4
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/4x32_topology.png?raw=true" width="700"/>
 
-*Chip-level topology: 4 Galaxy chassis side by side, which can form full 32×4 mesh.*
+*Flattened layout: 4 Galaxy chassis side by side, which can form full 32×4 mesh.*
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/4x32_cabling.png?raw=true" width="700"/>
 
-*Cabling web tool view: 4 Galaxies across 2 racks. Blue lines are inter-Galaxy mesh connections, green lines are torus wrap-around connections.*
+*[Cabling web tool](https://aus2-cablegen.aus2.tenstorrent.com/?file=http://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_32x4_torus-2d.textproto) (32×4 torus-2d configuration pre-loaded): 4 Galaxies across 2 racks. Blue lines are inter-Galaxy mesh connections, green lines are torus wrap-around connections.*
 
 ---
 
@@ -75,7 +81,7 @@ Four Galaxies arranged in a 2×2 grid. Optimized for 2D data flow: all-to-all co
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/8x16_cabling.png?raw=true" width="700"/>
 
-*Cabling web tool view: 4 Galaxies across 2 racks with inter-Galaxy cables crossing between racks in a distributed pattern.*
+*[Cabling web tool](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_8x16_torus-2d.textproto) (8×16 torus-2d configuration pre-loaded): 4 Galaxies across 2 racks with inter-Galaxy cables crossing between racks in a distributed pattern.*
 
 ---
 
@@ -89,13 +95,15 @@ Four Galaxies stacked vertically in a single column. An alternative orientation 
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/16x8_cabling.png?raw=true" width="700"/>
 
-*Cabling web tool view: 4 Galaxies across 2 racks with a different inter-Galaxy cable pattern than 8×16.*
+*[Cabling web tool](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_16x8_torus-2d.textproto) (16×8 torus-2d configuration pre-loaded): 4 Galaxies across 2 racks with a different inter-Galaxy cable pattern than 8×16.*
 
 ---
 
 #### Multi-Pod (4×32 SuperPod)
 
-Multiple pods can be connected into a SuperPod. The image below shows 4 pods in 4×32 topology (16 Galaxies total) in an exploded view — pods are spread apart to make inter-pod cables visible; in a physical deployment they are racked together.
+Multiple pods can be connected into a SuperPod. The topology below corresponds to the **SP4** (4-pod SuperPod) configuration. We also support **SP2** and **SP9** configurations, which will be documented separately.
+
+The image shows 4 pods in 4×32 topology (16 Galaxies total) in an exploded view — pods are spread apart to make inter-pod cables visible; in a physical deployment they are racked together.
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/4_pods_4x32_topology.png" width="700"/>
 
@@ -139,20 +147,21 @@ A **cutsheet** is a physical cabling instruction document (CSV/Excel) that tells
 The [Top Level Topologies spreadsheet](https://docs.google.com/spreadsheets/d/1mnZJueW4BKZGNvrtGiCQZa12hxQbg49Aref2FDrRBsQ/edit?gid=0#gid=0) contains cabling guide CSVs and cabling descriptor TextProtos for all supported topologies and connectivity variants (mesh, torus-x, torus-y, torus-2d).
 
 1. Find your topology and connectivity variant in the spreadsheet
-2. Download the **Cabling Guide CSV** — this is the cutsheet for your technician
-3. Optionally download the **Cabling Descriptor TextProto** — this can be used directly in Step 1 (skip the web tool import)
-4. Provide the cutsheet CSV to your cabling technician
+2. Download the **Cabling Guide CSV**
+3. **Update hostnames and locations** — the downloaded cutsheet describes connections in logical space with placeholder names. Update it to reflect your specific deployment's hostnames and physical locations before handing it off
+4. Optionally download the **Cabling Descriptor TextProto** — this can be used directly in Step 1 (skip the web tool import), but also requires hostname updates
+5. Provide the finalized cutsheet CSV to your cabling technician
 
 **Example cutsheet format:**
 
 ```csv
-Source_Node,Source_Port,Dest_Node,Dest_Port,Cable_Length
-C1U02,eth0,C1U08,eth4,3m
-C1U02,eth1,C2U02,eth5,5m
-...
+Hostname,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,Hostname,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type
+bh-glx-b02u02,120,B,2,U02,1,1,120B02U02-1-1,BH_GALAXY,bh-glx-b02u08,120,B,2,U08,2,1,120B02U08-2-1,BH_GALAXY
+bh-glx-b02u02,120,B,2,U02,1,2,120B02U02-1-2,BH_GALAXY,bh-glx-b02u08,120,B,2,U08,2,2,120B02U08-2-2,BH_GALAXY
+bh-glx-b05u02,120,B,5,U02,1,4,120B5U02-1-4,BH_GALAXY,bh-glx-b05u02,120,B,5,U02,3,4,120B5U02-03-4,BH_GALAXY
 ```
 
-The cutsheet specifies physical connections: which port on which node connects to which port on another node, plus cable length.
+Each row describes a single cable: the left half is the source endpoint (hostname, physical location, tray, port) and the right half is the destination endpoint.
 
 ### Creating a Custom Cutsheet
 
@@ -190,7 +199,7 @@ Where:
 
 4. Export as a **cabling descriptor** (`.textproto` format)
 
-5. Additionally export as a **deployment descriptor** (`.textproto` format, can be skipped if not adding new devices but rather connections between the devices that exist in the original deployment descriptor)
+5. Additionally export as a **deployment descriptor** (`.textproto` format, can be skipped if not adding new compute nodes/hosts)
 
 6. Save the exported file to a location accessible from your working host, e.g.:
    ```
@@ -200,7 +209,9 @@ Where:
 
 ## Step 2: Merge Configurations
 
-Use the `merge_cluster_configs.py` script to combine the new cabling descriptor with the existing cluster configuration.
+This step is for managing large deployments where cables or nodes are added to the physical cluster over time. The goal is to grow the virtual state (descriptors) in sync with the physical state of the deployment.
+
+Use the `merge_cluster_configs.py` script to combine the new cabling descriptor with the existing cluster configuration. **Always output to a local directory** to ensure that existing shared state isn't corrupted — only copy to the shared location after verifying the merge (Step 3).
 
 ### With Existing Deployment Descriptor
 
@@ -234,9 +245,17 @@ The script generates in `merged_output/`:
 - `merged_cabling_descriptor.textproto` - Combined cabling topology
 - `merged_deployment_descriptor.textproto` - Combined host deployment
 
-## Step 3: Deploy Merged Configuration
+## Step 3: Run Physical Validation
 
-Copy the merged configuration to a shared location accessible by all cluster hosts:
+Run physical validation **before** deploying configs to a shared location. This ensures the descriptors are in sync with the physical state before other users rely on them.
+
+Run `run_validation.sh` with `--cabling-descriptor-path` and `--deployment-descriptor-path` pointing to your local merged output from Step 2.
+
+See [Physical Validation](./README.md#physical-validation) for script usage, analysis commands, and interpreting results. For troubleshooting failures, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
+
+## Step 4: Deploy Merged Configuration
+
+Once validation passes, copy the merged configuration to a shared location accessible by all cluster hosts:
 
 ```bash
 sudo cp -r merged_output/ /data/scaleout_configs/<your-config-name>/
@@ -250,23 +269,16 @@ Verify the files are in place:
 ls -la /data/scaleout_configs/<your-config-name>/
 ```
 
-## Step 4: Run Physical Validation
+## Step 5: Run Dispatch and Fabric Tests
 
-Run `run_validation.sh` with `--cabling-descriptor-path` and `--deployment-descriptor-path` pointing to your merged configs from Step 3.
+Which tests to run depends on whether the pod is new or previously validated:
 
-See [Physical Validation](./README.md#physical-validation) for script usage, analysis commands, and interpreting results. For troubleshooting failures, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
+**First-time pod bringup** (pod has never been tested):
+1. Run **dispatch tests** to stress compute, memory, and data-movement on each chip — see [Dispatch Tests](./README.md#dispatch-tests)
+2. Run **single-pod fabric tests** to verify coordinated workloads across the mesh — see [Fabric Tests](./README.md#fabric-tests)
 
-## Step 5: Run Dispatch Tests
-
-Stress test all chips in the cluster to verify compute, memory, and data-movement stability.
-
-See [Dispatch Tests](./README.md#dispatch-tests) for usage.
-
-## Step 6: Run Fabric Tests
-
-After physical validation and dispatch tests pass, run fabric tests to verify coordinated workloads across the mesh.
-
-See [Fabric Tests](./README.md#fabric-tests) for topology-specific scripts and usage.
+**Existing pod with new inter-pod cabling** (pod already tested/used):
+- Skip dispatch and single-pod fabric tests. Instead, run **multi-pod fabric tests** (documentation coming soon in the top-level README).
 
 ## Troubleshooting
 
