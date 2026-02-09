@@ -303,7 +303,7 @@ def moe_topk_tt(
     else:
         logits = ttnn.linear(x, moe_w.w_gate, compute_kernel_config=compute_kernel_config)  # [1,1,T,E]
     scores = ttnn.sigmoid(logits)
-    ttnn.deallocate(logits)
+    ttnn.deallocate(logits, force=False)
 
     # scores_for_choice = scores + e_score_correction_bias (broadcast over tokens)
     bias_rm_owned = False
@@ -313,24 +313,24 @@ def moe_topk_tt(
         bias_rm_owned = True
     bias = ttnn.to_layout(bias_rm, ttnn.TILE_LAYOUT)
     if bias_rm_owned:
-        ttnn.deallocate(bias_rm)
+        ttnn.deallocate(bias_rm, force=False)
 
     scores_with_bias = ttnn.add(scores, bias, dtype=ttnn.bfloat16)
-    ttnn.deallocate(bias)
+    ttnn.deallocate(bias, force=False)
 
     topk_values, topk_indices = ttnn.topk(scores_with_bias, k=k, dim=-1, largest=True, sorted=False)
-    ttnn.deallocate(topk_values)
-    ttnn.deallocate(scores_with_bias)
+    ttnn.deallocate(topk_values, force=False)
+    ttnn.deallocate(scores_with_bias, force=False)
 
     # Gather weights from the *unbiased* sigmoid scores.
     topk_weights = ttnn.gather(scores, dim=3, index=topk_indices)
-    ttnn.deallocate(scores)
+    ttnn.deallocate(scores, force=False)
 
     if norm_topk_prob:
         denom = ttnn.sum(topk_weights, dim=3, keepdim=True)
         denom = ttnn.add(denom, 1e-20, output_tensor=denom)
         topk_weights = ttnn.div(topk_weights, denom)
-        ttnn.deallocate(denom)
+        ttnn.deallocate(denom, force=False)
 
     if routed_scaling_factor != 1.0:
         topk_weights = ttnn.mul(topk_weights, routed_scaling_factor)
@@ -414,8 +414,8 @@ def moe_topk_cpu_reference(
     )
     idx = ttnn.to_layout(idx_rm, ttnn.TILE_LAYOUT)
     w = ttnn.to_layout(w_rm, ttnn.TILE_LAYOUT)
-    ttnn.deallocate(idx_rm)
-    ttnn.deallocate(w_rm)
+    ttnn.deallocate(idx_rm, force=False)
+    ttnn.deallocate(w_rm, force=False)
     return w, idx
 
 
@@ -454,13 +454,13 @@ def moe_dense_experts_forward_decode_tt(
     idx_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     w_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
     # Consume router tensors.
-    ttnn.deallocate(topk_expert_indices)
-    ttnn.deallocate(topk_expert_weights)
+    ttnn.deallocate(topk_expert_indices, force=False)
+    ttnn.deallocate(topk_expert_weights, force=False)
 
     idx_host = _tt_to_torch_device0(idx_rm).reshape(-1).to(dtype=torch.int64).cpu().tolist()
     w_host = _tt_to_torch_device0(w_rm).reshape(-1).to(dtype=torch.float32).cpu().tolist()
-    ttnn.deallocate(idx_rm)
-    ttnn.deallocate(w_rm)
+    ttnn.deallocate(idx_rm, force=False)
+    ttnn.deallocate(w_rm, force=False)
     if len(idx_host) != k or len(w_host) != k:
         raise RuntimeError(f"topk host shapes mismatch: got {len(idx_host)} indices and {len(w_host)} weights, expected {k}")
 
@@ -481,20 +481,20 @@ def moe_dense_experts_forward_decode_tt(
         else:
             gate = ttnn.linear(hidden_states, w1, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
             up = ttnn.linear(hidden_states, w3, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
-        ttnn.deallocate(w1)
-        ttnn.deallocate(w3)
+        ttnn.deallocate(w1, force=False)
+        ttnn.deallocate(w3, force=False)
 
         gate = ttnn.silu(gate)
         x_ff = gate * up
-        ttnn.deallocate(gate)
-        ttnn.deallocate(up)
+        ttnn.deallocate(gate, force=False)
+        ttnn.deallocate(up, force=False)
 
         if compute_kernel_config is None:
             out = ttnn.linear(x_ff, w2, memory_config=memory_config)  # [1,1,1,H]
         else:
             out = ttnn.linear(x_ff, w2, memory_config=memory_config, compute_kernel_config=compute_kernel_config)  # [1,1,1,H]
-        ttnn.deallocate(x_ff)
-        ttnn.deallocate(w2)
+        ttnn.deallocate(x_ff, force=False)
+        ttnn.deallocate(w2, force=False)
 
         if weight != 1.0:
             out = ttnn.mul(out, float(weight), memory_config=memory_config)
@@ -503,12 +503,12 @@ def moe_dense_experts_forward_decode_tt(
             out_sum = out
         else:
             out_next = ttnn.add(out_sum, out, memory_config=memory_config)
-            ttnn.deallocate(out_sum)
-            ttnn.deallocate(out)
+            ttnn.deallocate(out_sum, force=False)
+            ttnn.deallocate(out, force=False)
             out_sum = out_next
 
     # Consume hidden_states now that experts are computed.
-    ttnn.deallocate(hidden_states)
+    ttnn.deallocate(hidden_states, force=False)
 
     if out_sum is None:
         raise RuntimeError("dense decode experts produced no output (empty top-k?)")
@@ -588,17 +588,17 @@ def moe_sparse_experts_forward_tt(
             # Materialize with `ttnn.clone` before deallocating the original tensor.
             hs_padded_view = ttnn.pad(hidden_states, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
             hs_padded = ttnn.clone(hs_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(hidden_states)
+            ttnn.deallocate(hidden_states, force=False)
             hidden_states = hs_padded
 
             idx_padded_view = ttnn.pad(topk_expert_indices, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0)
             idx_padded = ttnn.clone(idx_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(topk_expert_indices)
+            ttnn.deallocate(topk_expert_indices, force=False)
             topk_expert_indices = idx_padded
 
             w_padded_view = ttnn.pad(topk_expert_weights, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
             w_padded = ttnn.clone(w_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(topk_expert_weights)
+            ttnn.deallocate(topk_expert_weights, force=False)
             topk_expert_weights = w_padded
 
             total_tokens += pad_tokens
@@ -666,24 +666,24 @@ def moe_sparse_experts_forward_tt(
             )
 
         # The chunked calls consume their own slice inputs; we still own the base tensors.
-        ttnn.deallocate(hidden_states)
-        ttnn.deallocate(topk_expert_indices)
-        ttnn.deallocate(topk_expert_weights)
+        ttnn.deallocate(hidden_states, force=False)
+        ttnn.deallocate(topk_expert_indices, force=False)
+        ttnn.deallocate(topk_expert_weights, force=False)
 
         if len(out_chunks) == 1:
             return out_chunks[0]
         out = ttnn.concat(out_chunks, dim=2)
         for c in out_chunks:
-            ttnn.deallocate(c)
+            ttnn.deallocate(c, force=False)
         return out
 
     if use_all_to_all:
         # STEP 1: all_to_all_dispatch expects ROW_MAJOR.
         hidden_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(hidden_states)
+        ttnn.deallocate(hidden_states, force=False)
 
         topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(topk_expert_indices)
+        ttnn.deallocate(topk_expert_indices, force=False)
 
         dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
             hidden_rm,
@@ -695,8 +695,8 @@ def moe_sparse_experts_forward_tt(
             memory_config=memory_config,
             output_concat_dim=rt.output_concat_dim,
         )
-        ttnn.deallocate(hidden_rm)
-        ttnn.deallocate(topk_indices_rm)
+        ttnn.deallocate(hidden_rm, force=False)
+        ttnn.deallocate(topk_indices_rm, force=False)
 
         if debug:
             do_dt = ttnn.get_device_tensors(dispatch_output)
@@ -721,7 +721,7 @@ def moe_sparse_experts_forward_tt(
         # `ttnn.sparse_matmul` accepts this UINT16 sparsity directly, and keeping it as
         # UINT16 avoids a device-side typecast on small Row-Major tensors (e.g. last dim
         # = experts_per_device = 8) which currently requires padding to a multiple of 32.
-        ttnn.deallocate(remap_mask)
+        ttnn.deallocate(remap_mask, force=False)
 
         if debug:
             sp_dt = ttnn.get_device_tensors(sparsity)
@@ -736,15 +736,15 @@ def moe_sparse_experts_forward_tt(
         post_dispatch = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, hidden_size))
         post_dispatch_rm = post_dispatch
         post_dispatch = ttnn.to_layout(post_dispatch, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(post_dispatch_rm)  # view deallocates dispatch_output
+        ttnn.deallocate(post_dispatch_rm, force=False)  # view deallocates dispatch_output
     else:
         # Replicated-token + all-reduce path:
         # - Tokens are replicated across devices, and experts are sharded.
         # - Each device computes its local expert contributions and we sum across the mesh.
         topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
         topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(topk_expert_indices)
-        ttnn.deallocate(topk_expert_weights)
+        ttnn.deallocate(topk_expert_indices, force=False)
+        ttnn.deallocate(topk_expert_weights, force=False)
 
         weights_zero = _get_scatter_zero_tensor(
             device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
@@ -756,7 +756,7 @@ def moe_sparse_experts_forward_tt(
             topk_weights_rm,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(topk_weights_rm)
+        ttnn.deallocate(topk_weights_rm, force=False)
         local_weights, sparsity = ttnn.moe_expert_token_remap(
             topk_weights_dense,
             rt.expert_mapping_tensors,
@@ -767,8 +767,8 @@ def moe_sparse_experts_forward_tt(
         # `ttnn.sparse_matmul` accepts this UINT16 sparsity directly, and keeping it as
         # UINT16 avoids a device-side typecast on small Row-Major tensors (e.g. last dim
         # = experts_per_device = 8) which currently requires padding to a multiple of 32.
-        ttnn.deallocate(topk_weights_dense)
-        ttnn.deallocate(topk_indices_rm)
+        ttnn.deallocate(topk_weights_dense, force=False)
+        ttnn.deallocate(topk_indices_rm, force=False)
 
         if debug:
             lw_dt = ttnn.get_device_tensors(local_weights)
@@ -823,13 +823,13 @@ def moe_sparse_experts_forward_tt(
         compute_kernel_config=compute_kernel_config,
         output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
     )
-    ttnn.deallocate(expert_input)
+    ttnn.deallocate(expert_input, force=False)
 
     gate = ttnn.silu(w1_out)
-    ttnn.deallocate(w1_out)
+    ttnn.deallocate(w1_out, force=False)
     x_ff = ttnn.mul(gate, w3_out, memory_config=memory_config)
-    ttnn.deallocate(gate)
-    ttnn.deallocate(w3_out)
+    ttnn.deallocate(gate, force=False)
+    ttnn.deallocate(w3_out, force=False)
 
     # Collapse sparse_matmul rank-6 output into [num_blocks, E, block, moe_intermediate]
     x_ff = ttnn.squeeze(x_ff, 0)
@@ -847,15 +847,15 @@ def moe_sparse_experts_forward_tt(
         compute_kernel_config=compute_kernel_config,
         output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
     )
-    ttnn.deallocate(x_ff)
-    ttnn.deallocate(sparsity)
+    ttnn.deallocate(x_ff, force=False)
+    ttnn.deallocate(sparsity, force=False)
 
     # STEP 5: Prepare expert output for aggregation.
     while len(expert_output_sparse.shape) > 4:
         expert_output_sparse = ttnn.squeeze(expert_output_sparse, 0)
 
     expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))  # [E, num_blocks, block, H]
-    ttnn.deallocate(expert_output_sparse)
+    ttnn.deallocate(expert_output_sparse, force=False)
     expert_output = ttnn.reshape(
         expert_output,
         shape=(int(rt.num_experts_per_device), 1, total_tokens, hidden_size),
@@ -865,7 +865,7 @@ def moe_sparse_experts_forward_tt(
         # Convert expert output to row-major for all_to_all_combine.
         expert_output_tiled = expert_output
         expert_output = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(expert_output_tiled)
+        ttnn.deallocate(expert_output_tiled, force=False)
 
         # STEP 6: all_to_all_combine.
         combine_output = ttnn.all_to_all_combine(
@@ -878,24 +878,24 @@ def moe_sparse_experts_forward_tt(
             memory_config=memory_config,
             output_shard_dim=rt.output_shard_dim,
         )
-        ttnn.deallocate(expert_output)
-        ttnn.deallocate(dispatch_metadata)
+        ttnn.deallocate(expert_output, force=False)
+        ttnn.deallocate(dispatch_metadata, force=False)
 
         # STEP 7: Apply routing weights and reduce across K.
         post_combine = ttnn.to_layout(combine_output, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(combine_output)
+        ttnn.deallocate(combine_output, force=False)
 
         topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(topk_expert_weights)
+        ttnn.deallocate(topk_expert_weights, force=False)
         topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0))  # [K,1,tokens,1]
         topk_weights = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(topk_weights_rm)
+        ttnn.deallocate(topk_weights_rm, force=False)
 
         weighted_output = ttnn.mul(post_combine, topk_weights, memory_config=memory_config)
-        ttnn.deallocate(post_combine)
-        ttnn.deallocate(topk_weights)
+        ttnn.deallocate(post_combine, force=False)
+        ttnn.deallocate(topk_weights, force=False)
         output = ttnn.sum(weighted_output, dim=0, keepdim=True)
-        ttnn.deallocate(weighted_output)
+        ttnn.deallocate(weighted_output, force=False)
 
         # STEP 8: Aggregate across the *other* mesh axis if present.
         mesh_shape = _get_mesh_shape(device)
@@ -907,7 +907,7 @@ def moe_sparse_experts_forward_tt(
                 cluster_axis=rt.reduce_cluster_axis,
                 memory_config=memory_config,
             )
-            ttnn.deallocate(output)
+            ttnn.deallocate(output, force=False)
             return output_all_reduced
 
         return output
@@ -918,17 +918,17 @@ def moe_sparse_experts_forward_tt(
     local_weights_rm = local_weights
     if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
         local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(local_weights)
+        ttnn.deallocate(local_weights, force=False)
     local_weights_rm = ttnn.repeat(local_weights_rm, ttnn.Shape((hidden_size, 1, 1, 1)))  # [H,1,T,E]
     local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0))  # [E,1,T,H]
     local_weights_tiled = ttnn.to_layout(local_weights_rm, ttnn.TILE_LAYOUT)
-    ttnn.deallocate(local_weights_rm)
+    ttnn.deallocate(local_weights_rm, force=False)
 
     weighted = ttnn.mul(expert_output, local_weights_tiled, memory_config=memory_config)
-    ttnn.deallocate(expert_output)
-    ttnn.deallocate(local_weights_tiled)
+    ttnn.deallocate(expert_output, force=False)
+    ttnn.deallocate(local_weights_tiled, force=False)
     output = ttnn.sum(weighted, dim=0, keepdim=True)
-    ttnn.deallocate(weighted)
+    ttnn.deallocate(weighted, force=False)
 
     # Sum contributions across devices (experts are sharded across the mesh).
     if num_devices > 1:
@@ -938,13 +938,16 @@ def moe_sparse_experts_forward_tt(
             topology=rt.topology,
             memory_config=memory_config,
         )
-        ttnn.deallocate(output)
+        ttnn.deallocate(output, force=False)
         output = output_all_reduced
 
     # If we padded tokens for block-aligned sparse kernels, slice back to the original size.
     if unpadded_total_tokens != total_tokens:
-        output_sliced = ttnn.slice(output, [0, 0, 0, 0], [1, 1, int(unpadded_total_tokens), hidden_size])
-        ttnn.deallocate(output)
+        # `slice` may return a view that aliases `output` (no refcounting).
+        # Materialize before freeing the padded tensor to avoid corruption on decode.
+        output_view = ttnn.slice(output, [0, 0, 0, 0], [1, 1, int(unpadded_total_tokens), hidden_size])
+        output_sliced = ttnn.clone(output_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(output, force=False)
         output = output_sliced
 
     return output
