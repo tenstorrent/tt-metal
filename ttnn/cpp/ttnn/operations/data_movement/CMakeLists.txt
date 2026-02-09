@@ -207,6 +207,7 @@ target_sources(
         slice/device/slice_program_factory_rm_sharded.cpp
         slice/device/slice_program_factory_rm_stride.cpp
         slice/device/slice_program_factory_tile.cpp
+        slice/device/slice_program_factory_tile_interleaved.cpp
         slice/device/slice_program_factory_tile_tensor_args.cpp
         slice/slice.cpp
         split/device/split_device_operation.cpp

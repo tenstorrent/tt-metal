@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
@@ -11,11 +12,13 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_interleaved.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
+using namespace tt::constants;
 
 namespace ttnn::operations::data_movement {
 
@@ -256,8 +259,8 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
         }
         return SliceRmProgramFactory{};
     }
-    // Layout::TILE
-    return SliceTileProgramFactory{};
+    return SliceTileInterleavedProgramFactory{};
+    // return SliceTileProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>
