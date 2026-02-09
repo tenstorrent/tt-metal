@@ -121,7 +121,9 @@ class LMHead(LightweightModule):
                     )
                 else:
                     memory_config = args.create_dram_sharded_mem_config(
-                        k=args.dim, n=pad_to_power_of_2(math.ceil(combined_split.shape[-1] / self.num_devices))
+                        k=args.dim,
+                        n=pad_to_power_of_2(math.ceil(combined_split.shape[-1] / self.num_devices)),
+                        dram_grid=self.prefetcher.to_core_range_set(self.prefetcher.dram_banks()),
                     )
                     self.output_weights_ring_mm.append(
                         ttnn.as_tensor(

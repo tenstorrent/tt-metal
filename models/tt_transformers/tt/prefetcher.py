@@ -34,6 +34,13 @@ class PrefetcherCoreConfig:
                  Left receiver columns=1-3, Right receiver columns=5-6
     """
 
+    # DRAM banks ordered to match ring worker access pattern (by y-coordinate proximity)
+    # The bank ids are ordered in column major order from left to right
+    DRAM_BANKS = {
+        "blackhole": [ttnn.CoreCoord(bank, 0) for bank in [1, 3, 2, 0, 5, 7, 6, 4]],  # 8 banks in total
+        "wormhole": [ttnn.CoreCoord(bank, 0) for bank in [1, 2, 3, 0, 4, 6, 9, 10, 11, 8, 7, 5]],  # 12 banks in total
+    }
+
     num_receiver_cores: int
     mesh_device: ttnn.MeshDevice
 
@@ -67,6 +74,7 @@ class PrefetcherCoreConfig:
         self._sender_rows = self.SENDER_ROWS[arch]
         self._sender_cols = self.SENDER_COLS[arch]
         self._receiver_cols = self.RECEIVER_COLS[arch]
+        self._dram_banks = self.DRAM_BANKS[arch]
 
     def _get_sender_rows(self, active: Optional[bool], side: str) -> List[int]:
         """Get sender rows based on active filter for a specific side."""
@@ -168,6 +176,9 @@ class PrefetcherCoreConfig:
                 + [make_range(*left_recv, r) for r in left_inactive]
                 + [make_range(*right_recv, r) for r in right_inactive]
             )
+
+    def dram_banks(self) -> List[ttnn.CoreCoord]:
+        return self._dram_banks
 
 
 ### Helper class to manage subdevices for the Prefetcher

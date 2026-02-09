@@ -2954,14 +2954,14 @@ class ModelArgs:
     # =========================================================================
     # MATMUL / CONFIG HELPERS
     # =========================================================================
-    def create_dram_sharded_mem_config(self, k, n):
+    def create_dram_sharded_mem_config(self, k, n, dram_grid=None):
         """Create DRAM-sharded memory config for width-sharded tensors"""
         dram_cores = self.dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
         assert self.dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
-        shard_spec = ttnn.ShardSpec(
-            self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
-        )
+        if dram_grid is None:
+            dram_grid = self.dram_weight_grid
+        shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
     def matmul_config(
