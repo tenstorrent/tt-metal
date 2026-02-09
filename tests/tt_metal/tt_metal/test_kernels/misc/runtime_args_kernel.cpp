@@ -20,15 +20,27 @@ void kernel_main() {
     namespace NAMESPACE {
     void MAIN {
 #endif
+#if defined(SKIP_CORE_LOG_X) && defined(SKIP_CORE_LOG_Y)
+        // Skip execution on a specific core (by logical coords) to test partial RTA coverage
+        // This core doesn't have RTAs set, so accessing them would trigger watcher assert
+        if (get_relative_logical_x() == SKIP_CORE_LOG_X && get_relative_logical_y() == SKIP_CORE_LOG_Y) {
+            return;
+        }
+#endif
+
         volatile uint32_t tt_l1_ptr* results = (volatile uint32_t tt_l1_ptr*)RESULTS_ADDR;
         int i;
+        // Read unique runtime args
         for (i = 0; i < NUM_RUNTIME_ARGS; i++) {
-#ifdef COMMON_RUNTIME_ARGS
-            constexpr uint32_t kCommonRTASeparation = 1024;
-            results[i + kCommonRTASeparation] = get_common_arg_val<uint32_t>(i);
-#endif
             results[i] = get_arg_val<uint32_t>(i);
         }
+#ifdef COMMON_RUNTIME_ARGS
+        // Read common runtime args
+        constexpr uint32_t kCommonRTASeparation = 1024;
+        for (i = 0; i < NUM_COMMON_RUNTIME_ARGS; i++) {
+            results[i + kCommonRTASeparation] = get_common_arg_val<uint32_t>(i);
+        }
+#endif
 
 #ifdef COORDS_ADDR
 #ifdef DATA_MOVEMENT
