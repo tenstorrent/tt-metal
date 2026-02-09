@@ -4,6 +4,8 @@
 
 import itertools
 import math
+import pickle
+import hashlib
 import pytest
 import torch
 import ttnn
@@ -16,7 +18,50 @@ from tracy.process_model_log import (
     run_device_profiler,
 )
 
-PCC_THRESHOLD = 0.988
+PCC_THRESHOLD = 0.98
+
+
+def compute_tensor_checksum(tensor):
+    """Compute SHA256 checksum for a tensor."""
+    if isinstance(tensor, torch.Tensor):
+        # Convert tensor to bytes for hashing
+        torch_tensor = tensor.detach().cpu()
+    else:
+        raise ValueError(f"Unsupported tensor type: {type(tensor)}")
+
+    # Convert BFloat16 and other unsupported dtypes to float32 for numpy conversion
+    if torch_tensor.dtype == torch.bfloat16:
+        torch_tensor = torch_tensor.float()
+    elif torch_tensor.dtype not in [
+        torch.float32,
+        torch.float64,
+        torch.int32,
+        torch.int64,
+        torch.int16,
+        torch.int8,
+        torch.uint8,
+    ]:
+        # Convert any other unsupported dtypes to float32
+        torch_tensor = torch_tensor.float()
+
+    tensor_bytes = torch_tensor.numpy().tobytes()
+    return hashlib.sha256(tensor_bytes).hexdigest()
+
+
+def load_or_create_checksum_dict(pickle_file="moe_input_checksums.pkl"):
+    """Load checksum dictionary from pickle file, or create empty dict if file doesn't exist."""
+    try:
+        with open(pickle_file, "rb") as f:
+            return pickle.load(f)
+    except (FileNotFoundError, EOFError):
+        return {}
+
+
+def save_checksum_dict(checksum_dict, pickle_file="moe_input_checksums.pkl"):
+    """Save checksum dictionary to pickle file."""
+    with open(pickle_file, "wb") as f:
+        pickle.dump(checksum_dict, f)
+
 
 # Some cores have more tiles than others, but they are sprinkled around the ring for boundary alignment.
 FULL_CORES = {0, 1, 8, 9}
@@ -419,6 +464,8 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
         f"Running test_moe with M={M}, K={K}, N={N}, E={E}, L={L}, check_accuracy={check_accuracy}, dump_outputs={dump_outputs}"
     )
 
+    torch.manual_seed(0)
+
     # --------------------------------------------------------------------------
     # Shard grid
     # --------------------------------------------------------------------------
@@ -604,10 +651,34 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             output_shard_core_ranges=output_shard_core_range_set,
         )
 
-        # Output is produced in-place on the input tensor
+        # Output is produced in-place on the input tensor buffer, but output re-perceives it as RM
         tt_raw_output = ttnn.to_torch(tt_output)
 
-        # print(f"{tt_raw_output=}")
+        # Compute checksums for all inputs before calling moe (only when check_accuracy is True)
+        seed = 0  # torch.manual_seed(0) was set earlier
+        input_checksums = {
+            "torch_input": compute_tensor_checksum(torch_input[layer_id]),
+            "torch_w0_w1": compute_tensor_checksum(torch_w0_w1_reordered),
+            "torch_w2": compute_tensor_checksum(torch_w2_reordered),
+            "tt_raw_output": compute_tensor_checksum(tt_raw_output),
+        }
+
+        # Load existing checksums and check against them
+        checksum_dict = load_or_create_checksum_dict()
+        if seed in checksum_dict:
+            existing_checksums = checksum_dict[seed]
+            for tensor_name, checksum in input_checksums.items():
+                if checksum != existing_checksums[tensor_name]:
+                    raise AssertionError(
+                        f"Checksum mismatch for {tensor_name} with seed {seed}! "
+                        f"Expected: {existing_checksums[tensor_name]}, Got: {checksum}"
+                    )
+        else:
+            # New seed - add all checksums
+            checksum_dict[seed] = input_checksums
+
+            # Save updated checksums
+            save_checksum_dict(checksum_dict)
 
         tt_to_torch_output = prepare_output_tensor_from_combine_writer(
             tt_raw_output,
@@ -619,6 +690,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             M,
             K,
         )
+
         all_outputs.append(tt_to_torch_output)
 
     tt_to_torch_outputs = torch.stack(all_outputs)

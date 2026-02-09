@@ -63,6 +63,7 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_5;
 
     constexpr auto cb_c2w_out = tt::CBIndex::c_5;
 
@@ -78,7 +79,6 @@ void kernel_main() {
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -139,6 +139,7 @@ void kernel_main() {
         LOCAL_BUFFER_OFFSET[i] = local_base_addr + i * a2a_xfer_bytes_per_step;
     }
     uint32_t semaphore_value = 0;
+    *my_semaphore_ptr = 0;
 
     // Set state for the a2a writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
@@ -161,6 +162,14 @@ void kernel_main() {
         const uint32_t max_tokens_per_height_shard = detail::div_up(active_tokens, height_shard_dim);
         const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
         for (uint32_t hb = 0; hb < height_blocks; ++hb) {
+            // Wait for compute core to tell us that all mm01 data is ready
+            cb_wait_front(cb_c2w_rdy, 1);
+            cb_pop_front(cb_c2w_rdy, 1);
+
+            // Assume data is already in the CB, but this will get plumbed to tilize in the future.
+            cb_reserve_back(cb_s2c_in, num_w0_w1_tiles_h);
+            cb_push_back(cb_s2c_in, num_w0_w1_tiles_h);
+
             // Wait for compute core to tell us that all mm01 data is ready
             cb_wait_front(cb_c2w_rdy, 1);
             cb_pop_front(cb_c2w_rdy, 1);

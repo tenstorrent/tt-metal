@@ -112,18 +112,18 @@ constexpr uint32_t W2_TILES_PER_CORE_A[NUM_CORES] = {
 };
 
 constexpr uint32_t W2_TILES_PER_CORE_B[NUM_CORES] = {
-    20,
     18,
+    19,
+    19,
     18,
-    20,
+    19,
+    19,
     18,
+    19,
+    19,
     18,
-    20,
-    18,
-    18,
-    20,
-    18,
-    18,
+    19,
+    19,
 };
 
 constexpr uint32_t IN2_TILES_PER_STEP_A = *std::max_element(
@@ -136,12 +136,10 @@ constexpr uint32_t IN2_TILES_PER_STEP_B = *std::max_element(
         return a < b;
     });
 
-constexpr uint32_t NUM_A2A_ITERS_A = 5;
+constexpr uint32_t NUM_A2A_ITERS_A =
+    (*std::max_element(W2_TILES_PER_CORE_A, W2_TILES_PER_CORE_A + NUM_CORES) + 4 - 1) / 4;
 
-constexpr uint32_t NUM_A2A_ITERS_B = *std::max_element(
-                                         W2_TILES_PER_CORE_B,
-                                         W2_TILES_PER_CORE_B + NUM_CORES,
-                                         [](uint32_t a, uint32_t b) { return (a / 2) < (b / 2); }) /
-                                     4;
+constexpr uint32_t NUM_A2A_ITERS_B =
+    (*std::max_element(W2_TILES_PER_CORE_B, W2_TILES_PER_CORE_B + NUM_CORES) + 4 - 1) / 4;
 
 }  // namespace moe_ring

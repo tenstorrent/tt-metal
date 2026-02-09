@@ -56,6 +56,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
         | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
         | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |    6*2   |      24576      |
+        | cb_c2s_out(sh) | CBIndex::c_5  | Float16_b  | true  |    224*2 |      917504     |
         ------------------------------------------------------------------------------------
     */
 
@@ -66,7 +67,6 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
         {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 6 * 2},
-        {"cb_c2w_out", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 20},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
@@ -86,6 +86,12 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         sharded_cb_specs = {
             {"cb_s2c_in",
              tt::CBIndex::c_1,
+             tt::DataFormat::Float16_b,
+             true,
+             224 * 2,
+             tensor_args.input_tensor.buffer()},
+            {"cb_c2s_out",
+             tt::CBIndex::c_5,
              tt::DataFormat::Float16_b,
              true,
              224 * 2,
