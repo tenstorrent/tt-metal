@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "compute_kernel_api/common_globals.h"
+#include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_exp.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
