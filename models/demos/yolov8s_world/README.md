@@ -71,6 +71,20 @@ Note: To test the demo with your own images, replace images with `models/demos/y
   ```
 Note: The model is evaluated with 500 samples.
 
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9969080             | 104.00                   | Passed      |
+
+**N300**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9969080             | 183                      | Passed      |
+
 ## Details
 The model picks up certain configs and weights from Ultralytics pretrained model. We've used weights available [here](https://docs.ultralytics.com/models/yolo-world/#available-models-supported-tasks-and-operating-modes) in YOLOv8s-world row.
 

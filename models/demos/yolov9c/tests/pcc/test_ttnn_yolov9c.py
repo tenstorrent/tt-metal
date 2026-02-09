@@ -52,4 +52,5 @@ def test_yolov9c(use_pretrained_weights, model_task, device, reset_seeds, model_
     ttnn_model = ttnn_yolov9c.YoloV9(device, parameters, enable_segment=enable_segment)
     ttnn_output = ttnn_model(ttnn_input)
     ttnn_output_ = ttnn.to_torch(ttnn_output[0])
-    assert_with_pcc(torch_output[0], ttnn_output_, 0.99)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output[0], ttnn_output_, pcc=0.99)
+    print(pcc_message)

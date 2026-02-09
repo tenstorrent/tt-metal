@@ -38,4 +38,5 @@ def test_yolov7(device, reset_seeds, model_location_generator):
 
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor[0], output, pcc=0.99)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor[0], output, pcc=0.999)
+    print(pcc_message)

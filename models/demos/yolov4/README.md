@@ -14,21 +14,23 @@ YOLOv4 is a state-of-the-art real-time object detection model introduced in 2020
 ### For 320x320:
 ```
 pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
+pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_false-0]
 ```
 ### For 640x640:
 ```
 pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[1-pretrained_weight_true-0]
+pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[1-pretrained_weight_false-0]
 ```
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
 - For `320x320`, end-2-end perf is `166` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```
-  pytest --disable-warnings models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-103-1-act_dtype0-weight_dtype0-device_params0]
+  pytest --disable-warnings models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-125-1-DataType.BFLOAT8_B-DataType.BFLOAT8_B-device_params0]
   ```
 - For `640x640`, end-2-end perf is `74` FPS  (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```
-  pytest --disable-warnings models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution1-46-1-act_dtype0-weight_dtype0-device_params0]
+  pytest --disable-warnings models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution1-65-1-DataType.BFLOAT8_B-DataType.BFLOAT8_B-device_params0]
   ```
 
 #### Multi Device (DP=2, N300):
@@ -53,7 +55,7 @@ pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::tes
   ```
 - Use the following command to run demo for `640x640` resolution :
   ```
-  pytest models/demos/yolov4/demo.py::test_yolov4[resolution0-1-DataType.BFLOAT16-DataType.BFLOAT16-models/demos/yolov4/resources-device_params0]
+  pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4[resolution1-1-DataType.BFLOAT16-DataType.BFLOAT16-models/demos/yolov4/resources-device_params0]
   ```
 - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/yolov4/resources/` and run:
   ```
@@ -97,15 +99,21 @@ pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::tes
 
 ## Model Performance Summary
 
-**Note:** Performance numbers are measured on **N150** platform.
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
 
-| Resolution | Pretrained Weights | Boxes PCC (threshold: 0.99) | Confs PCC (threshold: 0.9) | Performance (FPS, N150) | Demo Status |
-|------------|-------------------|----------------------------|---------------------------|------------------------|-------------|
-| 640x640     | False             | 0.9999884         | 0.9871971         | 86.745                  | Passed   |
-| 640x640     | True              | 0.9990449         | 0.9370966         | 86.745                  | Passed   |
-| 320x320     | False             | 0.9999879         | 0.9937709         | 184.63                  | Passed   |
-| 320x320     | True              | 0.9976081         | 0.9537761         | 184.63                  | Passed   |
+| Resolution | Pretrained Weights | Boxes PCC (threshold: 0.99) | Confs PCC (threshold: 0.9) | Performance (FPS, N150)  | Demo Status |
+|------------|--------------------|-----------------------------|----------------------------|--------------------------|-------------|
+| 640x640     | False             | 0.9999884                   | 0.9871971                  | 86.745                   | Passed      |
+| 640x640     | True              | 0.9990449                   | 0.9370966                  | 86.745                   | Passed      |
+| 320x320     | False             | 0.9999879                   | 0.9937709                  | 184.63                   | Passed      |
+| 320x320     | True              | 0.9976081                   | 0.9537761                  | 184.63                   | Passed      |
 
+| Resolution | Pretrained Weights | Boxes PCC (threshold: 0.99) | Confs PCC (threshold: 0.9) | Performance (FPS, N300)  | Demo Status |
+|------------|--------------------|-----------------------------|----------------------------|--------------------------|-------------|
+| 640x640    | False              | 0.9999884                   | 0.9871971                  | 86.745                   | Passed      |
+| 640x640    | True               | 0.9990449                   | 0.9370966                  | 86.745                   | Passed      |
+| 320x320    | False              | 0.9999879                   | 0.9937709                  | 184.63                   | Passed      |
+| 320x320    | True               | 0.9976081                   | 0.9537761                  | 184.63                   | Passed      |
 
 #### Web Demo
 - Try the interactive web demo (35 FPS end-2-end) for 320x320 following the [./web_demo/README.md](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/web_demo/README.md)

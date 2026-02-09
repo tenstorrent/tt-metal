@@ -74,6 +74,21 @@ pytest --disable-warnings models/demos/yolov5x/tests/pcc/test_ttnn_yolov5x.py::t
   pytest --disable-warnings models/demos/yolov5x/demo/demo.py::test_demo_dataset_dp
   ```
 
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9941650             | 66.00                    | Passed      |
+
+**N300**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9941650             | 120.00                   | Passed      |
+
+
 ## Details
 - The entry point to the yolov5x is located at:`models/demos/yolov5x/tt/yolov5x.py`
 - Batch Size :1
