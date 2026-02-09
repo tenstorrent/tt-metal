@@ -13,7 +13,11 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import (
     Qwen3VLForConditionalGeneration as Ref_Qwen3VLForConditionalGeneration,
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.qwen3_vl import Qwen3VLProcessingInfo
+from vllm.model_executor.models.qwen3_vl import (
+    Qwen3VLDummyInputsBuilder,
+    Qwen3VLMultiModalProcessor,
+    Qwen3VLProcessingInfo,
+)
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
@@ -21,7 +25,6 @@ from models.demos.qwen3_vl.tt.common import merge_vision_tokens, multimodal_rope
 from models.demos.qwen3_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.generator_vllm import DummyInputsBuilder, MultiModalProcessor
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
@@ -98,7 +101,7 @@ class TT_Qwen3VLProcessingInfo(Qwen3VLProcessingInfo):
 
 # TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
 @MULTIMODAL_REGISTRY.register_processor(
-    MultiModalProcessor, info=TT_Qwen3VLProcessingInfo, dummy_inputs=DummyInputsBuilder
+    Qwen3VLMultiModalProcessor, info=TT_Qwen3VLProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
 class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
