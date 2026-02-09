@@ -131,7 +131,6 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requireme
 RUN umask 000 && \
     uv pip install --no-cache --index-strategy unsafe-best-match setuptools && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
-    uv pip install pkg_resources && \
     uv pip install --no-build-isolation --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
