@@ -115,8 +115,7 @@ inline void calculate_sine() {
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
-        v_if(whole_v & 1) { v = -v; }
-        v_endif;
+        v = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(v) ^ (whole_v << 31));
         dst_reg[0] = v;
         dst_reg++;
     }
@@ -131,8 +130,7 @@ inline void calculate_cosine() {
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
-        v_if(whole_v & 1) { v = -v; }
-        v_endif;
+        v = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(v) ^ (whole_v << 31));
         dst_reg[0] = v;
         dst_reg++;
     }
