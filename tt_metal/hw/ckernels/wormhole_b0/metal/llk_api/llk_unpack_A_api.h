@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
+#include "api/debug/dprint.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -47,12 +48,11 @@ inline void llk_unpack_A_init(
     }
 
 #ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByFace>(
+    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
         operand_unpack_src_format, operand_unpack_dst_format, face_r_dim, num_faces, 100 /* nop_count */);
 
     if (!isUnpackerConfiguredCorrectly) {
-        DPRINT_UNPACK(DPRINT << "llk_unpack_A_init - Need to reconfigure unpacker for A." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
+        DPRINT_UNPACK(DPRINT << "llk_unpack_A_init - Unpacker not configured for A. Need to reconfigure." << ENDL());
         LLK_ASSERT(false, "");
     }
 #endif
@@ -81,7 +81,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     const uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const uint32_t num_faces = get_operand_num_faces(operand_id);
 
-    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByFace>(
+    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
         unpack_src_format[operand_id], unpack_dst_format[operand_id], face_r_dim, num_faces, 0 /* nop_count */);
 
     if (!isUnpackerConfiguredCorrectly) {

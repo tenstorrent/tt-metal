@@ -95,7 +95,7 @@ inline void llk_unpack_tilizeA_B_init(
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
 #ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly(
+    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
@@ -108,7 +108,6 @@ inline void llk_unpack_tilizeA_B_init(
 
     if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_tilizeA_B_init - Need to reconfigure unpacker for tilizeA_B." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
         LLK_ASSERT(false, "");
     }
 #endif
@@ -147,7 +146,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t address_b = base_address_b + offset_address_b;
 
 #ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly(
+    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],

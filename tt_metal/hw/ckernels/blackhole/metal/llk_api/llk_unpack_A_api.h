@@ -47,7 +47,7 @@ inline void llk_unpack_A_init(
     }
 
 #ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByFace>(
+    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
         operand_unpack_src_format, operand_unpack_dst_format, face_r_dim, num_faces, 100 /* nop_count */);
 
     if (!isUnpackerConfiguredCorrectly) {
@@ -81,7 +81,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     const uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const uint32_t num_faces = get_operand_num_faces(operand_id);
 
-    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByFace>(
+    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
         unpack_src_format[operand_id], unpack_dst_format[operand_id], face_r_dim, num_faces, 0 /* nop_count */);
 
     if (!isUnpackerConfiguredCorrectly) {

@@ -54,7 +54,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
 
     if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul_init - Need to reconfigure unpacker for AB matmul." << ENDL());
-        LLK_ASSERT(false, "Unpacker not configured correctly for llk_unpack_AB_matmul.");
+        LLK_ASSERT(false, "");
     }
 #endif
 
@@ -118,7 +118,7 @@ inline void llk_unpack_AB_matmul(
 
     if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul - Need to reconfigure unpacker for AB matmul." << ENDL());
-        LLK_ASSERT(false, "Unpacker not configured correctly for llk_unpack_AB_matmul.");
+        LLK_ASSERT(false, "");
     }
 #endif
 
