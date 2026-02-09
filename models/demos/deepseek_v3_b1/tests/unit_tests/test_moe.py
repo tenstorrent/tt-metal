@@ -19,7 +19,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
-from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeRoutedExpertOp
+from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp, MoeRoutedExpertOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 
@@ -763,7 +763,7 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     num_iterations = 100
     logger.info(f"Running MoE routed expert for {num_iterations} iterations...")
     for iteration in range(num_iterations):
-        ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeRoutedExpertOp.op(
+        ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
             r["ttnn_input"],
             r["ttnn_mcast_output"],
             r["ttnn_gate_mm_weights"],
@@ -910,14 +910,14 @@ def test_moe_fused(device, use_hardcoded_expert_index):
 
     logger.info(f"Testing fused MoE: K={K}, use_hardcoded_expert_index={use_hardcoded_expert_index}")
 
-    # ── Phase 1: Routed expert ──
-    logger.info("Phase 1: Running routed expert...")
+    # ── Phase 1: Fused routed expert + shared gate/up matmul ──
+    logger.info("Phase 1: Running fused routed expert + shared gate/up matmul...")
     r = create_routed_expert_tensors(device, use_hardcoded_expert_index)
     s = create_shared_expert_tensors(device, M, K)
 
     num_iterations = 100
     for iteration in range(num_iterations):
-        ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeRoutedExpertOp.op(
+        ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
             r["ttnn_input"],
             r["ttnn_mcast_output"],
             r["ttnn_gate_mm_weights"],
@@ -944,10 +944,14 @@ def test_moe_fused(device, use_hardcoded_expert_index):
             r["up_proj_in1_buf_tensor"],
             r["down_proj_in1_buf_tensor"],
             r["mul_scalar_buf_tensor"],
+            # Shared expert: gate/up weights for fused KNSlicedMatmul
+            shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+            shared_k_parallel=s["k_parallel"],
+            shared_n_parallel=s["n_parallel"],
             use_hardcoded_expert_index=use_hardcoded_expert_index,
         )
     ttnn.synchronize_device(device)
-    logger.info(f"Routed expert: {num_iterations} iterations completed")
+    logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed")
 
     # Read back routed expert results
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)

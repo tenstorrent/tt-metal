@@ -3,25 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-MoE Routed Expert operation (refactored).
+Fused MoE operation: Routed Expert + Shared Expert.
 
-Follows the SharedExpertOp pattern with:
-  _MoeRoutedExpertContext dataclass → _setup_dimensions → _build_compile_time_args
-  → _build_cb_descriptors → _build_core_descriptors → op()
+Architecture:
+  MoeRoutedExpertOp  — context setup & build methods for routed expert
+  MoeSharedExpertOp  — context setup & build methods for shared expert
+  MoeOp              — top-level orchestrator that composes both
 
-Pipeline:
-  1. Input mcast: [1, K] from sender core → all cores in mcast grid
-  2. Gate matmul: [1, K] x [K, N_routing] → [1, N_routing] with sigmoid (8 compute cores)
-  3. Gate gather: [1, N_per_core] from 8 cores → [16, 16] on sender core
-  4. Gate: top-8 expert selection with normalized scores
-  5. Index mcast + Scale mcast: expert index and scale → compute cores
-  6. gate_proj: DRAM streaming matmul + SiLU with indexed expert weights
-  7. up_proj: DRAM streaming matmul with indexed expert weights
-  8. Fused mul: silu(gate_proj) * up_proj * expert_scale
-  9. down_proj gather: fused output → sender core
-  10. down_proj mcast: fused output → compute cores
-  11. down_proj: DRAM streaming matmul with indexed expert weights
-  12. Eltwise add: down_proj + fused_add → final output
+Pipeline (routed expert):
+  1. Input mcast → 2. Gate matmul → 3. Gate gather → 4. Gate
+  5. Index/Scale mcast → 6. gate_proj → 7. up_proj → 8. Fused mul
+  9. down_proj gather → 10. down_proj mcast → 11. down_proj → 12. Eltwise add
+
+Pipeline (shared expert, fused):
+  3a. Gate/Up KN-sliced matmul (runs on 128 cores after input mcast)
 """
 
 import math
@@ -296,6 +291,22 @@ class _MoeRoutedExpertContext:
 
     # Testing flag
     use_hardcoded_expert_index: bool
+
+
+@dataclass
+class _MoeSharedExpertContext:
+    """Holds shared expert values for the fused MoE kernel."""
+
+    # Gate/Up KN-sliced matmul
+    gu_weights_cb: int
+    gu_out_cb: int
+    gu_k_per_core: int
+    gu_act_total_tiles: int
+    gu_weights_num_pages: int
+    compute_core_grid: Any
+    gu_k_offset_core_values: list
+    gu_weights_cb_descriptor: Any
+    gu_out_cb_descriptor: Any
 
 
 class MoeRoutedExpertOp:
@@ -831,7 +842,7 @@ class MoeRoutedExpertOp:
 
     @staticmethod
     def _build_compile_time_args(ctx, mesh_chip_id):
-        """Build NCRISC, BRISC, and TRISC compile-time arg lists."""
+        """Build NCRISC, BRISC, and TRISC compile-time arg lists for routed expert."""
 
         ncrisc_named_compile_time_args = [
             # Input mcast (sender sharded buffer + receiver)
@@ -1076,7 +1087,7 @@ class MoeRoutedExpertOp:
 
     @staticmethod
     def _build_cb_descriptors(ctx):
-        """Build all circular buffer descriptors."""
+        """Build circular buffer descriptors for routed expert."""
         return [
             ctx.input_cb_descriptor,
             ctx.gate_mm_input_cb_descriptor,
@@ -1107,7 +1118,7 @@ class MoeRoutedExpertOp:
 
     @staticmethod
     def _build_core_descriptors(ctx):
-        """Build unified and per-core compile-time core descriptors."""
+        """Build unified and per-core compile-time core descriptors for routed expert."""
         unified_compile_time_core_descriptors = [
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_sender_core",
@@ -1180,6 +1191,197 @@ class MoeRoutedExpertOp:
 
         return unified_compile_time_core_descriptors, per_core_compile_time_descriptors
 
+
+class MoeSharedExpertOp:
+    """
+    Shared expert setup for the fused MoE kernel.
+
+    Provides context setup and build methods for shared expert components
+    (Gate/Up KN-sliced matmul, etc.). Does not execute on its own;
+    used by MoeOp to compose the fused kernel.
+    """
+
+    @staticmethod
+    def _setup_dimensions(
+        shared_gate_up_weights_tensor,
+        num_tiles_k,
+        tile_1x32_size,
+        data_format,
+        k_parallel=8,
+        n_parallel=8,
+    ):
+        """
+        Compute shared expert dimensions and build _MoeSharedExpertContext.
+
+        Args:
+            shared_gate_up_weights_tensor: Gate/Up weights tensor for shared expert
+            num_tiles_k: Number of K tiles (from routed expert context)
+            tile_1x32_size: Size of a 1x32 tile in bytes
+            data_format: Data format (dtype)
+            k_parallel: K parallelism factor
+            n_parallel: N parallelism factor
+
+        Returns:
+            _MoeSharedExpertContext
+        """
+        from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
+
+        # CB indices
+        shared_gu_weights_cb = 26
+        shared_gu_out_cb = 27
+
+        shared_num_compute_cores = 64  # per branch (gate/up)
+        assert k_parallel * n_parallel == shared_num_compute_cores
+        gu_k_per_core = num_tiles_k // k_parallel
+        gu_act_total_tiles = num_tiles_k
+        gu_weights_num_pages = gu_k_per_core  # tiles per core
+
+        # Build 128 compute core grid (64 A + 64 B)
+        a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
+        compute_cores_list = a_cores_list + b_cores_list
+        compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in compute_cores_list])
+
+        # CB descriptors (tensor-backed for weights, sized for output)
+        gu_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            shared_gu_weights_cb, shared_gate_up_weights_tensor
+        )
+        gu_out_format = ttnn.CBFormatDescriptor(
+            buffer_index=shared_gu_out_cb,
+            data_format=data_format,
+            page_size=tile_1x32_size,
+            tile=ttnn.TileDescriptor(ttnn.Tile((1, 32))),
+        )
+        gu_out_cb_descriptor = ttnn.CBDescriptor(
+            total_size=tile_1x32_size,
+            core_ranges=compute_core_grid,
+            format_descriptors=[gu_out_format],
+        )
+
+        # Per-core k_offset values
+        gu_k_offset_core_values = [(core, (i // n_parallel) * gu_k_per_core) for i, core in enumerate(a_cores_list)] + [
+            (core, (i // n_parallel) * gu_k_per_core) for i, core in enumerate(b_cores_list)
+        ]
+
+        return _MoeSharedExpertContext(
+            gu_weights_cb=shared_gu_weights_cb,
+            gu_out_cb=shared_gu_out_cb,
+            gu_k_per_core=gu_k_per_core,
+            gu_act_total_tiles=gu_act_total_tiles,
+            gu_weights_num_pages=gu_weights_num_pages,
+            compute_core_grid=compute_core_grid,
+            gu_k_offset_core_values=gu_k_offset_core_values,
+            gu_weights_cb_descriptor=gu_weights_cb_descriptor,
+            gu_out_cb_descriptor=gu_out_cb_descriptor,
+        )
+
+    @staticmethod
+    def _build_compile_time_args(shared_ctx, input_mcast_dst_cb):
+        """
+        Build shared expert compile-time args to append to routed expert args.
+
+        Args:
+            shared_ctx: _MoeSharedExpertContext (or None for defaults)
+            input_mcast_dst_cb: The CB index for the mcast destination (shared with routed)
+
+        Returns:
+            (ncrisc_args, brisc_args, trisc_args) - lists of named compile-time arg tuples
+        """
+        if shared_ctx is not None:
+            ncrisc_args = [
+                ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
+                ("shared_gu_weights_num_pages", shared_ctx.gu_weights_num_pages),
+            ]
+            brisc_args = []
+            trisc_args = [
+                ("shared_gu_act_cb", input_mcast_dst_cb),
+                ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
+                ("shared_gu_out_cb", shared_ctx.gu_out_cb),
+                ("shared_gu_k_per_core", shared_ctx.gu_k_per_core),
+                ("shared_gu_act_total_tiles", shared_ctx.gu_act_total_tiles),
+            ]
+        else:
+            # Defaults when not fusing shared expert
+            ncrisc_args = [
+                ("shared_gu_weights_cb", 0),
+                ("shared_gu_weights_num_pages", 0),
+            ]
+            brisc_args = []
+            trisc_args = [
+                ("shared_gu_act_cb", 0),
+                ("shared_gu_weights_cb", 0),
+                ("shared_gu_out_cb", 0),
+                ("shared_gu_k_per_core", 0),
+                ("shared_gu_act_total_tiles", 0),
+            ]
+        return ncrisc_args, brisc_args, trisc_args
+
+    @staticmethod
+    def _build_cb_descriptors(shared_ctx):
+        """Build CB descriptors for shared expert (empty list if not fusing)."""
+        if shared_ctx is None:
+            return []
+        return [
+            shared_ctx.gu_weights_cb_descriptor,
+            shared_ctx.gu_out_cb_descriptor,
+        ]
+
+    @staticmethod
+    def _build_core_descriptors(shared_ctx, fallback_grid):
+        """
+        Build core descriptors for shared expert.
+
+        Args:
+            shared_ctx: _MoeSharedExpertContext (or None)
+            fallback_grid: A valid core grid to use when not fusing (for default value=0)
+
+        Returns:
+            (unified_descs, per_core_descs) - lists to append to routed expert descriptors
+        """
+        if shared_ctx is not None:
+            unified = [
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_shared_compute_core",
+                    core_range=shared_ctx.compute_core_grid,
+                    value=1,
+                    other_value=0,
+                ),
+            ]
+            per_core = [
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="shared_gu_k_offset",
+                    core_values=shared_ctx.gu_k_offset_core_values,
+                    other_value=0,
+                ),
+            ]
+        else:
+            # Not fusing: all cores get is_shared_compute_core=0
+            unified = [
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_shared_compute_core",
+                    core_range=fallback_grid,
+                    value=0,
+                    other_value=0,
+                ),
+            ]
+            per_core = [
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="shared_gu_k_offset",
+                    core_values=[],
+                    other_value=0,
+                ),
+            ]
+        return unified, per_core
+
+
+class MoeOp:
+    """
+    Top-level fused MoE operation.
+
+    Composes MoeRoutedExpertOp and MoeSharedExpertOp, merging their
+    CB descriptors, compile-time args, and core descriptors into a
+    single unified kernel invocation.
+    """
+
     @staticmethod
     def op(
         input_tensor,
@@ -1208,47 +1410,25 @@ class MoeRoutedExpertOp:
         up_proj_in1_buf_tensor,
         down_proj_in1_buf_tensor,
         mul_scalar_buf_tensor,
+        # Shared expert tensors (optional)
+        shared_gate_up_weights_tensor=None,
+        shared_k_parallel=8,
+        shared_n_parallel=8,
         use_hardcoded_expert_index=False,
     ):
         """
-        Execute the full MoE routed expert fused operation.
+        Execute the full MoE fused operation (routed + optional shared expert).
 
-        Args:
-            input_tensor: [1, K] sharded on sender core
-            mcast_output_tensor: [1, K] sharded on mcast grid
-            gate_mm_weights_tensor: [K, N_routing] width-sharded on matmul cores
-            gate_mm_output_tensor: [1, N_routing] width-sharded on matmul cores
-            gate_input_tensor: [16, 16] on sender core
-            gate_bias_tensor: [16, 16] on sender core
-            gate_indices_tensor: [16, 16] on sender core
-            gate_output_scores_tensor: [1, 16] on sender core
-            gate_output_indices_tensor: [1, 16] on sender core
-            expert_index_tensor: [1, 16] on mcast grid
-            expert_scale_tensor: [1, 16] on mcast grid
-            gate_proj_weights_tensor: Expert weights in DRAM
-            gate_proj_output_tensor: gate_proj output
-            up_proj_weights_tensor: Expert weights in DRAM
-            up_proj_mm_out_tensor: up_proj intermediate output
-            fused_output_tensor: silu(gate_proj) * up_proj * scale
-            down_proj_gather_output_tensor: Gathered fused output on sender
-            down_proj_mcast_output_tensor: Mcasted fused output on compute cores
-            down_proj_weights_tensor: Expert weights in DRAM
-            down_proj_output_tensor: down_proj output
-            fused_add_tensor: Tensor to add after down_proj
-            final_output_tensor: Final output (down_proj + fused_add)
-            gate_proj_in1_buf_tensor: Working buffer for gate_proj DRAM matmul
-            up_proj_in1_buf_tensor: Working buffer for up_proj DRAM matmul
-            down_proj_in1_buf_tensor: Working buffer for down_proj DRAM matmul
-            mul_scalar_buf_tensor: Working buffer for scalar multiply
-            use_hardcoded_expert_index: For testing, always use expert index 0
+        When shared_gate_up_weights_tensor is None, runs routed expert only.
+        When provided, fuses shared expert Gate/Up KN-sliced matmul into the kernel.
 
         Returns:
             (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor)
         """
         # ==================================================================
-        # Setup all dimensions and parameters
+        # Setup routed expert context
         # ==================================================================
-        ctx = MoeRoutedExpertOp._setup_dimensions(
+        routed_ctx = MoeRoutedExpertOp._setup_dimensions(
             input_tensor,
             mcast_output_tensor,
             gate_mm_weights_tensor,
@@ -1275,47 +1455,71 @@ class MoeRoutedExpertOp:
             up_proj_in1_buf_tensor,
             down_proj_in1_buf_tensor,
             mul_scalar_buf_tensor,
-            use_hardcoded_expert_index,
+            use_hardcoded_expert_index=use_hardcoded_expert_index,
         )
 
         # ==================================================================
-        # Build CB descriptors and core descriptors (shared across devices)
+        # Setup shared expert context (optional)
         # ==================================================================
-        cb_descriptors = MoeRoutedExpertOp._build_cb_descriptors(ctx)
-        unified_core_descs, per_core_descs = MoeRoutedExpertOp._build_core_descriptors(ctx)
+        shared_ctx = None
+        if shared_gate_up_weights_tensor is not None:
+            shared_ctx = MoeSharedExpertOp._setup_dimensions(
+                shared_gate_up_weights_tensor,
+                num_tiles_k=routed_ctx.num_tiles_k,
+                tile_1x32_size=routed_ctx.tile_1x32_size,
+                data_format=routed_ctx.data_format,
+                k_parallel=shared_k_parallel,
+                n_parallel=shared_n_parallel,
+            )
+
+        # ==================================================================
+        # Build CB descriptors (routed + shared)
+        # ==================================================================
+        cb_descriptors = MoeRoutedExpertOp._build_cb_descriptors(routed_ctx)
+        cb_descriptors += MoeSharedExpertOp._build_cb_descriptors(shared_ctx)
+
+        # ==================================================================
+        # Build core descriptors (routed + shared)
+        # ==================================================================
+        unified_core_descs, per_core_descs = MoeRoutedExpertOp._build_core_descriptors(routed_ctx)
+        shared_unified, shared_per_core = MoeSharedExpertOp._build_core_descriptors(
+            shared_ctx, fallback_grid=routed_ctx.input_core_grid
+        )
+        unified_core_descs += shared_unified
+        per_core_descs += shared_per_core
 
         # ==================================================================
         # Semaphore descriptors
         # ==================================================================
         semaphore_descriptors = [
             ttnn.SemaphoreDescriptor(
-                id=ctx.mcast_data_sender_semaphore_id,
-                core_ranges=ctx.full_device_grid,
+                id=routed_ctx.mcast_data_sender_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=ctx.mcast_data_receiver_semaphore_id,
-                core_ranges=ctx.full_device_grid,
+                id=routed_ctx.mcast_data_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=ctx.gather_noc0_receiver_semaphore_id,
-                core_ranges=ctx.full_device_grid,
+                id=routed_ctx.gather_noc0_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=ctx.gather_noc1_receiver_semaphore_id,
-                core_ranges=ctx.full_device_grid,
+                id=routed_ctx.gather_noc1_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=ctx.expert_scale_mcast_sender_semaphore_id,
-                core_ranges=ctx.full_device_grid,
+                id=routed_ctx.expert_scale_mcast_sender_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
                 initial_value=1,  # Sender starts as VALID
             ),
             ttnn.SemaphoreDescriptor(
-                id=ctx.expert_scale_mcast_receiver_semaphore_id,
-                core_ranges=ctx.full_device_grid,
+                id=routed_ctx.expert_scale_mcast_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
         ]
@@ -1346,30 +1550,39 @@ class MoeRoutedExpertOp:
             down_proj_output_tensor,
             fused_add_tensor,
             final_output_tensor,
-            # Tensor-backed working buffers (internal scratch)
+            # Tensor-backed working buffers
             gate_proj_in1_buf_tensor,
             up_proj_in1_buf_tensor,
             down_proj_in1_buf_tensor,
             mul_scalar_buf_tensor,
         ]
+        if shared_gate_up_weights_tensor is not None:
+            io_tensors.append(shared_gate_up_weights_tensor)
 
         # ==================================================================
         # Create per-device programs (mesh loop)
         # ==================================================================
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        input_mcast_dst_cb = routed_ctx.input_mcast_params["dst_cb"]
 
-        for row in range(ctx.mesh_rows):
-            for col in range(ctx.mesh_cols):
+        for row in range(routed_ctx.mesh_rows):
+            for col in range(routed_ctx.mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
-                chip_id = row * ctx.mesh_cols + col
+                chip_id = row * routed_ctx.mesh_cols + col
 
-                # Build compile-time args for this chip
-                ncrisc_args, brisc_args, trisc_args = MoeRoutedExpertOp._build_compile_time_args(ctx, chip_id)
+                # Build compile-time args: routed + shared
+                ncrisc_args, brisc_args, trisc_args = MoeRoutedExpertOp._build_compile_time_args(routed_ctx, chip_id)
+                shared_ncrisc, shared_brisc, shared_trisc = MoeSharedExpertOp._build_compile_time_args(
+                    shared_ctx, input_mcast_dst_cb
+                )
+                ncrisc_args += shared_ncrisc
+                brisc_args += shared_brisc
+                trisc_args += shared_trisc
 
                 # Create unified kernel
                 unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_routed_expert_kernel.cpp",
-                    core_ranges=ctx.full_device_grid,
+                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_kernel.cpp",
+                    core_ranges=routed_ctx.full_device_grid,
                     ncrisc_named_compile_time_args=ncrisc_args,
                     brisc_named_compile_time_args=brisc_args,
                     trisc_named_compile_time_args=trisc_args,
