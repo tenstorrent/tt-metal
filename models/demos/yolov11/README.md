@@ -81,7 +81,7 @@ Note: The model is evaluated with 500 samples.
 
 | Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
 |------------|------------------- |----------------------|-------------------------|-------------|
-| 640x640    | True               | 0.9996607            | 369                     | Passed      |
+| 640x640    | True               | 0.9996607            | 373                     | Passed      |
 
 ## Details
 - The entry point to the `yolov11` is located at : `models/demos/yolov11/tt/ttnn_yolov11.py`

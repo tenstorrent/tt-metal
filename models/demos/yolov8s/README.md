@@ -76,7 +76,7 @@ Note: The model is evaluated with 500 samples.
 **N300**
 | Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
 |-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9990912             | 325                      | Passed      |
+| 640x640     | 0.9990912             | 348                      | Passed      |
 
 ## Details
 - The entry point to the yolov8s is located at:`models/demos/yolov8s/tt/ttnn_yolov8s.py`

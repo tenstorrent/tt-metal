@@ -85,7 +85,7 @@ Note: The model is evaluated with 500 samples.
 
 | Resolution | Pretrained Weights | PCC (threshold:0.999) | Performance (FPS, N300) | Demo Status |
 |------------|--------------------|-----------------------|--------------------------|------------|
-| 640x640    | True               | 0.9999193             | 86                       | Passed     |
+| 640x640    | True               | 0.9999193             | 89                       | Passed     |
 
 
 ### Web Demo:

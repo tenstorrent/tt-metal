@@ -83,7 +83,7 @@ Note: The model is evaluated with 500 samples.
 **N300**
 | Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
 |-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9969080             | 183                      | Passed      |
+| 640x640     | 0.9969080             | 189                      | Passed      |
 
 ## Details
 The model picks up certain configs and weights from Ultralytics pretrained model. We've used weights available [here](https://docs.ultralytics.com/models/yolo-world/#available-models-supported-tasks-and-operating-modes) in YOLOv8s-world row.
