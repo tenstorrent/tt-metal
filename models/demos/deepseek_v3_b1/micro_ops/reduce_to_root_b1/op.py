@@ -279,7 +279,7 @@ class ReduceToRootB1:
                     dst_l1_addr = intermediate_r3_device.buffer_address()
                     dst_sem_addr = sem_round3_addr
                 else:
-                    dst_l1_addr = intermediate_r1_device.buffer_address()  # unused
+                    dst_l1_addr = intermediate_r1_device.buffer_address()
                     dst_sem_addr = sem_exit_addr
 
                 # Get physical coords for output core

@@ -47,7 +47,6 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
-@pytest.mark.parametrize("using_persistent_buffers", [True])
 @pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
@@ -73,7 +72,6 @@ def test_ccl_broadcast_dual_axis(
     input_dtype,
     cluster_axis,
     secondary_cluster_axis,
-    using_persistent_buffers,
     num_iters,
     num_warmup_iter,
 ):
@@ -168,7 +166,6 @@ def test_ccl_broadcast_dual_axis(
         sender_coord,
         cluster_axis=cluster_axis,
         secondary_cluster_axis=secondary_cluster_axis,
-        using_persistent_buffers=using_persistent_buffers,
         semaphores=semaphores,
     )
     ttnn.synchronize_device(submesh)
@@ -183,7 +180,6 @@ def test_ccl_broadcast_dual_axis(
             sender_coord,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
-            using_persistent_buffers=using_persistent_buffers,
             semaphores=semaphores,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
@@ -199,7 +195,6 @@ def test_ccl_broadcast_dual_axis(
             sender_coord,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
-            using_persistent_buffers=using_persistent_buffers,
             semaphores=semaphores,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)

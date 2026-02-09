@@ -173,7 +173,6 @@ class PreSDPA:
         cluster_axis=0,
         secondary_cluster_axis=1,
         num_links=1,
-        using_persistent_buffers=True,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
@@ -198,7 +197,6 @@ class PreSDPA:
             cluster_axis: Primary axis for CCL broadcast (0=row, 1=col)
             secondary_cluster_axis: Secondary axis for CCL broadcast (optional)
             num_links: Number of fabric links for CCL
-            using_persistent_buffers: Whether to use persistent buffers for CCL
             epsilon: Small value to avoid division by zero
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
             skip_ccl: If True, skip CCL broadcast (single-device mode)
@@ -1040,7 +1038,6 @@ class PreSDPA:
 
                 # Determine if this device has secondary axis connections
                 has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
-                has_reverse_secondary_connection = is_secondary_sender
 
                 # Calculate mcast distances
                 start_distance_forward = 1 if num_targets_forward > 0 else 0
@@ -1060,7 +1057,6 @@ class PreSDPA:
                     ("bcast_core_noc_x", core_noc_x if not skip_ccl else 0),
                     ("bcast_core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("bcast_is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("bcast_is_active_broadcaster", int(is_sender or is_secondary_sender) if not skip_ccl else 0),
                 ]
 
                 bcast_brisc_named_compile_time_args = [
@@ -1075,15 +1071,10 @@ class PreSDPA:
                     ("bcast_core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("bcast_is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
                     ("bcast_has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
-                    (
-                        "bcast_has_reverse_secondary_connection",
-                        int(has_reverse_secondary_connection) if not skip_ccl else 0,
-                    ),
                     ("bcast_start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
                     ("bcast_range_hops_forward", range_hops_forward if not skip_ccl else 0),
                     ("bcast_start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
                     ("bcast_range_hops_backward", range_hops_backward if not skip_ccl else 0),
-                    ("bcast_using_persistent_buffers", (1 if using_persistent_buffers else 0) if not skip_ccl else 0),
                 ]
 
                 bcast_trisc_named_compile_time_args = [
@@ -1503,11 +1494,6 @@ class PreSDPA:
                     if has_secondary_target:
                         secondary_coord = ttnn.MeshCoordinate(row, 1)
                         dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-
-                    # Reverse secondary connection
-                    if has_reverse_secondary_connection and not using_persistent_buffers:
-                        sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
 
                     num_connections = len(dst_nodes)
 

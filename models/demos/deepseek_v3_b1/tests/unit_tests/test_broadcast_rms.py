@@ -34,7 +34,6 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("using_persistent_buffers", [True])
 @pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize(
     "device_params",
@@ -60,7 +59,6 @@ def test_broadcast_rms_fused(
     input_dtype,
     cluster_axis,
     secondary_cluster_axis,
-    using_persistent_buffers,
     num_iters,
 ):
     num_devices = mesh_rows * mesh_cols
@@ -172,7 +170,6 @@ def test_broadcast_rms_fused(
         semaphores,
         cluster_axis=cluster_axis,
         secondary_cluster_axis=secondary_cluster_axis,
-        using_persistent_buffers=using_persistent_buffers,
     )
 
     ttnn.synchronize_device(submesh)
