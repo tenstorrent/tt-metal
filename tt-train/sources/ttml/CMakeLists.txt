@@ -2,199 +2,95 @@ project(ttml)
 
 set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/autocast_tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/autocast_tensor.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/compute_kernel_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/compute_kernel_config.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/debug.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/random.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/random_sse.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/scoped.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/template_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_profiler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_profiler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_tensor_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_tensor_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/ttnn_all_includes.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/xtensor_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/dataloader.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/dataset_base.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/dataset_subset.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/datasets/generators.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/generators.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/in_memory_dataset.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/datasets/in_memory_token_dataset.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/in_memory_token_dataset.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/datasets/utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/datasets/utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/init/cpu_initializers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/init/cpu_initializers.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/init/tensor_initializers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/init/tensor_initializers.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/common/transformer_common.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/common/transformer_common.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/linear.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/linear.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/embedding_module.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/embedding_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/gpt_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/gpt_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/grouped_query_attention.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/grouped_query_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/layer_norm_module.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/layer_norm_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/positional_embeddings.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/positional_embeddings.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rms_norm_module.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/rms_norm_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rotary_embedding.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/rotary_embedding.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/linear_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/linear_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_fused.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_fused.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/scheduler_base.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/scheduler_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/sequential_scheduler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/sequential_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/tokenizer_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.hpp
 )
 
 # Manually select only specific files from metal ops
-# Note: Only .cpp files are listed here. Headers (.hpp) are found via include directories.
 set(METAL_OPS_FILES
     # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
