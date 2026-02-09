@@ -657,11 +657,9 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index):
         )
         return buf_tensor
 
-    gate_proj_in1_buf_tensor = _create_matmul_working_buf(
+    # gate_proj and up_proj share the same working buffer (identical shape, sequential execution)
+    gate_up_proj_in1_buf_tensor = _create_matmul_working_buf(
         device, gate_proj_weights, gate_proj_core_ranges, num_gate_proj_cores, num_subblocks_k=4
-    )
-    up_proj_in1_buf_tensor = _create_matmul_working_buf(
-        device, up_proj_weights, gate_proj_core_ranges, num_gate_proj_cores, num_subblocks_k=4
     )
     down_proj_in1_buf_tensor = _create_matmul_working_buf(
         device, down_proj_weights, gate_proj_core_ranges, num_gate_proj_cores, num_subblocks_k=2
@@ -704,9 +702,9 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index):
         "down_proj_output": down_proj_output,
         "fused_add_tensor": fused_add_tensor,
         "final_output_tensor": final_output_tensor,
-        # Tensor-backed working buffers
-        "gate_proj_in1_buf_tensor": gate_proj_in1_buf_tensor,
-        "up_proj_in1_buf_tensor": up_proj_in1_buf_tensor,
+        # Tensor-backed working buffers (gate_proj and up_proj share one buffer)
+        "gate_proj_in1_buf_tensor": gate_up_proj_in1_buf_tensor,
+        "up_proj_in1_buf_tensor": gate_up_proj_in1_buf_tensor,
         "down_proj_in1_buf_tensor": down_proj_in1_buf_tensor,
         "mul_scalar_buf_tensor": mul_scalar_buf_tensor,
         # Keep-alive references (prevent garbage collection)

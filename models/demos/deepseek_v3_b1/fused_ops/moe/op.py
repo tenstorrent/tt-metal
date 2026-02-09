@@ -115,6 +115,7 @@ def setup_dram_matmul(
         "in1_block_size_bytes": in1_block_size_bytes,
         "out_num_tiles": per_core_n,
         "in1_tensor_addr": weights_tensor.buffer_address(),
+        "in1_buf_addr": working_buf_tensor.buffer_address(),
         "cb_in1_descriptor": cb_in1_descriptor,
         "cb_out_descriptor": cb_out_descriptor,
     }
@@ -489,7 +490,7 @@ class MoeRoutedExpertOp:
         gate_proj_cb_in1 = 9
         gate_proj_cb_index = 10
         gate_proj_cb_out = 11
-        up_proj_cb_in1 = 12
+        up_proj_cb_in1 = gate_proj_cb_in1  # Shared CB: same buffer, kernel resets pointers between uses
         up_proj_cb_mm_out = 13
         mul_cb_in0 = 14
         mul_cb_in1 = 15
@@ -917,6 +918,7 @@ class MoeRoutedExpertOp:
             ("up_proj_out_num_tiles", ctx.up_proj_params["out_num_tiles"]),
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_cb_index", ctx.gate_proj_cb_index),
+            ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             ("up_proj_index_offset", mesh_chip_id),
             ("up_proj_cb_mm_out", ctx.up_proj_cb_mm_out),
             # down_proj DRAM matmul reader
@@ -931,6 +933,7 @@ class MoeRoutedExpertOp:
             ("down_proj_out_num_tiles", ctx.down_proj_params["out_num_tiles"]),
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_cb_index", ctx.gate_proj_cb_index),
+            ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             ("down_proj_index_offset", mesh_chip_id),
             # Testing flag
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
@@ -991,6 +994,9 @@ class MoeRoutedExpertOp:
             ("down_proj_mcast_src_cb", ctx.down_proj_mcast_params["src_cb"]),
             ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
             ("down_proj_mcast_src_num_pages", ctx.down_proj_mcast_params["src_num_pages"]),
+            # CB reset addresses for DRAM matmul working buffers
+            ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
+            ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
         ]
 
         trisc_named_compile_time_args = [
@@ -1061,6 +1067,9 @@ class MoeRoutedExpertOp:
             ("add_cb_in0_wait_tiles", ctx.add_params["cb_in0_wait_tiles"]),
             ("add_cb_in1_wait_tiles", ctx.add_params["cb_in1_wait_tiles"]),
             ("add_slice_size_bytes", ctx.add_params["slice_size_bytes"]),
+            # CB reset addresses for DRAM matmul working buffers
+            ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
+            ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
         ]
 
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
@@ -1078,10 +1087,9 @@ class MoeRoutedExpertOp:
             ctx.gate_params["indices_cb_descriptor"],
             ctx.gate_params["output_cb_descriptor"],
             ctx.gate_params["output_indices_cb_descriptor"],
-            ctx.gate_proj_params["cb_in1_descriptor"],
+            ctx.gate_proj_params["cb_in1_descriptor"],  # Shared by gate_proj and up_proj
             ctx.gate_proj_cb_index_descriptor,
             ctx.gate_proj_params["cb_out_descriptor"],
-            ctx.up_proj_params["cb_in1_descriptor"],
             ctx.up_proj_params["cb_out_descriptor"],
             ctx.mul_params["cb_in0_descriptor"],
             ctx.mul_params["cb_in1_descriptor"],
@@ -1360,7 +1368,7 @@ class MoeRoutedExpertOp:
 
                 # Create unified kernel
                 unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe_routed_expert/moe_routed_expert_kernel.cpp",
+                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_routed_expert_kernel.cpp",
                     core_ranges=ctx.full_device_grid,
                     ncrisc_named_compile_time_args=ncrisc_args,
                     brisc_named_compile_time_args=brisc_args,
