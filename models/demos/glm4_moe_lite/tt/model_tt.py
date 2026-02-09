@@ -483,12 +483,12 @@ class Glm4MoeLiteDenseOnlyTT:
                     for key, value in layer_profile.items():
                         stage_key = f"layer_{key}"
                         prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
-                ttnn.deallocate(x)
+                ttnn.deallocate(x, force=False)
                 x = x_next
 
             # Logits for the last *real* prompt token only.
             x_last = ttnn.slice(x, [0, 0, prompt_len - 1, 0], [1, 1, prompt_len, hidden])
-            ttnn.deallocate(x)
+            ttnn.deallocate(x, force=False)
 
             t0 = time.perf_counter() if profile_on else 0.0
             x_last = self.final_norm(x_last, mode="decode")
@@ -503,7 +503,7 @@ class Glm4MoeLiteDenseOnlyTT:
                     cluster_axis=cluster_axis,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                ttnn.deallocate(logits_tt)
+                ttnn.deallocate(logits_tt, force=False)
                 logits_tt = logits_tt_full
             if profile_on:
                 prefill_profile["head_s"] = prefill_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
@@ -520,12 +520,12 @@ class Glm4MoeLiteDenseOnlyTT:
             out_logits.append(logits_i)
 
             # Cleanup.
-            ttnn.deallocate(logits_tt)
-            ttnn.deallocate(x_last)
+            ttnn.deallocate(logits_tt, force=False)
+            ttnn.deallocate(x_last, force=False)
             if rope_slices_owned:
-                ttnn.deallocate(cos_matrix)
-                ttnn.deallocate(sin_matrix)
-            ttnn.deallocate(page_table_tt)
+                ttnn.deallocate(cos_matrix, force=False)
+                ttnn.deallocate(sin_matrix, force=False)
+            ttnn.deallocate(page_table_tt, force=False)
 
         if profile_on and profile_token_count > 0:
             prefill_profile["total_s"] = prefill_profile.get("total_s", 0.0) + (time.perf_counter() - t_prefill0)
@@ -639,7 +639,15 @@ class Glm4MoeLiteDenseOnlyTT:
         # Some TT tile-layout ops materialize/preserve tile padding in the logical
         # shape. Keep the decode batch dimension tight so downstream kernels (MoE,
         # FlashMLA, RoPE) do not execute inflated work on padded lanes.
-        x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, int(self.hparams.hidden_size)])
+        #
+        # `slice` can return a view that aliases the source buffer (no refcounting).
+        # Materialize the sliced tensor and then free the padded source to avoid
+        # intermittent use-after-free corruption during decode.
+        x_view = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, int(self.hparams.hidden_size)])
+        x_tight = ttnn.clone(x_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # NOTE: `x_view` may alias `x`; do not deallocate it separately.
+        ttnn.deallocate(x, force=False)
+        x = x_tight
         if profile_on:
             decode_profile["embed_s"] = decode_profile.get("embed_s", 0.0) + (time.perf_counter() - t0)
 
@@ -672,14 +680,14 @@ class Glm4MoeLiteDenseOnlyTT:
                 for key, value in layer_profile.items():
                     stage_key = f"layer_{key}"
                     decode_profile[stage_key] = decode_profile.get(stage_key, 0.0) + float(value)
-            ttnn.deallocate(x)
+            ttnn.deallocate(x, force=False)
             x = x_next
 
         if use_decode_rope:
             assert cos_decode is not None and sin_decode is not None and trans_decode is not None
-            ttnn.deallocate(cos_decode)
-            ttnn.deallocate(sin_decode)
-            ttnn.deallocate(trans_decode)
+            ttnn.deallocate(cos_decode, force=False)
+            ttnn.deallocate(sin_decode, force=False)
+            ttnn.deallocate(trans_decode, force=False)
 
         t0 = time.perf_counter() if profile_on else 0.0
         x = self.final_norm(x, mode="decode")
@@ -694,11 +702,11 @@ class Glm4MoeLiteDenseOnlyTT:
             # greedy-only first.
             # Multicore argmax expects ROW_MAJOR input.
             logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(logits_tt)
 
             if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
                 next_ids_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
-                ttnn.deallocate(logits_rm)
+                ttnn.deallocate(logits_rm, force=False)
+                ttnn.deallocate(logits_tt, force=False)
 
                 next_ids_torch = _tt_to_torch_for_vllm_output(tensor=next_ids_tt, device=self.device)
                 next_ids_flat = next_ids_torch.reshape(-1).to(dtype=torch.int32).cpu()
@@ -707,7 +715,7 @@ class Glm4MoeLiteDenseOnlyTT:
                         f"decode token ids shape mismatch: expected {active} values, got {int(next_ids_flat.numel())} "
                         f"(next_ids_torch.shape={tuple(next_ids_torch.shape)})"
                     )
-                ttnn.deallocate(next_ids_tt)
+                ttnn.deallocate(next_ids_tt, force=False)
             else:
                 # Vocab-sharded LM head: avoid all-gathering full logits. Compute per-device
                 # max+argmax and reduce on host (only a few scalars per token).
@@ -732,12 +740,13 @@ class Glm4MoeLiteDenseOnlyTT:
                 else:
                     local_max_tt = max_out
                     local_argmax_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
-                ttnn.deallocate(logits_rm)
+                ttnn.deallocate(logits_rm, force=False)
+                ttnn.deallocate(logits_tt, force=False)
 
                 local_argmax_torch = _mesh_to_torch_selected(tensor=local_argmax_tt, device_ids=selected_device_ids)
                 local_max_torch = _mesh_to_torch_selected(tensor=local_max_tt, device_ids=selected_device_ids)
-                ttnn.deallocate(local_argmax_tt)
-                ttnn.deallocate(local_max_tt)
+                ttnn.deallocate(local_argmax_tt, force=False)
+                ttnn.deallocate(local_max_tt, force=False)
 
                 vocab_per_shard = int(self.lm_head_vocab_per_shard)
                 next_ids = torch.empty((active,), dtype=torch.int32)
@@ -757,11 +766,11 @@ class Glm4MoeLiteDenseOnlyTT:
                     next_ids[b] = int(best_global)
                 next_ids_flat = next_ids
 
-            ttnn.deallocate(x)
-            ttnn.deallocate(tt_positions)
-            ttnn.deallocate(cos_batch)
-            ttnn.deallocate(sin_batch)
-            ttnn.deallocate(page_table_tt)
+            ttnn.deallocate(x, force=False)
+            ttnn.deallocate(tt_positions, force=False)
+            ttnn.deallocate(cos_batch, force=False)
+            ttnn.deallocate(sin_batch, force=False)
+            ttnn.deallocate(page_table_tt, force=False)
             if profile_on:
                 decode_profile["total_s"] = decode_profile.get("total_s", 0.0) + (time.perf_counter() - t_decode0)
                 self._profile_record(
@@ -785,7 +794,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 cluster_axis=cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            ttnn.deallocate(logits_tt)
+            ttnn.deallocate(logits_tt, force=False)
             logits_tt = logits_tt_full
         logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
 
@@ -802,12 +811,12 @@ class Glm4MoeLiteDenseOnlyTT:
         logits = logits_flat.reshape(active, 1, vocab).to(dtype=torch.float32).cpu()
 
         # Cleanup.
-        ttnn.deallocate(logits_tt)
-        ttnn.deallocate(x)
-        ttnn.deallocate(tt_positions)
-        ttnn.deallocate(cos_batch)
-        ttnn.deallocate(sin_batch)
-        ttnn.deallocate(page_table_tt)
+        ttnn.deallocate(logits_tt, force=False)
+        ttnn.deallocate(x, force=False)
+        ttnn.deallocate(tt_positions, force=False)
+        ttnn.deallocate(cos_batch, force=False)
+        ttnn.deallocate(sin_batch, force=False)
+        ttnn.deallocate(page_table_tt, force=False)
         if profile_on:
             decode_profile["total_s"] = decode_profile.get("total_s", 0.0) + (time.perf_counter() - t_decode0)
             self._profile_record(
@@ -859,7 +868,7 @@ class Glm4MoeLiteDenseOnlyTT:
         for t in (self._trace_logits_tt, self._trace_top1_values_tt, self._trace_top1_indices_tt):
             if t is not None:
                 try:
-                    ttnn.deallocate(t)
+                    ttnn.deallocate(t, force=False)
                 except Exception:
                     pass
         self._trace_logits_tt = None
@@ -880,7 +889,7 @@ class Glm4MoeLiteDenseOnlyTT:
         ):
             if t is not None:
                 try:
-                    ttnn.deallocate(t)
+                    ttnn.deallocate(t, force=False)
                 except Exception:
                     pass
         self._trace_tokens_tt = None
@@ -1119,12 +1128,12 @@ class Glm4MoeLiteDenseOnlyTT:
                 profile=None,
                 use_decode_rope=True,
             )
-            ttnn.deallocate(x)
+            ttnn.deallocate(x, force=False)
             x = x_next
 
         x = self.final_norm(x, mode="decode")
         logits_tt = ttnn.linear(x, self.lm_head_w)  # [1,1,B,vocab_shard?]
-        ttnn.deallocate(x)
+        ttnn.deallocate(x, force=False)
 
         return logits_tt
 
@@ -1163,21 +1172,21 @@ class Glm4MoeLiteDenseOnlyTT:
         logits_rm_warm = ttnn.to_layout(logits_warm, ttnn.ROW_MAJOR_LAYOUT)
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
             next_ids_warm = ttnn.argmax(logits_rm_warm, dim=3, keepdim=False, use_multicore=True)
-            ttnn.deallocate(next_ids_warm)
+            ttnn.deallocate(next_ids_warm, force=False)
         else:
             max_out_warm = ttnn.max(logits_rm_warm, dim=3, keepdim=True)
             if isinstance(max_out_warm, tuple):
                 local_max_warm, local_argmax_warm = max_out_warm
-                ttnn.deallocate(local_max_warm)
-                ttnn.deallocate(local_argmax_warm)
+                ttnn.deallocate(local_max_warm, force=False)
+                ttnn.deallocate(local_argmax_warm, force=False)
             else:
                 local_max_warm = max_out_warm
                 local_argmax_warm = ttnn.argmax(logits_rm_warm, dim=3, keepdim=False, use_multicore=True)
-                ttnn.deallocate(local_max_warm)
-                ttnn.deallocate(local_argmax_warm)
-        ttnn.deallocate(logits_rm_warm)
+                ttnn.deallocate(local_max_warm, force=False)
+                ttnn.deallocate(local_argmax_warm, force=False)
+        ttnn.deallocate(logits_rm_warm, force=False)
         ttnn.synchronize_device(self.device)
-        ttnn.deallocate(logits_warm)
+        ttnn.deallocate(logits_warm, force=False)
 
         # Re-copy inputs since the warm-up decode step updated KV cache and may
         # have consumed the previous values.
