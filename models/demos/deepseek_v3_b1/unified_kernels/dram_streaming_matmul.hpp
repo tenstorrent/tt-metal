@@ -115,8 +115,15 @@ struct DRAMStreamingMatmul {
     // Op - the actual operation, templated on CTArgs and IsActiveCore
     // PopIn0: If true (default), pops in0 after compute. Set to false to reuse
     //         in0 for multiple matmuls (e.g., gate_proj and up_proj).
+    // ResetCBIn1: If true, resets cb_in1 read/write pointers before starting.
+    //             Use when reusing a shared CB from a previous matmul.
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool PopIn0 = true>
+    template <
+        typename CTArgs,
+        bool IsActiveCore,
+        bool PopIn0 = true,
+        bool ResetCBIn1 = false,
+        uint32_t CBIn1ResetAddr = 0>
     class Op {
     public:
         void operator()() {
@@ -128,6 +135,11 @@ struct DRAMStreamingMatmul {
     private:
         void impl() {
 #if defined(COMPILE_FOR_NCRISC)
+            // Reset shared CB write pointer if reusing from a previous matmul
+            if constexpr (ResetCBIn1) {
+                get_local_cb_interface(CTArgs::cb_in1).fifo_wr_ptr = CBIn1ResetAddr;
+            }
+
             // ================================================================
             // NCRISC: Stream in1 from DRAM with pipelining (uses NOC_0)
             // ================================================================
@@ -221,6 +233,11 @@ struct DRAMStreamingMatmul {
             }
 
 #elif defined(COMPILE_FOR_TRISC)
+            // Reset shared CB read pointer if reusing from a previous matmul (UNPACK only)
+            if constexpr (ResetCBIn1) {
+                UNPACK(({ get_local_cb_interface(CTArgs::cb_in1).fifo_rd_ptr = CBIn1ResetAddr >> cb_addr_shift; }));
+            }
+
             // ================================================================
             // TRISC: Matmul compute with optional fused SiLU
             // ================================================================
