@@ -77,8 +77,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
 
     sfpi::vInt z = _float_to_int32_for_exp21f_(xlog2);
 
-    // #if defined(TT_SFPU_EXP21F_ENABLE_POLY_REFINE)
-#if 0
     sfpi::vInt exponential_part =
         exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vInt fractional_part =
@@ -92,10 +90,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
-#else
-    // Ultra-fast path: no mantissa refinement; just reinterpret the constructed bits.
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(z);
-#endif
 
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
