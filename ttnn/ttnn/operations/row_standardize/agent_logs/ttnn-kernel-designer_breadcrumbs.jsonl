@@ -14,3 +14,5 @@
 {"event":"design_decision","phase":"add_eps_rsqrt","choice":"NO HELPER - raw tile API","rationale":"binary_op PostOp parameter is accepted but never invoked in implementation. Must use raw add_tiles_bcast_scalar + rsqrt_tile with manual DST management.","ts":"2026-02-09T15:19:19+00:00"}
 {"event":"action","type":"write_design","file":"ttnn/ttnn/operations/row_standardize/kernel_design.md","ts":"2026-02-09T15:20:45+00:00"}
 {"event":"complete","final_status":"SUCCESS","phases_with_helpers":7,"raw_phases":1,"output_file":"ttnn/ttnn/operations/row_standardize/kernel_design.md","ts":"2026-02-09T15:21:47+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-kernel-designer] design: row_standardize","ts":"2026-02-09T15:22:09+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"8582f4dae3","ts":"2026-02-09T15:22:09+00:00"}
