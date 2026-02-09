@@ -1259,7 +1259,7 @@ From patch embedding to self-attention and feed-forward networks, the ViT model 
   - https://www.v7labs.com/blog/vision-transformer-guide
   - https://viso.ai/deep-learning/vision-transformer-vit/
   - TT-NN sharding & layouts: https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md
-  - ViT Blackhole Implementation: `models/demos/blackhole/vit/tt/ttnn_optimized_sharded_vit_bh.py`
+  - ViT Blackhole Implementation: `models/demos/vision/classification/vit/blackhole/tt/ttnn_optimized_sharded_vit_bh.py`
   - Blackhole Bring-Up Guide: `tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md`
   - Allocator / memory banks: `tech_reports/memory/allocator.md`
   - Matrix engine / fidelity notes: `tech_reports/matrix_engine/matrix_engine.md`

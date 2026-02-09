@@ -16,19 +16,19 @@
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 #endif
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/binary_max_min.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/comp.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/comp.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/mask.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tile_move_copy.h"
 
 // Deprecated
 ALWI void ACQ() { acquire_dst(); }
@@ -1029,8 +1029,8 @@ ALWI void power_tile_to_cb(
     copy_tile_init_with_dt(cb_x);
     copy_tile(cb_x, 0, dst0);
 
-    power_tile_init();
-    power_tile(dst0, p);
+    power_iterative_tile_init();
+    power_iterative_tile(dst0, p);
 
     if (p_is_negative) {
         recip_tile_init();
@@ -1124,8 +1124,8 @@ ALWI void power_tile_with_abs_x_to_cb(
     abs_tile_init();
     abs_tile(dst0);
 
-    power_tile_init();
-    power_tile(dst0, p);
+    power_iterative_tile_init();
+    power_iterative_tile(dst0, p);
 
     if (p_is_negative) {
         recip_tile_init();
@@ -1219,8 +1219,8 @@ ALWI void power_and_recip_tile_to_cb(
     copy_tile_init_with_dt(cb_x);
     copy_tile(cb_x, 0, dst0);
 
-    power_tile_init();
-    power_tile(dst0, p);
+    power_iterative_tile_init();
+    power_iterative_tile(dst0, p);
 
     if (p_is_negative) {
         recip_tile_init();

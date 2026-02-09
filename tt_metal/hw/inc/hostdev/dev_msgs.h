@@ -142,7 +142,7 @@ struct kernel_config_msg_t {
     volatile uint8_t mode;     // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
-    volatile uint32_t local_cb_mask;
+    volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
@@ -160,7 +160,7 @@ struct kernel_config_msg_t {
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2)];  // CODEGEN:skip
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 12];  // CODEGEN:skip
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
@@ -170,10 +170,9 @@ static_assert(offsetof(kernel_config_msg_t, kernel_config_base) % sizeof(uint32_
 static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
-static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
-static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
 struct go_msg_t {
@@ -255,7 +254,9 @@ enum debug_assert_type_t {
     DebugAssertNCriscNOCReadsFlushedTripped = 4,
     DebugAssertNCriscNOCNonpostedWritesSentTripped = 5,
     DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
-    DebugAssertNCriscNOCPostedWritesSentTripped = 7
+    DebugAssertNCriscNOCPostedWritesSentTripped = 7,
+    DebugAssertRtaOutOfBounds = 8,
+    DebugAssertCrtaOutOfBounds = 9
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };

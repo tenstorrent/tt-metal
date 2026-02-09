@@ -4,15 +4,14 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/tile_move_copy.h"
 
 using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr int onetile = 1;
 
     int dst_tile_index = 0;
@@ -51,4 +50,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

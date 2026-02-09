@@ -48,6 +48,7 @@ RUN mkdir -p /tmp/cba \
     && rm -rf /tmp/cba
 
 # Install extra ci apt requirements
+# Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
@@ -55,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libclang-rt-20-dev \
     clang-tidy-20 \
     clang-20 \
+    llvm-20 \
     curl \
     dialog \
     file \
@@ -66,6 +68,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zstd \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install yq (YAML processor) for CI workflows
+# Note: mikefarah/yq is not available in apt, download binary from GitHub releases
+ARG YQ_VERSION=v4.44.6
+RUN wget -q "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq && \
+    chmod +x /usr/local/bin/yq
 
 # Set up virtual environment using uv
 
@@ -84,7 +92,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
-RUN umask 000 && uv pip install --no-cache-dir build numpy setuptools
+RUN umask 000 && uv pip install --no-cache-dir build numpy setuptools==80
 
 RUN git config --global --add safe.directory '*'
 
@@ -109,6 +117,9 @@ FROM ci-build AS ci-test
 ARG UBUNTU_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
+# needed for setuptools dep tree
+RUN apt install python3-pkg-resources
+
 # Create directories for infra
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
@@ -125,7 +136,7 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requireme
 # that are not explicitly listed in the requirements.txt files
 RUN umask 000 && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
-    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 

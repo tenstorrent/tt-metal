@@ -213,11 +213,22 @@ validate_env_dir() {
 # Apply Configuration
 # ============================================================================
 
-# Apply configuration with precedence: arguments > env vars > defaults
+# Determine script directory (used for locating sibling scripts and OS detection)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Import functions for detecting OS
+. "$SCRIPT_DIR/install_dependencies.sh" --source-only
+detect_os
+
+# Apply configuration with precedence: arguments > OS detection > default
 # Python version
 if [ -n "$ARG_PYTHON_VERSION" ]; then
     VENV_PYTHON_VERSION="$ARG_PYTHON_VERSION"
-elif [ -z "${VENV_PYTHON_VERSION:-}" ]; then
+elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "24.04" ]; then
+    VENV_PYTHON_VERSION="3.12"
+elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
+    VENV_PYTHON_VERSION="3.10"
+else
     VENV_PYTHON_VERSION="3.10"
 fi
 
@@ -318,6 +329,29 @@ uv pip install --extra-index-url "$PYTORCH_INDEX" --index-strategy unsafe-best-m
 echo "Installing tt-metal"
 uv pip install -e .
 
+# Create .pth files for ttml
+# This allows using pre-built ttml from build_metal.sh --build-tt-train
+SITE_PACKAGES="$PYTHON_ENV_DIR/lib/python${VENV_PYTHON_VERSION}/site-packages"
+
+TTML_SRC_DIR="$SCRIPT_DIR/tt-train/sources/ttml"
+TTML_BUILD_DIR="$SCRIPT_DIR/build/tt-train/sources/ttml"
+
+# Add ttml Python source code, if available
+if [ -d "$TTML_SRC_DIR" ]; then
+    echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
+    echo "  Created: $SITE_PACKAGES/ttml.pth"
+else
+    echo "  Skipping ttml.pth creation (directory not found: $TTML_SRC_DIR)"
+fi
+
+# Add the built _ttml C++ extension (.so file), if available
+# Uses the 'build' symlink which points to the active build directory (e.g., build_Release)
+if [ -d "$TTML_BUILD_DIR" ]; then
+    echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+    echo "  Created: $SITE_PACKAGES/_ttml.pth"
+else
+    echo "  Skipping _ttml.pth creation (directory not found: $TTML_BUILD_DIR)"
+fi
 # Do not install hooks when this is a worktree
 if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
     echo "Generating git hooks"

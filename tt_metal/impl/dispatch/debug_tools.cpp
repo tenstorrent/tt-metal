@@ -186,6 +186,12 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                     val(cmd->write_packed_large.count),
                     val(cmd->write_packed_large.alignment));
                 break;
+            case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
+                cq_file << fmt::format(
+                    " (count={}, alignment={})",
+                    val(cmd->write_packed_large_unicast.count),
+                    val(cmd->write_packed_large_unicast.alignment));
+                break;
             case CQ_DISPATCH_CMD_WAIT:
                 cq_file << fmt::format(
                     " (flags={}, count={}, addr={:#010x}, stream={})",
@@ -259,6 +265,16 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                     val(cmd->relay_paged_packed.stride));
                 stride = cmd->relay_paged_packed.stride;
                 break;
+            case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED: {
+                iq_file << fmt::format(
+                    " (count={}, noc_xy_addr={:#010x}, total_length={:#010x}, stride={:#010x})",
+                    val(cmd->relay_linear_packed.count),
+                    val(cmd->relay_linear_packed.noc_xy_addr),
+                    val(cmd->relay_linear_packed.total_length),
+                    val(cmd->relay_linear_packed.stride));
+                stride = cmd->relay_linear_packed.stride;
+                break;
+            }
             case CQ_PREFETCH_CMD_RELAY_INLINE:
             case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             case CQ_PREFETCH_CMD_EXEC_BUF_END:

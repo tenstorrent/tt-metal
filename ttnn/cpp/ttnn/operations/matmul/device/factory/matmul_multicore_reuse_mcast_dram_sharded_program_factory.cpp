@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 
 #include <algorithm>
@@ -23,64 +24,10 @@ using ttnn::operations::unary::UnaryWithParam;
 namespace ttnn::prim {
 namespace reuse_dram_sharded_optimized_helpers {
 
-// This type of access pattern cannot be copied.
-// Treat it as a one off patch to restore functionality that
-// was adjusted to fix one P0 causing another P0.
-// TODO: Proper fix will be implemented in Issue #32205
-tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
-    ttnn::distributed::MeshDevice* device = a.device();
-    const ttnn::distributed::MeshDeviceView& view = device->get_view();
-    if (!view.contains(coord) || !view.is_local(coord)) {
-        return device;
-    }
-    return a.device()->get_device(coord);
-}
-
-void get_max_page_size_and_num_pages(
-    tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
-    uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
-
-    // TODO(#32477): Remove hardcoding when NOC_MAX_BURST_SIZE is available from HAL
-    uint32_t noc_max_page_size;
-    if (device->arch() == tt::ARCH::WORMHOLE_B0) {
-        noc_max_page_size = 8192;
-    } else if (device->arch() == tt::ARCH::BLACKHOLE) {
-        noc_max_page_size = 16384;
-    } else {
-        TT_FATAL(false, "Unsupported architecture for DRAM sharded matmul. Only Wormhole and Blackhole are supported.");
-    }
-
-    page_size = (noc_max_page_size / tile_size) * tile_size;
-    while (total_size % page_size != 0 && page_size >= tile_size) {
-        page_size -= tile_size;
-    }
-    num_pages = total_size / page_size;
-}
-
-void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2, std::vector<CoreCoord>& commons) {
-    for (const CoreCoord& item : v2) {
-        if (std::find(v1.begin(), v1.end(), item) != v1.end()) {
-            commons.push_back(item);
-        }
-    }
-
-    for (const CoreCoord& item : commons) {
-        v2.erase(std::remove(v2.begin(), v2.end(), item), v2.end());
-    }
-}
-
-void get_optimal_dram_bank_to_reader_assignment(
-    tt::tt_metal::IDevice* device,
-    std::vector<CoreCoord>& all_worker_cores_ordered,
-    CoreRangeSet& all_worker_cores,
-    tt_metal::NOC noc) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
-    std::set<CoreRange> all_cores_set;
-    for (const auto& worker_core : all_worker_cores_ordered) {
-        all_cores_set.insert(CoreRange(worker_core));
-    }
-    all_worker_cores = CoreRangeSet(all_cores_set);
-}
+using dram_sharded_helpers::get_device_for_dram_banks;
+using dram_sharded_helpers::get_max_page_size_and_num_pages;
+using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
+using dram_sharded_helpers::move_common_entries;
 
 std::pair<tt::tt_metal::Program, MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::shared_variables_t>
 create_program_dram_sharded(

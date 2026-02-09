@@ -19,7 +19,6 @@ from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
-DEFAULT_CACHE_DIR_PATTERN = "{home}/.cache/{hostname}_rank{rank}"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
@@ -226,8 +225,8 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         # This ensures the cache is on the shared filesystem (NFS) visible to all nodes.
         base_path = f"{ORIGINAL_CWD}/.cache"
 
-    # Apply consistent rank suffix pattern to both user-provided and default paths
-    cache_path = f"{base_path}_{hostname}_rank{binding.rank}"
+    # Apply consistent suffix pattern to both user-provided and default paths
+    cache_path = f"{base_path}_{hostname}"
 
     # Start with automatic pass-through of TT-related environment variables
     # This ensures variables like ARCH_NAME, WH_ARCH_YAML, TTNN_CONFIG_OVERRIDES are propagated

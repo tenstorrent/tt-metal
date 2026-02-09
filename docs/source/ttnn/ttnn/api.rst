@@ -103,6 +103,7 @@ Matrix Multiplication
    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
    ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig
    ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+   ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig
 
 
 Pointwise Unary

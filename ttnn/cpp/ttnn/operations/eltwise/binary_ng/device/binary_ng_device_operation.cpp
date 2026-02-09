@@ -18,7 +18,6 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     switch (val) {
         case ADD:
         case SUB:
-        case MUL:
         case EQ:
         case NE:
         case LOGICAL_AND:
@@ -26,6 +25,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case LOGICAL_XOR:
         case SQUARED_DIFFERENCE:
         case RSUB: return a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16);
+        case MUL:
+            return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
+        case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
@@ -45,7 +47,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case BITWISE_OR:
         case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
         case DIV_FLOOR:
-        case DIV_TRUNC: return (a == INT32 && b == INT32);
+        case DIV_TRUNC:
+        case REMAINDER:
+        case FMOD: return (a == INT32 && b == INT32);
         case QUANT:
         case REQUANT:
         case DEQUANT:
@@ -55,7 +59,6 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case POWER:
         case WHERE_TST:
         case WHERE_TTS: return true;
-        case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         default: return false;
     }
     return false;
@@ -63,6 +66,42 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
 
 bool is_quant_op(const BinaryOpType val) {
     return (val == BinaryOpType::QUANT) || (val == BinaryOpType::DEQUANT) || (val == BinaryOpType::REQUANT);
+}
+
+ShardSpec generate_shard_spec_all_cores(
+    const Tensor& input_tensor_a, const Shape& padded_out_shape, const TensorMemoryLayout& memory_layout) {
+    // Generate shard spec using all worker cores
+    auto* device = input_tensor_a.device();
+    auto compute_grid_size = device->compute_with_storage_grid_size();
+    auto all_cores = CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
+    uint32_t num_cores = all_cores.num_cores();
+
+    // Calculate squeezed tensor height (all dims except last) and width (last dim)
+    uint32_t tensor_height = 1;
+    for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
+        tensor_height *= padded_out_shape[i];
+    }
+    uint32_t tensor_width = padded_out_shape[-1];
+
+    // Calculate shard shape based on memory layout (must be tile-aligned for TILE layout)
+    std::array<uint32_t, 2> shard_shape = {0, 0};
+    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        auto height_padded = tt::round_up(tensor_height, num_cores * tt::constants::TILE_HEIGHT);
+        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tt::constants::TILE_HEIGHT);
+        shard_shape = {shard_height, tensor_width};
+    } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tt::constants::TILE_WIDTH);
+        shard_shape = {tensor_height, shard_width};
+    } else {
+        // BLOCK_SHARDED
+        CoreCoord grid_size = all_cores.bounding_box().grid_size();
+        auto height_padded = tt::round_up(tensor_height, grid_size.y * tt::constants::TILE_HEIGHT);
+        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tt::constants::TILE_HEIGHT);
+        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
+        shard_shape = {shard_height, shard_width};
+    }
+    log_debug(tt::LogOp, "BinaryNgDeviceOperation: Generated shard spec using all {} worker cores", num_cores);
+    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
 }
 }  // namespace utils
 
@@ -373,22 +412,21 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
 
         // If no shard spec is provided, inherit from input tensor
         if (!shard_spec_opt.has_value()) {
+            const auto& padded_out_shape =
+                input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
             if (input_tensor_a.is_sharded()) {
                 // Adjust shard spec from input A to match output shape
                 const auto& padded_a_shape = input_tensor_a.padded_shape();
-                const auto& padded_out_shape =
-                    input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
                     *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
             } else if (tensor_b.has_value() && tensor_b->is_sharded()) {
                 // Adjust shard spec from input B to match output shape
                 const auto& padded_b_shape = tensor_b->padded_shape();
-                const auto& padded_out_shape =
-                    tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
                     *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
             } else {
-                TT_THROW("Output memory config is sharded but has no shard spec, and no input tensors are sharded");
+                shard_spec_opt = utils::generate_shard_spec_all_cores(input_tensor_a, padded_out_shape, memory_layout);
             }
         }
 
@@ -539,7 +577,16 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                     operations::binary_ng::compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
                 log_debug(tt::LogOp, "BinaryNgDeviceOperation: Inheriting shard spec from input tensor B");
             } else {
-                TT_THROW("Output memory config is sharded but has no shard spec, and no input tensors are sharded");
+                auto memory_layout = mem_config_actual.memory_layout();
+                auto output_shape = operations::binary_ng::compute_broadcasted_output(
+                    input_tensor_a.logical_shape(), input_tensor_b.logical_shape());
+                const auto& padded_out_shape =
+                    input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+                mem_config_actual = MemoryConfig(
+                    memory_layout,
+                    mem_config_actual.buffer_type(),
+                    operations::binary_ng::utils::generate_shard_spec_all_cores(
+                        input_tensor_a, padded_out_shape, memory_layout));
             }
         } else {
             log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");

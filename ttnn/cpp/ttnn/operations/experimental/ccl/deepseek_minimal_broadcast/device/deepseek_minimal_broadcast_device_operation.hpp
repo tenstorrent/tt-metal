@@ -49,6 +49,8 @@ Tensor deepseek_minimal_broadcast(
     const std::optional<MemoryConfig>& memory_config,
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<uint32_t> secondary_cluster_axis = std::nullopt,
+    const std::optional<Tensor>& persistent_output_buffer = std::nullopt);
 
 }  // namespace ttnn::prim

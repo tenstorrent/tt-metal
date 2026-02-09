@@ -7,6 +7,13 @@ from loguru import logger
 from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
 from models.common.lightweightmodule import LightweightModule
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):
+        pass
+
 
 class TtStem(LightweightModule):
     """
@@ -110,6 +117,7 @@ class TtStem(LightweightModule):
         return conv_layer, output_shape
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        signpost("STEM_START")
         logger.debug(f"TtStem forward - input: {x.shape}")
 
         assert x.storage_type() == ttnn.StorageType.DEVICE, "Input tensor must be on device"
@@ -119,5 +127,5 @@ class TtStem(LightweightModule):
         x = self.conv2(x)  # self._conv_relu_block(self.conv2, x, "Conv2", self.conv2_out_shape)
         x = self.conv3(x)
         x = self.maxpool(x)
-
+        signpost("STEM_END")
         return x

@@ -89,7 +89,9 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(a, b, c.memory_config())) {
+    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
+    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
+    if (!is_native_L1_sharding(a, b, c.memory_config()) || is_uneven(c)) {
         // treat as interleaved
         return std::nullopt;
     }

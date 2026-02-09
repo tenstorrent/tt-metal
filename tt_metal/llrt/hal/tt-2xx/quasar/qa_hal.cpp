@@ -167,7 +167,6 @@ public:
         // TODO: Use correct tt-qsr cpu options #32893
         std::string cflags =
             params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensixbh ";
-        cflags += "-mno-tt-tensix-optimize-replay ";
         cflags += "-fno-extern-tls-init ";
         cflags += "-ftls-model=local-exec ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&

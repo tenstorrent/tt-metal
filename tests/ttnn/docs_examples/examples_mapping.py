@@ -30,6 +30,10 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.deallocate": core.test_deallocate,
     "ttnn.reallocate": core.test_reallocate,
     "ttnn.to_memory_config": core.test_to_memory_config,
+    "ttnn.copy_device_to_host_tensor": core.test_copy_device_to_host_tensor,
+    "ttnn.copy_host_to_device_tensor": core.test_copy_host_to_device_tensor,
+    "ttnn.to_dtype": core.test_to_dtype,
+    "ttnn.typecast": core.test_typecast,
     # Tensor Creation
     "ttnn.arange": tensor_creation.test_arrange,
     "ttnn.empty": tensor_creation.test_empty,
@@ -42,6 +46,10 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.full_like": tensor_creation.test_full_like,
     "ttnn.rand": tensor_creation.test_rand,
     "ttnn.from_buffer": tensor_creation.test_from_buffer,
+    "ttnn.bernoulli": tensor_creation.test_bernoulli,
+    "ttnn.complex_tensor": tensor_creation.test_complex_tensor,
+    "ttnn.index_fill": tensor_creation.test_index_fill,
+    "ttnn.uniform": tensor_creation.test_uniform,
     # Matrix Multiplication
     "ttnn.matmul": matrix_multiplication.test_matmul,
     "ttnn.linear": matrix_multiplication.test_linear,

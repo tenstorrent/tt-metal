@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/untilize.h"
 #include "api/debug/dprint.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t block_size_col = get_compile_time_arg_val(0);
     const uint32_t block_size_row = get_compile_time_arg_val(1);
     const uint32_t third_dim = get_compile_time_arg_val(2);
@@ -24,4 +23,3 @@ void MAIN {
         cb_pop_front(tt::CBIndex::c_0, block_size_row);
     }
 }
-}  // namespace NAMESPACE

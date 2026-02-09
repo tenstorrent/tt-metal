@@ -31,6 +31,7 @@ def run_with_trace(
     num_iter=20,
     num_warmup_iter=15,
     subdevice_id=None,
+    persistent_output_tensor=None,
 ):
     """Run the all-reduce operation with trace capture for performance testing."""
     profiler = BenchmarkProfiler()
@@ -41,6 +42,7 @@ def run_with_trace(
         input_tensor_mesh,
         cluster_axis=cluster_axis,
         intermediate_tensor=intermediate_tensor,
+        persistent_output_tensor=persistent_output_tensor,
         num_links=num_links,
         topology=topology,
     )
@@ -54,6 +56,7 @@ def run_with_trace(
             input_tensor_mesh,
             cluster_axis=cluster_axis,
             intermediate_tensor=intermediate_tensor,
+            persistent_output_tensor=persistent_output_tensor,
             num_links=num_links,
             topology=topology,
         )
@@ -68,6 +71,7 @@ def run_with_trace(
             input_tensor_mesh,
             cluster_axis=cluster_axis,
             intermediate_tensor=intermediate_tensor,
+            persistent_output_tensor=persistent_output_tensor,
             num_links=num_links,
             topology=topology,
         )
@@ -108,6 +112,7 @@ def run_with_trace_residual(
     num_iter=20,
     num_warmup_iter=15,
     subdevice_id=None,
+    persistent_output_tensor=None,
 ):
     """Run the all-reduce operation with fused residual add and trace capture for performance testing."""
     profiler = BenchmarkProfiler()
@@ -119,6 +124,7 @@ def run_with_trace_residual(
         cluster_axis=cluster_axis,
         intermediate_tensor=intermediate_tensor,
         residual_tensor=residual_tensor_mesh,
+        persistent_output_tensor=persistent_output_tensor,
         num_links=num_links,
         topology=topology,
     )
@@ -133,6 +139,7 @@ def run_with_trace_residual(
             cluster_axis=cluster_axis,
             intermediate_tensor=intermediate_tensor,
             residual_tensor=residual_tensor_mesh,
+            persistent_output_tensor=persistent_output_tensor,
             num_links=num_links,
             topology=topology,
         )
@@ -148,6 +155,7 @@ def run_with_trace_residual(
             cluster_axis=cluster_axis,
             intermediate_tensor=intermediate_tensor,
             residual_tensor=residual_tensor_mesh,
+            persistent_output_tensor=persistent_output_tensor,
             num_links=num_links,
             topology=topology,
         )
@@ -198,6 +206,7 @@ def run_deepseek_minimal_all_reduce_impl(
     intermediate_shape=None,
     intermediate_tile_shape=(32, 32),
     intermediate_shard_shape=None,
+    use_persistent_buffers=True,
 ):
     if mesh_mapper_config is None:
         # Mesh shape is (num_devices, 1), so we shard along dimension 0 (batch) across the first mesh dimension
@@ -280,7 +289,6 @@ def run_deepseek_minimal_all_reduce_impl(
                 mesh_mapper_config,
             ),
         )
-        input_tensor_mesh_list.append(input_tensor_mesh)
 
         # Create intermediate tensor with standard 32x32 tiles
         # Use provided intermediate_shape or derive from output_shape
@@ -313,26 +321,51 @@ def run_deepseek_minimal_all_reduce_impl(
         )
         intermediate_tensor_list.append(intermediate_tensor)
 
+        # Create persistent output tensor with same shape and memory config as input
+        # Must concatenate num_devices copies to match the mesh mapper config (PlacementShard(0))
+        if use_persistent_buffers:
+            output_tensor_per_device = torch.zeros(output_shape, dtype=torch.bfloat16)
+            output_tensor_torch = torch.cat([output_tensor_per_device] * num_devices, dim=0)
+            persistent_output_tensor = ttnn.from_torch(
+                output_tensor_torch,
+                device=mesh_device,
+                layout=layout,
+                tile=ttnn.Tile(input_tile_shape),
+                dtype=input_dtype,
+                memory_config=input_mem_config,
+                mesh_mapper=ttnn.create_mesh_mapper(
+                    mesh_device,
+                    mesh_mapper_config,
+                ),
+            )
+        else:
+            persistent_output_tensor = None
+        input_tensor_mesh_list.append((input_tensor_mesh, persistent_output_tensor))
+
     tt_out_tensor_list = []
     if trace_mode:
+        input_tensor, persistent_output = input_tensor_mesh_list[0]
         tt_out_tensor = run_with_trace(
             mesh_device,
-            input_tensor_mesh_list[0],
+            input_tensor,
             intermediate_tensor_list[0],
             cluster_axis,
             num_links,
             topology,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
+            persistent_output_tensor=persistent_output,
         )
         tt_out_tensor_list.append(tt_out_tensor)
     else:
         for i in range(num_iters):
             logger.info(f"Running iteration {i}")
+            input_tensor, persistent_output = input_tensor_mesh_list[i]
             tt_out_tensor = ttnn.experimental.deepseek_minimal_all_reduce(
-                input_tensor_mesh_list[i],
+                input_tensor,
                 cluster_axis=cluster_axis,
                 intermediate_tensor=intermediate_tensor_list[i],
+                persistent_output_tensor=persistent_output,
                 num_links=num_links,
                 topology=topology,
             )
@@ -402,6 +435,7 @@ def run_deepseek_minimal_all_reduce_impl(
 )
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("use_persistent_buffers", [True, False], ids=["persistent_buffers", "no_persistent_buffers"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -432,6 +466,7 @@ def test_deepseek_minimal_all_reduce_trace(
     intermediate_shape,
     intermediate_tile_shape,
     intermediate_shard_shape,
+    use_persistent_buffers,
 ):
     """Trace-enabled version of the all-reduce test for performance testing."""
     # Validate we have the right mesh configuration
@@ -460,6 +495,7 @@ def test_deepseek_minimal_all_reduce_trace(
         intermediate_shape=intermediate_shape,
         intermediate_tile_shape=intermediate_tile_shape,
         intermediate_shard_shape=intermediate_shard_shape,
+        use_persistent_buffers=use_persistent_buffers,
     )
 
 
@@ -484,6 +520,7 @@ def run_deepseek_minimal_all_reduce_with_residual_impl(
     intermediate_shape=None,
     intermediate_tile_shape=(32, 32),
     intermediate_shard_shape=None,
+    use_persistent_buffers=True,
 ):
     """Test implementation with fused residual add."""
     if mesh_mapper_config is None:
@@ -587,6 +624,21 @@ def run_deepseek_minimal_all_reduce_with_residual_impl(
             mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config),
         )
 
+        if use_persistent_buffers:
+            output_tensor_per_device = torch.zeros(output_shape, dtype=torch.bfloat16)
+            output_tensor_torch = torch.cat([output_tensor_per_device] * num_devices, dim=0)
+            persistent_output_tensor = ttnn.from_torch(
+                output_tensor_torch,
+                device=mesh_device,
+                layout=layout,
+                tile=ttnn.Tile(input_tile_shape),
+                dtype=input_dtype,
+                memory_config=input_mem_config,
+                mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config),
+            )
+        else:
+            persistent_output_tensor = None
+
         if trace_mode and i == 0:
             # For trace mode, run with trace on first iteration only
             tt_out_tensor = run_with_trace_residual(
@@ -599,6 +651,7 @@ def run_deepseek_minimal_all_reduce_with_residual_impl(
                 topology,
                 num_iter=num_iters,
                 subdevice_id=worker_sub_device_id,
+                persistent_output_tensor=persistent_output_tensor,
             )
         elif not trace_mode:
             logger.info(f"Running iteration {i} with residual add")
@@ -607,6 +660,7 @@ def run_deepseek_minimal_all_reduce_with_residual_impl(
                 cluster_axis=cluster_axis,
                 intermediate_tensor=intermediate_tensor,
                 residual_tensor=residual_tensor_mesh,
+                persistent_output_tensor=persistent_output_tensor,
                 num_links=num_links,
                 topology=topology,
             )
@@ -670,17 +724,18 @@ def run_deepseek_minimal_all_reduce_with_residual_impl(
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("use_persistent_buffers", [True, False], ids=["persistent_buffers", "no_persistent_buffers"])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
             "trace_region_size": 573440,
         },
     ],
     indirect=["device_params"],
-    ids=["fabric_1d_trace"],
+    ids=["fabric_2d_trace"],
 )
 def test_deepseek_minimal_all_reduce_with_residual_trace(
     bh_2d_mesh_device,
@@ -700,6 +755,7 @@ def test_deepseek_minimal_all_reduce_with_residual_trace(
     intermediate_shape,
     intermediate_tile_shape,
     intermediate_shard_shape,
+    use_persistent_buffers,
 ):
     """Trace-enabled test for all-reduce with fused residual add."""
     validate_test(num_devices, topology, bh_2d_mesh_device.shape, cluster_axis)
@@ -726,4 +782,5 @@ def test_deepseek_minimal_all_reduce_with_residual_trace(
         intermediate_shape=intermediate_shape,
         intermediate_tile_shape=intermediate_tile_shape,
         intermediate_shard_shape=intermediate_shard_shape,
+        use_persistent_buffers=use_persistent_buffers,
     )

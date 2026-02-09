@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
 #include "api/debug/dprint.h"
 #include "common.cpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
 #ifdef DST_ACCUM_MODE
     constexpr uint32_t max_bct = 4;
 #else
@@ -37,4 +36,3 @@ void MAIN {
     }
     pack_untilize_uninit(tt::CBIndex::c_16);
 }
-}  // namespace NAMESPACE

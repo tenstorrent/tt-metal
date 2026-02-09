@@ -1,1 +1,1 @@
-../../../../../models/demos/wormhole/stable_diffusion/tests/vae/test_vae.py
+../../../../../models/demos/vision/generative/stable_diffusion/wormhole/tests/vae/test_vae.py
