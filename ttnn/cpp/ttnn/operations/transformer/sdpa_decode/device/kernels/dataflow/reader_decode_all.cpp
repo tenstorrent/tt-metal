@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <vector>
+#include "api/debug/assert.h"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
@@ -97,7 +98,6 @@ void kernel_main() {
                 noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
                 noc_async_read_barrier();
             }
-
             cb_push_back(cb_index_id, 1);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
             cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
@@ -113,13 +113,14 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
-        cur_pos,
-        cur_batch,
-        core_num_in_reduce,
-        num_cores_per_head,
-        k_chunk_size_dynamic,
-        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] =
+        get_workload_for_core(
+            cur_pos,
+            cur_batch,
+            core_num_in_reduce,
+            num_cores_per_head,
+            k_chunk_size_dynamic,
+            sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
@@ -154,7 +155,9 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
-    // First, read Q entirely, it could be interleaved or sharded
+    // Read Q entirely - always read into cb_q_in
+    // When tilize_q is true, compute will tilize in-place back to cb_q_in
+    // When tilize_q is false, Q is already tilized
     uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
     if constexpr (is_q_sharded) {
@@ -273,33 +276,22 @@ void kernel_main() {
                 {
                     // Read K chunk in row-major order (to simplify page mapping). Write tiles to CB in transposed
                     // order.
-                    cb_reserve_back(cb_k_in, k_chunk_tiles);
-                    uint32_t k_write_ptr = get_write_ptr(cb_k_in);
-                    k_base_read_ptr = get_noc_addr(k_write_ptr);
-                    barrier_count = 0;
-                    for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
-                        uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
-                        uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
-
-                        uint32_t physical_k_tile_id =
-                            (is_page_table_sharded)
-                                ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
-                                      virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
-                                : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
-                                      virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
-                        for (uint32_t col = 0; col < DHt; ++col) {
-                            noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
-                            physical_k_tile_id += 1;                               // Go to next tile in row
-                            k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
-
-                            if (++barrier_count == barrier_threshold) {
-                                noc_async_read_barrier();
-                                barrier_count = 0;
-                            }
-                        }
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_k_in, k_chunk_tiles);
+                    k_base_read_ptr = read_k<
+                        cb_k_in,
+                        DHt,
+                        num_kv_heads,
+                        block_size_t,
+                        k_tile_bytes,
+                        barrier_threshold,
+                        is_page_table_sharded>(
+                        k_chunk_tiles,
+                        cur_head,
+                        Sk_chunk_t_dynamic,
+                        k_chunk_start_row_num,
+                        k_reader,
+                        page_table_ptr_u16,
+                        page_table_ptr_u32,
+                        barrier_count);
                 }
 
                 if constexpr (use_attention_mask) {
@@ -308,60 +300,26 @@ void kernel_main() {
                 }
 
                 {
-                    if constexpr (reuse_k) {
-                        // Read V chunk (tranpose of K), from K's L1 buffer
-                        cb_reserve_back(cb_v_in, v_chunk_tiles);
-                        uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-                        uint64_t k_read_ptr = k_base_read_ptr;
-
-                        for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {  // Row of V
-                            k_read_ptr = k_base_read_ptr + row * k_tile_bytes;     // Increment across K's Col
-
-                            for (uint32_t col = 0; col < vDHt; ++col) {  // Col of V
-                                noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
-
-                                v_write_ptr += v_tile_bytes;
-                                k_read_ptr += Sk_chunk_t_dynamic * k_tile_bytes;  // Strid across K's width
-                            }
-                        }
-                    } else {
-                        // Read V chunk in row major order, write in row-major order
-                        // V is an independent tensor with its own layout (width = vDHt, not DHt)
-                        cb_reserve_back(cb_v_in, v_chunk_tiles);
-                        uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-                        barrier_count = 0;
-
-                        for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
-                            uint32_t virtual_v_tile_row_num = k_chunk_start_row_num + row;
-                            // Use vDHt for V tensor's width since V is independent
-                            uint32_t physical_v_tile_id =
-                                (is_page_table_sharded)
-                                    ? virtual_seq_tile_id_to_physical_tile_id<
-                                          uint16_t,
-                                          num_kv_heads,
-                                          block_size_t,
-                                          vDHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
-                                    : virtual_seq_tile_id_to_physical_tile_id<
-                                          uint32_t,
-                                          num_kv_heads,
-                                          block_size_t,
-                                          vDHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
-                            for (uint32_t col = 0; col < vDHt; ++col) {
-                                noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
-                                physical_v_tile_id += 1;
-                                v_write_ptr += v_tile_bytes;
-
-                                if (++barrier_count == barrier_threshold) {
-                                    noc_async_read_barrier();
-                                    barrier_count = 0;
-                                }
-                            }
-                            // No padding to skip - V is an independent tensor with contiguous layout
-                        }
-                    }
-
-                    noc_async_read_barrier();
-                    cb_push_back(cb_v_in, v_chunk_tiles);
+                    // Read V chunk - either from DRAM or from K's L1 buffer (transpose) when reuse_k is true
+                    read_v<
+                        cb_v_in,
+                        vDHt,
+                        num_kv_heads,
+                        block_size_t,
+                        v_tile_bytes,
+                        barrier_threshold,
+                        is_page_table_sharded,
+                        reuse_k>(
+                        v_chunk_tiles,
+                        cur_head,
+                        Sk_chunk_t_dynamic,
+                        k_chunk_start_row_num,
+                        v_reader,
+                        page_table_ptr_u16,
+                        page_table_ptr_u32,
+                        barrier_count,
+                        k_base_read_ptr,
+                        k_tile_bytes);
                 }
 
             }
