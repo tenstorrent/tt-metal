@@ -62,16 +62,16 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
             Typically 1.0 in DiT transformer blocks.
 
         addcmul_input_tensor1 : ttnn.Tensor
-            Residual/base for addcmul (broadcast like bias).
-            - Layout: TILE (required).
-            - Device: same device as matmul tensors.
-            - Shape: [..., 1, N] - broadcast row across all M rows.
-
-        addcmul_input_tensor2 : ttnn.Tensor
-            Gate/multiplier tensor for addcmul.
+            Residual/base for addcmul.
             - Layout: TILE (required).
             - Device: same device as matmul tensors.
             - Shape: [..., M, N] - must match matmul output shape.
+
+        addcmul_input_tensor2 : ttnn.Tensor
+            Gate/multiplier tensor for addcmul (broadcast like bias).
+            - Layout: TILE (required).
+            - Device: same device as matmul tensors.
+            - Shape: [..., 1, N] - broadcast row across all M rows.
 
         bias_tensor : Optional[ttnn.Tensor], default: None
             Optional row-broadcast bias added to the matmul result.
@@ -118,8 +118,8 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
         ---------------
         - matmul_input_tensor: [..., M, K]
         - matmul_weight_tensor: [..., K, N]
-        - addcmul_input_tensor1: [..., 1, N] (broadcast like bias)
-        - addcmul_input_tensor2: [..., M, N] (full output shape)
+        - addcmul_input_tensor1: [..., M, N] (full output shape)
+        - addcmul_input_tensor2: [..., 1, N] (broadcast like bias)
         - output: [..., M, N]
 
         Limitations & Requirements
@@ -142,8 +142,8 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
                 input_normed,          # input after normalization [M, K]
                 ff_weight,             # feedforward weight [K, N]
                 1.0,                   # scalar multiplier
-                base_value,            # broadcast base value [1, N]
-                gate_tensor            # gate from timestep embedding [M, N]
+                gate_tensor,           # gate from timestep embedding [M, N]
+                base_value             # broadcast base value [1, N]
             )
 
         Notes on Implementation

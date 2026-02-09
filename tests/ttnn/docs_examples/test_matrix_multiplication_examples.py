@@ -239,15 +239,15 @@ def test_dit_minimal_matmul_addcmul_fused(device):
     input_tensor = ttnn.rand((64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [M, K]
     weight_tensor = ttnn.rand((32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [K, N]
 
-    base_value = ttnn.rand((1, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [1, N] - broadcast
-    gate = ttnn.rand((64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [M, N] - full shape
+    base_value = ttnn.rand((64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [M, N] - full shape
+    gate = ttnn.rand((1, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # [1, N] - broadcast
 
     output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
         matmul_input_tensor=input_tensor,
         matmul_weight_tensor=weight_tensor,
         scalar=1.0,
-        addcmul_input_tensor1=base_value,  # broadcast row
-        addcmul_input_tensor2=gate,  # gate/multiplier
+        addcmul_input_tensor1=base_value,  # base value (full shape)
+        addcmul_input_tensor2=gate,  # gate/multiplier (broadcast row)
     )
     logger.info(f"Output shape: {output.shape}")  # Output shape: Shape([64, 64])
 

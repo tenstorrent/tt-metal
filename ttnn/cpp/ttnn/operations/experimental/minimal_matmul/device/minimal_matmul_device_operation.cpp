@@ -157,17 +157,17 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         const auto& ternary_a_logical = ternary_a.logical_shape();
         const auto& ternary_b_logical = ternary_b.logical_shape();
 
-        // ternary_a is broadcast [1, N], ternary_b matches output [M, N]
+        // ternary_a matches output [M, N], ternary_b is broadcast [1, N]
         TT_FATAL(
-            ternary_a_logical[-2] == 1 && ternary_a_logical[-1] == N,
-            "fused_ternary_input_a shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
+            ternary_a_logical[-2] == M && ternary_a_logical[-1] == N,
+            "fused_ternary_input_a shape must match output [M={}, N={}], got [{}, {}]",
+            M,
             N,
             ternary_a_logical[-2],
             ternary_a_logical[-1]);
         TT_FATAL(
-            ternary_b_logical[-2] == M && ternary_b_logical[-1] == N,
-            "fused_ternary_input_b shape must match output [M={}, N={}], got [{}, {}]",
-            M,
+            ternary_b_logical[-2] == 1 && ternary_b_logical[-1] == N,
+            "fused_ternary_input_b shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
             N,
             ternary_b_logical[-2],
             ternary_b_logical[-1]);
