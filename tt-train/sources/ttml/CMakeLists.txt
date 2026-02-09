@@ -330,19 +330,18 @@ if(NOT TARGET TT::Metalium)
     find_package(TT-NN)
 
     if(NOT TT-NN_FOUND)
-        # Try to get TT_METAL_HOME from environment, otherwise infer from directory structure
-        if(DEFINED ENV{TT_METAL_HOME})
-            set(TT_METAL_HOME "$ENV{TT_METAL_HOME}")
-            message(STATUS "Using TT_METAL_HOME from environment: ${TT_METAL_HOME}")
+        # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
+        # From the tt-train project root, go up one level to reach the tt-metal repository root
+        set(TT_METAL_HOME "${CMAKE_SOURCE_DIR}/..")
+        cmake_path(NORMAL_PATH TT_METAL_HOME)
+        if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
+            message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
         else()
-            # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
-            # From tt-train/sources/ttml/, go up THREE levels to reach the repository root
-            set(TT_METAL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
-            if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
-                message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
-            else()
-                message(FATAL_ERROR "Failed to infer tt-metal location from ${TT_METAL_HOME}")
-            endif()
+            message(
+                FATAL_ERROR
+                "Failed to infer tt-metal location from ${TT_METAL_HOME}. "
+                "Please build tt-metal first or install the TT-NN package."
+            )
         endif()
 
         set(METALIUM_INCLUDE_DIRS
@@ -360,9 +359,9 @@ if(NOT TARGET TT::Metalium)
             "${TT_METAL_HOME}/tt_metal/hw/inc"
             "${TT_METAL_HOME}/tt_stl"
             # TTNN
-            "$ENV{TT_METAL_HOME}/ttnn"
-            "$ENV{TT_METAL_HOME}/ttnn/api"
-            "$ENV{TT_METAL_HOME}/ttnn/cpp"
+            "${TT_METAL_HOME}/ttnn"
+            "${TT_METAL_HOME}/ttnn/api"
+            "${TT_METAL_HOME}/ttnn/cpp"
             "${reflect_SOURCE_DIR}"
         )
 
