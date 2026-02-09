@@ -62,7 +62,7 @@ def _apply_swiglu(
     ttnn.deallocate(gate_sigmoid)
 
     # Add 1 to up: up = up + 1
-    up_clamped = ttnn.add(up_clamped, 1.0, output_tensor=up_clamped)
+    ttnn.add(up_clamped, 1.0, output_tensor=up_clamped)
 
     # Multiply: result = up * glu
     result = ttnn.mul(up_clamped, glu, memory_config=memory_config)
@@ -102,7 +102,7 @@ def decode_forward(
         remap_topk_mask: Mask for expert remapping (unused, kept for interface compat)
         dispatch_config: Configuration for all_to_all_dispatch
         combine_config: Configuration for all_to_all_combine
-        program_config: Matmul program configuration (unused, kept for interface compat)
+        program_config: Matmul program configuration for expert projections
         mesh_device: TTNN mesh device
 
     Returns:
@@ -195,25 +195,32 @@ def decode_forward(
     # All dispatched tokens are processed by all local experts. The combine
     # step will select the correct expert output for each token.
 
+    # Build 1D multicast program configs sized for total_tokens (M dimension)
+    gate_up_matmul_config = program_config.get_gate_up_config(n=config.intermediate_size, m=total_tokens)
+    down_matmul_config = program_config.get_down_config(n=config.hidden_size, m=total_tokens)
+
     # Gate projection (w1)
     w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config)
+    # w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config, program_config=gate_up_matmul_config)
     # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
-    w1_out = ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
+    ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
 
     # Up projection (w3)
     w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config)
+    # w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config, program_config=gate_up_matmul_config)
     ttnn.deallocate(post_dispatch)
     # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
-    w3_out = ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
+    ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
 
     # SwiGLU activation: (up + 1) * (gate * sigmoid(gate * alpha))
     activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
 
     # Down projection (w2): [1, E, total_tokens, I] x [1, E, I, H] -> [1, E, total_tokens, H]
     expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config)
+    # expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config, program_config=down_matmul_config)
     ttnn.deallocate(activated)
     # Bias: [1, num_experts_per_device, 1, H] broadcasts across total_tokens
-    expert_output = ttnn.add(expert_output, weights.w2_bias)
+    ttnn.add(expert_output, weights.w2_bias, output_tensor=expert_output)
 
     # ==========================================================================
     # STEP 5: PREPARE EXPERT OUTPUT FOR ALL_TO_ALL_COMBINE
