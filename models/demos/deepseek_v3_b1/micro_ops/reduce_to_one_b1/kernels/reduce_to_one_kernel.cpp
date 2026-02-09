@@ -5,19 +5,19 @@
 /**
  * Unified Reduce-to-Root Kernel for 4x2 mesh 3-level reduction tree.
  *
- * Uses the unified ReduceToRootB1 op from unified_kernels/reduce_to_root_b1.hpp
+ * Uses the unified ReduceToOneB1 op from unified_kernels/reduce_to_one_b1.hpp
  */
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
-#include "../../../unified_kernels/reduce_to_root_b1.hpp"
+#include "../../../unified_kernels/reduce_to_one_b1.hpp"
 
 void kernel_main() {
-    using ReduceToRoot = deepseek_b1_ops::ReduceToRootB1;
+    using ReduceToOne = deepseek_b1_ops::ReduceToOneB1;
 
 #if defined(COMPILE_FOR_NCRISC)
     // Reader CTArgs
-    using CTArgs = ReduceToRoot::ReaderCTArgs<
+    using CTArgs = ReduceToOne::ReaderCTArgs<
         get_named_compile_time_arg_val("device_role"),
         get_named_compile_time_arg_val("num_tiles"),
         get_named_compile_time_arg_val("local_cb"),
@@ -27,7 +27,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_fabric_core")>;
 
     // Reader runtime args (from common args)
-    ReduceToRoot::ReaderArgs rt_args{
+    ReduceToOne::ReaderArgs rt_args{
         get_common_arg_val<uint32_t>(0),  // recv_sem_round1
         get_common_arg_val<uint32_t>(1),  // recv_sem_round2
         get_common_arg_val<uint32_t>(2),  // recv_sem_round3
@@ -35,7 +35,7 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_BRISC)
     // Writer CTArgs
-    using CTArgs = ReduceToRoot::WriterCTArgs<
+    using CTArgs = ReduceToOne::WriterCTArgs<
         get_named_compile_time_arg_val("device_role"),
         get_named_compile_time_arg_val("num_tiles"),
         get_named_compile_time_arg_val("payload_size_bytes"),
@@ -52,7 +52,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_fabric_core")>;
 
     // Writer runtime args for worker cores (from per-core args)
-    ReduceToRoot::WorkerWriterArgs rt_args{
+    ReduceToOne::WorkerWriterArgs rt_args{
         get_arg_val<uint32_t>(0),  // fabric_core_noc_x
         get_arg_val<uint32_t>(1),  // fabric_core_noc_y
         get_arg_val<uint32_t>(2),  // my_slot_idx
@@ -65,7 +65,7 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
     // Compute CTArgs
-    using CTArgs = ReduceToRoot::ComputeCTArgs<
+    using CTArgs = ReduceToOne::ComputeCTArgs<
         get_named_compile_time_arg_val("device_role"),
         get_named_compile_time_arg_val("num_tiles"),
         get_named_compile_time_arg_val("local_cb"),
@@ -77,11 +77,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_fabric_core")>;
 
     // Compute has no runtime args
-    ReduceToRoot::ComputeArgs rt_args{};
+    ReduceToOne::ComputeArgs rt_args{};
 #endif
 
     // Execute the op
     // IsWorkerCore = true (compile-time) since fabric core logic is handled inside the op
-    ReduceToRoot::Op<CTArgs, true> op;
+    ReduceToOne::Op<CTArgs, true> op;
     op(rt_args);
 }

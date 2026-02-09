@@ -48,7 +48,7 @@ constexpr uint32_t MESH_ROOT2 = 2;
 constexpr uint32_t MESH_ROOT1 = 3;
 
 // Unified kernel for Reduce-to-Root B1 operation
-struct ReduceToRootB1 {
+struct ReduceToOneB1 {
     // ========================================================================
     // Compile-time args structs - different per RISC
     // ========================================================================
@@ -415,6 +415,6 @@ struct ReduceToRootB1 {
         }
     };  // class Op
 
-};  // struct ReduceToRootB1
+};  // struct ReduceToOneB1
 
 }  // namespace deepseek_b1_ops

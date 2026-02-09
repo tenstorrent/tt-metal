@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Unit tests for ReduceToRootB1 operation.
+Unit tests for ReduceToOneB1 operation.
 
 This test validates the 3-level reduction tree for a 4x2 mesh,
 matching the configuration from test_deepseek_b1_reduce_to_one.py.
@@ -16,15 +16,15 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.micro_ops.reduce_to_root_b1.op import ReduceToRootB1
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOneB1
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 # CoreRangeSet for CCL operations (subset of compute grid)
 CCL_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7))])
 
 
-def setup_reduce_to_root_test(mesh_device):
-    """Common setup for reduce_to_root tests. Returns test configuration."""
+def setup_reduce_to_one_test(mesh_device):
+    """Common setup for reduce_to_one tests. Returns test configuration."""
     # Log mesh device info
     logger.info(f"mesh_device shape: {mesh_device.shape}")
     logger.info(f"mesh_device num_devices: {mesh_device.get_num_devices()}")
@@ -104,7 +104,7 @@ def setup_reduce_to_root_test(mesh_device):
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, output_shard_spec
     )
 
-    # Create output tensor (zeros, will be filled by reduce_to_root)
+    # Create output tensor (zeros, will be filled by reduce_to_one)
     output_data = torch.zeros([4, 2] + tensor_shape, dtype=torch.bfloat16)
     output_tensor = ttnn.from_torch(
         output_data,
@@ -139,9 +139,9 @@ def setup_reduce_to_root_test(mesh_device):
     )
 
     # Compute reference output
-    ref_output = ReduceToRootB1.golden(data_per_device)
+    ref_output = ReduceToOneB1.golden(data_per_device)
 
-    # Create 4 semaphores for reduce_to_root (round1, round2, round3, exit)
+    # Create 4 semaphores for reduce_to_one (round1, round2, round3, exit)
     semaphores = [ttnn.create_global_semaphore(submesh_device, CCL_CRS, 0) for _ in range(4)]
 
     return {
@@ -205,15 +205,15 @@ def verify_output(output_tensor, submesh_device, root_coord, ref_output):
     return match
 
 
-def run_reduce_to_root(mesh_device):
-    """Run reduce_to_root test."""
-    print(f"\n=== Testing reduce_to_root ===")
+def run_reduce_to_one(mesh_device):
+    """Run reduce_to_one test."""
+    print(f"\n=== Testing reduce_to_one ===")
 
-    config = setup_reduce_to_root_test(mesh_device)
+    config = setup_reduce_to_one_test(mesh_device)
 
-    # Run reduce_to_root
-    print("Running reduce_to_root...")
-    output_tensor = ReduceToRootB1.op(
+    # Run reduce_to_one
+    print("Running reduce_to_one...")
+    output_tensor = ReduceToOneB1.op(
         config["input_tensor"],
         config["intermediate_tensors"],
         config["output_tensor"],
@@ -236,11 +236,11 @@ def run_reduce_to_root(mesh_device):
     print("Test passed!")
 
 
-def run_reduce_to_root_with_trace(mesh_device):
-    """Run reduce_to_root test with trace capture and replay."""
-    print(f"\n=== Testing reduce_to_root with trace ===")
+def run_reduce_to_one_with_trace(mesh_device):
+    """Run reduce_to_one test with trace capture and replay."""
+    print(f"\n=== Testing reduce_to_one with trace ===")
 
-    config = setup_reduce_to_root_test(mesh_device)
+    config = setup_reduce_to_one_test(mesh_device)
     submesh_device = config["submesh_device"]
     input_tensor = config["input_tensor"]
     intermediate_tensors = config["intermediate_tensors"]
@@ -251,8 +251,8 @@ def run_reduce_to_root_with_trace(mesh_device):
     semaphores = config["semaphores"]
 
     # Run once to compile
-    print("Running reduce_to_root (compiling)...")
-    output_tensor = ReduceToRootB1.op(
+    print("Running reduce_to_one (compiling)...")
+    output_tensor = ReduceToOneB1.op(
         input_tensor,
         intermediate_tensors,
         output_tensor_preallocated,
@@ -262,12 +262,12 @@ def run_reduce_to_root_with_trace(mesh_device):
     )
     ttnn.synchronize_device(submesh_device)
 
-    # Helper to run reduce_to_root multiple iterations
+    # Helper to run reduce_to_one multiple iterations
     profiler = BenchmarkProfiler()
 
     def run_iterations(num_iters):
         for _ in range(num_iters):
-            output_tensor = ReduceToRootB1.op(
+            output_tensor = ReduceToOneB1.op(
                 input_tensor,
                 intermediate_tensors,
                 output_tensor_preallocated,
@@ -325,9 +325,9 @@ def run_reduce_to_root_with_trace(mesh_device):
     indirect=["device_params"],
     ids=["fabric_1d"],
 )
-def test_reduce_to_root_1d(bh_2d_mesh_device):
-    """Test reduce_to_root with 1D fabric."""
-    run_reduce_to_root(bh_2d_mesh_device)
+def test_reduce_to_one_1d(bh_2d_mesh_device):
+    """Test reduce_to_one with 1D fabric."""
+    run_reduce_to_one(bh_2d_mesh_device)
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -337,9 +337,9 @@ def test_reduce_to_root_1d(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-def test_reduce_to_root_2d(bh_2d_mesh_device):
-    """Test reduce_to_root with 2D fabric."""
-    run_reduce_to_root(bh_2d_mesh_device)
+def test_reduce_to_one_2d(bh_2d_mesh_device):
+    """Test reduce_to_one with 2D fabric."""
+    run_reduce_to_one(bh_2d_mesh_device)
 
 
 # === Trace Tests ===
@@ -350,9 +350,9 @@ def test_reduce_to_root_2d(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_1d_trace"],
 )
-def test_reduce_to_root_with_trace_1d(bh_2d_mesh_device):
-    """Test reduce_to_root with trace capture/replay on 1D fabric."""
-    run_reduce_to_root_with_trace(bh_2d_mesh_device)
+def test_reduce_to_one_with_trace_1d(bh_2d_mesh_device):
+    """Test reduce_to_one with trace capture/replay on 1D fabric."""
+    run_reduce_to_one_with_trace(bh_2d_mesh_device)
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -362,6 +362,6 @@ def test_reduce_to_root_with_trace_1d(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_2d_trace"],
 )
-def test_reduce_to_root_with_trace_2d(bh_2d_mesh_device):
-    """Test reduce_to_root with trace capture/replay on 2D fabric."""
-    run_reduce_to_root_with_trace(bh_2d_mesh_device)
+def test_reduce_to_one_with_trace_2d(bh_2d_mesh_device):
+    """Test reduce_to_one with trace capture/replay on 2D fabric."""
+    run_reduce_to_one_with_trace(bh_2d_mesh_device)
