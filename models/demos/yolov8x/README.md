@@ -68,6 +68,17 @@ Note: Output images will be saved in the `models/demos/yolov8x/demo/runs` folder
   ```
 Note: The model is evaluated with 500 samples.
 
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
+|------------|------------------- |----------------------|-------------------------|-------------|
+| 640x640    | True               |   0.9987692          | 63.2165                 | Passed      |
+
+| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
+|------------|--------------------|----------------------|-------------------------|-------------|
+| 640x640    | True               | 0.9987606            | 113.4592                | Passed      |
+
 
 ### Web Demo
 - Try the interactive web demo at [yolov8x/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8x/web_demo/README.md)

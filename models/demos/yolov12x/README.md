@@ -90,6 +90,18 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
   ```
 Note: The model is evaluated with 500 samples.
 
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
+|------------|--------------------|----------------------|-------------------------|-------------|
+| 640x640     | True              |0.9974655             | 32                      | Passed      |
+
+| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
+|------------|--------------------|----------------------|-------------------------|-------------|
+| 640x640    | True               | 0.9974655            | 60                      | Passed      |
+
+
 ### Details:
 
 The model picks up certain configs and weights from Ultralytics pretrained model. We've used weights available [here](https://docs.ultralytics.com/models/yolo12/#performance-metrics) under YOLO12x.

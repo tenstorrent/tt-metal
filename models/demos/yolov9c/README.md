@@ -97,6 +97,18 @@ Note: To test the demo with your own images, replace images with `models/demos/y
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant_dp
   ```
+  ## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+| Resolution | Pretrained Weights | Segmentation PCC (threshold:0.99) | Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N150) | Detection Performance (FPS, N150) | Demo Status |
+|------------|--------------------|-----------------------------------|-------------------------------|---------------------------------------|-----------------------------------|
+| 640x640    | True               |  0.9993999                        |0.9993025                      | 85                                    | 96                                | Passed      |
+
+
+| Resolution | Pretrained Weights | Segmentation PCC (threshold:0.99) |Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N300) | Detection Performance (FPS, N300) | Demo Status |
+|------------|--------------------|-----------------------------------|------------------------------|---------------------------------------|----------------------------------|----------|
+| 640x640    | True               | 0.9993999                         | 0.9993025                    |145                                    |162                               | Passed      |
+
 
 ### Web Demo
 - Try the interactive web demo at [yolov9c/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov9c/web_demo/README.md)

@@ -65,13 +65,11 @@ def run_yolov4(device, model_location_generator, use_pretrained_weight, resoluti
     result_boxes, result_confs = ttnn_model_runner.run(ttnn_input)
 
     if is_blackhole():
-        pcc_passed, pcc_message = assert_with_pcc(ref_boxes, result_boxes, pcc=YOLOV4_BOXES_PCC_BLACKHOLE)
-        print(pcc_message)
+        assert_with_pcc(ref_boxes, result_boxes, pcc=YOLOV4_BOXES_PCC_BLACKHOLE)
+
     else:
-        pcc_passed, pcc_message = assert_with_pcc(ref_boxes, result_boxes, pcc=YOLOV4_BOXES_PCC)
-        print(pcc_message)
-        pcc_passed, pcc_message = assert_with_pcc(ref_confs, result_confs, pcc=YOLOV4_CONFS_PCC)
-        print(pcc_message)
+        assert_with_pcc(ref_boxes, result_boxes, pcc=YOLOV4_BOXES_PCC)
+        assert_with_pcc(ref_confs, result_confs, pcc=YOLOV4_CONFS_PCC)
 
 
 @pytest.mark.parametrize(
