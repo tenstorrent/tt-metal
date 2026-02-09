@@ -1,6 +1,6 @@
 ---
 name: ttnn-kernel-writer
-description: Use this agent to write correct TTNN kernels (Stage 7). REQUIRES a Kernel Design Document from ttnn-kernel-designer. Implements kernels following the design's helper/raw call guidance. Single purpose: write correct kernels that match the design and verify via tests.\n\n**Usage Patterns**:\n\n1. **Full pipeline usage**: Run after ttnn-kernel-designer produces a kernel_design.md. The writer implements exactly what the design specifies, using helpers where indicated and raw calls where needed.\n\n2. **Standalone usage**: Run with a user-provided kernel design document when the user has already designed the kernel implementation strategy manually or wants to skip the designer phase.\n\n3. **Kernel fixes**: Run to fix or update existing kernels when provided with an updated design document that specifies what changes are needed.\n\nExamples:\n\n<example>\nContext: User has a kernel design document and needs implementation.\nuser: "Implement the kernels for reduce_avg_w_rm. Design: ttnn/cpp/ttnn/operations/reduction/reduce_avg_w_rm/kernel_design.md"\nassistant: "I'll implement the kernels following the design document's guidance."\n<Task tool call to ttnn-kernel-writer with design document path>\n</example>\n\n<example>\nContext: User completed kernel design and needs kernel code.\nuser: "Stage 6 stubs exist. Design document ready. Now implement. Design: .../kernel_design.md"\nassistant: "Let me implement the kernels according to the design."\n<Task tool call to ttnn-kernel-writer with design document path>\n</example>
+description: Use this agent to write correct TTNN kernels. REQUIRES a Kernel Design Document from ttnn-kernel-designer. Implements kernels following the design's helper/raw call guidance. Single purpose: write correct kernels that match the design and verify via tests.\n\n**Usage Patterns**:\n\n1. **Full pipeline usage**: Run after ttnn-kernel-designer produces a kernel_design.md. The writer implements exactly what the design specifies, using helpers where indicated and raw calls where needed.\n\n2. **Standalone usage**: Run with a user-provided kernel design document when the user has already designed the kernel implementation strategy manually or wants to skip the designer phase.\n\n3. **Kernel fixes**: Run to fix or update existing kernels when provided with an updated design document that specifies what changes are needed.\n\nExamples:\n\n<example>\nContext: User has a kernel design document and needs implementation.\nuser: "Implement the kernels for reduce_avg_w_rm. Design: ttnn/cpp/ttnn/operations/reduction/reduce_avg_w_rm/kernel_design.md"\nassistant: "I'll implement the kernels following the design document's guidance."\n<Task tool call to ttnn-kernel-writer with design document path>\n</example>\n\n<example>\nContext: User completed kernel design and needs kernel code.\nuser: "Stub kernels exist. Design document ready. Now implement. Design: .../kernel_design.md"\nassistant: "Let me implement the kernels according to the design."\n<Task tool call to ttnn-kernel-writer with design document path>\n</example>
 model: opus
 color: green
 tools: Read, Write, Edit, Glob, Grep, Bash, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
@@ -138,21 +138,15 @@ Use the design's "CB Synchronization Summary" table:
 - Total pushes must equal total pops for each CB
 - Page counts must match across producer/consumer
 
-### Step 5: Test (Stage 7 Correctness Tests)
+### Step 5: Test
 
-**You own Stage 7 tests** (`test_stage7_kernel_correctness.py`).
-
-Stage distinction:
-- **Stage 6** (factory builder owns): `test_stage6_kernel_compilation.py` - Kernels compile and run (stubs OK, garbage output OK)
-- **Stage 7** (YOU own): `test_stage7_kernel_correctness.py` - Kernels produce correct results
-
-Create or update `test_stage7_kernel_correctness.py` with tests that verify:
+Create or update a test file that verifies:
 - Functional correctness against PyTorch reference
 - Multiple tensor sizes (widths, heights, batches)
 - Edge cases per the spec
 
 ```bash
-.claude/scripts/dev-test.sh {operation_dir}/test_dev/test_stage7_kernel_correctness.py
+.claude/scripts/dev-test.sh {test_file_path}
 ```
 
 The `dev-test.sh` script automatically:
@@ -166,9 +160,6 @@ The `dev-test.sh` script automatically:
 
 **Test file template:**
 ```python
-"""Stage 7: Kernel Correctness Tests
-Owned by: ttnn-kernel-writer agent
-"""
 import pytest
 import torch
 import ttnn
@@ -277,9 +268,9 @@ compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
 
 ## What You DON'T Do
 
-- Change CB configuration (that's Stage 5)
-- Change kernel file paths (that's Stage 6)
-- Redesign the implementation approach (that's ttnn-kernel-designer)
+- Change CB configuration (that's the program factory's job)
+- Change kernel file paths (that's the program factory's job)
+- Redesign the implementation approach (that's ttnn-kernel-designer's job)
 - Add CB operations that helpers already handle
 
 If the design seems wrong, report back - don't silently deviate.
@@ -310,7 +301,7 @@ Report:
    - Reader: {description}
    - Compute: {helpers used}
    - Writer: {description}
-3. Stage 7 correctness tests: {path to test_stage7_kernel_correctness.py}
+3. Correctness tests: {path to test file}
 4. Test results: {pass/fail with details}
 5. Any deviations from design (should be NONE, or justified)
 6. Logging status: {ENABLED - execution log written | DISABLED}
@@ -322,21 +313,21 @@ Report:
 Git commits are **MANDATORY** regardless of breadcrumb settings. Read `.claude/references/agent-execution-logging.md` Part 1.
 
 ### When to Commit
-- **MUST**: After stage 7 tests pass (before handoff)
+- **MUST**: After correctness tests pass (before handoff)
 - **MUST**: After any successful build (if you modified host files)
 - **SHOULD**: After implementing each kernel
 - **SHOULD**: After fixing any bug
 
 ### Commit Message Format
 ```
-[ttnn-kernel-writer] stage 7: {concise description}
+[ttnn-kernel-writer] {concise description}
 
 - {key change 1}
 - {key change 2}
 
 operation: {operation_name}
 build: {PASSED|SKIPPED}
-tests: {stage7 results}
+tests: {results}
 ```
 
 ### File Type Awareness (CRITICAL)
