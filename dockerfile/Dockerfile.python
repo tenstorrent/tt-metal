@@ -59,7 +59,7 @@ ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Install base packages
-RUN umask 000 && uv pip install --no-cache build numpy setuptools wheel
+RUN umask 000 && uv pip install --no-cache build numpy setuptools==80 wheel
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-build-venv
@@ -107,7 +107,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # Pre-install setuptools so pkg_resources is available for packages like mmcv
 # that use it at build time. This must be a separate RUN from the requirements
 # install so the package is fully on disk when uv resolves build dependencies.
-RUN umask 000 && uv pip install --no-cache setuptools wheel
+RUN umask 000 && uv pip install --no-cache setuptools==80 wheel
 
 # Create directory structure for requirements files
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
@@ -127,7 +127,7 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
 # umask 000 ensures the venv is world-writable for runtime pip installs
 RUN umask 000 && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
-    uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation-package mmcv -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
