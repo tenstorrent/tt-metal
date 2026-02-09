@@ -23,6 +23,8 @@ struct HaloParams {
     bool config_tensors_in_dram = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
+        "config",
+        "parallel_config",
         "pad_val",
         "remote_read",
         "transpose_mcast",
@@ -33,6 +35,8 @@ struct HaloParams {
         "config_tensors_in_dram");
     auto attribute_values() const {
         return std::forward_as_tuple(
+            config,
+            parallel_config,
             pad_val,
             remote_read,
             transpose_mcast,
