@@ -81,8 +81,14 @@ struct MeshDeviceOperationAdapter {
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+            // Operation provides custom hash function
             return DeviceOperation::compute_program_hash(attrs, tensor_args);
+        } else if constexpr (requires { attrs.compile_time; }) {
+            // Operation uses compile_time/runtime struct pattern - hash only compile_time fields
+            return tt::stl::hash::hash_objects_with_default_seed(
+                tt::stl::hash::type_hash<DeviceOperation>, attrs.compile_time, tensor_args);
         } else {
+            // Fallback: hash everything
             return tt::stl::hash::hash_objects_with_default_seed(
                 tt::stl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
         }

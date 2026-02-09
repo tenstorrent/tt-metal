@@ -55,14 +55,27 @@ template <typename... Ts>
     return table[i];
 }
 
+// Concept to detect if operation_attributes_t has a compile_time member
+template <typename T>
+concept HasCompileTimeStruct = requires(const T& attrs) {
+    { attrs.compile_time };
+};
+
 template <typename device_operation_t>
 auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     if constexpr (DeviceOperationWithCustomProgramCacheConcept<device_operation_t>) {
+        // Operation provides custom hash function
         ZoneScopedN("Compute custom program hash");
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
+    } else if constexpr (HasCompileTimeStruct<typename device_operation_t::operation_attributes_t>) {
+        // Operation uses compile_time/runtime struct pattern - hash only compile_time fields
+        ZoneScopedN("Compute compile_time program hash");
+        return tt::stl::hash::hash_objects_with_default_seed(
+            tt::stl::hash::type_hash<device_operation_t>, operation_attributes.compile_time, tensor_args);
     } else {
+        // Fallback: hash everything
         ZoneScopedN("Compute default program hash");
         return tt::stl::hash::hash_objects_with_default_seed(
             tt::stl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);

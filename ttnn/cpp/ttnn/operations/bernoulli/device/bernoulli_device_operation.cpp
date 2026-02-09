@@ -59,7 +59,9 @@ BernoulliDeviceOperation::spec_return_value_t BernoulliDeviceOperation::compute_
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
+            operation_attributes.compile_time.dtype,
+            tt::tt_metal::PageConfig(Layout::TILE),
+            operation_attributes.compile_time.memory_config));
 }
 
 BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create_output_tensors(
@@ -69,13 +71,6 @@ BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create
     }
 
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
-tt::stl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::operations::bernoulli
@@ -92,10 +87,16 @@ ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t ber
     TT_FATAL(input.device() != nullptr, "Bernoulli: Input tensor needs to be on device");
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        seed,
-        dtype.value_or(DataType::FLOAT32),
-        memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        .compile_time = {
+            .dtype = dtype.value_or(DataType::FLOAT32),
+            .memory_config = memory_config.value_or(input.memory_config()),
+            .compute_kernel_config = init_device_compute_kernel_config(
+                input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
+        },
+        .runtime = {
+            .seed = seed,
+        },
+    };
     auto tensor_args = OperationType::tensor_args_t{input, output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
