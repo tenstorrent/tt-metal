@@ -156,7 +156,7 @@ jobs:
               "save-perf-data": true,
               "timeout": 30,
               "tracy": true,
-              "cmd": "uv pip install -r models/demos/gpt_oss/requirements.txt && export HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ && pytest models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_all_fused_ops_device_perf.py::test_all_fused_ops_device_perf -k \"decode and 1\"",
+              "cmd": "uv pip install -r models/demos/gpt_oss/requirements.txt && export HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ && pytest -n auto --timeout 600 models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_all_fused_ops_device_perf.py::test_all_fused_ops_device_perf -k \"decode and 1\"",
               "owner_id": "U08TJ70UFRT"
             } # Harry Andrews
           ]' --compact-output)
