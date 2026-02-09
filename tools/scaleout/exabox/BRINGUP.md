@@ -53,7 +53,7 @@ One Galaxy (32 chips) as a self-contained mesh. Used for single-host development
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/8x4_cabling.png?raw=true" width="700"/>
 
-*[Cabling web tool](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_8x4_torus-2d.textproto) (8×4 torus-2d configuration pre-loaded): Shows 1 host (node_0) with 4 trays (T1–T4) and internal torus connections (orange curves) wrapping between trays.*
+*[Cabling web tool view](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_8x4_torus-2d.textproto) (8×4 torus-2d configuration): Shows 1 host (node_0) with 4 trays (T1–T4) and internal torus connections (orange lines) wrapping between trays.*
 
 ---
 
@@ -67,7 +67,7 @@ Four Galaxies arranged in a horizontal line, forming an elongated 32-column × 4
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/4x32_cabling.png?raw=true" width="700"/>
 
-*[Cabling web tool](https://aus2-cablegen.aus2.tenstorrent.com/?file=http://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_32x4_torus-2d.textproto) (32×4 torus-2d configuration pre-loaded): 4 Galaxies across 2 racks. Blue lines are inter-Galaxy mesh connections, green lines are torus wrap-around connections.*
+*[Cabling web tool view](https://aus2-cablegen.aus2.tenstorrent.com/?file=http://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_32x4_torus-2d.textproto) (32×4 torus-2d configuration): 4 Galaxies across 2 racks. Blue lines are inter-Galaxy mesh connections, green lines are torus wrap-around connections.*
 
 ---
 
@@ -81,7 +81,7 @@ Four Galaxies arranged in a 2×2 grid. Optimized for 2D data flow: all-to-all co
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/8x16_cabling.png?raw=true" width="700"/>
 
-*[Cabling web tool](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_8x16_torus-2d.textproto) (8×16 torus-2d configuration pre-loaded): 4 Galaxies across 2 racks with inter-Galaxy cables crossing between racks in a distributed pattern.*
+*[Cabling web tool view](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_8x16_torus-2d.textproto) (8×16 torus-2d configuration): 4 Galaxies across 2 racks with inter-Galaxy cables crossing between racks.*
 
 ---
 
@@ -95,7 +95,7 @@ Four Galaxies stacked vertically in a single column. An alternative orientation 
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/16x8_cabling.png?raw=true" width="700"/>
 
-*[Cabling web tool](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_16x8_torus-2d.textproto) (16×8 torus-2d configuration pre-loaded): 4 Galaxies across 2 racks with a different inter-Galaxy cable pattern than 8×16.*
+*[Cabling web toolview ](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_16x8_torus-2d.textproto) (16×8 torus-2d configuration): 4 Galaxies across 2 racks with a different inter-Galaxy cable pattern than 8×16.*
 
 ---
 
