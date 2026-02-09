@@ -152,10 +152,17 @@ Create or update `test_stage7_kernel_correctness.py` with tests that verify:
 - Edge cases per the spec
 
 ```bash
-pkill -9 -f pytest || true
-tt-smi -r
-timeout 30 pytest {operation_dir}/test_dev/test_stage7_kernel_correctness.py -v
+.claude/scripts/dev-test.sh {operation_dir}/test_dev/test_stage7_kernel_correctness.py
 ```
+
+The `dev-test.sh` script automatically:
+- Enables watcher, lightweight asserts, and LLK asserts
+- Detects hangs via operation timeout and runs `tt-triage` automatically
+- Dumps watcher log on crash/hang
+- Kills stale processes and resets the device on failure
+- Leaves the system ready for the next invocation
+
+**Exit codes**: 0=PASS, 1=test failure, 2=hang (triage output in stderr). The script is idempotent — just re-run it after fixing code.
 
 **Test file template:**
 ```python
@@ -279,15 +286,17 @@ If the design seems wrong, report back - don't silently deviate.
 
 ## Debugging
 
-**Hang**: CB sync mismatch
-- Verify you didn't add CB ops around helpers
-- Check design's CB Sync Summary table
-- Count total push vs pop
+`dev-test.sh` automatically provides debug instrumentation. Read its output carefully.
 
-**Wrong values**: Computation error
-- Verify helper parameters match design
-- Check scaler values
-- Add DPRINT for debugging
+**Hang (exit code 2)**: The script runs `tt-triage` automatically on timeout and dumps the watcher log.
+- **Triage callstacks** show exactly where each RISC-V is stuck (e.g. spinning in `cb_wait_front`)
+- **Watcher log** shows waypoints (last code point reached), NoC sanitization errors, and assert failures
+- **Most common cause**: CB sync mismatch — verify you didn't add CB ops around helpers, check the design's CB Sync Summary table, count total push vs pop per CB
+
+**Test failure (exit code 1)**: Could be a watcher assert, NoC violation, or wrong values.
+- **Watcher assert**: Output will contain "tripped assert on line X" with the kernel name — check that line in the kernel
+- **NoC sanitization error**: Output will contain address/coordinate info for the illegal transaction — check reader/writer NoC addressing
+- **Wrong values**: Verify helper parameters match design, check scaler packing, add DPRINT for debugging
 
 **Compile error**: Include or syntax issue
 - Verify all helper includes are present
