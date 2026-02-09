@@ -8,19 +8,19 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/debug/assert.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/binary_max_min.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/softplus.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/reduce_custom.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/reduce_custom.h"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -663,8 +663,8 @@ void calculate_exponential_polynomial() {
     constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
     constexpr float M_LN2 = -0.69314718055994530942f;     // -ln(2)
 
-    if (!USE_SFPARECIP_INSTR) {
-        ASSERT(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
+    if constexpr (!USE_SFPARECIP_INSTR) {
+        static_assert(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
 
         // Evaluate polynomial f(x) = c0 + c1 * x + c2 * x^2 + ... using Horner's method.
         constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
@@ -682,25 +682,24 @@ void calculate_exponential_polynomial() {
                                                 : 0.16792157982882225102649214918047336097544632172075f;
         constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
 
-        switch (POLY_DEGREE) {
-            case 4:
-                TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
-                TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
-                [[fallthrough]];
-            case 3:
-                TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
-                TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
-                [[fallthrough]];
-            case 2:
-                TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
-                TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
-                [[fallthrough]];
-            case 1:
-                TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
-                TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
-                TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
-                TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
-            default: break;
+        // Load polynomial coefficients.
+        if constexpr (POLY_DEGREE >= 4) {
+            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
+            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
+        }
+        if constexpr (POLY_DEGREE >= 3) {
+            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
+            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
+        }
+        if constexpr (POLY_DEGREE >= 2) {
+            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
+            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
+        }
+        if constexpr (POLY_DEGREE >= 1) {
+            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
         }
     }
 
@@ -1138,9 +1137,11 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_push_back(out_cb, num_tiles);
 }
 
-void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
-    // out_cb = in0_cb - in1_cb
-
+/**
+ * out_cb = in0_cb - in1_cb
+ * Compile with size optimization to prevent binary size exceeding the limit.
+ */
+__attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);

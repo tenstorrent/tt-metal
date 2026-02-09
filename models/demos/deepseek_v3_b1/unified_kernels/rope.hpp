@@ -10,12 +10,12 @@
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reg_api.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/matmul.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reg_api.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -36,19 +36,21 @@ struct Rope {
     // Compile-time args structs - different layout per RISC
     // ========================================================================
 
-    // Reader CTArgs (NCRISC): Wt for sharded input signaling
-    template <uint32_t Wt_>
+    // Reader CTArgs (NCRISC): Wt and Ht for sharded input signaling
+    template <uint32_t Wt_, uint32_t Ht_>
     struct ReaderCTArgs {
         static constexpr uint32_t Wt = Wt_;  // head_dim in tiles
+        static constexpr uint32_t Ht = Ht_;  // num_heads per core
     };
 
     // Writer CTArgs (BRISC): none
     struct WriterCTArgs {};
 
-    // Compute CTArgs (TRISC): Wt as template parameter (Ht=1 hardcoded)
-    template <uint32_t Wt_>
+    // Compute CTArgs (TRISC): Wt and Ht as template parameters
+    template <uint32_t Wt_, uint32_t Ht_>
     struct ComputeCTArgs {
         static constexpr uint32_t Wt = Wt_;  // head_dim in tiles
+        static constexpr uint32_t Ht = Ht_;  // num_heads per core
     };
 
     // ========================================================================
@@ -81,9 +83,10 @@ struct Rope {
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
 
     // ========================================================================
-    // Op - the actual operation, templated on CTArgs and IsActiveCore
+    // Op - the actual operation, templated on CTArgs, IsActiveCore, and SkipFullInit
+    // SkipFullInit: When true, skip full mm_init/binary_op_init_common
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore>
+    template <typename CTArgs, bool IsActiveCore, bool SkipFullInit = false>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -96,23 +99,26 @@ struct Rope {
         void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_TRISC)
             constexpr uint32_t Wt = CTArgs::Wt;
-            constexpr uint32_t Ht = 1;
+            constexpr uint32_t Ht = CTArgs::Ht;
 
             // ================================================================
             // Wait for sharded CBs (signaled by NCRISC)
             // ================================================================
             cb_wait_front(args.trans_mat_cb, 1);  // Trans_mat: 1 tile, reused for all heads
-            cb_wait_front(args.sin_cb, Wt);       // Sin: Wt tiles
-            cb_wait_front(args.cos_cb, Wt);       // Cos: Wt tiles
-
+            cb_wait_front(args.sin_cb, Wt);       // Sin: Wt tiles (reused for all heads)
+            cb_wait_front(args.cos_cb, Wt);       // Cos: Wt tiles (reused for all heads)
             // ================================================================
-            // Initialize matmul and binary ops (done once before loop)
+            // Initialize matmul and binary ops
+            // In fused kernels (SkipFullInit=true), skip full init because multiple full
+            // inits are unsafe (can interfere with other matmul operations on the same core).
+            // Use mm_init_short in the loop to reconfigure CB pointers as needed.
             // ================================================================
-            mm_init(args.in_cb, args.trans_mat_cb, args.rotated_in_interm_cb);
-            binary_op_init_common(args.rotated_in_interm_cb, args.sin_cb, args.sin_interm_cb);
-
+            if constexpr (!SkipFullInit) {
+                mm_init(args.in_cb, args.trans_mat_cb, args.rotated_in_interm_cb);
+                binary_op_init_common(args.rotated_in_interm_cb, args.sin_cb, args.sin_interm_cb);
+            }
             // ================================================================
-            // Main loop: process each head tile row
+            // Main loop: process Ht heads, each head consumes Wt tiles
             // ================================================================
             for (uint32_t ht = 0; ht < Ht; ht++) {
                 // Reserve intermediate and output buffers
@@ -121,7 +127,6 @@ struct Rope {
                 cb_reserve_back(args.cos_interm_cb, Wt);
                 cb_reserve_back(args.out_cb, Wt);
 
-                // Signal input row is ready (sharded tensor)
                 cb_wait_front(args.in_cb, Wt);
 
                 // ============================================================
@@ -197,6 +202,7 @@ struct Rope {
 
             // ================================================================
             // Cleanup: pop sin/cos (trans_mat is reused, not popped)
+            // Note: sin/cos are reused for all heads, so only pop once after all heads processed
             // ================================================================
             cb_pop_front(args.sin_cb, Wt);
             cb_pop_front(args.cos_cb, Wt);

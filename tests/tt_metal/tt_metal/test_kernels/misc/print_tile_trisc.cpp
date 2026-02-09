@@ -7,7 +7,7 @@
 
 // PACK trisc version of cb_wait_front just for this test
 #if defined(UCK_CHLKC_PACK)
-#include "compute_kernel_api/cb_api.h"
+#include "api/compute/cb_api.h"
 inline void cb_wait_front_pack(int operand, std::int32_t num_tiles) {
     std::uint32_t input = operand;
     volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
@@ -23,8 +23,8 @@ inline void cb_wait_front_pack(int operand, std::int32_t num_tiles) {
 }
 #endif
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/common.h"
+#include "api/compute/untilize.h"
 ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
     compute_kernel_hw_startup(in0_cb, out_cb);
     untilize_init(in0_cb);
