@@ -104,6 +104,11 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
+#ifdef FUSE_MM_OP_SIGNALER
+    size_t mm_op_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_sem_target = 0;
+#endif
+
     DPRINT << "compile time args:" << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
     DPRINT << "ring_size: " << ring_size << ENDL();
@@ -160,6 +165,14 @@ void kernel_main() {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
+#ifdef FUSE_MM_OP_SIGNALER
+                if (!do_reduce) {
+                    // Wait for matmul to produce this chunk of output before reading it
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target + 1);
+                    mm_sem_target++;
+                }
+#endif
                 for (uint32_t i = 0; i < ring_size; i++) {
                     DPRINT << "************************************************" << ENDL();
                     DPRINT << "ring iteration: " << i << " started" << ENDL();

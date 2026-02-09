@@ -186,6 +186,42 @@ void ReduceScatterFusedOpSignaler::push_reduce_scatter_fused_op_rt_args(std::vec
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
 }
 
+// Used to propagate semaphore information from strided reduce scatter to matmul
+// so the matmul master knows which cores and semaphore to signal.
+void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
+    Program& program, const IDevice* device, const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
+    this->fused_op_receiver_cores_noc.clear();
+
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+            }
+        },
+        core_range_to_signal);
+
+    this->fused_op_receiver_signal_semaphore = CreateSemaphore(program, core_range_to_signal, 0);
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+    this->initialized = true;
+}
+
+void StridedReduceScatterFusedOpSignaler::push_strided_reduce_scatter_fused_op_rt_args(
+    std::vector<uint32_t>& out_rt_args) const {
+    TT_FATAL(initialized, "StridedReduceScatterFusedOpSignaler not initialized.");
+    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphore));
+}
+
 // Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
 void MatmulFusedOpSignaler::init_all_gather(
     uint32_t num_transfers,
