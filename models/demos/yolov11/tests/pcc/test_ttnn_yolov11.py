@@ -55,4 +55,5 @@ def test_yolov11(device, reset_seeds, resolution, use_pretrained_weights, model_
     ttnn_model = ttnn_yolov11.TtnnYoloV11(device, parameters)
     ttnn_output = ttnn_model(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
+    print(pcc_message)

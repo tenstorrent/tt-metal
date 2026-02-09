@@ -64,6 +64,20 @@ Note: The model is evaluated with 500 samples.
 ### Web Demo
 - Try the interactive web demo at [yolov8s/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8s/web_demo/README.md)
 
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9990457             | 210.00                   | Passed      |
+
+**N300**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9990912             | 325                      | Passed      |
+
 ## Details
 - The entry point to the yolov8s is located at:`models/demos/yolov8s/tt/ttnn_yolov8s.py`
 - Batch Size :1

@@ -558,4 +558,5 @@ def test_yolov10x(use_pretrained_weights, device, reset_seeds, model_location_ge
     ttnn_output = ttnn_module(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)[0]
 
-    assert_with_pcc(torch_model_output, ttnn_output, 0.999)
+    pcc_passed, pcc_message = assert_with_pcc(torch_model_output, ttnn_output, pcc=0.999)
+    print(pcc_message)

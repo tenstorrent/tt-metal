@@ -73,6 +73,21 @@ pytest models/demos/yolo_eval/evaluate.py::test_yolov7[res0-device_params0-tt_mo
 ```
 Note: The model is evaluated with 500 samples.
 
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N150)  | Demo Status  |
+|-------------|------------------------|--------------------------|--------------|
+| 640x640     | 0.9991836              | 119.4100463              | Passed       |
+
+**N300**
+| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N300)  | Demo Status  |
+|-------------|------------------------|--------------------------|--------------|
+| 640x640     | 0.9991836              | 204.42                   | Passed       |
+
+
 ## Details
 - The entry point of the model is located at ```models/demos/yolov7/tt/ttnn_yolov7.py```
 - Batch Size : `1` (Single Device), `2` (Multi Device).

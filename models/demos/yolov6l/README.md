@@ -86,6 +86,20 @@ pytest --disable-warnings models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py
 
 Note: The model is evaluated with 500 samples.
 
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N150)  | Demo Status |
+|-------------|------------------------|--------------------------|-------------|
+| 640x640     | 0.9998796              | 100.00                   | Passed      |
+
+**N300**
+| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N300)  | Demo Status |
+|-------------|------------------------|--------------------------|-------------|
+| 640x640     | 0.9998796              | 174.00                   | Passed      |
+
 
 ### Details
 - The entry point to yolov6l model is TtYolov6l in `models/demos/yolov6l/tt/ttnn_yolov6l.py`.

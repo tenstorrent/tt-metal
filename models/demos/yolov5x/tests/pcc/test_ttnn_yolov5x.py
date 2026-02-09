@@ -39,4 +39,5 @@ def test_yolov5x(device, reset_seeds, model_location_generator):
     ttnn_output = ttnn_module(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_model_output, ttnn_output, 0.99)
+    pcc_passed, pcc_message = assert_with_pcc(torch_model_output, ttnn_output, 0.99)
+    print(pcc_message)
