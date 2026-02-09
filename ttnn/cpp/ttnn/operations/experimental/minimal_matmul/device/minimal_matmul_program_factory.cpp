@@ -116,7 +116,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const std::vector<Tensor>& output_tensors,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
-    uint32_t N_chunks) {
+    uint32_t N_chunks,
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler) {
     auto* device = input_tensor.device();
 
     bool fuse_op = fused_op_signaler.has_value();
@@ -331,10 +332,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::map<std::string, std::string> defines;
     std::map<std::string, std::string> in0_injector_defines;
 
-    // OpSignaler for synchronizing matmul output writers each time an output block is written
-    defines["SRS_FUSE_OP_SIGNALER"] = "1";
-    auto srs_fuse_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
-    auto srs_fuse_signaler_dummy_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    // OpSignaler for synchronizing matmul output writers and signaling strided reduce scatter
+    bool fuse_srs = srs_fused_op_signaler.has_value();
+    uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
+    if (fuse_srs) {
+        defines["SRS_FUSE_OP_SIGNALER"] = "1";
+        srs_fuse_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    }
 
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
@@ -642,7 +646,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
         // Push OpSignaler runtime args (matches OpSignaler constructor in worker_sync_utils.hpp)
-        {
+        if (fuse_srs) {
             in0_args.push_back(static_cast<uint32_t>(num_cores));                      // num_workers_to_sync
             in0_args.push_back(static_cast<uint32_t>(core_id));                        // curr_worker_index
             in0_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_sync_semaphore_id));  // worker_sync_sem
@@ -650,9 +654,14 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
                 in0_args.push_back(static_cast<uint32_t>(noc_core.x));
                 in0_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
-            in0_args.push_back(0);  // num_fused_op_cores_to_signal (empty op)
-            in0_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_dummy_semaphore_id));  // signal_op_sem (dummy)
-            in0_args.push_back(1);                                                      // mcast_signal_op_cores
+            // Strided reduce scatter signal info from the signaler
+            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
+            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
+            in0_args.push_back(1);  // mcast_signal_op_cores
+            for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
+                in0_args.push_back(static_cast<uint32_t>(noc_core.x));
+                in0_args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
         }
         if (in1_idx == 0) {
             // in0 sender
@@ -684,7 +693,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
         // Push OpSignaler runtime args (matches OpSignaler constructor in worker_sync_utils.hpp)
-        {
+        if (fuse_srs) {
             in1_args.push_back(static_cast<uint32_t>(num_cores));                      // num_workers_to_sync
             in1_args.push_back(static_cast<uint32_t>(core_id));                        // curr_worker_index
             in1_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_sync_semaphore_id));  // worker_sync_sem
@@ -692,9 +701,14 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
                 in1_args.push_back(static_cast<uint32_t>(noc_core.x));
                 in1_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
-            in1_args.push_back(0);  // num_fused_op_cores_to_signal (empty op)
-            in1_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_dummy_semaphore_id));  // signal_op_sem (dummy)
-            in1_args.push_back(1);                                                      // mcast_signal_op_cores
+            // Strided reduce scatter signal info from the signaler
+            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
+            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
+            in1_args.push_back(1);  // mcast_signal_op_cores
+            for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
+                in1_args.push_back(static_cast<uint32_t>(noc_core.x));
+                in1_args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
         }
         if (in0_idx == 0) {
             // in1 sender
@@ -734,7 +748,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const std::optional<const MinimalMatmulConfig>& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler) {
     // Wrap single output in vector and call shared implementation
     std::vector<Tensor> output_tensors = {output_tensor};
     return minimal_matmul_factory_helper_common(
@@ -747,8 +762,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
         output_tensors,
         compute_kernel_config,
         fused_op_signaler,
-        1  // N_chunks = 1 for regular minimal_matmul
-    );
+        1,  // N_chunks = 1 for regular minimal_matmul
+        srs_fused_op_signaler);
 }
 
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
@@ -757,6 +772,7 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
     Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
 
     auto shared_vars = minimal_matmul_factory_helper(
         program,
@@ -767,7 +783,8 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
         operation_attributes.config,
         tensor_return_value,
         operation_attributes.compute_kernel_config,
-        empty_fused_op_signaler);
+        empty_fused_op_signaler,
+        empty_srs_fused_op_signaler);
 
     return {std::move(program), std::move(shared_vars)};
 }
