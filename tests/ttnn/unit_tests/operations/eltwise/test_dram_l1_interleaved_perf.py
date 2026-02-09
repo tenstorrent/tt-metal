@@ -62,10 +62,10 @@ def _check_profiler_available():
         pytest.skip("Profiler bindings not available in this build")
 
 
-def _get_max_kernel_duration(device) -> int:
+def _get_kernel_duration_and_cores(device) -> tuple:
     """
-    Read device profiler and return the max kernel duration (ns) from the
-    latest program execution data.
+    Read device profiler and return (max_kernel_duration_ns, core_count)
+    from the latest program execution data.
     """
     ttnn.synchronize_device(device)
     ttnn.ReadDeviceProfiler(device)
@@ -80,16 +80,18 @@ def _get_max_kernel_duration(device) -> int:
         pytest.skip("No program entries in profiler data")
 
     max_duration = 0
+    core_count = 0
     for program in programs:
+        core_count = max(core_count, program.core_count)
         for _name, result in program.program_analyses_results.items():
             if result.duration > max_duration:
                 max_duration = result.duration
 
-    return max_duration
+    return max_duration, core_count
 
 
 def _measure_relu(device, input_tensor, output_memory_config, warmup_iterations=2):
-    """Run relu with warmup, then return measured kernel duration (ns)."""
+    """Run relu with warmup, then return (kernel_duration_ns, core_count)."""
     for _ in range(warmup_iterations):
         out = ttnn.relu(input_tensor, memory_config=output_memory_config)
         ttnn.deallocate(out)
@@ -100,9 +102,9 @@ def _measure_relu(device, input_tensor, output_memory_config, warmup_iterations=
 
     # Measured run
     out = ttnn.relu(input_tensor, memory_config=output_memory_config)
-    duration = _get_max_kernel_duration(device)
+    duration, core_count = _get_kernel_duration_and_cores(device)
     ttnn.deallocate(out)
-    return duration
+    return duration, core_count
 
 
 @pytest.mark.parametrize(
@@ -139,6 +141,7 @@ def test_relu_memory_layout_kernel_duration(shape, num_tiles, monkeypatch, tmp_p
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
         durations = {}
+        core_counts = {}
         for in_name, in_mem_config in MEMORY_CONFIGS.items():
             input_tensor = ttnn.from_torch(
                 torch_input,
@@ -149,19 +152,34 @@ def test_relu_memory_layout_kernel_duration(shape, num_tiles, monkeypatch, tmp_p
             )
             for out_name, out_mem_config in MEMORY_CONFIGS.items():
                 label = f"{in_name}->{out_name}"
-                durations[label] = _measure_relu(device, input_tensor, out_mem_config)
+                duration, cores = _measure_relu(device, input_tensor, out_mem_config)
+                durations[label] = duration
+                core_counts[label] = cores
 
             ttnn.deallocate(input_tensor)
+
+        compute_grid = device.compute_with_storage_grid_size()
+        max_cores = compute_grid.x * compute_grid.y
     finally:
         ttnn.close_device(device)
 
     # Print results
-    print(f"\nShape: {shape}  ({num_tiles} tiles)")
-    for label, duration in durations.items():
-        print(f"  {label:12s} kernel duration: {duration} ns")
+    print(f"\nShape: {shape}  ({num_tiles} tiles, device grid: {max_cores} cores)")
+    for label in durations:
+        tiles_per_core = num_tiles / core_counts[label] if core_counts[label] else 0
+        print(
+            f"  {label:12s} duration: {durations[label]:>8d} ns, "
+            f"cores: {core_counts[label]:>3d}, tiles/core: {tiles_per_core:.1f}"
+        )
 
     # Dump JSON for plotting
-    result = {"num_tiles": num_tiles, "shape": list(shape), "durations": durations}
+    result = {
+        "num_tiles": num_tiles,
+        "shape": list(shape),
+        "durations": durations,
+        "core_counts": core_counts,
+        "max_cores": max_cores,
+    }
     results_dir = tmp_path.parent / "relu_perf_results"
     results_dir.mkdir(exist_ok=True)
     with open(results_dir / f"{num_tiles}_tiles.json", "w") as f:
