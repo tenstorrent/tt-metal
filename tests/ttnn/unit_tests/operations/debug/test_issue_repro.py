@@ -284,9 +284,11 @@ def test_no_deadlock_repro(device):
 
 def test_issue_6849_repro(device):
     """
-    Reproduces issue from issue_6849.mlir.
-    Issue: https://github.com/tenstorrent/tt-mlir/issues/6849
+    Attempt to reproduce issue from issue_6849.mlir. Not seeing the incorrect values reported in the issue.
+    Issue: https//github.com/tenstorrent/tt-mlir/issues/6849
     Multi-core (4x2) program with multiple CB ports and buffer configurations.
+    To see output, run export TT_METAL_DPRINT_CORES=0,0
+    DPRINTs are located in /tt-metal/tt_metal/kernels/compute/issue_6849_compute_kernel.cpp
     """
 
     logger.info("Starting test_issue_6849_repro")
