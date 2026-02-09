@@ -3673,6 +3673,14 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedScatterWriteAtomic
         NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)});
 }
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedScatterWriteAtomicIncWithState) {
+    FabricUnicastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
+        {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
+        FabricApiType::Linear,
+        true);
+}
 
 void FabricSparseMulticastCommon(
     BaseFabricFixture* fixture, const std::vector<std::tuple<RoutingDirection, uint16_t>>& pair_ordered_dir_configs) {
@@ -3941,6 +3949,13 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedScatterWriteAtom
         this,
         NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)});
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedScatterWriteAtomicIncWithState) {
+    FabricMulticastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
+        {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
+        true);
 }
 
 // Test cases using the new Fabric1DTensixFixture to test tensix config with mux

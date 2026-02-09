@@ -616,8 +616,9 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     static_assert(
-        UpdateMask == UnicastFusedScatterWriteAtomicIncUpdateMask::All,
-        "When setting state, all fields must be updated");
+        has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::Flush),
+        "When setting state, the Flush field must be updated to set the chunk encoding for the semaphore increment "
+        "chunk");
     fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
     packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
     populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
@@ -2106,8 +2107,9 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     static_assert(
-        UpdateMask == UnicastFusedScatterWriteAtomicIncUpdateMask::All,
-        "When setting state, all fields must be updated");
+        has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::Flush),
+        "When setting state, the Flush field must be updated to set the chunk encoding for the semaphore increment "
+        "chunk");
     fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
     populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(

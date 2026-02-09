@@ -597,6 +597,17 @@ TEST_F(NightlyFabric2DFixture, TestMeshFabricMulticastNocFusedScatterWriteAtomic
         },
         false);
 }
+TEST_F(NightlyFabric2DFixture, TestMeshFabricMulticastNocFusedScatterWriteAtomicIncWithState) {
+    Fabric2DMulticastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
+        {
+            {std::make_tuple(RoutingDirection::N, 0, 1), std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::W, 0, 1)},
+        },
+        true);
+}
 TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocInlineWrite) {
     for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
         FabricUnicastCommon(
@@ -1394,6 +1405,17 @@ TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocFusedScatterWriteAtomicIn
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)},
         FabricApiType::Mesh);
+}
+TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocFusedScatterWriteAtomicIncWithState) {
+    FabricUnicastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
+        {std::make_tuple(RoutingDirection::E, 1),
+         std::make_tuple(RoutingDirection::W, 2),
+         std::make_tuple(RoutingDirection::N, 1),
+         std::make_tuple(RoutingDirection::S, 1)},
+        FabricApiType::Mesh,
+        true);
 }
 
 // 2D topology Linear API tests (using 1D Linear API semantics)

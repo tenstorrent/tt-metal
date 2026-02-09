@@ -250,6 +250,30 @@ struct NocUnicastScatterAtomicIncFusedCommandHeader {
     uint16_t chunk_size[NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS - 1];  // last chunk size is implicit
     uint16_t val;                                                              // Semaphore increment value
     bool flush;
+
+    NocUnicastScatterAtomicIncFusedCommandHeader(
+        std::initializer_list<uint64_t> noc_addresses,
+        uint64_t semaphore_noc_address,
+        std::initializer_list<uint16_t> chunk_sizes,
+        uint16_t val,
+        bool flush = true) :
+        semaphore_noc_address(semaphore_noc_address), val(val), flush(flush) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        const size_t num_noc_addresses = noc_addresses.size();
+        const size_t num_chunk_sizes = chunk_sizes.size();
+        ASSERT(num_noc_addresses == NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS);
+        ASSERT(num_chunk_sizes == num_noc_addresses - 1);
+#endif
+        size_t idx = 0;
+        for (auto addr : noc_addresses) {
+            this->noc_address[idx++] = addr;
+        }
+
+        idx = 0;
+        for (auto chunk_size : chunk_sizes) {
+            this->chunk_size[idx++] = chunk_size;
+        }
+    }
 };
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
