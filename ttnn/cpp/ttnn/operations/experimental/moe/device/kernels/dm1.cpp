@@ -65,8 +65,6 @@ void kernel_main() {
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
     constexpr auto cb_c2s_out = tt::CBIndex::c_5;
 
-    constexpr auto cb_c2w_out = tt::CBIndex::c_5;
-
     //     auto * source_base_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(source_base_l1_addr);
     //
     //     // for(uint32_t i = 0; i<1024; ++i){
@@ -188,8 +186,8 @@ void kernel_main() {
 
                     // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                     // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
-                    const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
-                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
+                    const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
+                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
                     noc_async_write_one_packet_with_state</*posted=*/true>(
@@ -209,7 +207,7 @@ void kernel_main() {
 
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - hb * tile_height);
 
-            cb_wait_front(cb_c2w_out, 20);
+            cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2w_out);
 
             // tt::data_movement::common::print_bf16_pages(source_base_l1_addr,16, 64);
@@ -260,7 +258,7 @@ void kernel_main() {
             }
 
             noc_async_posted_atomic_barrier();
-            cb_pop_front(cb_c2w_out, 20);
+            cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
 
             source_buffer_iter = !source_buffer_iter;
         }

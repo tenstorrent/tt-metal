@@ -8,7 +8,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/pack_untilize.h"
+// #include "compute_kernel_api/pack_untilize.h"
 
 // DEBUG
 #include "compute_kernel_api/eltwise_unary/fill.h"
@@ -109,6 +109,7 @@ void kernel_main() {
     // Unpacker A is for W0,W1 and W2, so Bf4_b
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
+<<<<<<< HEAD
     auto stall = []() {
         for (uint32_t i = 0; i < 10000000; ++i) {
             asm volatile("nop");
@@ -129,6 +130,7 @@ void kernel_main() {
             asm volatile("nop");
         }
     };
+    MATH(ckernel::zeroacc());
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -237,7 +239,7 @@ void kernel_main() {
                         cb_pop_front(cb_w2c_rdy, 1);
                         cb_wait_front(cb_w2c_rdy, 1);
                         dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in2_offset = (in2_offset == tiles_per_step) ? 0 : tiles_per_step;
+                        in2_offset += tiles_per_step;
                         in2_index = in2_offset;
                     }
                     dm1_tiles_remaining--;
@@ -285,6 +287,7 @@ void kernel_main() {
             // /*block_c_index=*/iter);
             tile_regs_release();
         }
+        // pack_untilize_uninit(cb_c2s_out);
         cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
     }  // end for (expert_id)
 
