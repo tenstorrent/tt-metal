@@ -59,7 +59,7 @@ void kernel_main() {
         // -------------------- Addition with acc -----------------------------
 
         // Init like CB_0 is in A and CB_1 is in B
-        add_tiles_init(cb_in0, cb_in1, true);
+        add_tiles_init(cb_in2, cb_in1, true);
 
         // Reconfigure UNPACK for correct source formats, tests reconfig calls
 #if (EXPLICIT_RECONFIG == 1)
