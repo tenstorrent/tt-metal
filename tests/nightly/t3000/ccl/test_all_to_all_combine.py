@@ -28,7 +28,7 @@ def get_experts_on_device(num_experts, expert_mapping, device):
     return [e for e in range(num_experts) if expert_mapping[0, 0, e, device] == 1]
 
 
-def _get_replication_dims(replication_axis, mesh_shape):
+def get_cluster_dims(replication_axis, mesh_shape):
     if replication_axis == 1:
         replication_dim = mesh_shape[0]
         replication_group = mesh_shape[1]
@@ -39,14 +39,11 @@ def _get_replication_dims(replication_axis, mesh_shape):
         assert replication_axis == -1
         replication_dim = 1
         replication_group = mesh_shape[0] * mesh_shape[1]
-<<<<<<< HEAD
-    return replication_dim, replication_group
-=======
+
     return replication_dim, replication_group, mesh_shape[0] * mesh_shape[1]
->>>>>>> 78e80ceb9b (pre commit fixes and AI suggestions)
 
 
-def _get_batch_rep_idxr(replication_axis, batch):
+def get_batch_cluster_idxr(replication_axis, batch):
     def _idxr(m0, m1, b):
         if replication_axis == 0:
             return m1 * batch + b
@@ -124,13 +121,12 @@ def get_output_combined_contribs(
     hidden = sparse_contribs.shape[-1]
     seq = sparse_contribs.shape[-2]
 
-    devices = mesh_shape[0] * mesh_shape[1]
+    replication_dim, replication_group, devices = get_cluster_dims(replication_axis, mesh_shape)
 
     assert experts % devices == 0
     experts_per_device = experts // devices
 
-    replication_dim, replication_group = _get_replication_dims(replication_axis, mesh_shape)
-    batch_rep_idxr = _get_batch_rep_idxr(replication_axis, batch)
+    batch_rep_idxr = get_batch_cluster_idxr(replication_axis, batch)
 
     if local_reduce:
         local_contrib_idx_func = lambda d, _: d
