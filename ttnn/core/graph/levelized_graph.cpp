@@ -6,7 +6,6 @@
 #include "ttnn/graph/levelized_graph.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include <nlohmann/json.hpp>
-#include <ranges>
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
@@ -62,10 +61,16 @@ std::vector<int> get_connections(const nlohmann::json& node) {
     return node[kConnections].get<std::vector<int>>();
 }
 
-auto get_valid_connections(const nlohmann::json& node, const nlohmann::json& trace) {
-    return get_connections(node) | std::views::filter([&](const auto& conn_counter) {
-               return conn_counter >= 0 && static_cast<size_t>(conn_counter) < trace.size();
-           });
+std::vector<int> get_valid_connections(const nlohmann::json& node, const nlohmann::json& trace) {
+    std::vector<int> out;
+    auto connections = get_connections(node);
+    out.reserve(connections.size());
+    for (int conn_counter : connections) {
+        if (conn_counter >= 0 && static_cast<size_t>(conn_counter) < trace.size()) {
+            out.push_back(conn_counter);
+        }
+    }
+    return out;
 }
 
 // -----------------------------------------------------------------------------------------------------------------
@@ -88,14 +93,15 @@ void LevelizedGraph::init(const nlohmann::json& trace, std::size_t max_level) {
 // 2. tensor nodes at stacking_level 1 (input tensors)
 void LevelizedGraph::populate_vertices(const nlohmann::json& trace, std::size_t max_level) {
     // Verify that counters are sequential (counter == index)
-    auto get_counter = [](const auto& node) { return node[kCounter].template get<int>(); };
-    TT_ASSERT(std::ranges::equal(trace | std::views::transform(get_counter), std::views::iota(0u, trace.size())));
+    for (std::size_t index = 0; index < trace.size(); index++) {
+        TT_ASSERT(trace[index][kCounter].template get<int>() == static_cast<int>(index));
+    }
 
     // Process tensor nodes at stacking_level 1
-    auto input_tensors = trace | std::views::filter([&](const auto& node) {
-                             return node[kNodeType] == kNodeTensor && node[kStackingLevel].template get<size_t>() == 1;
-                         });
-    std::ranges::for_each(input_tensors, [&](const auto& node) {
+    for (const auto& node : trace) {
+        if (node[kNodeType] != kNodeTensor || node[kStackingLevel].template get<size_t>() != 1) {
+            continue;
+        }
         // Create a new vertex for the tensor
         Vertex vertex;
         vertex.id = graph.size();
@@ -120,14 +126,13 @@ void LevelizedGraph::populate_vertices(const nlohmann::json& trace, std::size_t 
         reverse_id_map[vertex.id] = counter;
 
         graph.push_back(vertex);
-    });
+    }
 
     // Process function_start nodes
-    auto valid_starts =
-        trace | std::views::filter([&](const auto& node) {
-            return node[kNodeType] == kNodeFunctionStart && node[kStackingLevel].template get<size_t>() <= max_level;
-        });
-    std::ranges::for_each(valid_starts, [&](const auto& node) {
+    for (const auto& node : trace) {
+        if (node[kNodeType] != kNodeFunctionStart || node[kStackingLevel].template get<size_t>() > max_level) {
+            continue;
+        }
         // Create a new vertex
         Vertex vertex;
         vertex.id = graph.size();
@@ -136,9 +141,11 @@ void LevelizedGraph::populate_vertices(const nlohmann::json& trace, std::size_t 
 
         // Extract arguments if they exist
         if (node.contains(kArguments) && node[kArguments].is_array()) {
-            auto string_args = node[kArguments] | std::views::filter([](const auto& arg) { return arg.is_string(); }) |
-                               std::views::transform([](const auto& arg) { return arg.template get<std::string>(); });
-            vertex.arguments.assign(string_args.begin(), string_args.end());
+            for (const auto& arg : node[kArguments]) {
+                if (arg.is_string()) {
+                    vertex.arguments.push_back(arg.template get<std::string>());
+                }
+            }
         }
 
         int counter = node[kCounter].template get<int>();
@@ -146,37 +153,46 @@ void LevelizedGraph::populate_vertices(const nlohmann::json& trace, std::size_t 
         reverse_id_map[vertex.id] = counter;
 
         graph.push_back(vertex);
-    });
+    }
 }
 
 // Map function_end to function_start (function_start has function_end in its connections)
 void LevelizedGraph::populate_fn_start_to_end_maps(const nlohmann::json& trace) {
-    auto starts = trace | std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeFunctionStart; });
-    std::ranges::for_each(starts, [&](const auto& node) {
+    for (const auto& node : trace) {
+        if (node[kNodeType] != kNodeFunctionStart) {
+            continue;
+        }
         int start_counter = node[kCounter].template get<int>();
-        auto ends = get_valid_connections(node, trace) | std::views::filter([&](const auto& neighbor_counter) {
-                        return trace[neighbor_counter][kNodeType] == kNodeFunctionEnd &&
-                               trace[neighbor_counter][kParams][kName] == node[kParams][kName];
-                    });
-        TT_ASSERT(std::ranges::distance(ends) >= 1);
-        int end_counter = *ends.begin();
+        int end_counter = -1;
+        auto valid_connections = get_valid_connections(node, trace);
+        for (int neighbor_counter : valid_connections) {
+            if (trace[neighbor_counter][kNodeType] == kNodeFunctionEnd &&
+                trace[neighbor_counter][kParams][kName] == node[kParams][kName]) {
+                end_counter = neighbor_counter;
+                break;
+            }
+        }
+        TT_ASSERT(end_counter >= 0);
         function_start_to_end[start_counter] = end_counter;
         function_end_to_start[end_counter] = start_counter;
-    });
+    }
 }
 
 // Map output tensors to function_end that produced them The correct producer is the function_end at the LOWEST stacking
 // level (outermost operation) that has the tensor in its connections. This ensures we get the actual producer, not an
 // intermediate nested operation.
 void LevelizedGraph::populate_tensor_to_producer_end_map(const nlohmann::json& trace) {
-    auto fn_ends = trace | std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeFunctionEnd; });
-    std::ranges::for_each(fn_ends, [&](const auto& node) {
+    for (const auto& node : trace) {
+        if (node[kNodeType] != kNodeFunctionEnd) {
+            continue;
+        }
         int end_counter = node[kCounter].template get<int>();
         size_t end_level = node[kStackingLevel].template get<size_t>();
-        auto tensor_counters = get_valid_connections(node, trace) | std::views::filter([&](const auto& conn_counter) {
-                                   return trace[conn_counter][kNodeType] == kNodeTensor;
-                               });
-        std::ranges::for_each(tensor_counters, [&](const auto& tensor_counter) {
+        auto valid_connections = get_valid_connections(node, trace);
+        for (int tensor_counter : valid_connections) {
+            if (trace[tensor_counter][kNodeType] != kNodeTensor) {
+                continue;
+            }
             // Map tensor to this function_end if:
             // 1. Not already mapped, OR
             // 2. This function_end is at a lower stacking level (outermost operation)
@@ -195,14 +211,13 @@ void LevelizedGraph::populate_tensor_to_producer_end_map(const nlohmann::json& t
                     }
                 }
             }
-        });
-    });
+        }
+    }
 }
 
 // Third pass: Build edges based on actual tensor flow
 void LevelizedGraph::populate_edges(const nlohmann::json& trace) {
-    auto vertex_ids = std::views::iota(0u, graph.size());
-    std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
+    for (std::size_t vertex_id = 0; vertex_id < graph.size(); vertex_id++) {
         int node_counter = reverse_id_map[vertex_id];
         const auto& node = trace[node_counter];
 
@@ -228,13 +243,16 @@ void LevelizedGraph::populate_edges(const nlohmann::json& trace) {
 
             // Find input tensors: tensors that have connections to this function_start
             // This represents tensors that are used as inputs to this operation
-            auto input_tensors =
-                trace | std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeTensor; }) |
-                std::views::filter([&](const auto& node) {
-                    auto connections = get_connections(node);
-                    return std::ranges::find(connections, function_start_counter) != connections.end();
-                }) |
-                std::views::transform([&](const auto& node) { return node[kCounter].template get<int>(); });
+            std::vector<int> input_tensors;
+            for (const auto& trace_node : trace) {
+                if (trace_node[kNodeType] != kNodeTensor) {
+                    continue;
+                }
+                auto connections = get_connections(trace_node);
+                if (std::find(connections.begin(), connections.end(), function_start_counter) != connections.end()) {
+                    input_tensors.push_back(trace_node[kCounter].template get<int>());
+                }
+            }
 
             // For each input tensor, find the producer operation (or the tensor vertex itself)
             auto fn = [&](int tensor_counter) {
@@ -271,15 +289,16 @@ void LevelizedGraph::populate_edges(const nlohmann::json& trace) {
                     }
                 }
             };
-            std::ranges::for_each(input_tensors, fn);
+            for (int tensor_counter : input_tensors) {
+                fn(tensor_counter);
+            }
         }
-    });
+    }
 }
 
 // Fourth pass: Populate internals (children at stacking_level + 1)
 void LevelizedGraph::populate_internals(const nlohmann::json& trace, std::size_t max_level) {
-    auto vertex_ids = std::views::iota(0u, graph.size());
-    std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
+    for (std::size_t vertex_id = 0; vertex_id < graph.size(); vertex_id++) {
         int node_counter = reverse_id_map[vertex_id];
         const auto& node = trace[node_counter];
 
@@ -300,39 +319,43 @@ void LevelizedGraph::populate_internals(const nlohmann::json& trace, std::size_t
 
         // Find all function_start nodes that are children (between function_start and function_end)
         // and have stacking_level = parent_level + 1
-        auto children = trace |
-                        std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeFunctionStart; }) |
-                        std::views::filter([&](const auto& node) {
-                            int child_counter = node[kCounter].template get<int>();
-                            size_t child_level = node[kStackingLevel].template get<size_t>();
-                            return child_level == parent_level + 1 && child_counter > function_start_counter &&
-                                   child_counter < function_end_counter && child_level <= max_level;
-                        }) |
-                        std::views::transform([&](const auto& node) { return node[kCounter].template get<int>(); }) |
-                        std::views::filter([&](int child_counter) { return id_map.contains(child_counter); }) |
-                        std::views::transform([&](int child_counter) { return id_map[child_counter]; });
-
-        graph[vertex_id].internals.assign(children.begin(), children.end());
-    });
+        std::vector<std::size_t> internals;
+        for (const auto& trace_node : trace) {
+            if (trace_node[kNodeType] != kNodeFunctionStart) {
+                continue;
+            }
+            int child_counter = trace_node[kCounter].template get<int>();
+            size_t child_level = trace_node[kStackingLevel].template get<size_t>();
+            if (child_level != parent_level + 1 || child_level > max_level) {
+                continue;
+            }
+            if (child_counter <= function_start_counter || child_counter >= function_end_counter) {
+                continue;
+            }
+            auto it = id_map.find(child_counter);
+            if (it == id_map.end()) {
+                continue;
+            }
+            internals.push_back(it->second);
+        }
+        graph[vertex_id].internals = std::move(internals);
+    }
 }
 
 // Fifth pass: Populate output_info
 // For each vertex, find same-level consumers and extract their first tensor argument
 // This can later change if graph capture stores the output info of each vertex.
 void LevelizedGraph::populate_output_info() {
-    auto vertex_ids = std::views::iota(0u, graph.size());
-    std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
+    for (std::size_t vertex_id = 0; vertex_id < graph.size(); vertex_id++) {
         auto& vertex = graph[vertex_id];
         size_t vertex_level = vertex.stacking_level;
 
         // Find connections at the same stacking level
-        auto same_level_consumers =
-            vertex.out_edges | std::views::filter([&](size_t consumer_id) {
-                return consumer_id < graph.size() && graph[consumer_id].stacking_level == vertex_level;
-            });
-
         // Extract the first tensor argument from same-level consumers
-        for (size_t consumer_id : same_level_consumers) {
+        for (size_t consumer_id : vertex.out_edges) {
+            if (consumer_id >= graph.size() || graph[consumer_id].stacking_level != vertex_level) {
+                continue;
+            }
             const auto& consumer = graph[consumer_id];
             if (!consumer.arguments.empty()) {
                 const std::string& first_arg = consumer.arguments[0];
@@ -341,21 +364,21 @@ void LevelizedGraph::populate_output_info() {
                     // Add to output_info if not already present (avoid duplicates)
                     // Note: this is not scalable, but the only viable solution for now since graph capture does not
                     // store the output info of each vertex.
-                    if (std::ranges::find(vertex.output_info, first_arg) == vertex.output_info.end()) {
+                    if (std::find(vertex.output_info.begin(), vertex.output_info.end(), first_arg) ==
+                        vertex.output_info.end()) {
                         vertex.output_info.push_back(first_arg);
                     }
                     break;  // Found it, no need to check other consumers
                 }
             }
         }
-    });
+    }
 }
 
 // Sixth pass: Populate output_shape
 // For each vertex, find its function_end and extract shape from output tensor nodes
 void LevelizedGraph::populate_output_shape(const nlohmann::json& trace) {
-    auto vertex_ids = std::views::iota(0u, graph.size());
-    std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
+    for (std::size_t vertex_id = 0; vertex_id < graph.size(); vertex_id++) {
         auto& vertex = graph[vertex_id];
         int node_counter = reverse_id_map[vertex_id];
         const auto& node = trace[node_counter];
@@ -381,29 +404,28 @@ void LevelizedGraph::populate_output_shape(const nlohmann::json& trace) {
         const auto& function_end_node = trace[function_end_counter];
 
         // Get connections from function_end and extract shapes from tensor nodes
-        auto shapes =
-            get_valid_connections(function_end_node, trace) |
-            std::views::filter([&](int conn_counter) { return trace[conn_counter][kNodeType] == kNodeTensor; }) |
-            std::views::filter([&](int conn_counter) {
-                const auto& connected_node = trace[conn_counter];
-                return connected_node.contains(kParams) && connected_node[kParams].contains(kShape);
-            }) |
-            std::views::transform(
-                [&](int conn_counter) { return trace[conn_counter][kParams][kShape].template get<std::string>(); }) |
-            std::views::filter([&](const std::string& shape_str) {
-                return std::ranges::find(vertex.output_shape, shape_str) == vertex.output_shape.end();
-            });
-
-        vertex.output_shape.insert(vertex.output_shape.end(), shapes.begin(), shapes.end());
-    });
+        auto connections = get_valid_connections(function_end_node, trace);
+        for (int conn_counter : connections) {
+            if (trace[conn_counter][kNodeType] != kNodeTensor) {
+                continue;
+            }
+            const auto& connected_node = trace[conn_counter];
+            if (!connected_node.contains(kParams) || !connected_node[kParams].contains(kShape)) {
+                continue;
+            }
+            auto shape_str = trace[conn_counter][kParams][kShape].template get<std::string>();
+            if (std::find(vertex.output_shape.begin(), vertex.output_shape.end(), shape_str) == vertex.output_shape.end()) {
+                vertex.output_shape.push_back(std::move(shape_str));
+            }
+        }
+    }
 }
 
 // Seventh pass: Populate input_connections
 // For each vertex, find input tensor producers for each tensor argument
 // Use the input_tensors field from graph capture if available
 void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
-    auto vertex_ids = std::views::iota(0u, graph.size());
-    std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
+    for (std::size_t vertex_id = 0; vertex_id < graph.size(); vertex_id++) {
         auto& vertex = graph[vertex_id];
         int node_counter = reverse_id_map[vertex_id];
         const auto& node = trace[node_counter];
@@ -461,7 +483,7 @@ void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
                 }
             }
         }
-    });
+    }
 }
 
 }  // namespace ttnn::graph

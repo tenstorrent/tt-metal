@@ -166,8 +166,6 @@ class Glm4MoeLiteForCausalLM(nn.Module):
         if self.mesh_device.__class__.__name__ == "MeshDevice":
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
-        cache_file = self.cache_dir / f"empty_kvpe_cache_paged_attention{self._kv_cache_shape}_dtype_{tt_dtype}"
-
         kv_cache = []
         for layer_idx in range(num_layers_to_alloc):
             if layer_idx == 0 or (layer_idx + 1) % 8 == 0 or (layer_idx + 1) == num_layers_to_alloc:
@@ -180,7 +178,10 @@ class Glm4MoeLiteForCausalLM(nn.Module):
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=tt_dtype,
-                    cache_file_name=cache_file,
+                    # Do not use `cache_file_name` here. KV caches must be unique
+                    # per layer; disk caching can lead to accidentally reusing
+                    # the same backing buffer across layers.
+                    cache_file_name=None,
                 )
             )
         self._kv_cache = kv_cache
@@ -249,13 +250,27 @@ class Glm4MoeLiteForCausalLM(nn.Module):
         if impl in {"mla", "flash_mla", "flash_mla_prefill", "prefill"}:
             return self._tt_runner.prefill(tokens=tokens, prompt_lens=prompt_lens, page_table=page_table, kv_cache=kv_cache)
 
-        if impl not in {"decode_loop", "decode"}:
+        if impl not in {"decode_loop", "decode", "decode_loop_trace"}:
             raise ValueError(
                 f"Invalid GLM4_MOE_LITE_PREFILL_IMPL={impl!r}; expected one of "
-                "['flash_mla_prefill', 'decode_loop']"
+                "['flash_mla_prefill', 'decode_loop', 'decode_loop_trace']"
             )
 
-        # Fallback: iterative decode-per-token prefill (slow, correctness-only).
+        # Fallback: iterative decode-per-token prefill. This is a pragmatic
+        # workaround for large/slow shape-specialized prefill graphs.
+        #
+        # decode_loop:
+        # - correctness-only
+        # - runs non-traced decode and reads logits each step (slow)
+        #
+        # decode_loop_trace:
+        # - uses decode trace replay for each prompt token
+        # - uses on-device greedy sampling for intermediate tokens to avoid
+        #   reading full logits back to host for every token
+        #
+        # Note: this still computes the LM head for intermediate tokens (the
+        # trace graph produces logits). A future optimization is to add an
+        # "update-cache-only" trace that stops before the LM head.
         last_logits = []
         for i in range(batch):
             prompt_len = int(prompt_lens[i])
@@ -268,8 +283,23 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             for t in range(prompt_len):
                 tok = tokens[i, t].view(1, 1).to(torch.int32)
                 pos = torch.tensor([t], dtype=torch.int32)
+                if impl == "decode_loop_trace" and t < (prompt_len - 1):
+                    _ = self._tt_runner.decode(
+                        tokens=tok,
+                        start_pos=pos,
+                        page_table=user_page_table,
+                        kv_cache=kv_cache,
+                        sampling_params={"temperature": 0.0},
+                        enable_trace=True,
+                    )
+                    continue
+
                 logits_i = self._tt_runner.decode(
-                    tokens=tok, start_pos=pos, page_table=user_page_table, kv_cache=kv_cache
+                    tokens=tok,
+                    start_pos=pos,
+                    page_table=user_page_table,
+                    kv_cache=kv_cache,
+                    enable_trace=(impl == "decode_loop_trace"),
                 )  # [1,1,V]
             assert logits_i is not None
             last_logits.append(logits_i[0])  # [1,V]
@@ -288,6 +318,7 @@ class Glm4MoeLiteForCausalLM(nn.Module):
         start_pos: torch.Tensor = kwargs["start_pos"]
         sampling_params = kwargs.get("sampling_params", None)
         enable_trace: bool = bool(kwargs.get("enable_trace", False))
+        read_from_device: bool = bool(kwargs.get("read_from_device", False))
 
         # Warmup can pass a dummy all-zero page table; patch it to avoid
         # overlapping updates to the same physical block.
@@ -296,7 +327,7 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             page_table[:, 0] = torch.arange(page_table.shape[0], dtype=torch.int32)
 
         self._ensure_tt_runner()
-        return self._tt_runner.decode(
+        tt_out = self._tt_runner.decode(
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
@@ -304,6 +335,12 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             sampling_params=sampling_params,
             enable_trace=enable_trace,
         )
+        if read_from_device:
+            # Used by vLLM warmup. Force a synchronous readback so compilation/tracing
+            # work happens during warmup rather than at first user request.
+            tt_host = self.read_decode_output(tt_out, async_read=False)
+            return self.process_decode_output_host(tt_host, is_tokens=(sampling_params is not None))
+        return tt_out
 
     def _ensure_tt_runner(self) -> None:
         if self._tt_runner is not None:
@@ -325,13 +362,96 @@ class Glm4MoeLiteForCausalLM(nn.Module):
     # so these are essentially identity operations.
 
     def read_decode_output(self, tt_out, async_read: bool):
-        if async_read:
-            # We currently return torch tensors directly from `decode_forward`,
-            # so there is no device->host read to synchronize. Return an empty
-            # event list to satisfy TTModelRunner's async_read_decode contract.
-            return tt_out, []
-        return tt_out
+        # tt_out can be:
+        # - torch.Tensor: already on host (compat sampling/logits path)
+        # - ttnn.Tensor: device tensor (sample-on-device tokens)
+        # - tuple[ttnn.Tensor, ttnn.Tensor]: per-shard (max, argmax) for vocab-sharded LM head
+        if isinstance(tt_out, torch.Tensor):
+            return (tt_out, []) if async_read else tt_out
+
+        if not async_read:
+            if isinstance(tt_out, tuple):
+                max_tt, argmax_tt = tt_out
+                return (max_tt.cpu(), argmax_tt.cpu())
+            return tt_out.cpu()
+
+        if isinstance(tt_out, tuple):
+            max_tt, argmax_tt = tt_out
+            max_cpu = max_tt.cpu(blocking=False, cq_id=0)
+            argmax_cpu = argmax_tt.cpu(blocking=False, cq_id=0)
+            return (max_cpu, argmax_cpu), [ttnn.record_event(self.mesh_device, 0)]
+
+        tt_cpu = tt_out.cpu(blocking=False, cq_id=0)
+        return tt_cpu, [ttnn.record_event(self.mesh_device, 0)]
 
     def process_decode_output_host(self, tt_out, is_tokens: bool):
-        _ = is_tokens  # skeleton always returns logits
-        return tt_out
+        if not is_tokens:
+            return tt_out
+
+        def _tt_to_torch_device0(tensor: ttnn.Tensor) -> torch.Tensor:
+            if self.mesh_device.__class__.__name__ == "MeshDevice":
+                try:
+                    device_tensors = ttnn.get_device_tensors(tensor)
+                except Exception:
+                    device_tensors = []
+                if device_tensors:
+                    return ttnn.to_torch(device_tensors[0])
+            return ttnn.to_torch(tensor)
+
+        if isinstance(tt_out, torch.Tensor):
+            return tt_out.to(dtype=torch.int32).cpu().reshape(-1)
+
+        # Vocab-sharded LM head returns (local_max, local_argmax) for each shard.
+        if isinstance(tt_out, tuple):
+            if self._tt_runner is None:
+                raise RuntimeError("TT runner is not initialized")
+            local_max_tt, local_argmax_tt = tt_out
+
+            max_dts = ttnn.get_device_tensors(local_max_tt)
+            idx_dts = ttnn.get_device_tensors(local_argmax_tt)
+            if not max_dts or not idx_dts:
+                raise RuntimeError("expected mesh tensors for vocab-sharded decode output")
+
+            mesh_rows, mesh_cols = int(self.mesh_device.shape[0]), int(self.mesh_device.shape[1])
+            tp_axis = self._tt_runner.lm_head_tp_axis
+            if tp_axis is None:
+                tp_size = int(mesh_rows * mesh_cols)
+                selected_device_ids = list(range(tp_size))
+                shard_indices = list(range(tp_size))
+            elif int(tp_axis) == 1:
+                tp_size = mesh_cols
+                selected_device_ids = [c for c in range(tp_size)]
+                shard_indices = [c for c in range(tp_size)]
+            else:
+                tp_size = mesh_rows
+                selected_device_ids = [r * mesh_cols for r in range(tp_size)]
+                shard_indices = [r for r in range(tp_size)]
+
+            local_max_torch = [_tt_to_torch_device0(max_dts[device_id]).reshape(-1) for device_id in selected_device_ids]
+            local_idx_torch = [
+                _tt_to_torch_device0(idx_dts[device_id]).reshape(-1) for device_id in selected_device_ids
+            ]
+
+            vocab = int(self._tt_runner.hparams.vocab_size)
+            vocab_per_shard = int(self._tt_runner.lm_head_vocab_per_shard)
+            batch = int(local_idx_torch[0].numel())
+            next_ids = torch.empty((batch,), dtype=torch.int32)
+            for b in range(batch):
+                best_val = None
+                best_global = None
+                for shard_idx, (val_tensor, idx_tensor) in enumerate(zip(local_max_torch, local_idx_torch)):
+                    max_val = float(val_tensor[b].item())
+                    local_idx = int(idx_tensor[b].item())
+                    global_idx = int(shard_indices[shard_idx] * vocab_per_shard + local_idx)
+                    if global_idx >= vocab:
+                        continue
+                    if best_val is None or max_val > best_val:
+                        best_val = max_val
+                        best_global = global_idx
+                if best_global is None:
+                    best_global = max(0, vocab - 1)
+                next_ids[b] = int(best_global)
+            return next_ids
+
+        next_ids_torch = _tt_to_torch_device0(tt_out).reshape(-1).to(dtype=torch.int32).cpu()
+        return next_ids_torch
