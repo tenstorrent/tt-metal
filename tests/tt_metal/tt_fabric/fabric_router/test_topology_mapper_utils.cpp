@@ -3979,5 +3979,1148 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConn
     std::filesystem::remove(temp_mgd_path);
 }
 
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_RingTopology) {
+    // Test mapping 3 logical meshes (2x2 each) connected in a line to 5 physical meshes (2x2 each) connected in a ring.
+    // All inter-mesh connections are mesh-level constraints (relaxed mode).
+    // This test verifies that the solver can find a valid mapping when there are more physical meshes than logical
+    // meshes.
+    //
+    // Logical Topology (3 meshes):
+    //   Mesh 0: 2x2 grid (4 nodes)
+    //   Mesh 1: 2x2 grid (4 nodes)
+    //   Mesh 2: 2x2 grid (4 nodes)
+    //   Inter-mesh: Mesh 0 <-> Mesh 1 <-> Mesh 2 (line: 0-1-2) - mesh-level connections
+    //
+    // Physical Topology (5 meshes):
+    //   Mesh 0: 2x2 grid (4 ASICs)
+    //   Mesh 1: 2x2 grid (4 ASICs)
+    //   Mesh 2: 2x2 grid (4 ASICs)
+    //   Mesh 3: 2x2 grid (4 ASICs)
+    //   Mesh 4: 2x2 grid (4 ASICs)
+    //   Inter-mesh: Ring topology (0-1-2-3-4-0)
+
+    using namespace ::tt::tt_fabric;
+
+    // =========================================================================
+    // Create Logical Multi-Mesh Graph using MGD (3 meshes, line topology)
+    // =========================================================================
+
+    const std::string mgd_textproto = R"proto(
+        # --- Meshes ---------------------------------------------------------------
+
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 1 }
+        }
+
+        # --- Graphs ---------------------------------------------------------------
+
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          # Instances: mesh ids 0,1,2 (all 2x2)
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+          # Intermesh connections: mesh 0 <-> mesh 1, mesh 1 <-> mesh 2 (line topology)
+          # Using mesh-level connections (relaxed mode) - no device_id specified
+          # Note: mesh-level connections create mesh-level exit nodes
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+            channels { count: 1 }
+          }
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+            channels { count: 1 }
+          }
+        }
+
+        # --- Instantiation ----------------------------------------------------------
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create temporary MGD file
+    const std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
+    std::string unique_suffix;
+    for (int i = 0; i < 8; ++i) {
+        unique_suffix += "0123456789abcdef"[dis(gen)];
+    }
+    const std::filesystem::path temp_mgd_path =
+        temp_dir / ("test_three_logical_five_physical_" + unique_suffix + ".textproto");
+
+    // Write the MGD content to temporary file
+    {
+        std::ofstream mgd_file(temp_mgd_path);
+        ASSERT_TRUE(mgd_file.is_open()) << "Failed to create temporary MGD file";
+        mgd_file << mgd_textproto;
+    }  // File is closed here
+
+    // Load MeshGraph from the temporary file
+    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+
+    // Clean up temporary file immediately after loading
+    std::filesystem::remove(temp_mgd_path);
+
+    // Build the logical multi-mesh graph from MGD
+    LogicalMultiMeshGraph logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    // Verify we have 3 logical meshes
+    EXPECT_EQ(logical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u) << "Should have 3 logical meshes";
+
+    // Verify exit node graphs only reference valid mesh IDs (0, 1, 2)
+    for (const auto& [mesh_id, exit_node_graph] : logical_multi_mesh_graph.mesh_exit_node_graphs_) {
+        EXPECT_TRUE(mesh_id.get() < 3u) << "Exit node graph should only reference meshes 0, 1, 2";
+        for (const auto& exit_node : exit_node_graph.get_nodes()) {
+            EXPECT_TRUE(exit_node.mesh_id.get() < 3u) << "Exit node should only reference meshes 0, 1, 2";
+            const auto& neighbors = exit_node_graph.get_neighbors(exit_node);
+            for (const auto& neighbor_exit_node : neighbors) {
+                EXPECT_TRUE(neighbor_exit_node.mesh_id.get() < 3u)
+                    << "Exit node neighbor should only reference meshes 0, 1, 2";
+            }
+        }
+    }
+
+    // Verify mesh-level connectivity (line: 0-1-2)
+    const auto& mesh0_neighbors = logical_multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 1u) << "Mesh 0 should have 1 neighbor (mesh 1)";
+    EXPECT_TRUE(std::find(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{1}) != mesh0_neighbors.end())
+        << "Mesh 0 should connect to mesh 1";
+
+    const auto& mesh1_neighbors = logical_multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
+    EXPECT_EQ(mesh1_neighbors.size(), 2u) << "Mesh 1 should have 2 neighbors (mesh 0 and mesh 2)";
+    EXPECT_TRUE(std::find(mesh1_neighbors.begin(), mesh1_neighbors.end(), MeshId{0}) != mesh1_neighbors.end())
+        << "Mesh 1 should connect to mesh 0";
+    EXPECT_TRUE(std::find(mesh1_neighbors.begin(), mesh1_neighbors.end(), MeshId{2}) != mesh1_neighbors.end())
+        << "Mesh 1 should connect to mesh 2";
+
+    const auto& mesh2_neighbors = logical_multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{2});
+    EXPECT_EQ(mesh2_neighbors.size(), 1u) << "Mesh 2 should have 1 neighbor (mesh 1)";
+    EXPECT_TRUE(std::find(mesh2_neighbors.begin(), mesh2_neighbors.end(), MeshId{1}) != mesh2_neighbors.end())
+        << "Mesh 2 should connect to mesh 1";
+
+    // =========================================================================
+    // Create Physical Multi-Mesh Graph (5 meshes, ring topology)
+    // =========================================================================
+
+    constexpr size_t kNumPhysicalMeshes = 5;
+    constexpr size_t kPhysicalMeshSize = 2;  // 2x2 grid
+
+    // Create physical meshes: 5 meshes, each 2x2 grid
+    PhysicalAdjacencyMap flat_physical_adj;
+    std::vector<std::vector<tt::tt_metal::AsicID>> physical_asics_by_mesh(kNumPhysicalMeshes);
+    std::vector<PhysicalAdjacencyMap> physical_adj_by_mesh(kNumPhysicalMeshes);
+
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + mesh_idx * 100);
+        physical_adj_by_mesh[mesh_idx] =
+            build_grid_adjacency(physical_asics_by_mesh[mesh_idx], kPhysicalMeshSize, kPhysicalMeshSize);
+    }
+
+    // Add intermesh connections: ring topology (0->1, 1->2, 2->3, 3->4, 4->0)
+    // Connect right edge of each mesh to left edge of next mesh
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        size_t next_mesh_idx = (mesh_idx + 1) % kNumPhysicalMeshes;
+        for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
+            size_t current_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+            size_t next_left_idx = row * kPhysicalMeshSize;
+            physical_adj_by_mesh[mesh_idx][physical_asics_by_mesh[mesh_idx][current_right_idx]].push_back(
+                physical_asics_by_mesh[next_mesh_idx][next_left_idx]);
+            physical_adj_by_mesh[next_mesh_idx][physical_asics_by_mesh[next_mesh_idx][next_left_idx]].push_back(
+                physical_asics_by_mesh[mesh_idx][current_right_idx]);
+        }
+    }
+
+    // Combine into flat adjacency map
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        for (const auto& [asic, neighbors] : physical_adj_by_mesh[mesh_idx]) {
+            flat_physical_adj[asic] = neighbors;
+        }
+    }
+
+    // Build hierarchical physical graph from flat graph
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        for (const auto& asic : physical_asics_by_mesh[mesh_idx]) {
+            asic_id_to_mesh_rank[MeshId{mesh_idx}][asic] = rank0_;
+        }
+    }
+
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph =
+        build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify physical mesh-level connectivity (ring: 0-1-2-3-4-0)
+    // Note: Each mesh may have duplicate neighbor entries due to multiple ASIC-level connections,
+    // so we check for unique neighbors instead of exact count
+    const auto& physical_mesh_level_graph = physical_multi_mesh_graph.mesh_level_graph_;
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        const auto& neighbors = physical_mesh_level_graph.get_neighbors(MeshId{mesh_idx});
+        // Get unique neighbors (multiple ASIC connections between meshes create duplicates)
+        std::set<MeshId> unique_neighbors(neighbors.begin(), neighbors.end());
+        EXPECT_EQ(unique_neighbors.size(), 2u)
+            << "Physical mesh " << mesh_idx << " should have 2 unique neighbors in ring";
+        size_t prev_mesh_idx = (mesh_idx + kNumPhysicalMeshes - 1) % kNumPhysicalMeshes;
+        size_t next_mesh_idx = (mesh_idx + 1) % kNumPhysicalMeshes;
+        EXPECT_TRUE(unique_neighbors.contains(MeshId{prev_mesh_idx}))
+            << "Physical mesh " << mesh_idx << " should connect to previous mesh " << prev_mesh_idx;
+        EXPECT_TRUE(unique_neighbors.contains(MeshId{next_mesh_idx}))
+            << "Physical mesh " << mesh_idx << " should connect to next mesh " << next_mesh_idx;
+    }
+
+    // =========================================================================
+    // Debug: Print adjacency graphs before mapping
+    // =========================================================================
+
+    std::cout << "\n=== DEBUG: Logical Mesh-Level Graph ===" << std::endl;
+    const auto& logical_mesh_level_graph = logical_multi_mesh_graph.mesh_level_graph_;
+    for (const auto& mesh_id : logical_mesh_level_graph.get_nodes()) {
+        const auto& neighbors = logical_mesh_level_graph.get_neighbors(mesh_id);
+        std::cout << "Logical Mesh " << mesh_id.get() << " neighbors: ";
+        for (const auto& neighbor : neighbors) {
+            std::cout << neighbor.get() << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    std::cout << "\n=== DEBUG: Logical Exit Node Graphs ===" << std::endl;
+    for (const auto& [mesh_id, exit_node_graph] : logical_multi_mesh_graph.mesh_exit_node_graphs_) {
+        std::cout << "Logical Mesh " << mesh_id.get() << " exit nodes:" << std::endl;
+        for (const auto& exit_node : exit_node_graph.get_nodes()) {
+            std::cout << "  Exit node: mesh_id=" << exit_node.mesh_id.get();
+            if (exit_node.fabric_node_id.has_value()) {
+                std::cout << ", fabric_node_id=" << exit_node.fabric_node_id->chip_id;
+            } else {
+                std::cout << ", mesh-level (no fabric_node_id)";
+            }
+            std::cout << std::endl;
+            const auto& neighbors = exit_node_graph.get_neighbors(exit_node);
+            std::cout << "    Neighbors: ";
+            for (const auto& neighbor : neighbors) {
+                std::cout << "(mesh_id=" << neighbor.mesh_id.get();
+                if (neighbor.fabric_node_id.has_value()) {
+                    std::cout << ", fabric_node_id=" << neighbor.fabric_node_id->chip_id;
+                } else {
+                    std::cout << ", mesh-level";
+                }
+                std::cout << ") ";
+            }
+            std::cout << std::endl;
+        }
+    }
+
+    std::cout << "\n=== DEBUG: Physical Mesh-Level Graph ===" << std::endl;
+    for (const auto& mesh_id : physical_mesh_level_graph.get_nodes()) {
+        const auto& neighbors = physical_mesh_level_graph.get_neighbors(mesh_id);
+        std::set<MeshId> unique_neighbors(neighbors.begin(), neighbors.end());
+        std::cout << "Physical Mesh " << mesh_id.get() << " neighbors (total=" << neighbors.size()
+                  << ", unique=" << unique_neighbors.size() << "): ";
+        for (const auto& neighbor : unique_neighbors) {
+            std::cout << neighbor.get() << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    std::cout << "\n=== DEBUG: Physical Exit Node Graphs ===" << std::endl;
+    for (const auto& [mesh_id, exit_node_graph] : physical_multi_mesh_graph.mesh_exit_node_graphs_) {
+        std::cout << "Physical Mesh " << mesh_id.get() << " exit nodes:" << std::endl;
+        for (const auto& exit_node : exit_node_graph.get_nodes()) {
+            std::cout << "  Exit node: mesh_id=" << exit_node.mesh_id.get() << ", asic_id=" << exit_node.asic_id.get()
+                      << std::endl;
+            const auto& neighbors = exit_node_graph.get_neighbors(exit_node);
+            std::cout << "    Neighbors: ";
+            for (const auto& neighbor : neighbors) {
+                std::cout << "(mesh_id=" << neighbor.mesh_id.get() << ", asic_id=" << neighbor.asic_id.get() << ") ";
+            }
+            std::cout << std::endl;
+        }
+    }
+
+    // =========================================================================
+    // Run mapping and verify results
+    // =========================================================================
+
+    TopologyMappingConfig config;
+    config.strict_mode = false;           // Use relaxed mode to allow more flexibility
+    config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
+    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;  // Relaxed inter-mesh validation
+
+    std::cout << "\n=== DEBUG: Starting Mapping ===" << std::endl;
+    std::cout << "Config: strict_mode=" << config.strict_mode
+              << ", disable_rank_bindings=" << config.disable_rank_bindings << std::endl;
+
+    // Call map_multi_mesh_to_physical (rank mappings omitted since disable_rank_bindings is true)
+    TopologyMappingResult result;
+    try {
+        result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+    } catch (const std::exception& e) {
+        std::cout << "\n=== DEBUG: Exception caught during mapping ===" << std::endl;
+        std::cout << "Exception: " << e.what() << std::endl;
+        throw;  // Re-throw to see full stack trace
+    }
+
+    std::cout << "\n=== DEBUG: Mapping Result ===" << std::endl;
+    std::cout << "Success: " << (result.success ? "true" : "false") << std::endl;
+    std::cout << "Error message: " << result.error_message << std::endl;
+    std::cout << "Number of mapped nodes: " << result.fabric_node_to_asic.size() << std::endl;
+
+    // Print all mappings (even if partial)
+    std::cout << "\n=== DEBUG: All Mappings (Partial or Complete) ===" << std::endl;
+    std::map<MeshId, std::vector<std::pair<FabricNodeId, tt::tt_metal::AsicID>>> mappings_by_mesh_debug;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        mappings_by_mesh_debug[fabric_node.mesh_id].emplace_back(fabric_node, asic);
+    }
+
+    for (const auto& [mesh_id, mappings] : mappings_by_mesh_debug) {
+        std::cout << "\nLogical Mesh " << mesh_id.get() << " -> Physical Mesh mappings:" << std::endl;
+        // Determine which physical mesh this maps to
+        if (!mappings.empty()) {
+            const auto& first_asic = mappings[0].second;
+            MeshId physical_mesh_id = MeshId{0};
+            for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+                const auto& nodes = adjacency_graph.get_nodes();
+                if (std::find(nodes.begin(), nodes.end(), first_asic) != nodes.end()) {
+                    physical_mesh_id = pm_id;
+                    break;
+                }
+            }
+            std::cout << "  Mapped to Physical Mesh " << physical_mesh_id.get() << std::endl;
+        }
+        for (const auto& [logical_node, asic] : mappings) {
+            std::cout << "    Logical node (mesh=" << logical_node.mesh_id.get() << ", chip=" << logical_node.chip_id
+                      << ") -> ASIC " << asic.get() << std::endl;
+        }
+    }
+
+    // Print mesh-level mappings inferred from node mappings
+    std::cout << "\n=== DEBUG: Inferred Mesh-Level Mappings ===" << std::endl;
+    std::map<MeshId, MeshId> inferred_mesh_mappings;
+    for (const auto& [mesh_id, mappings] : mappings_by_mesh_debug) {
+        if (!mappings.empty()) {
+            const auto& first_asic = mappings[0].second;
+            MeshId physical_mesh_id = MeshId{0};
+            for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+                const auto& nodes = adjacency_graph.get_nodes();
+                if (std::find(nodes.begin(), nodes.end(), first_asic) != nodes.end()) {
+                    physical_mesh_id = pm_id;
+                    break;
+                }
+            }
+            inferred_mesh_mappings[mesh_id] = physical_mesh_id;
+            std::cout << "Logical Mesh " << mesh_id.get() << " -> Physical Mesh " << physical_mesh_id.get()
+                      << std::endl;
+        }
+    }
+
+    // Verify overall result succeeded
+    EXPECT_TRUE(result.success) << "Multi-mesh mapping should succeed: " << result.error_message;
+
+    // Verify bidirectional consistency of the overall result
+    verify_bidirectional_consistency(result);
+
+    // Verify all logical nodes are mapped (3 meshes * 4 nodes = 12 nodes)
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 12u) << "All 12 logical nodes should be mapped";
+
+    // Group mappings by mesh_id
+    std::map<MeshId, std::map<FabricNodeId, tt::tt_metal::AsicID>> mappings_by_mesh;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        mappings_by_mesh[fabric_node.mesh_id][fabric_node] = asic;
+    }
+
+    // Verify we have mappings for all 3 logical meshes
+    EXPECT_EQ(mappings_by_mesh.size(), 3u) << "Should have mappings for all 3 logical meshes";
+    EXPECT_TRUE(mappings_by_mesh.contains(MeshId{0})) << "Should have mappings for logical mesh 0";
+    EXPECT_TRUE(mappings_by_mesh.contains(MeshId{1})) << "Should have mappings for logical mesh 1";
+    EXPECT_TRUE(mappings_by_mesh.contains(MeshId{2})) << "Should have mappings for logical mesh 2";
+
+    // Verify each logical mesh has all 4 nodes mapped
+    for (const auto& [logical_mesh_id, mesh_mappings] : mappings_by_mesh) {
+        EXPECT_EQ(mesh_mappings.size(), 4u) << "Logical mesh " << logical_mesh_id.get() << " should map all 4 nodes";
+    }
+
+    // Verify connectivity is preserved for all meshes
+    for (const auto& [logical_mesh_id, mesh_mappings] : mappings_by_mesh) {
+        // Find which physical mesh this logical mesh mapped to
+        MeshId physical_mesh_id = MeshId{0};  // Default, will be updated
+        if (!mesh_mappings.empty()) {
+            const auto& first_asic = mesh_mappings.begin()->second;
+            // Determine which physical mesh this ASIC belongs to by checking all physical meshes
+            for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+                const auto& nodes = adjacency_graph.get_nodes();
+                if (std::find(nodes.begin(), nodes.end(), first_asic) != nodes.end()) {
+                    physical_mesh_id = pm_id;
+                    break;
+                }
+            }
+        }
+
+        // Verify intra-mesh connectivity is preserved
+        const auto& logical_graph = logical_multi_mesh_graph.mesh_adjacency_graphs_.at(logical_mesh_id);
+        const auto& physical_graph = physical_multi_mesh_graph.mesh_adjacency_graphs_.at(physical_mesh_id);
+        const auto& logical_nodes = logical_graph.get_nodes();
+
+        for (const auto& node : logical_nodes) {
+            const auto mapped_asic = mesh_mappings.at(node);
+            const auto& logical_neighbors = logical_graph.get_neighbors(node);
+            const auto& physical_neighbors = physical_graph.get_neighbors(mapped_asic);
+
+            for (const auto& neighbor : logical_neighbors) {
+                // If neighbor is in the same logical mesh, verify intra-mesh connectivity
+                if (neighbor.mesh_id == logical_mesh_id) {
+                    const auto neighbor_asic = mesh_mappings.at(neighbor);
+                    EXPECT_TRUE(
+                        std::find(physical_neighbors.begin(), physical_neighbors.end(), neighbor_asic) !=
+                        physical_neighbors.end())
+                        << "Logical intra-mesh edge not preserved in physical mapping for logical mesh "
+                        << logical_mesh_id.get();
+                }
+            }
+        }
+    }
+
+    // Verify inter-mesh connectivity is preserved (mesh-level constraints)
+    // Check that logical meshes that are connected map to physical meshes that are connected
+    for (const auto& logical_mesh_id : logical_mesh_level_graph.get_nodes()) {
+        const auto& logical_neighbors = logical_mesh_level_graph.get_neighbors(logical_mesh_id);
+        if (!mappings_by_mesh.contains(logical_mesh_id) || mappings_by_mesh.at(logical_mesh_id).empty()) {
+            continue;
+        }
+
+        // Find which physical mesh this logical mesh mapped to
+        const auto& first_asic = mappings_by_mesh.at(logical_mesh_id).begin()->second;
+        MeshId mapped_physical_mesh_id = MeshId{0};
+        for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+            const auto& nodes = adjacency_graph.get_nodes();
+            if (std::find(nodes.begin(), nodes.end(), first_asic) != nodes.end()) {
+                mapped_physical_mesh_id = pm_id;
+                break;
+            }
+        }
+
+        // For each logical neighbor, verify it maps to a physically connected mesh
+        for (const auto& logical_neighbor_id : logical_neighbors) {
+            if (!mappings_by_mesh.contains(logical_neighbor_id) || mappings_by_mesh.at(logical_neighbor_id).empty()) {
+                continue;
+            }
+
+            const auto& neighbor_first_asic = mappings_by_mesh.at(logical_neighbor_id).begin()->second;
+            MeshId neighbor_physical_mesh_id = MeshId{0};
+            for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+                const auto& nodes = adjacency_graph.get_nodes();
+                if (std::find(nodes.begin(), nodes.end(), neighbor_first_asic) != nodes.end()) {
+                    neighbor_physical_mesh_id = pm_id;
+                    break;
+                }
+            }
+
+            // Verify the physical meshes are connected
+            const auto& physical_neighbor_meshes =
+                physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(mapped_physical_mesh_id);
+            EXPECT_TRUE(
+                std::find(
+                    physical_neighbor_meshes.begin(), physical_neighbor_meshes.end(), neighbor_physical_mesh_id) !=
+                physical_neighbor_meshes.end())
+                << "Logical mesh " << logical_mesh_id.get() << " connects to logical mesh " << logical_neighbor_id.get()
+                << ", but their mapped physical meshes (" << mapped_physical_mesh_id.get() << " and "
+                << neighbor_physical_mesh_id.get() << ") are not connected";
+        }
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_DeviceLevelConstraints_Fails) {
+    // Test mapping 3 logical meshes (2x2 each) connected in a line to 5 physical meshes (2x2 each) connected in a ring.
+    // All inter-mesh connections are device-level constraints (strict mode, device_id: 0).
+    // This test verifies that the solver correctly fails when constraints are over-constrained.
+    //
+    // Logical Topology (3 meshes):
+    //   Mesh 0: 2x2 grid (4 nodes)
+    //   Mesh 1: 2x2 grid (4 nodes)
+    //   Mesh 2: 2x2 grid (4 nodes)
+    //   Inter-mesh: Mesh 0 <-> Mesh 1 <-> Mesh 2 (line: 0-1-2) - device-level connections (device_id: 0)
+    //
+    // Physical Topology (5 meshes):
+    //   Mesh 0: 2x2 grid (4 ASICs)
+    //   Mesh 1: 2x2 grid (4 ASICs)
+    //   Mesh 2: 2x2 grid (4 ASICs)
+    //   Mesh 3: 2x2 grid (4 ASICs)
+    //   Mesh 4: 2x2 grid (4 ASICs)
+    //   Inter-mesh: Ring topology (0-1-2-3-4-0)
+    //
+    // Expected: Should fail because device-level constraints require device 0 in each logical mesh
+    // to connect to device 0 in adjacent logical meshes, which may not be possible depending on
+    // which physical meshes are selected and their connectivity.
+
+    using namespace ::tt::tt_fabric;
+
+    // =========================================================================
+    // Create Logical Multi-Mesh Graph using MGD (3 meshes, line topology, device-level connections)
+    // =========================================================================
+
+    const std::string mgd_textproto = R"proto(
+        # --- Meshes ---------------------------------------------------------------
+
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 1 }
+        }
+
+        # --- Graphs ---------------------------------------------------------------
+
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          # Instances: mesh ids 0,1,2 (all 2x2)
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+          # Intermesh connections: mesh 0 <-> mesh 1, mesh 1 <-> mesh 2 (line topology)
+          # Using device-level connections (strict mode) - device_id: 0 specified
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+            channels { count: 1 }
+          }
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 0 } }
+            channels { count: 1 }
+          }
+        }
+
+        # --- Instantiation ----------------------------------------------------------
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create temporary MGD file
+    const std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
+    std::string unique_suffix;
+    for (int i = 0; i < 8; ++i) {
+        unique_suffix += "0123456789abcdef"[dis(gen)];
+    }
+    const std::filesystem::path temp_mgd_path =
+        temp_dir / ("test_three_logical_five_physical_device_level_" + unique_suffix + ".textproto");
+
+    // Write the MGD content to temporary file
+    {
+        std::ofstream mgd_file(temp_mgd_path);
+        ASSERT_TRUE(mgd_file.is_open()) << "Failed to create temporary MGD file";
+        mgd_file << mgd_textproto;
+    }  // File is closed here
+
+    // Load MeshGraph from the temporary file
+    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+
+    // Clean up temporary file immediately after loading
+    std::filesystem::remove(temp_mgd_path);
+
+    // Build the logical multi-mesh graph from MGD
+    LogicalMultiMeshGraph logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    // Verify we have 3 logical meshes
+    EXPECT_EQ(logical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u) << "Should have 3 logical meshes";
+
+    // Verify mesh-level connectivity (line: 0-1-2)
+    const auto& logical_mesh_level_graph = logical_multi_mesh_graph.mesh_level_graph_;
+    const auto& mesh0_neighbors = logical_mesh_level_graph.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 1u) << "Mesh 0 should have 1 neighbor (mesh 1)";
+    EXPECT_TRUE(std::find(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{1}) != mesh0_neighbors.end())
+        << "Mesh 0 should connect to mesh 1";
+
+    const auto& mesh1_neighbors = logical_mesh_level_graph.get_neighbors(MeshId{1});
+    EXPECT_EQ(mesh1_neighbors.size(), 2u) << "Mesh 1 should have 2 neighbors (mesh 0 and mesh 2)";
+    EXPECT_TRUE(std::find(mesh1_neighbors.begin(), mesh1_neighbors.end(), MeshId{0}) != mesh1_neighbors.end())
+        << "Mesh 1 should connect to mesh 0";
+    EXPECT_TRUE(std::find(mesh1_neighbors.begin(), mesh1_neighbors.end(), MeshId{2}) != mesh1_neighbors.end())
+        << "Mesh 1 should connect to mesh 2";
+
+    const auto& mesh2_neighbors = logical_mesh_level_graph.get_neighbors(MeshId{2});
+    EXPECT_EQ(mesh2_neighbors.size(), 1u) << "Mesh 2 should have 1 neighbor (mesh 1)";
+    EXPECT_TRUE(std::find(mesh2_neighbors.begin(), mesh2_neighbors.end(), MeshId{1}) != mesh2_neighbors.end())
+        << "Mesh 2 should connect to mesh 1";
+
+    // Verify exit nodes are device-level (strict mode)
+    EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
+        << "Mesh 0 should have exit nodes (device-level connection)";
+    EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
+        << "Mesh 1 should have exit nodes (device-level connection)";
+    EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
+        << "Mesh 2 should have exit nodes (device-level connection)";
+
+    // Verify exit nodes are fabric node-level (device_id specified)
+    const auto& exit_graph0 = logical_multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node (device 0)";
+    LogicalExitNode exit_node0{MeshId{0}, FabricNodeId(MeshId{0}, 0)};
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0) != exit_nodes0.end())
+        << "Device 0 should be an exit node in mesh 0";
+    EXPECT_TRUE(exit_node0.fabric_node_id.has_value()) << "Mesh 0 exit node should be fabric node-level (strict mode)";
+
+    // =========================================================================
+    // Create Physical Multi-Mesh Graph (5 meshes, ring topology)
+    // =========================================================================
+
+    constexpr size_t kNumPhysicalMeshes = 5;
+    constexpr size_t kPhysicalMeshSize = 2;  // 2x2 grid
+
+    // Create physical meshes: 5 meshes, each 2x2 grid
+    PhysicalAdjacencyMap flat_physical_adj;
+    std::vector<std::vector<tt::tt_metal::AsicID>> physical_asics_by_mesh(kNumPhysicalMeshes);
+    std::vector<PhysicalAdjacencyMap> physical_adj_by_mesh(kNumPhysicalMeshes);
+
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + mesh_idx * 100);
+        physical_adj_by_mesh[mesh_idx] =
+            build_grid_adjacency(physical_asics_by_mesh[mesh_idx], kPhysicalMeshSize, kPhysicalMeshSize);
+    }
+
+    // Add intermesh connections: ring topology (0->1, 1->2, 2->3, 3->4, 4->0)
+    // Connect right edge of each mesh to left edge of next mesh
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        size_t next_mesh_idx = (mesh_idx + 1) % kNumPhysicalMeshes;
+        for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
+            size_t current_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+            size_t next_left_idx = row * kPhysicalMeshSize;
+            physical_adj_by_mesh[mesh_idx][physical_asics_by_mesh[mesh_idx][current_right_idx]].push_back(
+                physical_asics_by_mesh[next_mesh_idx][next_left_idx]);
+            physical_adj_by_mesh[next_mesh_idx][physical_asics_by_mesh[next_mesh_idx][next_left_idx]].push_back(
+                physical_asics_by_mesh[mesh_idx][current_right_idx]);
+        }
+    }
+
+    // Combine into flat adjacency map
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        for (const auto& [asic, neighbors] : physical_adj_by_mesh[mesh_idx]) {
+            flat_physical_adj[asic] = neighbors;
+        }
+    }
+
+    // Build hierarchical physical graph from flat graph
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        for (const auto& asic : physical_asics_by_mesh[mesh_idx]) {
+            asic_id_to_mesh_rank[MeshId{mesh_idx}][asic] = rank0_;
+        }
+    }
+
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph =
+        build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // =========================================================================
+    // Run mapping and verify failure
+    // =========================================================================
+
+    TopologyMappingConfig config;
+    config.strict_mode = true;            // Use strict mode for device-level constraints
+    config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
+
+    std::cout << "\n=== DEBUG: Starting Mapping (Device-Level Constraints) ===" << std::endl;
+    std::cout << "Config: strict_mode=" << config.strict_mode
+              << ", disable_rank_bindings=" << config.disable_rank_bindings << std::endl;
+
+    // Call map_multi_mesh_to_physical (rank mappings omitted since disable_rank_bindings is true)
+    TopologyMappingResult result;
+    bool exception_thrown = false;
+    std::string exception_message;
+    try {
+        result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+    } catch (const std::exception& e) {
+        exception_thrown = true;
+        exception_message = e.what();
+        std::cout << "\n=== DEBUG: Exception caught during mapping ===" << std::endl;
+        std::cout << "Exception: " << exception_message << std::endl;
+        // Exception is acceptable - it indicates over-constrained scenario
+    }
+
+    std::cout << "\n=== DEBUG: Mapping Result ===" << std::endl;
+    std::cout << "Success: " << (result.success ? "true" : "false") << std::endl;
+    std::cout << "Error message: " << result.error_message << std::endl;
+    std::cout << "Exception thrown: " << (exception_thrown ? "true" : "false") << std::endl;
+    std::cout << "Number of mapped nodes: " << result.fabric_node_to_asic.size() << std::endl;
+
+    // Print partial mappings if any
+    if (!result.fabric_node_to_asic.empty()) {
+        std::cout << "\n=== DEBUG: Partial Mappings ===" << std::endl;
+        std::map<MeshId, std::vector<std::pair<FabricNodeId, tt::tt_metal::AsicID>>> mappings_by_mesh_debug;
+        for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+            mappings_by_mesh_debug[fabric_node.mesh_id].emplace_back(fabric_node, asic);
+        }
+
+        for (const auto& [mesh_id, mappings] : mappings_by_mesh_debug) {
+            std::cout << "\nLogical Mesh " << mesh_id.get() << " -> Physical Mesh mappings:" << std::endl;
+            for (const auto& [logical_node, asic] : mappings) {
+                std::cout << "    Logical node (mesh=" << logical_node.mesh_id.get()
+                          << ", chip=" << logical_node.chip_id << ") -> ASIC " << asic.get() << std::endl;
+            }
+        }
+    }
+
+    // Verify overall result failed (either via exception or result.success == false)
+    if (exception_thrown) {
+        // Exception was thrown - this is acceptable and indicates over-constrained scenario
+        EXPECT_TRUE(true) << "Exception thrown indicates over-constrained device-level constraints: "
+                          << exception_message;
+
+        // Verify exception message mentions the constraint issue
+        bool exception_mentions_constraint = exception_message.find("not mapped") != std::string::npos ||
+                                             exception_message.find("exit node") != std::string::npos ||
+                                             exception_message.find("constraint") != std::string::npos ||
+                                             exception_message.find("mesh") != std::string::npos;
+        EXPECT_TRUE(exception_mentions_constraint)
+            << "Exception message should mention constraint, exit node, or mesh mapping issue. Exception: "
+            << exception_message;
+    } else {
+        // No exception - verify result indicates failure
+        EXPECT_FALSE(result.success)
+            << "Multi-mesh mapping should fail due to over-constrained device-level constraints";
+
+        EXPECT_FALSE(result.error_message.empty())
+            << "Error message should be provided when mapping fails. Error: " << result.error_message;
+
+        // Verify that the failure occurred due to constraints
+        // The error message should indicate constraint failure, exit node constraints, or solver failure
+        bool mentions_constraint_or_exit_node = result.error_message.find("constraint") != std::string::npos ||
+                                                result.error_message.find("exit") != std::string::npos ||
+                                                result.error_message.find("solver") != std::string::npos ||
+                                                result.error_message.find("mapping") != std::string::npos;
+
+        EXPECT_TRUE(mentions_constraint_or_exit_node)
+            << "Error message should indicate constraint, exit node, solver, or mapping failure. Error: "
+            << result.error_message;
+    }
+
+    // Verify that no complete mapping was found
+    // The mapper should not have successfully mapped all logical nodes
+    size_t expected_logical_nodes = 3 * kPhysicalMeshSize * kPhysicalMeshSize;  // 3 * 2 * 2 = 12
+    EXPECT_LT(result.fabric_node_to_asic.size(), expected_logical_nodes)
+        << "Should not have mapped all " << expected_logical_nodes << " logical nodes due to over-constraints";
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_DeviceLevelConstraints_Succeeds) {
+    // Test mapping 3 logical meshes (2x2 each) connected in a line to 5 physical meshes (2x2 each) connected in a ring.
+    // All inter-mesh connections are device-level constraints (strict mode) with valid device assignments.
+    // This test verifies that the solver correctly succeeds when device-level constraints can be satisfied.
+    //
+    // Logical Topology (3 meshes):
+    //   Mesh 0: 2x2 grid (4 nodes)
+    //   Mesh 1: 2x2 grid (4 nodes)
+    //   Mesh 2: 2x2 grid (4 nodes)
+    //   Inter-mesh:
+    //     - Mesh 0 device 0 <-> Mesh 1 device 0 (device-level connection)
+    //     - Mesh 1 device 1 <-> Mesh 2 device 0 (device-level connection)
+    //
+    // Physical Topology (5 meshes):
+    //   Mesh 0: 2x2 grid (4 ASICs)
+    //   Mesh 1: 2x2 grid (4 ASICs)
+    //   Mesh 2: 2x2 grid (4 ASICs)
+    //   Mesh 3: 2x2 grid (4 ASICs)
+    //   Mesh 4: 2x2 grid (4 ASICs)
+    //   Inter-mesh: Ring topology (0-1-2-3-4-0)
+    //   Physical connections: Device 0 connects to device 0, device 1 connects to device 0, plus ring connectivity
+    //
+    // Expected: Should succeed because device-level constraints match physical connectivity
+    // - Logical mesh 0 device 0 -> Logical mesh 1 device 0 matches physical mesh 0 device 0 -> physical mesh 1 device 0
+    // - Logical mesh 1 device 1 -> Logical mesh 2 device 0 matches physical mesh 1 device 1 -> physical mesh 2 device 0
+
+    using namespace ::tt::tt_fabric;
+
+    // =========================================================================
+    // Create Logical Multi-Mesh Graph using MGD (3 meshes, line topology, device-level connections)
+    // =========================================================================
+
+    const std::string mgd_textproto = R"proto(
+        # --- Meshes ---------------------------------------------------------------
+
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 1 }
+        }
+
+        # --- Graphs ---------------------------------------------------------------
+
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          # Instances: mesh ids 0,1,2 (all 2x2)
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+          # Intermesh connections: mesh 0 <-> mesh 1, mesh 1 <-> mesh 2 (line topology)
+          # Using device-level connections (strict mode) with valid device assignments
+          # For 2x2 grid: device 0=(0,0), 1=(0,1), 2=(1,0), 3=(1,1)
+          # Mesh 0 device 0 <-> Mesh 1 device 0 (device-level connection)
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+            channels { count: 1 }
+          }
+          # Mesh 1 device 1 <-> Mesh 2 device 0 (device-level connection, different device)
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 0 } }
+            channels { count: 1 }
+          }
+        }
+
+        # --- Instantiation ----------------------------------------------------------
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create temporary MGD file
+    const std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
+    std::string unique_suffix;
+    for (int i = 0; i < 8; ++i) {
+        unique_suffix += "0123456789abcdef"[dis(gen)];
+    }
+    const std::filesystem::path temp_mgd_path =
+        temp_dir / ("test_three_logical_five_physical_device_level_valid_" + unique_suffix + ".textproto");
+
+    // Write the MGD content to temporary file
+    {
+        std::ofstream mgd_file(temp_mgd_path);
+        ASSERT_TRUE(mgd_file.is_open()) << "Failed to create temporary MGD file";
+        mgd_file << mgd_textproto;
+    }  // File is closed here
+
+    // Load MeshGraph from the temporary file
+    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+
+    // Clean up temporary file immediately after loading
+    std::filesystem::remove(temp_mgd_path);
+
+    // Build the logical multi-mesh graph from MGD
+    LogicalMultiMeshGraph logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    // Verify we have 3 logical meshes
+    EXPECT_EQ(logical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u) << "Should have 3 logical meshes";
+
+    // Verify exit nodes are device-level (strict mode)
+    EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
+        << "Mesh 0 should have exit nodes (device-level connection)";
+    EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
+        << "Mesh 1 should have exit nodes (device-level connection)";
+    EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
+        << "Mesh 2 should have exit nodes (device-level connection)";
+
+    // Verify exit nodes are fabric node-level (device_id specified)
+    const auto& exit_graph0 = logical_multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node (device 0)";
+    LogicalExitNode exit_node0{MeshId{0}, FabricNodeId(MeshId{0}, 0)};
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0) != exit_nodes0.end())
+        << "Device 0 should be an exit node in mesh 0";
+    EXPECT_TRUE(exit_node0.fabric_node_id.has_value()) << "Mesh 0 exit node should be fabric node-level (strict mode)";
+
+    const auto& exit_graph1 = logical_multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
+    const auto& exit_nodes1 = exit_graph1.get_nodes();
+    EXPECT_EQ(exit_nodes1.size(), 2u) << "Mesh 1 should have 2 exit nodes (device 0 and device 1)";
+    LogicalExitNode exit_node1_0{MeshId{1}, FabricNodeId(MeshId{1}, 0)};
+    LogicalExitNode exit_node1_1{MeshId{1}, FabricNodeId(MeshId{1}, 1)};
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_0) != exit_nodes1.end())
+        << "Device 0 should be an exit node in mesh 1";
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_1) != exit_nodes1.end())
+        << "Device 1 should be an exit node in mesh 1";
+
+    const auto& exit_graph2 = logical_multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{2});
+    const auto& exit_nodes2 = exit_graph2.get_nodes();
+    EXPECT_EQ(exit_nodes2.size(), 1u) << "Mesh 2 should have 1 exit node (device 0)";
+    LogicalExitNode exit_node2{MeshId{2}, FabricNodeId(MeshId{2}, 0)};
+    EXPECT_TRUE(std::find(exit_nodes2.begin(), exit_nodes2.end(), exit_node2) != exit_nodes2.end())
+        << "Device 0 should be an exit node in mesh 2";
+
+    // =========================================================================
+    // Create Physical Multi-Mesh Graph (5 meshes, ring topology)
+    // =========================================================================
+
+    constexpr size_t kNumPhysicalMeshes = 5;
+    constexpr size_t kPhysicalMeshSize = 2;  // 2x2 grid
+
+    // Create physical meshes: 5 meshes, each 2x2 grid
+    PhysicalAdjacencyMap flat_physical_adj;
+    std::vector<std::vector<tt::tt_metal::AsicID>> physical_asics_by_mesh(kNumPhysicalMeshes);
+    std::vector<PhysicalAdjacencyMap> physical_adj_by_mesh(kNumPhysicalMeshes);
+
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + mesh_idx * 100);
+        physical_adj_by_mesh[mesh_idx] =
+            build_grid_adjacency(physical_asics_by_mesh[mesh_idx], kPhysicalMeshSize, kPhysicalMeshSize);
+    }
+
+    // Add intermesh connections: ring topology (0->1, 1->2, 2->3, 3->4, 4->0)
+    // For 2x2 grid: device 0=(0,0), 1=(0,1), 2=(1,0), 3=(1,1)
+    // We need to support:
+    // - Device 0 to device 0 connections (for logical mesh 0->1)
+    // - Device 1 to device 0 connections (for logical mesh 1->2)
+    // So we'll add both connection patterns
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        size_t next_mesh_idx = (mesh_idx + 1) % kNumPhysicalMeshes;
+
+        // Connect device 0 of current mesh to device 0 of next mesh (top-left to top-left)
+        physical_adj_by_mesh[mesh_idx][physical_asics_by_mesh[mesh_idx][0]].push_back(
+            physical_asics_by_mesh[next_mesh_idx][0]);
+        physical_adj_by_mesh[next_mesh_idx][physical_asics_by_mesh[next_mesh_idx][0]].push_back(
+            physical_asics_by_mesh[mesh_idx][0]);
+
+        // Connect device 1 of current mesh to device 0 of next mesh (top-right to top-left)
+        physical_adj_by_mesh[mesh_idx][physical_asics_by_mesh[mesh_idx][1]].push_back(
+            physical_asics_by_mesh[next_mesh_idx][0]);
+        physical_adj_by_mesh[next_mesh_idx][physical_asics_by_mesh[next_mesh_idx][0]].push_back(
+            physical_asics_by_mesh[mesh_idx][1]);
+
+        // Also connect right edge to left edge for full ring connectivity
+        for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
+            size_t current_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);  // Device 1 or 3
+            size_t next_left_idx = row * kPhysicalMeshSize;                                // Device 0 or 2
+            // Only add if not already added above
+            if (row == 0 && current_right_idx == 1) {
+                // Already added device 1 -> device 0 above
+                continue;
+            }
+            physical_adj_by_mesh[mesh_idx][physical_asics_by_mesh[mesh_idx][current_right_idx]].push_back(
+                physical_asics_by_mesh[next_mesh_idx][next_left_idx]);
+            physical_adj_by_mesh[next_mesh_idx][physical_asics_by_mesh[next_mesh_idx][next_left_idx]].push_back(
+                physical_asics_by_mesh[mesh_idx][current_right_idx]);
+        }
+    }
+
+    // Combine into flat adjacency map
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        for (const auto& [asic, neighbors] : physical_adj_by_mesh[mesh_idx]) {
+            flat_physical_adj[asic] = neighbors;
+        }
+    }
+
+    // Build hierarchical physical graph from flat graph
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
+        for (const auto& asic : physical_asics_by_mesh[mesh_idx]) {
+            asic_id_to_mesh_rank[MeshId{mesh_idx}][asic] = rank0_;
+        }
+    }
+
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph =
+        build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // =========================================================================
+    // Run mapping and verify results
+    // =========================================================================
+
+    TopologyMappingConfig config;
+    config.strict_mode = true;            // Use strict mode for device-level constraints
+    config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
+
+    std::cout << "\n=== DEBUG: Starting Mapping (Valid Device-Level Constraints) ===" << std::endl;
+    std::cout << "Config: strict_mode=" << config.strict_mode
+              << ", disable_rank_bindings=" << config.disable_rank_bindings << std::endl;
+
+    // Call map_multi_mesh_to_physical (rank mappings omitted since disable_rank_bindings is true)
+    const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+
+    std::cout << "\n=== DEBUG: Mapping Result ===" << std::endl;
+    std::cout << "Success: " << (result.success ? "true" : "false") << std::endl;
+    std::cout << "Error message: " << result.error_message << std::endl;
+    std::cout << "Number of mapped nodes: " << result.fabric_node_to_asic.size() << std::endl;
+
+    // Verify overall result succeeded
+    EXPECT_TRUE(result.success) << "Multi-mesh mapping should succeed with valid device-level constraints: "
+                                << result.error_message;
+
+    // Verify bidirectional consistency of the overall result
+    verify_bidirectional_consistency(result);
+
+    // Verify all logical nodes are mapped (3 meshes * 4 nodes = 12 nodes)
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 12u) << "All 12 logical nodes should be mapped";
+
+    // Group mappings by mesh_id
+    std::map<MeshId, std::map<FabricNodeId, tt::tt_metal::AsicID>> mappings_by_mesh;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        mappings_by_mesh[fabric_node.mesh_id][fabric_node] = asic;
+    }
+
+    // Verify we have mappings for all 3 logical meshes
+    EXPECT_EQ(mappings_by_mesh.size(), 3u) << "Should have mappings for all 3 logical meshes";
+    EXPECT_TRUE(mappings_by_mesh.contains(MeshId{0})) << "Should have mappings for logical mesh 0";
+    EXPECT_TRUE(mappings_by_mesh.contains(MeshId{1})) << "Should have mappings for logical mesh 1";
+    EXPECT_TRUE(mappings_by_mesh.contains(MeshId{2})) << "Should have mappings for logical mesh 2";
+
+    // Verify each logical mesh has all 4 nodes mapped
+    for (const auto& [logical_mesh_id, mesh_mappings] : mappings_by_mesh) {
+        EXPECT_EQ(mesh_mappings.size(), 4u) << "Logical mesh " << logical_mesh_id.get() << " should map all 4 nodes";
+    }
+
+    // =========================================================================
+    // Verify intra-mesh connectivity is preserved
+    // =========================================================================
+
+    for (const auto& [logical_mesh_id, mesh_mappings] : mappings_by_mesh) {
+        // Find which physical mesh this logical mesh mapped to
+        MeshId physical_mesh_id = MeshId{0};
+        if (!mesh_mappings.empty()) {
+            const auto& first_asic = mesh_mappings.begin()->second;
+            for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+                const auto& nodes = adjacency_graph.get_nodes();
+                if (std::find(nodes.begin(), nodes.end(), first_asic) != nodes.end()) {
+                    physical_mesh_id = pm_id;
+                    break;
+                }
+            }
+        }
+
+        // Verify intra-mesh connectivity is preserved
+        const auto& logical_graph = logical_multi_mesh_graph.mesh_adjacency_graphs_.at(logical_mesh_id);
+        const auto& physical_graph = physical_multi_mesh_graph.mesh_adjacency_graphs_.at(physical_mesh_id);
+        const auto& logical_nodes = logical_graph.get_nodes();
+
+        for (const auto& node : logical_nodes) {
+            const auto mapped_asic = mesh_mappings.at(node);
+            const auto& logical_neighbors = logical_graph.get_neighbors(node);
+            const auto& physical_neighbors = physical_graph.get_neighbors(mapped_asic);
+
+            for (const auto& neighbor : logical_neighbors) {
+                // If neighbor is in the same logical mesh, verify intra-mesh connectivity
+                if (neighbor.mesh_id == logical_mesh_id) {
+                    const auto neighbor_asic = mesh_mappings.at(neighbor);
+                    EXPECT_TRUE(
+                        std::find(physical_neighbors.begin(), physical_neighbors.end(), neighbor_asic) !=
+                        physical_neighbors.end())
+                        << "Logical intra-mesh edge not preserved in physical mapping for logical mesh "
+                        << logical_mesh_id.get() << ": logical node " << node.chip_id << " -> " << neighbor.chip_id
+                        << " should map to physically connected ASICs";
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // Verify inter-mesh connectivity with device-level constraints
+    // =========================================================================
+
+    // Verify exit node mappings match device-level constraints
+    // Logical mesh 0 device 0 should map to a physical ASIC that connects to logical mesh 1 device 0's mapped ASIC
+    FabricNodeId logical_exit_node_0_0{MeshId{0}, 0};
+    FabricNodeId logical_exit_node_1_0{MeshId{1}, 0};
+    FabricNodeId logical_exit_node_1_1{MeshId{1}, 1};
+    FabricNodeId logical_exit_node_2_0{MeshId{2}, 0};
+
+    EXPECT_TRUE(mappings_by_mesh.at(MeshId{0}).contains(logical_exit_node_0_0))
+        << "Logical mesh 0 device 0 should be mapped";
+    EXPECT_TRUE(mappings_by_mesh.at(MeshId{1}).contains(logical_exit_node_1_0))
+        << "Logical mesh 1 device 0 should be mapped";
+    EXPECT_TRUE(mappings_by_mesh.at(MeshId{1}).contains(logical_exit_node_1_1))
+        << "Logical mesh 1 device 1 should be mapped";
+    EXPECT_TRUE(mappings_by_mesh.at(MeshId{2}).contains(logical_exit_node_2_0))
+        << "Logical mesh 2 device 0 should be mapped";
+
+    const auto& asic_0_0 = mappings_by_mesh.at(MeshId{0}).at(logical_exit_node_0_0);
+    const auto& asic_1_0 = mappings_by_mesh.at(MeshId{1}).at(logical_exit_node_1_0);
+    const auto& asic_1_1 = mappings_by_mesh.at(MeshId{1}).at(logical_exit_node_1_1);
+    const auto& asic_2_0 = mappings_by_mesh.at(MeshId{2}).at(logical_exit_node_2_0);
+
+    // Verify logical mesh 0 device 0 is physically connected to logical mesh 1 device 0
+    // Find which physical meshes these ASICs belong to
+    MeshId physical_mesh_0 = MeshId{0};
+    MeshId physical_mesh_1 = MeshId{0};
+    MeshId physical_mesh_2 = MeshId{0};
+
+    for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        const auto& nodes = adjacency_graph.get_nodes();
+        if (std::find(nodes.begin(), nodes.end(), asic_0_0) != nodes.end()) {
+            physical_mesh_0 = pm_id;
+        }
+        if (std::find(nodes.begin(), nodes.end(), asic_1_0) != nodes.end()) {
+            physical_mesh_1 = pm_id;
+        }
+        if (std::find(nodes.begin(), nodes.end(), asic_2_0) != nodes.end()) {
+            physical_mesh_2 = pm_id;
+        }
+    }
+
+    // Verify physical meshes are connected
+    const auto& physical_mesh_level_graph = physical_multi_mesh_graph.mesh_level_graph_;
+    const auto& neighbors_0 = physical_mesh_level_graph.get_neighbors(physical_mesh_0);
+    EXPECT_TRUE(std::find(neighbors_0.begin(), neighbors_0.end(), physical_mesh_1) != neighbors_0.end())
+        << "Physical mesh " << physical_mesh_0.get() << " (logical mesh 0) should connect to physical mesh "
+        << physical_mesh_1.get() << " (logical mesh 1)";
+
+    const auto& neighbors_1 = physical_mesh_level_graph.get_neighbors(physical_mesh_1);
+    EXPECT_TRUE(std::find(neighbors_1.begin(), neighbors_1.end(), physical_mesh_2) != neighbors_1.end())
+        << "Physical mesh " << physical_mesh_1.get() << " (logical mesh 1) should connect to physical mesh "
+        << physical_mesh_2.get() << " (logical mesh 2)";
+
+    // Verify the specific ASICs are physically connected (device-level constraint)
+    // Get exit node graphs to check inter-mesh ASIC connections
+    const auto& exit_node_graph_0 = physical_multi_mesh_graph.mesh_exit_node_graphs_.at(physical_mesh_0);
+    const auto& exit_node_graph_1 = physical_multi_mesh_graph.mesh_exit_node_graphs_.at(physical_mesh_1);
+
+    // Check if asic_0_0 (logical mesh 0 device 0) connects to asic_1_0 (logical mesh 1 device 0)
+    PhysicalExitNode exit_node_0_0{physical_mesh_0, asic_0_0};
+    const auto& exit_neighbors_0_0 = exit_node_graph_0.get_neighbors(exit_node_0_0);
+    bool found_connection_0_1 = false;
+    for (const auto& neighbor_exit_node : exit_neighbors_0_0) {
+        if (neighbor_exit_node.mesh_id == physical_mesh_1 && neighbor_exit_node.asic_id == asic_1_0) {
+            found_connection_0_1 = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_connection_0_1) << "Logical mesh 0 device 0 (ASIC " << asic_0_0.get()
+                                      << ") should be physically connected to logical mesh 1 device 0 (ASIC "
+                                      << asic_1_0.get() << ")";
+
+    // Check if asic_1_1 (logical mesh 1 device 1) connects to asic_2_0 (logical mesh 2 device 0)
+    PhysicalExitNode exit_node_1_1{physical_mesh_1, asic_1_1};
+    const auto& exit_neighbors_1_1 = exit_node_graph_1.get_neighbors(exit_node_1_1);
+    bool found_connection_1_2 = false;
+    for (const auto& neighbor_exit_node : exit_neighbors_1_1) {
+        if (neighbor_exit_node.mesh_id == physical_mesh_2 && neighbor_exit_node.asic_id == asic_2_0) {
+            found_connection_1_2 = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_connection_1_2) << "Logical mesh 1 device 1 (ASIC " << asic_1_1.get()
+                                      << ") should be physically connected to logical mesh 2 device 0 (ASIC "
+                                      << asic_2_0.get() << ")";
+
+    // Verify fabric node IDs match the device-level constraints
+    EXPECT_EQ(logical_exit_node_0_0.chip_id, 0u) << "Logical mesh 0 exit node should be device 0 (as specified in MGD)";
+    EXPECT_EQ(logical_exit_node_1_0.chip_id, 0u) << "Logical mesh 1 exit node should be device 0 (as specified in MGD)";
+    EXPECT_EQ(logical_exit_node_1_1.chip_id, 1u) << "Logical mesh 1 exit node should be device 1 (as specified in MGD)";
+    EXPECT_EQ(logical_exit_node_2_0.chip_id, 0u) << "Logical mesh 2 exit node should be device 0 (as specified in MGD)";
+
+    std::cout << "\n=== DEBUG: Device-Level Constraint Verification ===" << std::endl;
+    std::cout << "Logical Mesh 0 device 0 -> ASIC " << asic_0_0.get() << " (Physical Mesh " << physical_mesh_0.get()
+              << ")" << std::endl;
+    std::cout << "Logical Mesh 1 device 0 -> ASIC " << asic_1_0.get() << " (Physical Mesh " << physical_mesh_1.get()
+              << ")" << std::endl;
+    std::cout << "Logical Mesh 1 device 1 -> ASIC " << asic_1_1.get() << " (Physical Mesh " << physical_mesh_1.get()
+              << ")" << std::endl;
+    std::cout << "Logical Mesh 2 device 0 -> ASIC " << asic_2_0.get() << " (Physical Mesh " << physical_mesh_2.get()
+              << ")" << std::endl;
+    std::cout << "Connection 0->1 (device 0->0) verified: " << (found_connection_0_1 ? "YES" : "NO") << std::endl;
+    std::cout << "Connection 1->2 (device 1->0) verified: " << (found_connection_1_2 ? "YES" : "NO") << std::endl;
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental::tt_fabric

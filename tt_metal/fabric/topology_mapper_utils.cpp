@@ -675,22 +675,35 @@ bool add_exit_node_constraints(
     std::unordered_map<MeshId, std::set<tt::tt_metal::AsicID>> valid_physical_exit_nodes_by_mesh;
     std::set<FabricNodeId> valid_logical_exit_nodes(logical_graph.get_nodes().begin(), logical_graph.get_nodes().end());
 
+    // Build reverse map: physical mesh ID -> logical mesh ID
+    std::unordered_map<MeshId, MeshId> physical_to_logical_mesh;
+    for (const auto& [logical_mesh_id, physical_mesh_id] : mesh_mappings) {
+        physical_to_logical_mesh[physical_mesh_id] = logical_mesh_id;
+    }
+
     // Get the valid physical exit nodes for each mesh direction
     // Map them by physical mesh ID (not logical mesh ID) since we'll look them up by physical mesh ID later
+    // Only process exit nodes for physical meshes that are mapped to logical meshes
     for (const auto& src_exit_node : physical_exit_node_graph.get_nodes()) {
+        // Skip if source physical mesh is not mapped to any logical mesh
+        if (!physical_to_logical_mesh.contains(src_exit_node.mesh_id)) {
+            continue;
+        }
+
         // Get the valid logical exit nodes for this source exit node
         const auto& dst_exit_nodes = physical_exit_node_graph.get_neighbors(src_exit_node);
 
         // Loop through all destination exit nodes (can be multiple)
+        // Only process exit nodes where both source and destination physical meshes are mapped
         for (const auto& dst_exit_node : dst_exit_nodes) {
-            // Map the logical mesh ID to physical mesh ID, then use physical mesh ID as the key
-            // Error if the mesh mapping doesn't include the destination exit node mesh ID
-            auto mesh_mapping_it = mesh_mappings.find(dst_exit_node.mesh_id);
-            TT_ASSERT(
-                mesh_mapping_it != mesh_mappings.end(),
-                "Mesh mapping missing for logical mesh ID {} (destination exit node mesh ID)",
-                dst_exit_node.mesh_id.get());
-            valid_physical_exit_nodes_by_mesh[mesh_mapping_it->second].insert(src_exit_node.asic_id);
+            // Skip if destination physical mesh is not mapped to any logical mesh
+            // This can happen when there are more physical meshes than logical meshes
+            if (!physical_to_logical_mesh.contains(dst_exit_node.mesh_id)) {
+                continue;
+            }
+
+            // Use the mapped physical mesh ID as the key (which is the same as dst_exit_node.mesh_id)
+            valid_physical_exit_nodes_by_mesh[dst_exit_node.mesh_id].insert(src_exit_node.asic_id);
         }
     }
 
