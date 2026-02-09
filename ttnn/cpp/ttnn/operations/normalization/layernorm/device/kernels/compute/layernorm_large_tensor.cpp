@@ -9,13 +9,13 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_16;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
+    uint32_t cb_xmm = tt::CBIndex::c_24;          // x minus mean
     constexpr auto cb_ex = tt::CBIndex::c_18;     // E[x]
     constexpr auto cb_ex2 = tt::CBIndex::c_19;    // E[(x-E[x])^2]
     constexpr auto cb_xmm2 = tt::CBIndex::c_20;   // xmm^2

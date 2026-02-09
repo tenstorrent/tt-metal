@@ -38,6 +38,7 @@ target_sources(
         grid_sample/grid_sample_prepare_grid.cpp
         rotate/device/rotate_device_operation.cpp
         rotate/device/rotate_nearest_program_factory.cpp
+        rotate/device/rotate_bilinear_program_factory.cpp
         rotate/rotate.cpp
         pool_utils.cpp
         upsample/device//upsample_bilinear_program_factory_multicore.cpp

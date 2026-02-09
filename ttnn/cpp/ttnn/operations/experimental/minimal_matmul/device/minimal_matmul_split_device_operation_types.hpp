@@ -21,8 +21,8 @@ struct MinimalMatmulSplitParams {
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
-    int32_t chunks;
-    int32_t dim;
+    int32_t chunks{};
+    int32_t dim{};
 };
 
 struct MinimalMatmulSplitInputs {

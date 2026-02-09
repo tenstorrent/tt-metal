@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/tile_move_copy.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 
 // Fused SiLU activation support (only when FUSE_SILU is defined)
@@ -13,7 +13,7 @@
 // - ITERATIONS: minimum 2 required for SFPU, then scales (m<=4->2, m=8->4, m>=16->8)
 // Total: significant speedup vs default silu_tile()
 #ifdef FUSE_SILU
-#include "compute_kernel_api.h"  // for silu_tile_init() and llk_math_eltwise_unary_sfpu_silu
+#include "api/compute/compute_kernel_api.h"  // for silu_tile_init() and llk_math_eltwise_unary_sfpu_silu
 #endif
 
 /**
@@ -63,7 +63,7 @@ void kernel_main() {
 
     // Initialize custom matmul
     // Use subblock_k for init since that's the K tiles per call
-    custom_mm_block_init(cb_id_in0, cb_id_in1, cb_id_out, transpose, subblock_k);
+    custom_mm_block_init<false, true>(cb_id_in0, cb_id_in1, cb_id_out);
 
     // Wait for all in0 tiles (replicated, tensor-backed - always available)
     cb_wait_front(cb_id_in0, num_tiles_k);
@@ -79,13 +79,12 @@ void kernel_main() {
             // Intermediate K subblocks: partial accumulation (no finalization)
             for (uint32_t sb_k = 0; sb_k < num_subblocks_k - 1; sb_k++) {
                 cb_wait_front(cb_id_in1, subblock_k);
-                custom_mm_block<true>(cb_id_in0, cb_id_in1, sb_k * subblock_k, 0, w, transpose, subblock_k);
+                custom_mm_block<false>(cb_id_in0, cb_id_in1, sb_k * subblock_k, 0, w, subblock_k);
                 cb_pop_front(cb_id_in1, subblock_k);
             }
             // Final K subblock: full accumulation with finalization
             cb_wait_front(cb_id_in1, subblock_k);
-            custom_mm_block<false>(
-                cb_id_in0, cb_id_in1, (num_subblocks_k - 1) * subblock_k, 0, w, transpose, subblock_k);
+            custom_mm_block<true>(cb_id_in0, cb_id_in1, (num_subblocks_k - 1) * subblock_k, 0, w, subblock_k);
             cb_pop_front(cb_id_in1, subblock_k);
         }
 

@@ -1218,29 +1218,29 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
         # 1,1,32,3072, L1 interleaved
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
-        # 1,32,16,128 L1 interleaved
+        # 32,1,16,192 L1 interleaved
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
-        # 1,32,16,192 L1 interleaved
+        # 32,1,16,128 L1 interleaved
         tt_q_rope = ttnn.slice(
             tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
         )
-        # 1,32,16,64 height sharded 8x4 [32,64]
+        # 32,1,16,64 height sharded 8x4 [32,64]
 
         # Q Rope: wkv_b1
-        # 1,32,16,192 L1 interleaved
+        # 32,1,16,128 L1 interleaved
         tt_q_nope = ttnn.permute(tt_q_nope, (1, 2, 0, 3))  # [1, num_heads_local, bsz, qk_nope_head_dim]
-        # 1,16,32,192 L1 interleaved
+        # 1,16,32,128 L1 interleaved
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, bsz, kv_lora_rank]
         # 1,16,32,512 L1 interleaved
         tt_q_nope = ttnn.permute(tt_q_nope, (0, 2, 1, 3))  # [1, bsz, num_heads_local, qk_nope_head_dim]
-        # 1,132,16,512 L1 interleaved
+        # 1,32,16,512 L1 interleaved
 
         # Q RoPE
-        # 1,32,16,64 height sharded 8x4 [32,64]
+        # 32,1,16,64 height sharded 8x4 [32,64]
         tt_q_rope = ttnn.permute(
             tt_q_rope, **cfg["q_rope_permute"]
         )  # [1, bsz, num_heads_local, qk_rope_head_dim], should be no-op
-        # 32,1,16,64 height sharded 8x4 [32,64]
+        # 1,32,16,64 height sharded 8x4 [32,64]
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
             tt_q_rope,
             rope_tensors["cos_matrix"],
@@ -1248,12 +1248,12 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
-        # 32,1,16,64 width sharded 8x4 [32,64]
+        # 1,32,16,64 width sharded 8x4 [32,64]
         tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
-        # 32,1,16,64 L1 interleaved
+        # 1,32,16,64 L1 interleaved
 
         # Concat Q Nope and Q Rope
-        # 1,32,16,512 L1 interleaved | # 32,1,16,64 L1 interleaved
+        # 1,32,16,512 L1 interleaved | # 1,32,16,64 L1 interleaved
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
         # 1,32,16,576 L1 interleaved
         return tt_q

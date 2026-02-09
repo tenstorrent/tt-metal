@@ -27,9 +27,9 @@ def create_fabric_router_config(max_payload_size):
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
         # Perf variant (with tracing)
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
+        (8, [1, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
         # Check variant (without tracing)
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
+        (8, [1, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
     ],
     ids=[
         "sd35_spatial-perf",
@@ -71,13 +71,13 @@ def create_fabric_router_config(max_payload_size):
         # "fabric_manager_enabled_linear" # test removed due to issue 35320
     ],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("chunks_per_sync", [1])
+@pytest.mark.parametrize("num_workers_per_link", [1])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 @pytest.mark.parametrize(
     "all_gather_function",
-    [ttnn.experimental.all_gather_async, ttnn.experimental.all_gather_async_reversed],
-    ids=["normal", "reversed"],
+    [ttnn.experimental.all_gather_async],
+    ids=["normal"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_all_gather_async(

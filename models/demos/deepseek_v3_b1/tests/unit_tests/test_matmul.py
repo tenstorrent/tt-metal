@@ -35,28 +35,30 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import MatmulSingleCore
 
 
 @pytest.mark.parametrize(
-    "M, K, N, in0_dtype, in1_dtype",
+    "M, K, N, in0_dtype, in1_dtype, transpose",
     [
         # Before SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b),  # Q down + K down
-        (1, 3584, 32, ttnn.bfloat16, ttnn.bfloat8_b),  # Q down with split inner dim
-        (1, 1536, 128, ttnn.bfloat16, ttnn.bfloat8_b),  # Q up
-        (1, 128, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # Q nope
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b, False),  # Q down + K down
+        (1, 3584, 32, ttnn.bfloat16, ttnn.bfloat8_b, False),  # Q down with split inner dim
+        (1, 1536, 128, ttnn.bfloat16, ttnn.bfloat8_b, False),  # Q up
+        (1, 128, 512, ttnn.bfloat16, ttnn.bfloat8_b, False),  # Q nope
         # SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA Q @ K.T (KV_chunk_size=256)
-        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA Q @ K.T (KV_chunk_size=512)
-        (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA S @ V (KV_chunk_size=256)
-        (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA S @ V (KV_chunk_size=512)
+        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, False),  # SDPA Q @ K.T (KV_chunk_size=256)
+        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, False),  # SDPA Q @ K.T (KV_chunk_size=512)
+        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, True),  # SDPA Q @ K.T (KV_chunk_size=256)
+        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, True),  # SDPA Q @ K.T (KV_chunk_size=512)
+        (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b, False),  # SDPA S @ V (KV_chunk_size=256)
+        (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b, False),  # SDPA S @ V (KV_chunk_size=512)
         # After SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b),  # V out
-        (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b),  # Out
+        (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b, False),  # V out
+        (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b, False),  # Out
         # MoE (bfloat16 srcB/in0, bfloat8_b srcA/in1 - potentially bfloat4_b if accurate enough)
-        (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b),  # Dense MLP: W_up (out_w=2)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Gate proj + up proj
-        (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Down proj
+        (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b, False),  # Dense MLP: W_up (out_w=2)
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, False),  # Gate proj + up proj
+        (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b, False),  # Down proj
     ],
 )
-def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype):
+def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose):
     """Test single-core matmul operation with fully sharded inputs"""
 
     # Tile dimensions
@@ -73,16 +75,23 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype):
     num_tiles_k = K // a_tile.tile_shape[1]
     num_tiles_n = N // b_tile.tile_shape[1]
 
-    logger.info(f"Testing single-core matmul with shape [{M}, {K}] x [{K}, {N}], in0={in0_dtype}, in1={in1_dtype}")
+    logger.info(
+        f"Testing single-core matmul with shape [{M}, {K}] x [{K}, {N}], in0={in0_dtype}, in1={in1_dtype}, transpose={transpose}"
+    )
     logger.info(f"Tiles: M={num_tiles_m}, K={num_tiles_k}, N={num_tiles_n}")
 
     # Create input A and input B PyTorch tensors
     torch.manual_seed(0)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    if transpose:
+        torch_b = torch_b.T
 
     # Compute reference output using PyTorch
-    torch_expected = MatmulSingleCore.golden(torch_a.float(), torch_b.float()).bfloat16()
+    if transpose:
+        torch_expected = MatmulSingleCore.golden(torch_a.float(), torch_b.T.float()).bfloat16()
+    else:
+        torch_expected = MatmulSingleCore.golden(torch_a.float(), torch_b.float()).bfloat16()
 
     # Create HEIGHT_SHARDED memory config for input A
     # Single core has full 1xK tensor
@@ -111,6 +120,8 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype):
     # Create WIDTH_SHARDED memory config for input B
     # Single core has full KxN tensor
     input_b_shard_shape = (K, N)
+    if transpose:
+        input_b_shard_shape = (N, K)
     input_b_shard_spec = ttnn.ShardSpec(
         core_grid,
         input_b_shard_shape,
@@ -162,6 +173,7 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype):
         ttnn_b,
         ttnn_output,
         fp32_dest_acc_en=False,
+        transpose=transpose,
     )
 
     # Convert back to torch for comparison

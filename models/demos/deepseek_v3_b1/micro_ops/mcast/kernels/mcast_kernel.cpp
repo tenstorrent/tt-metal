@@ -58,7 +58,7 @@ void kernel_main() {
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
 
     // Mcast receiver data address (passed from Python as runtime arg, this is the output tensor's buffer address)
-    uint32_t mcast_receiver_data_addr = get_arg_val<uint32_t>(0);
+    uint32_t mcast_receiver_data_addr = get_common_arg_val<uint32_t>(0);
 
     // Mcast sender args (from compile-time args, passed to op as runtime args)
     Mcast::SenderArgs mcast_args{

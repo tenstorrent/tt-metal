@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
@@ -175,6 +176,8 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape
 
 // Test small tensor - basic functionality
 TEST_F(SiLUOpTest, SiLU_Compare_Small) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C=8, Wt=1, Wt%4=1
     CompareKernelVsReferenceWithShape({1, 1, 1, 8});
 }
@@ -182,30 +185,40 @@ TEST_F(SiLUOpTest, SiLU_Compare_Small) {
 // Test block_size alignment patterns
 // Wt % block_size = 0 (perfectly aligned)
 TEST_F(SiLUOpTest, SiLU_Compare_BlockSize_Remainder0) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C=128, Wt=4, Wt%4=0
     CompareKernelVsReferenceWithShape({1, 1, 1, 128});
 }
 
 // Wt % block_size = 1
 TEST_F(SiLUOpTest, SiLU_Compare_BlockSize_Remainder1) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C=160, Wt=5, Wt%4=1
     CompareKernelVsReferenceWithShape({1, 1, 1, 160});
 }
 
 // Wt % block_size = 2
 TEST_F(SiLUOpTest, SiLU_Compare_BlockSize_Remainder2) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C=192, Wt=6, Wt%4=2
     CompareKernelVsReferenceWithShape({1, 1, 1, 192});
 }
 
 // Wt % block_size = 3
 TEST_F(SiLUOpTest, SiLU_Compare_BlockSize_Remainder3) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C=224, Wt=7, Wt%4=3
     CompareKernelVsReferenceWithShape({1, 1, 1, 224});
 }
 
 // Test large tensor - memory stress test
 TEST_F(SiLUOpTest, SiLU_Compare_Large) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // Large C dimension to test memory handling
     // C=32768, Wt=1024, Wt%4=0
     CompareKernelVsReferenceWithShape({1, 1, 1, 32768});
@@ -213,6 +226,8 @@ TEST_F(SiLUOpTest, SiLU_Compare_Large) {
 
 // Test very large tensor - extreme memory test
 TEST_F(SiLUOpTest, SiLU_Compare_VeryLarge) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // Very large C dimension ~1M elements
     // C=1048576, Wt=32768, Wt%4=0
     CompareKernelVsReferenceWithShape({1, 1, 1, 1048576});
@@ -220,6 +235,8 @@ TEST_F(SiLUOpTest, SiLU_Compare_VeryLarge) {
 
 // Test NanoLlama-like shape - realistic transformer model
 TEST_F(SiLUOpTest, SiLU_Compare_NanoLlama_Shape) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // Typical NanoLlama dimensions: multiple batches and sequences
     // B=2, N=1, S=64, C=512 (hidden dimension)
     // C=512, Wt=16, Wt%4=0
@@ -228,6 +245,8 @@ TEST_F(SiLUOpTest, SiLU_Compare_NanoLlama_Shape) {
 
 // Test batch processing with different sequence lengths
 TEST_F(SiLUOpTest, SiLU_Compare_MultiBatch_MultiSeq) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // Multiple batches with longer sequences
     // B=4, N=1, S=128, C=768
     // C=768, Wt=24, Wt%4=0
@@ -236,6 +255,8 @@ TEST_F(SiLUOpTest, SiLU_Compare_MultiBatch_MultiSeq) {
 
 // Test smaller model dimensions with unaligned C
 TEST_F(SiLUOpTest, SiLU_Compare_SmallModel_Unaligned) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // Smaller model with unaligned channel dimension
     // B=2, N=1, S=32, C=100
     // C=100, Wt=4, Wt%4=0 (but C is not multiple of 32)
@@ -251,6 +272,8 @@ TEST_F(SiLUOpTest, SiLU_Compare_SmallModel_Unaligned) {
 // ============================================================================
 
 TEST_F(SiLUOpTest, SiLU_Precision_Comparison) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     // Single test shape: nanollama-like

@@ -14,6 +14,7 @@ target_sources(
         test_mesh_device_view.cpp
         test_mesh_workload.cpp
         test_mesh_socket.cpp
+        test_hd_sockets.cpp
         test_mesh_sub_device.cpp
         test_mesh_allocator.cpp
         test_mesh_events.cpp

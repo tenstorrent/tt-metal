@@ -11,7 +11,7 @@ import math
 import ttnn
 
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import pad_to_dram_banks
-from models.common.utility_functions import comp_pcc, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, skip_for_blackhole, skip_with_watcher
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -40,10 +40,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 896,
-            "n": 2112,  # this pads up to 2304
+            "n": 2112,  # pads to 2304 (72 tiles), out_core_grid must divide 72
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
-            "in0_core_grid": (7, 1),
-            "out_core_grid": (8, 1),
+            "in0_core_grid": (1, 7),
+            "out_core_grid": (1, 8),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
@@ -59,10 +59,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 1536,
-            "n": 3072,
+            "n": 3072,  # already aligned (96 tiles), out_core_grid must divide 96
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
-            "in0_core_grid": (8, 2),
-            "out_core_grid": (8, 2),
+            "in0_core_grid": (2, 8),
+            "out_core_grid": (2, 8),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
@@ -79,10 +79,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 16384,
-            "n": 896,  # this pads up to 1152
+            "n": 896,  # pads to 1152 (36 tiles), out_core_grid must divide 36
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
-            "in0_core_grid": (8, 1),
-            "out_core_grid": (8, 1),
+            "in0_core_grid": (1, 8),
+            "out_core_grid": (1, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
@@ -98,10 +98,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 8192,
-            "n": 1280,
+            "n": 1280,  # pads to 1536 (48 tiles), out_core_grid must divide 48
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
-            "in0_core_grid": (8, 1),
-            "out_core_grid": (8, 1),
+            "in0_core_grid": (1, 8),
+            "out_core_grid": (1, 8),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
@@ -117,10 +117,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 7168,
-            "n": 3584,  # 2304, padded up
+            "n": 3584,  # pads to 3840 (120 tiles), out_core_grid must divide 120
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (7, 8),
+            "out_core_grid": (5, 8),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -135,11 +135,11 @@ def pad_to_tile(dim, tile_size):
         # mlp ff2
         {
             "m": 32,
-            "k": 3584,  # 2304, padded up
-            "n": 7168,
+            "k": 3584,
+            "n": 7168,  # pads to 7296 (228 tiles), out_core_grid must divide 228
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (7, 8),
+            "out_core_grid": (2, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -155,10 +155,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 16,
             "k": 7168,
-            "n": 256,
+            "n": 256,  # pads to 384 (12 tiles), out_core_grid must divide 12
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (1, 8),
+            "out_core_grid": (1, 4),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -174,10 +174,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 7168,
-            "n": 384,  # 256, padded up
+            "n": 384,  # already aligned (12 tiles), out_core_grid must divide 12
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (3, 4),
+            "out_core_grid": (2, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -193,10 +193,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 256,
-            "n": 7168,
+            "n": 7168,  # pads to 7296 (228 tiles), out_core_grid must divide 228
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (1, 8),
-            "out_core_grid": (7, 8),
+            "out_core_grid": (2, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -212,10 +212,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 7168,
-            "n": 16512,  # 16160 padded
+            "n": 16512,  # already aligned (516 tiles), out_core_grid must divide 516
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (8, 8),
+            "out_core_grid": (2, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -242,6 +242,7 @@ def pad_to_tile(dim, tile_size):
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
 def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     """
     Test matmul with L1 sharded input1 and DRAM sharded input2.
@@ -294,7 +295,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     # The code calculates: num_blocks_x = ((N_tiles - 1) / per_core_N) + 1
     # and num_cores = num_blocks_x * num_blocks_y
     # We need to ensure num_cores <= available cores (64 for 8x8 grid)
-    N_tiles = n // out_tile_w
+    N_tiles = n_padded // out_tile_w
     M_tiles = m // out_tile_h
     num_blocks_y = ((M_tiles - 1) // per_core_M) + 1
     # Maximum number of blocks in x direction to stay within available cores
@@ -312,7 +313,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     else:
         min_per_core_N = N_tiles
     # Use the larger of the two: what we want for sharding vs what fits in available cores
-    desired_per_core_N = n // num_out_cores // out_tile_w
+    desired_per_core_N = n_padded // num_out_cores // out_tile_w
     per_core_N = max(min_per_core_N, desired_per_core_N)
 
     # Create torch tensors
@@ -349,9 +350,9 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         memory_config=in1_memory_config,
     )
 
-    # Output: L1 width-sharded memory config
+    # Output: L1 width-sharded memory config using padded dimensions
     out_memory_config = ttnn.create_sharded_memory_config(
-        [1, 1, m, n],
+        [1, 1, m, n_padded],
         core_grid=out_core_grid,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -374,7 +375,6 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         packer_l1_acc=True,
     )
 
-    # Run matmul - do it three times for perf
     for itr in range(num_iters):
         output_t = ttnn.matmul(
             in0_t,
@@ -398,7 +398,6 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("Deepseek tests target Wormhole")
 @pytest.mark.parametrize(
     "test_case",
     [
@@ -409,10 +408,6 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
             "n": 96,
             "tile_h": 32,
             "tile_w": 32,
-            "in0_core_grid_x": 6,
-            "in0_core_grid_y": 2,
-            "out_core_grid_x": 6,
-            "out_core_grid_y": 2,
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "expected_pcc": 0.9997,
@@ -424,42 +419,41 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
             "n": 64,
             "tile_h": 32,
             "tile_w": 32,
-            "in0_core_grid_x": 4,
-            "in0_core_grid_y": 3,
-            "out_core_grid_x": 4,
-            "out_core_grid_y": 3,
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.9997,
+        },
+        {
+            "batch": 7,
+            "m": 32,
+            "k": 32,
+            "n": 32,
+            "tile_h": 32,
+            "tile_w": 32,
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "expected_pcc": 0.9997,
         },
         # wkv_b1 takes roughly 19us. Compute bound, could be 15us
         {
-            "batch": 16,  # Pads to 24
+            "batch": 16,  # Pads to 24 (Wormhole) or 21 (Blackhole)
             "m": 32,
             "k": 128,
             "n": 512,
             "tile_h": 32,
             "tile_w": 32,
-            "in0_core_grid_x": 3,
-            "in0_core_grid_y": 4,
-            "out_core_grid_x": 3,
-            "out_core_grid_y": 4,
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "expected_pcc": 0.9997,
         },
         # wkv_b2 takes roughly 63us. Compute bound, could be 45us.
         {
-            "batch": 128,  # Pads to 132
+            "batch": 128,  # Pads to 132 (Wormhole) or 133 (Blackhole)
             "m": 4,
             "k": 512,
             "n": 128,
             "tile_h": 4,  # Tiny tile needed to avoid padding
             "tile_w": 32,
-            "in0_core_grid_x": 3,
-            "in0_core_grid_y": 4,
-            "out_core_grid_x": 3,
-            "out_core_grid_y": 4,
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "expected_pcc": 0.9997,
@@ -467,12 +461,13 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     ],
     ids=[
         "batch48_m64_n96_k32",
-        "batch12_m32_n32_k64",
+        "wh_sanity",
+        "bh_sanity",
         "wkv_b1",
         "wkv_b2",
     ],
 )
-@skip_for_blackhole("Deepseek tests target Wormhole")
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
 def test_matmul_batched_dram_sharded(device, test_case):
     """
     Test for Batch-Sharded DRAM Matmul.
@@ -495,16 +490,17 @@ def test_matmul_batched_dram_sharded(device, test_case):
     n = test_case["n"]  # output cols (cols of B)
     tile_h = test_case["tile_h"]
     tile_w = test_case["tile_w"]
-    in0_core_grid_x = test_case["in0_core_grid_x"]
-    in0_core_grid_y = test_case["in0_core_grid_y"]
-    out_core_grid_x = test_case["out_core_grid_x"]
-    out_core_grid_y = test_case["out_core_grid_y"]
     in0_dtype = test_case["in0_dtype"]
     in1_dtype = test_case["in1_dtype"]
     expected_pcc = test_case["expected_pcc"]
 
-    # Dimensions for batched matmul
-    num_dram_banks = 12  # Wormhole has 12 DRAM banks
+    # Get the optimal DRAM bank-to-worker core assignment from the device.
+    # The factory uses this same assignment to map workers to DRAM banks.
+    optimal_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+
+    num_dram_banks = len(optimal_worker_cores)
+    num_in0_cores = num_dram_banks
+    num_out_cores = num_dram_banks
 
     # Pad batch to be divisible by num_dram_banks (required for even sharding)
     batch_padded = pad_batch_to_dram_banks(batch, num_dram_banks)
@@ -514,24 +510,12 @@ def test_matmul_batched_dram_sharded(device, test_case):
     k_padded = pad_to_tile(k, tile_w)
     n_padded = pad_to_tile(n, tile_w)
 
-    num_in0_cores = in0_core_grid_x * in0_core_grid_y
-    num_out_cores = out_core_grid_x * out_core_grid_y
-
-    # Core grids must equal num_dram_banks for 1:1 worker mapping
-    assert (
-        num_in0_cores == num_dram_banks
-    ), f"in0 core grid ({num_in0_cores}) must equal num_dram_banks ({num_dram_banks})"
-    assert (
-        num_out_cores == num_dram_banks
-    ), f"out core grid ({num_out_cores}) must equal num_dram_banks ({num_dram_banks})"
-
     batches_per_core_in0 = batch_padded // num_in0_cores
     batches_per_core_out = batch_padded // num_out_cores
 
     # Shapes with padded dimensions: [1, B_padded, M_padded, K_padded] x [1, B_padded, K_padded, N_padded] = [1, B_padded, M_padded, N_padded]
     in0_shape_padded = [1, batch_padded, m_padded, k_padded]
     in1_shape_padded = [1, batch_padded, k_padded, n_padded]
-    out_shape_padded = [1, batch_padded, m_padded, n_padded]
 
     # Create random input data at original size
     in0_orig = torch.randn([1, batch, m, k], dtype=torch.bfloat16)
@@ -543,14 +527,15 @@ def test_matmul_batched_dram_sharded(device, test_case):
     in1 = torch.zeros(in1_shape_padded, dtype=torch.bfloat16)
     in1[:, :batch, :k, :n] = in1_orig
 
-    # in0 L1 shard grid
+    # Use optimal worker cores for L1 shard grids - this ensures the shard ordering
+    # matches the factory's worker ordering (critical for correct data routing!)
     in0_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(in0_core_grid_x - 1, in0_core_grid_y - 1))}
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
     )
 
-    # Output L1 shard grid
+    # Output L1 shard grid - same cores as input
     out_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(out_core_grid_x - 1, out_core_grid_y - 1))}
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
     )
 
     # DRAM shard grid: 12 DRAM banks (1D grid from 0 to 11)
@@ -632,11 +617,9 @@ def test_matmul_batched_dram_sharded(device, test_case):
 
     # Lower PCC threshold due to bfloat8_b weights (lower precision than bfloat16)
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    logger.info(f"Batch-sharded DRAM matmul test: {pcc_message}")
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    assert pcc_passed
 
 
-@skip_for_blackhole("Deepseek tests target Wormhole")
 @pytest.mark.parametrize(
     "batch, m, k, n",
     [
@@ -645,6 +628,7 @@ def test_matmul_batched_dram_sharded(device, test_case):
     ],
     ids=["batch12_m32_k64_n32", "batch24_m64_k128_n64"],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
 def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
     """
     Test program cache behavior for Batch-Sharded DRAM Matmul.
@@ -656,36 +640,37 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
 
     tile_h = 32
     tile_w = 32
-    num_dram_banks = 12
-    in0_core_grid_x = 4
-    in0_core_grid_y = 3
-    out_core_grid_x = 4
-    out_core_grid_y = 3
     expected_pcc = 0.9997
 
-    num_in0_cores = in0_core_grid_x * in0_core_grid_y
-    num_out_cores = out_core_grid_x * out_core_grid_y
+    # Get the optimal DRAM bank-to-worker core assignment from the device.
+    # The factory uses this same assignment to map workers to DRAM banks.
+    optimal_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
 
-    assert num_in0_cores == num_dram_banks
-    assert num_out_cores == num_dram_banks
+    num_dram_banks = len(optimal_worker_cores)
+    num_in0_cores = num_dram_banks
+    num_out_cores = num_dram_banks
 
-    batches_per_core_in0 = batch // num_in0_cores
-    batches_per_core_out = batch // num_out_cores
+    # Pad batch to be divisible by num_dram_banks (required for even sharding)
+    batch_padded = pad_batch_to_dram_banks(batch, num_dram_banks)
 
-    in0_shape = [1, batch, m, k]
-    in1_shape = [1, batch, k, n]
+    batches_per_core_in0 = batch_padded // num_in0_cores
+    batches_per_core_out = batch_padded // num_out_cores
 
-    # in0 L1 shard grid
+    in0_shape_padded = [1, batch_padded, m, k]
+    in1_shape_padded = [1, batch_padded, k, n]
+
+    # Use optimal worker cores for L1 shard grids - this ensures the shard ordering
+    # matches the factory's worker ordering (critical for correct data routing!)
     in0_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(in0_core_grid_x - 1, in0_core_grid_y - 1))}
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
     )
 
-    # Output L1 shard grid
+    # Output L1 shard grid - same cores as input
     out_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(out_core_grid_x - 1, out_core_grid_y - 1))}
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
     )
 
-    # DRAM shard grid: 12 DRAM banks
+    # DRAM shard grid: num_dram_banks DRAM banks (1D grid from 0 to num_dram_banks-1)
     dram_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
 
     # in0: L1 sharded by batch
@@ -694,7 +679,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
     in0_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
 
     # in1: DRAM sharded by batch
-    batches_per_dram_bank = batch // num_dram_banks
+    batches_per_dram_bank = batch_padded // num_dram_banks
     in1_shard_shape = [batches_per_dram_bank * k, n]
     in1_shard_spec = ttnn.ShardSpec(dram_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
@@ -717,9 +702,15 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
     )
 
     for _ in range(2):
-        # Create input tensors
-        in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
-        in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
+        # Create input tensors at original size
+        in0_orig = torch.randn([1, batch, m, k], dtype=torch.bfloat16)
+        in1_orig = torch.randn([1, batch, k, n], dtype=torch.bfloat16)
+
+        # Pad tensors to padded dimensions (pad with zeros)
+        in0 = torch.zeros(in0_shape_padded, dtype=torch.bfloat16)
+        in0[:, :batch, :, :] = in0_orig
+        in1 = torch.zeros(in1_shape_padded, dtype=torch.bfloat16)
+        in1[:, :batch, :, :] = in1_orig
 
         in0_t = ttnn.from_torch(
             in0,
@@ -751,7 +742,9 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
 
         # Validate correctness
         output_tensor = ttnn.to_torch(output_t)
-        pt_out = torch.matmul(in0, in1)
+        # Slice off padding from output to get original dimensions [1, batch, m, n]
+        output_tensor = output_tensor[:, :batch, :m, :n]
+        pt_out = torch.matmul(in0_orig, in1_orig)
         assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
         # Dummy tensor to change tensor allocation (tests program cache robustness)

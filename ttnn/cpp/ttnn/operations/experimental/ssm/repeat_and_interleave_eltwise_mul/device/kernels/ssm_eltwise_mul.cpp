@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/transpose_wh.h"
 
 void kernel_main() {
     uint32_t in1_num_blocks = get_arg_val<uint32_t>(0);
