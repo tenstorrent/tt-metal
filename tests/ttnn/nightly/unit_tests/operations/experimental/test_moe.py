@@ -654,6 +654,19 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
         # Output is produced in-place on the input tensor buffer, but output re-perceives it as RM
         tt_raw_output = ttnn.to_torch(tt_output)
 
+        tt_to_torch_output = prepare_output_tensor_from_combine_writer(
+            tt_raw_output,
+            all_core_range_set,
+            output_shard_core_range_set,
+            output_height_shard_dim,
+            output_width_shard_dim,
+            E,
+            M,
+            K,
+        )
+
+        all_outputs.append(tt_to_torch_output)
+
         # Compute checksums for all inputs before calling moe (only when check_accuracy is True)
         seed = 0  # torch.manual_seed(0) was set earlier
         input_checksums = {
@@ -679,19 +692,6 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
             # Save updated checksums
             save_checksum_dict(checksum_dict)
-
-        tt_to_torch_output = prepare_output_tensor_from_combine_writer(
-            tt_raw_output,
-            all_core_range_set,
-            output_shard_core_range_set,
-            output_height_shard_dim,
-            output_width_shard_dim,
-            E,
-            M,
-            K,
-        )
-
-        all_outputs.append(tt_to_torch_output)
 
     tt_to_torch_outputs = torch.stack(all_outputs)
 

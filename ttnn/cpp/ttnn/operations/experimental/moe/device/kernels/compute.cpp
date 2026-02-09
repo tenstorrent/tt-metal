@@ -8,7 +8,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
-// #include "compute_kernel_api/pack_untilize.h"
+#include "compute_kernel_api/pack_untilize.h"
 
 // DEBUG
 #include "compute_kernel_api/eltwise_unary/fill.h"
@@ -109,7 +109,6 @@ void kernel_main() {
     // Unpacker A is for W0,W1 and W2, so Bf4_b
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
-<<<<<<< HEAD
     auto stall = []() {
         for (uint32_t i = 0; i < 10000000; ++i) {
             asm volatile("nop");
@@ -170,12 +169,6 @@ void kernel_main() {
                 cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
             }
 
-            MATH((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            MATH((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-
-            MATH((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-            MATH((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
-
             tile_regs_commit();
             // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
             // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
@@ -210,7 +203,7 @@ void kernel_main() {
         cb_reserve_back(cb_c2w_rdy, 1);
         cb_push_back(cb_c2w_rdy, 1);
 
-        // pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
+        pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
 
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 4)
@@ -279,15 +272,16 @@ void kernel_main() {
             tile_regs_wait();
 
             // Pack this in-place for now.
-            pack_tile(0, cb_c2s_out);
-            pack_tile(1, cb_c2s_out);
-            pack_tile(2, cb_c2s_out);
-            pack_tile(3, cb_c2s_out);
-            // pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out, /*block_rt_dim=*/1,
-            // /*block_c_index=*/iter);
+            //  pack_tile(0, cb_c2s_out);
+            //             pack_tile(1, cb_c2s_out);
+            //             pack_tile(2, cb_c2s_out);
+            //             pack_tile(3, cb_c2s_out);
+            pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(
+                cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
+
             tile_regs_release();
         }
-        // pack_untilize_uninit(cb_c2s_out);
+        pack_untilize_uninit(cb_c2s_out);
         cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
     }  // end for (expert_id)
 

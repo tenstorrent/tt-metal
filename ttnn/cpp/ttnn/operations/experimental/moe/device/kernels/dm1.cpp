@@ -160,10 +160,6 @@ void kernel_main() {
         const uint32_t max_tokens_per_height_shard = detail::div_up(active_tokens, height_shard_dim);
         const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
         for (uint32_t hb = 0; hb < height_blocks; ++hb) {
-            // Wait for compute core to tell us that all mm01 data is ready
-            cb_wait_front(cb_c2w_rdy, 1);
-            cb_pop_front(cb_c2w_rdy, 1);
-
             // Assume data is already in the CB, but this will get plumbed to tilize in the future.
             cb_reserve_back(cb_s2c_in, num_w0_w1_tiles_h);
             cb_push_back(cb_s2c_in, num_w0_w1_tiles_h);
@@ -208,7 +204,7 @@ void kernel_main() {
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - hb * tile_height);
 
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
-            const uint32_t source_base_l1_addr = get_read_ptr(cb_c2w_out);
+            const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
 
             // tt::data_movement::common::print_bf16_pages(source_base_l1_addr,16, 64);
 
