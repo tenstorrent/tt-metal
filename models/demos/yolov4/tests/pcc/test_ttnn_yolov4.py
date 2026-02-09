@@ -68,8 +68,10 @@ def run_yolov4(device, model_location_generator, use_pretrained_weight, resoluti
         assert_with_pcc(ref_boxes, result_boxes, pcc=YOLOV4_BOXES_PCC_BLACKHOLE)
 
     else:
-        assert_with_pcc(ref_boxes, result_boxes, pcc=YOLOV4_BOXES_PCC)
-        assert_with_pcc(ref_confs, result_confs, pcc=YOLOV4_CONFS_PCC)
+        pcc_result, pcc_message = assert_with_pcc(ref_boxes, result_boxes, pcc=YOLOV4_BOXES_PCC)
+        print(f"PCC result: {pcc_result}, PCC message: {pcc_message}")
+        pcc_result, pcc_message = assert_with_pcc(ref_confs, result_confs, pcc=YOLOV4_CONFS_PCC)
+        print(f"PCC result: {pcc_result}, PCC message: {pcc_message}")
 
 
 @pytest.mark.parametrize(
