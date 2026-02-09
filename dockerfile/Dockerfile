@@ -128,9 +128,11 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requireme
 # Configure PyTorch CPU index and install Python packages using uv
 # index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
 # that are not explicitly listed in the requirements.txt files
+# Note: mmcv and mmcv-full are installed via pip due to legacy build dependencies (pkg_resources)
 RUN umask 000 && \
     uv pip install --no-cache-dir build numpy setuptools wheel && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+    pip install --no-cache-dir mmcv==2.2.0 mmcv-full==1.7.2 && \
     uv pip install --no-build-isolation --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
