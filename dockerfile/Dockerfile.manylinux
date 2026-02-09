@@ -42,7 +42,7 @@ FROM quay.io/pypa/manylinux_2_34_x86_64
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
   sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
 
-RUN dnf remove -y epel-release || true
+#RUN dnf remove -y epel-release || true
 
 ENV PATH="/usr/local/bin:$PATH"
 
