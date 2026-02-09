@@ -328,6 +328,8 @@ void kernel_main() {
 
                     // Reset for next batch, but respect split slice boundaries
                     // Use is_split_forwarded_slice (based on forwarded count) to match writer's logic
+                    tiles_read = input_tile_id_start;
+                    tiles_to_read = input_tile_id_end;
                     pages_read_in_row = start_pages_read_in_row;
                     row_offset = start_row_offset;
                     if (is_split_forwarded_slice) {

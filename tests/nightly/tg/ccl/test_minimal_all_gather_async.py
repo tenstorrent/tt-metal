@@ -598,9 +598,9 @@ def test_all_gather_async_wan_galaxy_4x32(
 )
 @pytest.mark.parametrize("num_links", [2], ids=lambda v: f"{v}links")
 @pytest.mark.parametrize("chunks_per_sync", [320], ids=lambda v: f"{v}chunks")
-@pytest.mark.parametrize("num_workers_per_link", [4], ids=lambda v: f"{v}workers")
+@pytest.mark.parametrize("num_workers_per_link", [3], ids=lambda v: f"{v}workers")
 @pytest.mark.parametrize("num_buffers_per_channel", [4], ids=lambda v: f"{v}buffers")
-@pytest.mark.parametrize("num_iters, warmup_iters", [(10, 2)])
+@pytest.mark.parametrize("num_iters, warmup_iters", [(75, 10)])
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_all_gather_wan(
     mesh_device,
