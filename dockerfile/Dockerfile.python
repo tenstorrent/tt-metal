@@ -59,7 +59,7 @@ ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Install base packages
-RUN umask 000 && uv pip install --no-cache build numpy setuptools
+RUN umask 000 && uv pip install --no-cache build numpy setuptools==81
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-build-venv
@@ -106,7 +106,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # Pre-install setuptools so pkg_resources is available for packages like mmcv
 # that use it at build time. This must be a separate RUN from the requirements
 # install so the package is fully on disk when uv resolves build dependencies.
-RUN umask 000 && uv pip install --no-cache setuptools
+RUN umask 000 && uv pip install --no-cache setuptools==81
 
 # Create directory structure for requirements files
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
