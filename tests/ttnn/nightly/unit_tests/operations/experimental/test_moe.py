@@ -540,7 +540,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             "torch_input": compute_tensor_checksum(torch_input[layer_id]),
             "torch_w0_w1": compute_tensor_checksum(torch_w0_w1_reordered),
             "torch_w2": compute_tensor_checksum(torch_w2_reordered),
-            "tt_raw_output": compute_tensor_checksum(tt_raw_output),
+            "tt_to_torch_output": compute_tensor_checksum(tt_to_torch_output),
         }
 
         # Load existing checksums and check against them
