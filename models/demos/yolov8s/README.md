@@ -22,7 +22,7 @@ pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_y
 #### Single Device (BS=1):
 - end-2-end perf is `215` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 ```
-pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py
+pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_inference
 ```
 
 #### Multi Device (DP=2, n300):
@@ -71,7 +71,7 @@ Note: The model is evaluated with 500 samples.
 **N150**
 | Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
 |-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9990457             | 210.00                   | Passed      |
+| 640x640     | 0.9990457             | 210                      | Passed      |
 
 **N300**
 | Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
