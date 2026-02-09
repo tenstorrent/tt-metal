@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ternary_op_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
@@ -10,6 +11,106 @@
 #include <unordered_map>
 
 namespace ttnn::operations::ternary {
+
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+    return tensor_spec.memory_config().shard_spec();
+}
+
+bool is_uneven(const TensorSpec& t) {
+    if (not t.memory_config().is_sharded()) {
+        return false;
+    }
+    const auto& shape = t.padded_shape();
+    const auto& shard = get_shard_spec(t)->shape;
+    const auto rank = shape.rank();
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
+}
+
+bool is_native_L1_sharding(
+    const TensorSpec& predicate_spec,
+    const std::optional<TensorSpec>& true_spec,
+    const std::optional<TensorSpec>& false_spec,
+    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    using namespace tt::tt_metal;
+    if (!output_memory_config.is_sharded()) {
+        return false;
+    }
+    // TTS or TST: only one of true_spec/false_spec present
+    if (!true_spec.has_value() && false_spec.has_value() && predicate_spec.memory_config().is_sharded()) {
+        return !is_uneven(predicate_spec) && !is_uneven(*false_spec) &&
+               predicate_spec.logical_shape() == false_spec->logical_shape() &&
+               predicate_spec.memory_config() == false_spec->memory_config() &&
+               predicate_spec.memory_config().buffer_type() != BufferType::DRAM &&
+               false_spec->memory_config().buffer_type() != BufferType::DRAM &&
+               output_memory_config.buffer_type() != BufferType::DRAM &&
+               (predicate_spec.memory_config().buffer_type() == BufferType::L1 ||
+                false_spec->memory_config().buffer_type() == BufferType::L1 ||
+                output_memory_config.buffer_type() == BufferType::L1);
+    }
+    if (true_spec.has_value() && !false_spec.has_value() && predicate_spec.memory_config().is_sharded()) {
+        return !is_uneven(predicate_spec) && !is_uneven(*true_spec) &&
+               predicate_spec.logical_shape() == true_spec->logical_shape() &&
+               predicate_spec.memory_config() == true_spec->memory_config() &&
+               predicate_spec.memory_config().buffer_type() != BufferType::DRAM &&
+               true_spec->memory_config().buffer_type() != BufferType::DRAM &&
+               output_memory_config.buffer_type() != BufferType::DRAM &&
+               (predicate_spec.memory_config().buffer_type() == BufferType::L1 ||
+                true_spec->memory_config().buffer_type() == BufferType::L1 ||
+                output_memory_config.buffer_type() == BufferType::L1);
+    }
+    // TTT: all three specs present
+    if (!true_spec.has_value() || !false_spec.has_value()) {
+        return false;
+    }
+    if (predicate_spec.logical_shape() == true_spec->logical_shape() &&
+        predicate_spec.logical_shape() == false_spec->logical_shape() &&
+        predicate_spec.memory_config() == true_spec->memory_config() &&
+        predicate_spec.memory_config() == false_spec->memory_config()) {
+        if (is_uneven(predicate_spec) || is_uneven(*true_spec) || is_uneven(*false_spec)) {
+            return false;
+        }
+        if (predicate_spec.memory_config().buffer_type() == BufferType::DRAM ||
+            true_spec->memory_config().buffer_type() == BufferType::DRAM ||
+            false_spec->memory_config().buffer_type() == BufferType::DRAM ||
+            output_memory_config.buffer_type() == BufferType::DRAM) {
+            return false;
+        }
+        if (output_memory_config.is_sharded() && output_memory_config.shard_spec().has_value()) {
+            const auto& out_grid = output_memory_config.shard_spec()->grid;
+            if (predicate_spec.memory_config().is_sharded() &&
+                predicate_spec.memory_config().shard_spec().has_value() &&
+                predicate_spec.memory_config().shard_spec()->grid != out_grid) {
+                return false;
+            }
+            if (true_spec->memory_config().is_sharded() && true_spec->memory_config().shard_spec().has_value() &&
+                true_spec->memory_config().shard_spec()->grid != out_grid) {
+                return false;
+            }
+            if (false_spec->memory_config().is_sharded() && false_spec->memory_config().shard_spec().has_value() &&
+                false_spec->memory_config().shard_spec()->grid != out_grid) {
+                return false;
+            }
+        }
+        if ((predicate_spec.memory_config().is_sharded() &&
+             predicate_spec.memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if ((true_spec->memory_config().is_sharded() && true_spec->memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if ((false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if ((output_memory_config.is_sharded() && output_memory_config.buffer_type() == BufferType::L1)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // Composite key for kernel lookup
 struct KernelLookupKey {
@@ -536,6 +637,17 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
     ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
     return ret;
+}
+
+tt::tt_metal::MemoryConfig compute_mem_config_actual(
+    const Tensor& input_tensor, const ttnn::Shape& output_logical_shape) {
+    const auto& padded_a_shape = input_tensor.padded_shape();
+    const auto& padded_out_shape =
+        input_tensor.tensor_spec().tensor_layout().compute_padded_shape(output_logical_shape);
+    auto adjusted_shard_spec =
+        adjust_to_shape(*input_tensor.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+    return tt::tt_metal::MemoryConfig(
+        input_tensor.memory_config().memory_layout(), input_tensor.memory_config().buffer_type(), adjusted_shard_spec);
 }
 
 }  // namespace ttnn::operations::ternary
