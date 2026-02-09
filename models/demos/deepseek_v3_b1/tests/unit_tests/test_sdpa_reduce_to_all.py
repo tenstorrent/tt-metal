@@ -58,16 +58,8 @@ def compute_forwarder_scratch_size(
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "trace_region_size": 548880,
-            }
-        ),
-    ],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=["device_params"],
-    ids=["fabric_2d_trace"],
 )
 def test_sdpa_reduce_to_all(bh_1d_mesh_device):
     num_devices = 4

@@ -47,7 +47,11 @@ static constexpr uint32_t slots_per_round = get_compile_time_arg_val(0);   // Sl
 static constexpr uint32_t slot_size = get_compile_time_arg_val(1);         // Max bytes per slot
 static constexpr uint32_t r2_buffer_offset = get_compile_time_arg_val(2);  // Offset for R2 buffer region
 
-static constexpr uint32_t all_sent_mask = (1u << slots_per_round) - 1;
+// Avoid undefined behavior for slots_per_round == 32 (shift by width of type).
+static constexpr uint32_t compute_all_sent_mask(uint32_t slots) {
+    return (slots == 32) ? 0xFFFF'FFFFu : ((1u << slots) - 1u);
+}
+static constexpr uint32_t all_sent_mask = compute_all_sent_mask(slots_per_round);
 
 // Maximum slots is 32 (one bit per slot in 32-bit semaphore)
 static_assert(slots_per_round <= 32, "forwarder supports at most 32 slots per round (limited by 32-bit semaphore)");
