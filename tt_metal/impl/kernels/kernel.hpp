@@ -374,6 +374,8 @@ public:
 
     std::string_view get_linker_opt_level() const override;
 
+    const std::vector<DataMovementProcessor>& get_dm_processors() const { return this->dm_cores_; }
+
 private:
     const QuasarDataMovementConfig config_;
     const std::vector<DataMovementProcessor> dm_cores_;
