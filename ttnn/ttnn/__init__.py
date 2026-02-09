@@ -22,6 +22,11 @@ if "TTNN_CONFIG_PATH" in os.environ:
     CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
 
 CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
+# Treat an empty override value as "unset". This commonly happens when container
+# orchestration passes through `TTNN_CONFIG_OVERRIDES` with a default empty
+# string.
+if CONFIG_OVERRIDES is not None and CONFIG_OVERRIDES.strip() == "":
+    CONFIG_OVERRIDES = None
 
 
 def load_config_from_dictionary(config, from_file=False):
