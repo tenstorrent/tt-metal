@@ -17,7 +17,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
-#include "tt_metal/impl/dispatch/kernels/perf_telemetry.hpp"
+#include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -126,9 +126,9 @@ constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
 // may be unavailable to the prefetcher at any time
 constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb_blocks;
 
-// Pointer to perf telemetry config in mailbox (for setting terminate flag)
-volatile tt_l1_ptr perf_telemetry_msg_t* perf_telemetry_mailbox =
-    reinterpret_cast<volatile tt_l1_ptr perf_telemetry_msg_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
+// Pointer to real-time profiler config in mailbox (for setting terminate flag)
+volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
 
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
@@ -1164,7 +1164,7 @@ re_run_command:
             //        ENDL();
             // DeviceZoneScopedN("CQ-DISPATCH");
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
-            program_id_fifo_append(perf_telemetry_mailbox, cmd->set_write_offset.program_host_id);
+            program_id_fifo_append(realtime_profiler_mailbox, cmd->set_write_offset.program_host_id);
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
             ASSERT(offset_count <= std::size(write_offset));

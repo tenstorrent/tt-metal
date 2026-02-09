@@ -381,7 +381,6 @@ void MetalContext::teardown() {
 
     if (data_collector_) {
         data_collector_->DumpData();
-        data_collector_->DumpKernelSourceMap();
         data_collector_.reset();
     }
 

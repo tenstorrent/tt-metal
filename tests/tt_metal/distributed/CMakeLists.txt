@@ -16,7 +16,7 @@ target_sources(
         test_mesh_socket.cpp
         test_h2d_socket.cpp
         test_d2h_socket_simple.cpp
-        test_perf_telemetry_socket.cpp
+        test_realtime_profiler_socket.cpp
         test_mesh_sub_device.cpp
         test_mesh_allocator.cpp
         test_mesh_events.cpp

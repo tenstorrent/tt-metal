@@ -79,35 +79,37 @@ struct profiler_msg_t {
     profiler_msg_buffer_t buffer[PROCESSOR_COUNT];
 };
 
-// Telemetry state enum for D2H socket streaming kernel (ping-pong buffering)
-enum TelemetryState : uint32_t {
-    TELEMETRY_STATE_IDLE = 0,       // Waiting for initialization, skip iteration
-    TELEMETRY_STATE_PUSH_A = 1,     // Push telemetry data from buffer A
-    TELEMETRY_STATE_PUSH_B = 2,     // Push telemetry data from buffer B
-    TELEMETRY_STATE_TERMINATE = 3,  // Signal to terminate the kernel
+// Real-time profiler state enum for D2H socket streaming kernel (ping-pong buffering)
+enum RealtimeProfilerState : uint32_t {
+    REALTIME_PROFILER_STATE_IDLE = 0,       // Waiting for initialization, skip iteration
+    REALTIME_PROFILER_STATE_PUSH_A = 1,     // Push real-time profiler data from buffer A
+    REALTIME_PROFILER_STATE_PUSH_B = 2,     // Push real-time profiler data from buffer B
+    REALTIME_PROFILER_STATE_TERMINATE = 3,  // Signal to terminate the kernel
 };
 
-// Telemetry data payload - 16 bytes, PCIe write aligned
-struct telemetry_timestamp_t {
+// Real-time profiler data payload - 16 bytes, PCIe write aligned
+struct realtime_profiler_timestamp_t {
     uint32_t time_hi;  // High 32 bits of timestamp
     uint32_t time_lo;  // Low 32 bits of timestamp
-    uint32_t id;       // Telemetry event ID
+    uint32_t id;       // Real-time profiler event ID
     uint32_t header;   // Event header/metadata
 };
 
-// Perf telemetry message for D2H socket streaming (ping-pong buffering)
+// Real-time profiler message for D2H socket streaming (ping-pong buffering)
 // Placed after profiler_msg_t in mailboxes_t to allow for expansion
-struct perf_telemetry_msg_t {
-    volatile uint32_t config_buffer_addr;      // Address of D2H socket config buffer in L1
-    volatile uint32_t telemetry_state;         // Current telemetry state (TelemetryState enum)
-    volatile uint32_t telemetry_core_noc_xy;   // NOC XY encoding of telemetry core (for remote terminate)
-    volatile uint32_t telemetry_mailbox_addr;  // Mailbox address on telemetry core (for remote terminate)
+struct realtime_profiler_msg_t {
+    volatile uint32_t config_buffer_addr;       // Address of D2H socket config buffer in L1
+    volatile uint32_t realtime_profiler_state;  // Current state (RealtimeProfilerState enum)
+    volatile uint32_t
+        realtime_profiler_core_noc_xy;  // NOC XY encoding of real-time profiler core (for remote terminate)
+    volatile uint32_t
+        realtime_profiler_mailbox_addr;  // Mailbox address on real-time profiler core (for remote terminate)
     // Ping-pong buffer A
-    struct telemetry_timestamp_t kernel_start_a;  // Device kernel start time (buffer A)
-    struct telemetry_timestamp_t kernel_end_a;    // Device kernel stop time (buffer A)
+    struct realtime_profiler_timestamp_t kernel_start_a;  // Device kernel start time (buffer A)
+    struct realtime_profiler_timestamp_t kernel_end_a;    // Device kernel stop time (buffer A)
     // Ping-pong buffer B
-    struct telemetry_timestamp_t kernel_start_b;  // Device kernel start time (buffer B)
-    struct telemetry_timestamp_t kernel_end_b;    // Device kernel stop time (buffer B)
+    struct realtime_profiler_timestamp_t kernel_start_b;  // Device kernel start time (buffer B)
+    struct realtime_profiler_timestamp_t kernel_end_b;    // Device kernel stop time (buffer B)
     // Program ID circular buffer
     volatile uint32_t program_id_fifo[32];    // Circular buffer to hold program IDs
     volatile uint32_t program_id_fifo_start;  // Read index (consumer)
@@ -433,7 +435,7 @@ struct mailboxes_t {
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
-    struct perf_telemetry_msg_t perf_telemetry;  // Placed after profiler to allow for expansion
+    struct realtime_profiler_msg_t realtime_profiler;  // Placed after profiler to allow for expansion
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().

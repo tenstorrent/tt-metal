@@ -162,10 +162,10 @@ public:
     bool compile_fabric() override;
     void configure_fabric() override;
     void init_fabric() override;
-    // Initialize D2H socket for real-time performance telemetry streaming from device to host
-    void init_perf_telemetry_socket();
-    // Get the perf telemetry socket (returns nullptr if not initialized)
-    D2HSocket* get_perf_telemetry_socket() const;
+    // Initialize D2H socket for real-time profiler streaming from device to host
+    void init_realtime_profiler_socket();
+    // Get the real-time profiler socket (returns nullptr if not initialized)
+    D2HSocket* get_realtime_profiler_socket() const;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;

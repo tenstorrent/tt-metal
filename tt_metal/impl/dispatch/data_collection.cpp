@@ -59,16 +59,17 @@ std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) {
     return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesVecForRuntimeId(runtime_id);
 }
 
-ProgramPerfCallbackHandle RegisterProgramPerfCallback(ProgramPerfCallback callback) {
-    return tt::tt_metal::MetalContext::instance().data_collector()->RegisterProgramPerfCallback(std::move(callback));
+ProgramRealtimeCallbackHandle RegisterProgramRealtimeCallback(ProgramRealtimeCallback callback) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->RegisterProgramRealtimeCallback(
+        std::move(callback));
 }
 
-void UnregisterProgramPerfCallback(ProgramPerfCallbackHandle handle) {
-    tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProgramPerfCallback(handle);
+void UnregisterProgramRealtimeCallback(ProgramRealtimeCallbackHandle handle) {
+    tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProgramRealtimeCallback(handle);
 }
 
-void InvokeProgramPerfCallbacks(const ProgramPerfRecord& record) {
-    tt::tt_metal::MetalContext::instance().data_collector()->InvokeProgramPerfCallbacks(record);
+void InvokeProgramRealtimeCallbacks(const ProgramRealtimeRecord& record) {
+    tt::tt_metal::MetalContext::instance().data_collector()->InvokeProgramRealtimeCallbacks(record);
 }
 
 }  // namespace tt
@@ -76,10 +77,12 @@ void InvokeProgramPerfCallbacks(const ProgramPerfRecord& record) {
 // Public experimental API — delegates to the internal tt:: functions.
 namespace tt::tt_metal::experimental {
 
-ProgramPerfCallbackHandle RegisterProgramPerfCallback(ProgramPerfCallback callback) {
-    return tt::RegisterProgramPerfCallback(std::move(callback));
+ProgramRealtimeCallbackHandle RegisterProgramRealtimeCallback(ProgramRealtimeCallback callback) {
+    return tt::RegisterProgramRealtimeCallback(std::move(callback));
 }
 
-void UnregisterProgramPerfCallback(ProgramPerfCallbackHandle handle) { tt::UnregisterProgramPerfCallback(handle); }
+void UnregisterProgramRealtimeCallback(ProgramRealtimeCallbackHandle handle) {
+    tt::UnregisterProgramRealtimeCallback(handle);
+}
 
 }  // namespace tt::tt_metal::experimental

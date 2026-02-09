@@ -2281,7 +2281,7 @@ void update_program_dispatch_commands(
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
 
-    // Record the runtime_id -> kernel source paths mapping for telemetry correlation.
+    // Record the runtime_id -> kernel source paths mapping for real-time profiler correlation.
     tt::RecordKernelSourceMap(program);
 
     if (hal.get_programmable_core_type_count() >= 2) {

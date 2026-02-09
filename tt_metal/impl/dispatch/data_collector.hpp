@@ -58,15 +58,14 @@ public:
     std::string GetKernelSourcesForRuntimeId(uint64_t runtime_id) const;
     // Look up the kernel source paths for a given runtime_id as a vector.
     std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) const;
-    // Register a callback to be invoked when program perf telemetry data arrives.
+    // Register a callback to be invoked when real-time profiler data arrives.
     // Returns a handle that can be used to unregister the callback.
-    tt::ProgramPerfCallbackHandle RegisterProgramPerfCallback(tt::ProgramPerfCallback callback);
+    tt::ProgramRealtimeCallbackHandle RegisterProgramRealtimeCallback(tt::ProgramRealtimeCallback callback);
     // Unregister a previously registered callback by its handle.
-    void UnregisterProgramPerfCallback(tt::ProgramPerfCallbackHandle handle);
+    void UnregisterProgramRealtimeCallback(tt::ProgramRealtimeCallbackHandle handle);
     // Invoke all registered callbacks with the given record.
-    void InvokeProgramPerfCallbacks(const tt::ProgramPerfRecord& record);
+    void InvokeProgramRealtimeCallbacks(const tt::ProgramRealtimeRecord& record);
     void DumpData();
-    void DumpKernelSourceMap();
 
 private:
     struct KernelData {
@@ -82,10 +81,10 @@ private:
     std::map<uint64_t, int> program_id_to_call_count;
     // runtime_id -> list of kernel source paths for that program
     std::map<uint64_t, std::vector<std::string>> runtime_id_to_kernel_sources;
-    // Registered program perf callbacks (called from telemetry receiver thread)
-    std::mutex program_perf_callbacks_mutex_;
-    std::vector<std::pair<tt::ProgramPerfCallbackHandle, tt::ProgramPerfCallback>> program_perf_callbacks_;
-    tt::ProgramPerfCallbackHandle next_callback_handle_{0};
+    // Registered real-time profiler callbacks (called from receiver thread)
+    std::mutex program_realtime_callbacks_mutex_;
+    std::vector<std::pair<tt::ProgramRealtimeCallbackHandle, tt::ProgramRealtimeCallback>> program_realtime_callbacks_;
+    tt::ProgramRealtimeCallbackHandle next_callback_handle_{0};
 };
 
 }  // namespace tt::tt_metal

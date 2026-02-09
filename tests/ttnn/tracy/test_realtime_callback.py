@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Example: register a perf telemetry callback that collects every program
+Example: register a real-time profiler callback that collects every program
 execution record and writes them to a JSON file on disk.
 """
 
@@ -23,8 +23,8 @@ import ttnn
     [{"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}],
     indirect=True,
 )
-def test_perf_telemetry_callback_json(device, tmp_path):
-    """Run a matmul workload and dump every perf telemetry record to a JSON file."""
+def test_realtime_callback_json(device, tmp_path):
+    """Run a matmul workload and dump every real-time profiler record to a JSON file."""
 
     # -- 1. Set up the callback ------------------------------------------------
     records = []
@@ -42,7 +42,7 @@ def test_perf_telemetry_callback_json(device, tmp_path):
         with lock:
             records.append(entry)
 
-    handle = ttnn.device.RegisterProgramPerfCallback(collect_record)
+    handle = ttnn.device.RegisterProgramRealtimeCallback(collect_record)
 
     # -- 2. Run a small matmul workload ----------------------------------------
     torch.manual_seed(0)
@@ -63,20 +63,20 @@ def test_perf_telemetry_callback_json(device, tmp_path):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
     ttnn.synchronize_device(device)
 
-    # Give the telemetry receiver thread a moment to deliver remaining records
+    # Give the real-time profiler receiver thread a moment to deliver remaining records
     time.sleep(0.5)
 
     # -- 3. Unregister and dump to JSON ----------------------------------------
-    ttnn.device.UnregisterProgramPerfCallback(handle)
+    ttnn.device.UnregisterProgramRealtimeCallback(handle)
 
-    out_file = tmp_path / "perf_telemetry.json"
+    out_file = tmp_path / "realtime_profiler.json"
     with lock:
         snapshot = list(records)
 
     with open(out_file, "w") as f:
         json.dump(snapshot, f, indent=2)
 
-    print(f"\nCollected {len(snapshot)} perf telemetry records -> {out_file}")
+    print(f"\nCollected {len(snapshot)} real-time profiler records -> {out_file}")
     for i, rec in enumerate(snapshot[:5]):
         duration_ticks = rec["end_timestamp"] - rec["start_timestamp"]
         print(f"  [{i}] program={rec['program_id']} chip={rec['chip_id']} duration={duration_ticks} ticks")
@@ -84,7 +84,7 @@ def test_perf_telemetry_callback_json(device, tmp_path):
         print(f"  ... and {len(snapshot) - 5} more")
 
     # Basic sanity: we should have received at least one record
-    assert len(snapshot) > 0, "Expected at least one perf telemetry record"
+    assert len(snapshot) > 0, "Expected at least one real-time profiler record"
     for rec in snapshot:
         assert rec["end_timestamp"] >= rec["start_timestamp"], "end should be >= start"
         assert rec["frequency_ghz"] > 0, "frequency should be positive"

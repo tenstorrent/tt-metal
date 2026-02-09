@@ -167,26 +167,26 @@ std::vector<std::string> DataCollector::GetKernelSourcesVecForRuntimeId(uint64_t
     return it->second;
 }
 
-tt::ProgramPerfCallbackHandle DataCollector::RegisterProgramPerfCallback(tt::ProgramPerfCallback callback) {
-    std::lock_guard<std::mutex> lock(program_perf_callbacks_mutex_);
+tt::ProgramRealtimeCallbackHandle DataCollector::RegisterProgramRealtimeCallback(tt::ProgramRealtimeCallback callback) {
+    std::lock_guard<std::mutex> lock(program_realtime_callbacks_mutex_);
     auto handle = next_callback_handle_++;
-    program_perf_callbacks_.emplace_back(handle, std::move(callback));
+    program_realtime_callbacks_.emplace_back(handle, std::move(callback));
     return handle;
 }
 
-void DataCollector::UnregisterProgramPerfCallback(tt::ProgramPerfCallbackHandle handle) {
-    std::lock_guard<std::mutex> lock(program_perf_callbacks_mutex_);
-    program_perf_callbacks_.erase(
+void DataCollector::UnregisterProgramRealtimeCallback(tt::ProgramRealtimeCallbackHandle handle) {
+    std::lock_guard<std::mutex> lock(program_realtime_callbacks_mutex_);
+    program_realtime_callbacks_.erase(
         std::remove_if(
-            program_perf_callbacks_.begin(),
-            program_perf_callbacks_.end(),
+            program_realtime_callbacks_.begin(),
+            program_realtime_callbacks_.end(),
             [handle](const auto& entry) { return entry.first == handle; }),
-        program_perf_callbacks_.end());
+        program_realtime_callbacks_.end());
 }
 
-void DataCollector::InvokeProgramPerfCallbacks(const tt::ProgramPerfRecord& record) {
-    std::lock_guard<std::mutex> lock(program_perf_callbacks_mutex_);
-    for (const auto& [handle, callback] : program_perf_callbacks_) {
+void DataCollector::InvokeProgramRealtimeCallbacks(const tt::ProgramRealtimeRecord& record) {
+    std::lock_guard<std::mutex> lock(program_realtime_callbacks_mutex_);
+    for (const auto& [handle, callback] : program_realtime_callbacks_) {
         callback(record);
     }
 }
@@ -242,22 +242,6 @@ void DataCollector::DumpData() {
 
     outfile.close();
     log_info(tt::LogMetal, "Dispatch data dumped to {}", std::filesystem::absolute("dispatch_data.txt").string());
-}
-
-void DataCollector::DumpKernelSourceMap() {
-    if (runtime_id_to_kernel_sources.empty()) {
-        return;
-    }
-    std::string filename = "runtime_id_to_kernel_sources.txt";
-    std::ofstream outfile(filename);
-    for (const auto& [runtime_id, sources] : runtime_id_to_kernel_sources) {
-        outfile << fmt::format("Runtime ID {}:\n", runtime_id);
-        for (const auto& source : sources) {
-            outfile << fmt::format("  {}\n", source);
-        }
-    }
-    outfile.close();
-    log_info(tt::LogMetal, "Kernel source map dumped to {}", std::filesystem::absolute(filename).string());
 }
 
 }  // namespace tt::tt_metal
