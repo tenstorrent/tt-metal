@@ -5,20 +5,20 @@
 #include <cstdint>
 #define REDUCE_OP (PoolType::SUM)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/rand.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/rand.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/reduce.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
 #include "ckernel_sfpu.h"
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/tilize.h"
 
 #define DEBUG_PRINT 0
 using namespace ckernel;
