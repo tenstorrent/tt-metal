@@ -87,7 +87,7 @@ runs:
         echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
-        echo "TT_METAL_DPRINT_CORES=" >> $GITHUB_ENV
+        unset TT_METAL_DPRINT_CORES
       shell: bash
 
     - name: Set up env vars for lightweight kernel asserts
