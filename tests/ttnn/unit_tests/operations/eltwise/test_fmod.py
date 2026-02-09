@@ -52,8 +52,6 @@ def test_fmod_binary_accuracy(device, dtype):
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
 
-    # Test various cases: positive/negative, small/large values
-    # Use divisors that are powers of 2 or simple fractions for better reciprocal precision
     torch_input_a = torch.tensor([[5.0, 7.0, -5.0, -7.0, 3.5, 10.0, 1.5, -1.5, 9.0, 15.0]], dtype=torch_dtype)
     torch_input_b = torch.tensor([[2.0, 4.0, 2.0, 4.0, 2.0, 4.0, 0.5, 0.5, -2.0, -4.0]], dtype=torch_dtype)
 
@@ -66,7 +64,4 @@ def test_fmod_binary_accuracy(device, dtype):
     output = ttnn.fmod(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    if dtype == "bfloat16":
-        assert_with_ulp(golden, output, 2)
-    else:
-        assert_with_ulp(golden, output, 8)
+    assert_with_ulp(golden, output, 1)

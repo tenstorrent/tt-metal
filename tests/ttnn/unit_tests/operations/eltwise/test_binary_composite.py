@@ -456,8 +456,8 @@ def test_binary_fmod_decimal_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.fmod)
     golden_tensor = golden_function(in_data1, in_data2, device=device)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor], 0.9999)
-    assert comp_pass
+    output_torch = ttnn.to_torch(output_tensor)
+    assert torch.allclose(output_torch, golden_tensor, rtol=5e-2, atol=1e-5)
 
 
 @pytest.mark.parametrize(
@@ -476,7 +476,7 @@ def test_fmod_ttnn(input_shapes, device):
         golden_function = ttnn.get_golden_function(ttnn.fmod)
         golden_tensor = golden_function(in_data1, scalar, device=device)
 
-        comp_pass = compare_pcc([output_tensor], [golden_tensor])
+        comp_pass = assert_with_ulp(output_tensor, golden_tensor, 1)
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
