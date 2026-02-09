@@ -247,7 +247,6 @@ class ReduceToRootB1:
                     core_to_shard_idx[(core.x, core.y)] = shard_idx
 
                 # Create core range sets
-                worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in input_cores_list])
                 fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in fabric_cores])
                 all_cores_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in input_cores_list + fabric_cores])
 
