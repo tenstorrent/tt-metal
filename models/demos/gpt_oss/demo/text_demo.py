@@ -238,7 +238,7 @@ def prepare_gpt_oss_generator_args(
             128,  # batch_size
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
-            200,  # max_generated_tokens
+            5000,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
@@ -345,6 +345,7 @@ def test_gpt_oss_demo(
     is_ci_env,
     state_dict,
 ):
+    stop_at_eos = False
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     if batch_size > 1 and mesh_shape[0] == 1:
         pytest.skip(
@@ -669,11 +670,13 @@ def test_gpt_oss_demo(
                 user_tok = out_tok[user].item()
                 if user_tok != tokenizer.eos_token_id and user_done[user] == False:
                     all_outputs[user].append(user_tok)
-                else:
+                elif stop_at_eos:
                     user_done[user] = True
                     logger.debug(f"User {user} finished decoding at iteration {iteration}")
                     if all(user_done):
                         users_decoding = False
+                else:
+                    all_outputs[user].append(user_tok)
 
             iteration += 1
 
