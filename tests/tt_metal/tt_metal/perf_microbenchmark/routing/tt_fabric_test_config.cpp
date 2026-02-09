@@ -8,6 +8,8 @@
 #include "routing/tt_fabric_test_common_types.hpp"
 #include "tt-metalium/core_coord.hpp"
 
+#include "tt_metal/test_utils/env_vars.hpp"
+
 namespace tt::tt_fabric::fabric_tests {
 
 // Helper function to get supported pattern names from the mapper
@@ -950,9 +952,15 @@ bool TestConfigBuilder::should_skip_test_on_platform(const ParsedTestConfig& tes
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
         std::string cluster_name = std::string(enchantum::to_string(cluster_type));
+        bool watcher_enabled = tt::test_utils::is_watcher_enabled();
         for (const auto& token : test_config.skip.value()) {
             if (token == arch_name || token == cluster_name) {
                 log_info(LogTest, "Skipping test '{}' on architecture or platform '{}'", test_config.name, token);
+                return true;
+            }
+            // The test is hanging with watcher enabled, github issue #xxxx
+            if (token == "watcher" && watcher_enabled) {
+                log_info(LogTest, "Skipping test '{}' because watcher is enabled", test_config.name);
                 return true;
             }
         }
