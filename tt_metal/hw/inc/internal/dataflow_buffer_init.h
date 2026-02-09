@@ -17,10 +17,12 @@
 
 // Global DFB interface array - defined in firmware, declared here for use by setup functions
 // For kernels (NCRISC/BRISC/TRISC), provide a definition since they're compiled separately
-extern thread_local ::experimental::LocalDFBInterface g_dfb_interface[32];
 extern RemapperAPI g_remapper_configurator;
 
 namespace experimental {
+
+extern thread_local LocalDFBInterface g_dfb_interface[32];
+extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[MAX_TOTAL_TXN_IDS];
 
 FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t local_dfb_mask) {
     uint64_t hartid;
@@ -52,38 +54,38 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             // Populate LocalDFBInterface from combined dfb_initializer_t + dfb_initializer_per_risc_t
             LocalDFBInterface& dfb_interface = ::g_dfb_interface[logical_dfb_id];
 
-            // DPRINT << "risc_index: " << static_cast<uint32_t>(risc_index) << ENDL();
+            DPRINT << "risc_index: " << static_cast<uint32_t>(risc_index) << ENDL();
 
             // Copy per-risc fields
             for (uint8_t i = 0; i < 4; i++) {
                 dfb_interface.base_addr[i] = per_risc_ptr->base_addr[i] >> cb_addr_shift;
-                // DPRINT << "base_addr[" << static_cast<uint32_t>(i) << "]: " << dfb_interface.base_addr[i] << ENDL();
+                DPRINT << "base_addr[" << static_cast<uint32_t>(i) << "]: " << dfb_interface.base_addr[i] << ENDL();
                 dfb_interface.limit[i] = per_risc_ptr->limit[i] >> cb_addr_shift;
-                // DPRINT << "limit[" << static_cast<uint32_t>(i) << "]: " << dfb_interface.limit[i] << ENDL();
+                DPRINT << "limit[" << static_cast<uint32_t>(i) << "]: " << dfb_interface.limit[i] << ENDL();
                 dfb_interface.rd_ptr[i] = per_risc_ptr->base_addr[i] >> cb_addr_shift;
-                // DPRINT << "rd_ptr[" << static_cast<uint32_t>(i) << "]: " << dfb_interface.rd_ptr[i] << ENDL();
+                DPRINT << "rd_ptr[" << static_cast<uint32_t>(i) << "]: " << dfb_interface.rd_ptr[i] << ENDL();
                 dfb_interface.wr_ptr[i] = per_risc_ptr->base_addr[i] >> cb_addr_shift;
-                // DPRINT << "wr_ptr[" << static_cast<uint32_t>(i) << "]: " << dfb_interface.wr_ptr[i] << ENDL();
+                DPRINT << "wr_ptr[" << static_cast<uint32_t>(i) << "]: " << dfb_interface.wr_ptr[i] << ENDL();
                 dfb_interface.packed_tile_counter[i] = per_risc_ptr->packed_tile_counter[i];
-                // DPRINT << "packed_tile_counter[" << static_cast<uint32_t>(i)
-                //        << "]: " << (uint32_t)dfb_interface.packed_tile_counter[i] << ENDL();
+                DPRINT << "packed_tile_counter[" << static_cast<uint32_t>(i)
+                       << "]: " << (uint32_t)dfb_interface.packed_tile_counter[i] << ENDL();
             }
             dfb_interface.num_tcs_to_rr = per_risc_ptr->num_tcs_to_rr;
-            // DPRINT << "num_tcs_to_rr: " << static_cast<uint32_t>(dfb_interface.num_tcs_to_rr) << ENDL();
+            DPRINT << "num_tcs_to_rr: " << static_cast<uint32_t>(dfb_interface.num_tcs_to_rr) << ENDL();
             dfb_interface.entry_size = init_ptr->entry_size;
-            // DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
+            DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
             dfb_interface.stride_size = init_ptr->stride_size;
-            // DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
+            DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
 
-            dfb_interface.num_txn_ids = init_ptr->num_txn_ids;
-            for (uint8_t i = 0; i < init_ptr->num_txn_ids; i++) {
-                dfb_interface.txn_ids[i] = init_ptr->txn_ids[i];
+            dfb_interface.num_txn_ids = per_risc_ptr->num_txn_ids;
+            for (uint8_t i = 0; i < per_risc_ptr->num_txn_ids; i++) {
+                dfb_interface.txn_ids[i] = per_risc_ptr->txn_ids[i];
             }
-            dfb_interface.num_entries_per_txn_id = init_ptr->num_entries_per_txn_id;
-            dfb_interface.num_entries_per_txn_id_per_tc = init_ptr->num_entries_per_txn_id_per_tc;
+            dfb_interface.num_entries_per_txn_id = per_risc_ptr->num_entries_per_txn_id;
+            dfb_interface.num_entries_per_txn_id_per_tc = per_risc_ptr->num_entries_per_txn_id_per_tc;
 
             dfb_interface.remapper_pair_index = per_risc_ptr->flags.remapper_pair_index;
-            // DPRINT << "remapper_pair_index: " << static_cast<uint32_t>(dfb_interface.remapper_pair_index) << ENDL();
+            DPRINT << "remapper_pair_index: " << static_cast<uint32_t>(dfb_interface.remapper_pair_index) << ENDL();
 
 #ifndef COMPILE_FOR_TRISC
             // Configure remapper if needed (must be done before TC init)
@@ -95,9 +97,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 uint8_t num_clientRs = __builtin_popcount(remapper_consumer_mask);
                 uint8_t clientR_valid_mask = (1u << num_clientRs) - 1;
                 g_remapper_configurator.set_pair_index(dfb_interface.remapper_pair_index);
-                // DPRINT << "Setting clientL fields " << static_cast<uint32_t>(risc_index) << " id: " <<
-                // static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0])) << " mask: " <<
-                // static_cast<uint32_t>(clientR_valid_mask) << ENDL();
+                DPRINT << "Setting clientL fields " << static_cast<uint32_t>(risc_index)
+                       << " id: " << static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0]))
+                       << " mask: " << static_cast<uint32_t>(clientR_valid_mask) << ENDL();
                 g_remapper_configurator.configure_clientL_all_fields(
                     risc_index,                                            // id_L
                     get_counter_id(per_risc_ptr->packed_tile_counter[0]),  // in SxB mode, producers have 1 TC
@@ -115,11 +117,12 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     uint8_t id_R = 4;  //__builtin_ctz(mask);
                     uint8_t tc_R =
                         (per_risc_ptr->consumer_tcs >> (clientR_idx * 5)) & 0x1F;  // TC can be value between 0 and 31
-                    // DPRINT << "Setting clientR slot " << static_cast<uint32_t>(clientR_idx) << " id: " <<
-                    // static_cast<uint32_t>(id_R) << " tc: " << static_cast<uint32_t>(tc_R) << ENDL();
+                    DPRINT << "Setting clientR slot " << static_cast<uint32_t>(clientR_idx)
+                           << " id: " << static_cast<uint32_t>(id_R) << " tc: " << static_cast<uint32_t>(tc_R)
+                           << ENDL();
                     g_remapper_configurator.set_clientR_slot(clientR_idx, id_R, tc_R);
                 }
-                // DPRINT << "Writing all remapper configs" << ENDL();
+                DPRINT << "Writing all remapper configs" << ENDL();
                 g_remapper_configurator.write_all_configs();
             }
 #endif
@@ -131,7 +134,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
     // all DFBs were initialized, safe to enable remapper if used
     if (enable_remapper && hartid == 0) {  // update how one risc enables the remapper
-        // DPRINT << "Enabling remapper" << ENDL();
+        DPRINT << "Enabling remapper" << ENDL();
         g_remapper_configurator.enable_remapper();
     }
 
@@ -156,8 +159,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     uint8_t tensix_id = get_tensix_id(ptc);
                     uint8_t tc_id = get_counter_id(ptc);
 
-                    // DPRINT << "initializing tc tensix_id: " << static_cast<uint32_t>(tensix_id)
-                    //        << " tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
+                    DPRINT << "initializing tc tensix_id: " << static_cast<uint32_t>(tensix_id)
+                           << " tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
 
                     llk_intf_reset(tensix_id, tc_id);
                     llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);

@@ -34,8 +34,7 @@ void kernel_main() {
         dfb.reserve_back(1);
         // DPRINT << "rbd" << ENDL();
         // DPRINT << "rdi" << ENDL();
-        // DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) <<
-        // ENDL();
+        DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) << ENDL();
         noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = tile_id * num_producers + producer_idx}, {});
         noc.async_read_barrier();
         // DPRINT << "rdd" << ENDL();

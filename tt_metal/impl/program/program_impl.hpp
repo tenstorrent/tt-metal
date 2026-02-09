@@ -382,6 +382,7 @@ private:
         dataflow_buffer_by_id_;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
+    tt::tt_metal::experimental::dfb::detail::TransactionIdAllocator txn_id_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
 

@@ -20,6 +20,7 @@ constexpr uint8_t NUM_TENSIX_TILE_COUNTERS_FOR_DM = 16;
 constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
 constexpr uint8_t NUM_TXN_IDS = 4;
 constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 4;
+constexpr uint8_t MAX_TOTAL_TXN_IDS = 32;
 
 using PackedTileCounter = uint8_t;  // bits 5-6: tensix_id (2 bits), bits 0-4: counter_id (5 bits)
 
@@ -57,9 +58,9 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     | dfb_initializer_per_risc_t | risc 0
     | dfb_initializer_per_risc_t | risc 1
     ...
-    (24 + (44 * 12)) * 16 = 8320 bytes
+    (20 + (50 * 12)) * 16 = 9920 bytes
 */
-struct dfb_initializer_t {  // 24 bytes
+struct dfb_initializer_t {  // 20 bytes
     uint32_t logical_id;
     uint32_t entry_size;
     uint32_t stride_size;
@@ -70,14 +71,15 @@ struct dfb_initializer_t {  // 24 bytes
         uint16_t reserved : 3;        // bits 12-14: unused
         uint16_t tc_initialized : 1;  // bit 15: tile counter initialized flag
     } risc_mask_bits;
-    uint8_t num_txn_ids;
-    uint8_t txn_ids[NUM_TXN_IDS];
-    uint8_t num_entries_per_txn_id;
-    uint8_t num_entries_per_txn_id_per_tc;
+    // Thresholds for implicit sync - how many entries each txn ID tracks before posting/acking
+    uint8_t num_entries_to_process_threshold_producer;
+    uint8_t num_entries_to_process_threshold_consumer;
     uint8_t remapper_consumer_mask;  // used to program remapper, for a L:R mapping, indicates which riscs make up R
+    uint8_t padding;  // first non-zero bit sets up txn isr for producer, and second non-zero bit sets up txn isr for
+                      // consumer. TODO: plug through the host
 } __attribute__((packed));
 
-struct dfb_initializer_per_risc_t {  // 44 bytes
+struct dfb_initializer_per_risc_t {  // 50 bytes
     uint32_t base_addr[MAX_NUM_TILE_COUNTERS_TO_RR];
     uint32_t limit[MAX_NUM_TILE_COUNTERS_TO_RR];
     PackedTileCounter packed_tile_counter[MAX_NUM_TILE_COUNTERS_TO_RR];
@@ -89,7 +91,12 @@ struct dfb_initializer_per_risc_t {  // 44 bytes
     } __attribute__((packed)) flags;
     uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side
                             // (R). TC can be value between 0 and 31 (5 bits, max of 4 TCs)
-    uint8_t padding[2];
+    // Per-risc transaction ID fields (only used by DM RISCs with implicit sync)
+    uint8_t num_txn_ids;
+    uint8_t txn_ids[NUM_TXN_IDS];
+    uint8_t num_entries_per_txn_id;  // entries to post (producer) or ack (consumer) per txn ID
+    uint8_t num_entries_per_txn_id_per_tc;
+    uint8_t padding;
 } __attribute__((packed));
 
 // intra tensix dfb
@@ -105,6 +112,10 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint8_t tensix_mask;
 } __attribute__((packed));
 
+////////////////////////////////////////////////////////////
+// Below are not used by host (TODO: split this file up)
+////////////////////////////////////////////////////////////
+
 // on WH/BH arrays will be sized to 1
 struct LocalDFBInterface {
     uint32_t rd_ptr[MAX_NUM_TILE_COUNTERS_TO_RR];
@@ -112,18 +123,16 @@ struct LocalDFBInterface {
     uint32_t base_addr[MAX_NUM_TILE_COUNTERS_TO_RR];
     uint32_t limit[MAX_NUM_TILE_COUNTERS_TO_RR];
 
-    uint32_t entry_size;   // shared across riscs so can be factored out and put into sep initialization struct
-    uint32_t stride_size;  // shared across riscs so can be factored out and put into sep initialization struct
+    uint32_t entry_size;   // shared across riscs, from dfb_initializer_t
+    uint32_t stride_size;  // shared across riscs, from dfb_initializer_t
 
     PackedTileCounter packed_tile_counter[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint8_t txn_ids[NUM_TXN_IDS];  // shared across riscs so can be factored out and put into sep initialization struct
-    uint8_t
-        num_entries_per_txn_id;  // shared across riscs so can be factored out and put into sep initialization struct
-    uint8_t num_entries_per_txn_id_per_tc;  // shared across riscs so can be factored out and put into sep
-                                            // initialization struct
+    uint8_t txn_ids[NUM_TXN_IDS];           // per-risc, from dfb_initializer_per_risc_t
+    uint8_t num_entries_per_txn_id;         // per-risc, entries to post (producer) or ack (consumer) per txn ID
+    uint8_t num_entries_per_txn_id_per_tc;  // per-risc, for round-robin across TCs
     uint8_t remapper_pair_index;
     uint8_t num_tcs_to_rr;
-    uint8_t num_txn_ids;  // shared across riscs so can be factored out and put into sep initialization struct
+    uint8_t num_txn_ids;  // per-risc, from dfb_initializer_per_risc_t
 
     uint8_t padding[3];
 
@@ -142,8 +151,15 @@ struct LocalDFBInterface {
     // #endif
 } __attribute__((packed));
 
-static_assert(sizeof(dfb_initializer_t) == 24, "dfb_initializer_t size is incorrect");
-static_assert(sizeof(dfb_initializer_per_risc_t) == 44, "dfb_initializer_per_risc_t size is incorrect");
+// Holds metadata for transction based ISR handling
+struct TxnDFBDescriptor {
+    uint8_t tile_counters[MAX_NUM_TILE_COUNTERS_TO_RR];
+    uint8_t tiles_to_post;
+    uint8_t num_counters;
+};
+
+static_assert(sizeof(dfb_initializer_t) == 20, "dfb_initializer_t size is incorrect");
+static_assert(sizeof(dfb_initializer_per_risc_t) == 50, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 88, "LocalDFBInterface size is incorrect");
 
