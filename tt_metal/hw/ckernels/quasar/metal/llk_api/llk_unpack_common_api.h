@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,10 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     // Program buffer descriptors for all 32 circular buffers
     for (std::uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
         const DataFormat l1_data_format = static_cast<DataFormat>(unpack_src_format[i]);
+
+        if (l1_data_format == DataFormat::Invalid) {
+            continue;
+        }
 
         buffer_descriptor_u bd_val = {0};
         bd_val.f.l1_addr_16B = get_local_cb_interface(i).fifo_limit - get_local_cb_interface(i).fifo_size;

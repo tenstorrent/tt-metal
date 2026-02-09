@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,16 +8,13 @@
 #include "ckernel.h"
 #include "internal/circular_buffer_interface.h"
 
-using namespace ckernel;
-using namespace ckernel::trisc;
-
 /**
  * @brief  Wait for num_tiles of free space in the circular buffer
  * @param cb_id: Circular Buffer ID, values = [0-31]
  * @param num_tiles: Number of tiles of free space to wait for in circular buffer
  */
 inline void llk_wait_for_free_tiles(const std::int32_t cb_id, const std::int32_t num_tiles) {
-    TT_WAIT_FREE(p_stall::STALL_PACK, num_tiles, cb_id);
+    TT_WAIT_FREE(ckernel::p_stall::STALL_PACK, num_tiles, cb_id);
 }
 
 /**
