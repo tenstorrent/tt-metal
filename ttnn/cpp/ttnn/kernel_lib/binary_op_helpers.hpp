@@ -72,6 +72,16 @@ enum class BinaryDataFormatReconfig { NONE = 0, INPUT = 1, OUTPUT = 2, INPUT_AND
  * - WaitUpfrontPopAtEnd: Wait for all tiles upfront, pop all at end (consume after processing)
  * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB)
  * - NoWaitPopAtEnd: Caller manages wait, pop all at end (preloaded, consume after processing)
+ *
+ * WARNING - NoWait Policies (NoWaitNoPop, NoWaitPopAtEnd):
+ * These policies are DANGEROUS when used incorrectly and can cause data hazards:
+ * - DO NOT use directly after other operations without prior cb_wait_front() calls
+ * - ONLY use when:
+ *   1. Paired with explicit cb_wait_front() before the operation, OR
+ *   2. As the FIRST operation in a chain (no prior data movement or compute operations), OR
+ *   3. With sharded tensors where data is pre-loaded in CB
+ * - Failure to follow these rules can result in reading stale/invalid data from CB
+ * - When in doubt, use WaitAndPopPerTile or WaitUpfrontNoPop for safety
  */
 enum class BinaryInputPolicy {
     WaitAndPopPerTile,    // Wait/process/pop one tile at a time (streaming)
