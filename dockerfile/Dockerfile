@@ -114,10 +114,6 @@ FROM ci-build AS ci-test
 ARG UBUNTU_VERSION=22.04
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
-# needed for setuptools dep tree
-RUN apt install -y --no-install-recommends python3-pkg-resources \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
 # Create directories for infra
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
