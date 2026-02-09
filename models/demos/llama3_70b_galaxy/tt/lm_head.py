@@ -6,6 +6,7 @@ import math
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.llama3_70b_galaxy.tt import profiling_utils
 
 
 class LMHead(LightweightModule):
@@ -139,8 +140,14 @@ class LMHead(LightweightModule):
         return [output]
 
     def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
+        _fine = profiling_utils.is_fine_enabled()
+
         outputs = []
         num_links = 3
+
+        if _fine:
+            ft0 = profiling_utils.sync_and_time(self.mesh_device)
+
         if mode == "decode":
             num_links = self.args.model_config["GALAXY_NUM_LINKS"]
             for weight, pc in zip(self.output_weights_decode, self.program_configs):
@@ -155,7 +162,6 @@ class LMHead(LightweightModule):
                     sub_device_id=worker_sub_device_id,
                 )
                 output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
-
                 outputs.append(output)
         else:
             for weight, pc in zip(self.output_weights_prefill, self.program_configs):
@@ -167,17 +173,12 @@ class LMHead(LightweightModule):
                     program_config=self.prefill_pc,
                     dtype=ttnn.bfloat8_b,
                 )
-                # Minimal matmul is not giving any performance improvement over linear
-                # output = ttnn.experimental.minimal_matmul(
-                #     input_tensor=x,
-                #     weight_tensor=weight,
-                #     config=self.prefill_pc,
-                #     dtype=ttnn.bfloat8_b,
-                #     compute_kernel_config=self.compute_kernel_config,
-                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # )
                 x.deallocate(True)
                 outputs.append(output)
+
+        if _fine:
+            ft1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("lm_matmul", ft1 - ft0)
 
         outputs_reduced = []
         for output in outputs:
@@ -188,6 +189,11 @@ class LMHead(LightweightModule):
                 memory_config=output.memory_config(),
                 lm_head=True,
                 buffer_key="LM_HEAD",
-            )  # self.output_memory_config
+            )
             outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+
+        if _fine:
+            ft2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("lm_all_reduce", ft2 - ft1)
+
         return outputs_reduced

@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 from models.common.lightweightmodule import LightweightModule
 from models.common.utils import LogProbsCalculator
 
+# Import profiling utils if available (optional for non-llama models)
+try:
+    from models.demos.llama3_70b_galaxy.tt import profiling_utils
+except ImportError:
+    profiling_utils = None
+
 
 class TTSampling(LightweightModule):
     """
@@ -264,8 +270,14 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
+        _fine = profiling_utils and profiling_utils.is_fine_enabled()
+
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+
+        # TopK: local topk + all_gather across devices
+        if _fine:
+            ft0 = profiling_utils.sync_and_time(self.mesh_device)
 
         if self.multi_step_reduction:
             x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
@@ -345,7 +357,6 @@ class TTSampling(LightweightModule):
             ttnn.deallocate(topk_indices)
 
         # Convert indices to appropriate data types
-
         topk_indices_gathered_int32 = ttnn.typecast(
             topk_indices_gathered, dtype=ttnn.int32, sub_core_grids=self.sub_core_grids
         )
@@ -376,7 +387,13 @@ class TTSampling(LightweightModule):
         )
         ttnn.deallocate(topk_global_indices_interleaved)
 
+        if _fine:
+            ft1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("topk", ft1 - ft0)
+
         # Perform the actual sampling with top-k, top-p, and temperature
+        if _fine:
+            ft0 = profiling_utils.sync_and_time(self.mesh_device)
         tt_out_tok = ttnn.sampling(
             topk_values_gathered_bf16_interleaved,
             topk_global_indices_interleaved_untilised,
@@ -393,6 +410,9 @@ class TTSampling(LightweightModule):
 
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
+        if _fine:
+            ft1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("sample_topk_topp", ft1 - ft0)
 
         # Return dummy log-probs tensor with same shape as regular log-probs would be
         # to satisfy the return type and for later post-processing

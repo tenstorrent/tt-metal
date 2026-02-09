@@ -7,6 +7,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
+from models.demos.llama3_70b_galaxy.tt import profiling_utils
 
 
 class TtTransformerBlock(LightweightModule):
@@ -140,6 +141,12 @@ class TtTransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
+        _prof = profiling_utils.is_profiling_enabled()
+
+        if _prof:
+            profiling_utils.begin_section("attention_norm")
+            t0 = profiling_utils.sync_and_time(self.mesh_device)
+
         if self.layer_num == 0 or mode == "prefill":
             # In the first layer we "make" the h tensor from the original x keeping it alive
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
@@ -155,6 +162,11 @@ class TtTransformerBlock(LightweightModule):
             else:
                 attn_in_sharded, _ = self.attention_norm(x, h, mode)
 
+        if _prof:
+            t1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("attention_norm", t1 - t0)
+            profiling_utils.begin_section("attention")
+
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
@@ -167,6 +179,12 @@ class TtTransformerBlock(LightweightModule):
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
+
+        if _prof:
+            t2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("attention", t2 - t1)
+            profiling_utils.begin_section("ff_norm")
+
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # bfloat8_b
             x.deallocate(True)
@@ -179,14 +197,28 @@ class TtTransformerBlock(LightweightModule):
                 ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             attn_out.deallocate(True)
 
+        if _prof:
+            t3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("ff_norm", t3 - t2)
+            profiling_utils.begin_section("mlp")
+
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
+
+        if _prof:
+            t4 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("mlp", t4 - t3)
+            profiling_utils.begin_section("residual_add")
+
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             if mode == "decode":
                 ff_out.deallocate(True)
             if mode == "prefill":
                 h.deallocate(True)
+            if _prof:
+                t5 = profiling_utils.sync_and_time(self.mesh_device)
+                profiling_utils.record("residual_add", t5 - t4)
             return out, None
         else:
             return ff_out, h

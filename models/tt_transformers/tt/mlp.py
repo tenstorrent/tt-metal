@@ -10,6 +10,11 @@ from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
+try:
+    from models.demos.llama3_70b_galaxy.tt import profiling_utils
+except ImportError:
+    profiling_utils = None
+
 
 class MLP(LightweightModule):
     def __init__(
@@ -92,6 +97,7 @@ class MLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
+        _fine = profiling_utils and profiling_utils.is_fine_enabled()
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
@@ -122,6 +128,10 @@ class MLP(LightweightModule):
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
+        if _fine:
+            tf0 = profiling_utils.sync_and_time(self.mesh_device)
+
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -206,6 +216,10 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
+        if _fine:
+            tf1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("ff1_ff3", tf1 - tf0)
+
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
@@ -240,6 +254,10 @@ class MLP(LightweightModule):
 
             if mode == "decode":
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
+
+        if _fine:
+            tf2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("silu_mul", tf2 - tf1)
 
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
@@ -283,6 +301,10 @@ class MLP(LightweightModule):
                 w2_out_reduced,
                 self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] if TG else self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
+
+        if _fine:
+            tf3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("ff2", tf3 - tf2)
 
         # ttnn.deallocate(w2_out)
         return w2_out_reduced

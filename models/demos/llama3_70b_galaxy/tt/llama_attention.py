@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.demos.llama3_70b_galaxy.tt import profiling_utils
 
 
 class TtLlamaAttention(LightweightModule):
@@ -382,10 +383,15 @@ class TtLlamaAttention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
+        _fine = profiling_utils.is_fine_enabled()
+
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+        if _fine:
+            ft0 = profiling_utils.sync_and_time(self.mesh_device)
+
         xqkv_fused_sharded = ttnn.matmul(  # [1, 1, 32, 1280]
             x,  # [1, 1, 32, 1280]
             self.wqkv,
@@ -397,7 +403,10 @@ class TtLlamaAttention(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
-        # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
+
+        if _fine:
+            ft1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("qkv_matmul", ft1 - ft0)
 
         ###
         # Reshape and rotary embeddings
@@ -426,11 +435,8 @@ class TtLlamaAttention(LightweightModule):
                 k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
             )
 
-            # Reshape and prepare tensors for QK norm
-            q_heads_pre_rot_1BQD = ttnn.view(q_heads_pre_rot_1BQD, [1, 1, 64, 128])  # [1, 8, 8, 128] => [1, 1, 64, 128]
-            k_heads_pre_rot_1BKD = ttnn.view(
-                k_heads_pre_rot_1BKD, [1, 1, 64, 128]
-            )  # [1, 8, 1 (8), 128]] => [1, 1, 64, 128]
+            q_heads_pre_rot_1BQD = ttnn.view(q_heads_pre_rot_1BQD, [1, 1, 64, 128])
+            k_heads_pre_rot_1BKD = ttnn.view(k_heads_pre_rot_1BKD, [1, 1, 64, 128])
 
             q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
@@ -445,7 +451,6 @@ class TtLlamaAttention(LightweightModule):
                 k_heads_pre_rot_1BKD, memory_config=self.reshape_output_k_mem_cfg
             )
 
-            # Apply QK norm
             q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
             k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
 
@@ -460,21 +465,27 @@ class TtLlamaAttention(LightweightModule):
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
 
             q_heads_pre_rot_1BQD = ttnn.view(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
-            k_heads_pre_rot_1BKD = ttnn.view(k_heads_pre_rot_1BKD, [1, 8, 8, 128])  # ==> [1, 8, 1 (8), 128]
+            k_heads_pre_rot_1BKD = ttnn.view(k_heads_pre_rot_1BKD, [1, 8, 8, 128])
 
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
 
-        # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
+
+        if _fine:
+            ft2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("create_heads", ft2 - ft1)
 
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
-        )  # [1, 8, 8, 128], [1, 8, 8, 128]
+        )
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
-        # print("done rotary embeddings")
+
+        if _fine:
+            ft3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("rotary_emb", ft3 - ft2)
 
         ###
         # KV update
@@ -486,9 +497,6 @@ class TtLlamaAttention(LightweightModule):
             keys = self.layer_past[0]
             values = self.layer_past[1]
 
-        # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
-        # v_heads [seqlen, n_kv_heads, bsz, head_dim]
-        # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
         ttnn.experimental.paged_fused_update_cache(
             keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
         )
@@ -496,11 +504,10 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
 
-        # print("done update cache")
-        # NOTE: Varying the batch size will result in slightly different outputs.
-        # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
-        # This is because the SDPA op in decode mode has different number of reductions depending on batch size
-        # Which leads to slightly different outputs from attention (due to accumulated errors)
+        if _fine:
+            ft4 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("kv_cache_update", ft4 - ft3)
+
         sdpa_out_mem_cfg = self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group)
         if page_table:
             attn_output_1G4D_sharded = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -523,12 +530,16 @@ class TtLlamaAttention(LightweightModule):
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
-                memory_config=sdpa_out_mem_cfg,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
+                memory_config=sdpa_out_mem_cfg,
             )
 
         ttnn.deallocate(q_heads_1BQD)
 
-        attn_output_cat = self.tt_ccl.all_gather_concat(  # [1, 1, 32, 1024]
+        if _fine:
+            ft5 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("sdpa", ft5 - ft4)
+
+        attn_output_cat = self.tt_ccl.all_gather_concat(
             attn_output_1G4D_sharded,
             dim=1,
             cluster_axis=1,
@@ -537,10 +548,13 @@ class TtLlamaAttention(LightweightModule):
             num_heads=self.n_local_heads,
         )
         ttnn.deallocate(attn_output_1G4D_sharded)
-        # print("done concat heads")
 
-        # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
-        dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
+        if _fine:
+            ft6 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("attn_all_gather", ft6 - ft5)
+
+        # Output projection [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
+        dense_out_ttnn = ttnn.matmul(
             attn_output_cat,
             self.wo,
             program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
@@ -550,8 +564,12 @@ class TtLlamaAttention(LightweightModule):
             dtype=ttnn.bfloat8_b,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
-        # [1, 1, 32, 2304]
-        dense_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 32, 1280]
+
+        if _fine:
+            ft7 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("output_proj", ft7 - ft6)
+
+        dense_out_reduced = self.tt_ccl.line_all_reduce(
             dense_out_ttnn,
             cluster_axis=0,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
@@ -560,7 +578,9 @@ class TtLlamaAttention(LightweightModule):
         )
         ttnn.deallocate(dense_out_ttnn)
 
-        # print("done all reduce")
+        if _fine:
+            ft8 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("attn_all_reduce", ft8 - ft7)
 
         return dense_out_reduced
 
@@ -575,18 +595,20 @@ class TtLlamaAttention(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
+        _fine = profiling_utils.is_fine_enabled()
+
         if batch_size > 1:
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
 
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
-        ###
-        # QKV matmuls
-        ###
 
         # reshaping long sequence to matmul fit on device
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
+
+        if _fine:
+            ft0 = profiling_utils.sync_and_time(self.mesh_device)
 
         xqkv = ttnn.linear(
             x_11SH,
@@ -607,6 +629,10 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(x_11SH)
 
+        if _fine:
+            ft1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("qkv_matmul", ft1 - ft0)
+
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv,
             cluster_axis=1,
@@ -616,13 +642,16 @@ class TtLlamaAttention(LightweightModule):
         )
         ttnn.deallocate(xqkv)
 
+        if _fine:
+            ft2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("qkv_all_reduce", ft2 - ft1)
+
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         if batch_size > 1:
             xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
-        # split qkv into heads
         (
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
@@ -635,11 +664,9 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # ttnn.deallocate(xqkv_fused)
-
-        ###
-        # Rotary embeddings
-        ###
+        if _fine:
+            ft3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("create_heads", ft3 - ft2)
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
@@ -675,6 +702,10 @@ class TtLlamaAttention(LightweightModule):
             is_decode_mode=False,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
+
+        if _fine:
+            ft4 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("rotary_emb", ft4 - ft3)
 
         # Fill KV-Cache
         if kv_cache:
@@ -724,6 +755,10 @@ class TtLlamaAttention(LightweightModule):
                 user_id % self.batch_size_per_device_group,
             )
 
+        if _fine:
+            ft5 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("kv_cache_fill", ft5 - ft4)
+
         # SDPA
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
@@ -755,10 +790,13 @@ class TtLlamaAttention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
 
-        # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
+
+        if _fine:
+            ft6 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("sdpa", ft6 - ft5)
 
         ###
         # Output matmul
@@ -805,6 +843,10 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
+        if _fine:
+            ft7 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("concat_heads", ft7 - ft6)
+
         ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096:
             output_11SH = ttnn.linear(
@@ -828,7 +870,10 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        # Reduce-scatter
+        if _fine:
+            ft8 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("output_proj", ft8 - ft7)
+
         output_11SH = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
@@ -836,6 +881,10 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="WO",
         )
+
+        if _fine:
+            ft9 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("attn_all_reduce", ft9 - ft8)
 
         return output_11SH
 

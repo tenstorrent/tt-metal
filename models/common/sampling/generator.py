@@ -15,6 +15,12 @@ from .tt_sampling import TTSampling
 
 logger = logging.getLogger(__name__)
 
+# Import profiling utils if available (optional for non-llama models)
+try:
+    from models.demos.llama3_70b_galaxy.tt import profiling_utils
+except ImportError:
+    profiling_utils = None
+
 
 @dataclass(frozen=True)
 class _TraceKey:
@@ -152,8 +158,16 @@ class SamplingGenerator:
         penalties_on: bool,
         tt_out_tok: Optional[ttnn.Tensor],
     ):
+        _fine = profiling_utils and profiling_utils.is_fine_enabled()
+
         if penalties_on:
+            if _fine:
+                ft0 = profiling_utils.sync_and_time(self.mesh_device)
             self.tt_penalties.apply(logits)
+            if _fine:
+                ft1 = profiling_utils.sync_and_time(self.mesh_device)
+                profiling_utils.record_fine("penalties_apply", ft1 - ft0)
+
         tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
         return tt_tokens, tt_log_probs
 

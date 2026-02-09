@@ -125,7 +125,7 @@ def map_hf_to_meta_keys(loaded_weights):
 
 
 def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
-    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+    checkpoints = sorted([ckpt for ckpt in Path(ckpt_dir).glob("*.pth") if not ckpt.name.startswith("._")])
     assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
     is_chunked = any(ckpt.stem.startswith("layers_") for ckpt in checkpoints)
     if is_chunked:
@@ -150,7 +150,7 @@ def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
             if end_layer < start_layer_idx:
                 continue
 
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
+        loaded_ckpt = torch.load(ckpt, map_location="cpu", weights_only=False)
         checkpoint.update(loaded_ckpt)
     return checkpoint
 
@@ -161,7 +161,7 @@ def load_sharded_checkpoints_optimized(checkpoints, n_layers):
 
     def load_single_checkpoint(ckpt_path):
         local_data = defaultdict(list)
-        loaded_ckpt = torch.load(ckpt_path, map_location="cpu")
+        loaded_ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         for key, value in loaded_ckpt.items():
             if "layers." in key:
                 layer_num = int(key.split("layers.")[1].split(".")[0])
@@ -201,7 +201,7 @@ def load_sharded_checkpoints(checkpoints, n_layers):
     checkpoint = {}
     logger.info(f"Loading {len(checkpoints)} checkpoint files")
     for ckpt in tqdm(checkpoints):
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
+        loaded_ckpt = torch.load(ckpt, map_location="cpu", weights_only=False)
         for (
             key,
             value,

@@ -19,6 +19,11 @@ from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.rope import RotarySetup
 
+try:
+    from models.demos.llama3_70b_galaxy.tt import profiling_utils
+except ImportError:
+    profiling_utils = None
+
 
 class Transformer(LightweightModule):
     def __init__(
@@ -509,9 +514,26 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        _prof = profiling_utils and profiling_utils.is_profiling_enabled()
+
+        if _prof:
+            profiling_utils.begin_section("rot_mat")
+            t0 = profiling_utils.sync_and_time(self.mesh_device)
+
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
+
+        if _prof:
+            t1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("rot_mat", t1 - t0)
+            profiling_utils.begin_section("embedding")
+
         x_embed = self._transform_decode_inputs_device(x)
+
+        if _prof:
+            t2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("embedding", t2 - t1)
+
         tt_logits = self.forward(
             x_embed,
             current_pos,
@@ -523,14 +545,33 @@ class Transformer(LightweightModule):
         )
 
         if sampling_on_device and self.sampling is not None:
+            if _prof:
+                profiling_utils.begin_section("increment_pos")
+                ti0 = profiling_utils.sync_and_time(self.mesh_device)
+
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            if capture_sampling_trace:
+
+            if _prof:
+                ti1 = profiling_utils.sync_and_time(self.mesh_device)
+                profiling_utils.record("increment_pos", ti1 - ti0)
+
+            # When profiling, force sampling to execute (don't return early for trace capture)
+            if capture_sampling_trace and not _prof:
                 return tt_logits
+
+            if _prof:
+                profiling_utils.begin_section("sampling")
+                ts0 = profiling_utils.sync_and_time(self.mesh_device)
+
             tt_toks, tt_log_probs = self.sampling.sample(
                 tt_logits,
                 tt_out_tok=x,
                 enable_trace=False,
             )
+
+            if _prof:
+                ts1 = profiling_utils.sync_and_time(self.mesh_device)
+                profiling_utils.record("sampling", ts1 - ts0)
 
             return tt_toks, tt_log_probs
 
@@ -598,6 +639,8 @@ class Transformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
 
+        _prof = profiling_utils and profiling_utils.is_profiling_enabled()
+
         if mode == "prefill" and get_last_token == -1:
             return x
 
@@ -605,13 +648,26 @@ class Transformer(LightweightModule):
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
+        if _prof:
+            profiling_utils.begin_section("final_norm")
+            tn0 = profiling_utils.sync_and_time(self.mesh_device)
+
         # Output norm
         x = self.norm(x, mode=mode)
+
+        if _prof:
+            tn1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("final_norm", tn1 - tn0)
+            profiling_utils.begin_section("lm_head")
 
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
         x = self.lm_head(x)
+
+        if _prof:
+            tl1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("lm_head", tl1 - tn1)
 
         if mode == "prefill":
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)

@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
+from models.demos.llama3_70b_galaxy.tt import profiling_utils
 
 
 def pad_to_next_multiple(tensor):
@@ -117,8 +118,13 @@ class TtLlamaMLP(LightweightModule):
         if mode == "prefill":
             return self.forward_prefill(x, mode)
 
+        _fine = profiling_utils.is_fine_enabled()
+
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
+
+        if _fine:
+            ft0 = profiling_utils.sync_and_time(self.mesh_device)
 
         w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
             x,
@@ -137,8 +143,11 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
             use_noc1_only=False,
         )
-
         ttnn.deallocate(x)
+
+        if _fine:
+            ft1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w1w3_matmul_rs", ft1 - ft0)
 
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
@@ -149,6 +158,10 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w3_out)
 
+        if _fine:
+            ft2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w3_reduce_scatter", ft2 - ft1)
+
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
@@ -156,9 +169,12 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
-
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
+
+        if _fine:
+            ft3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("silu_mul", ft3 - ft2)
 
         w2_in = self.tt_ccl.line_all_gather(
             ff1ff3,
@@ -169,8 +185,11 @@ class TtLlamaMLP(LightweightModule):
             buffer_key="BINARY_MUL",
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
-
         ttnn.deallocate(ff1ff3)
+
+        if _fine:
+            ft4 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w2_all_gather", ft4 - ft3)
 
         w2_out = ttnn.linear(
             w2_in,
@@ -183,6 +202,11 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
+
+        if _fine:
+            ft5 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w2_matmul", ft5 - ft4)
+
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
@@ -191,6 +215,10 @@ class TtLlamaMLP(LightweightModule):
             use_optimal_ccl_for_llama=True,
         )
         ttnn.deallocate(w2_out)
+
+        if _fine:
+            ft6 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w2_all_reduce", ft6 - ft5)
 
         return w2_out_reduced
 
@@ -201,6 +229,8 @@ class TtLlamaMLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
+        _fine = profiling_utils.is_fine_enabled()
+
         seq_len = x.shape[-2]
         use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         short_lens_pc_1_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
@@ -212,7 +242,9 @@ class TtLlamaMLP(LightweightModule):
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        if _fine:
+            ft0 = profiling_utils.sync_and_time(self.mesh_device)
+
         if seq_len < 4096:
             w1_out = ttnn.linear(
                 x,
@@ -240,7 +272,10 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        if _fine:
+            ft1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w1_matmul_rs", ft1 - ft0)
+
         if seq_len < 4096:
             w3_out = ttnn.linear(
                 x,
@@ -267,6 +302,11 @@ class TtLlamaMLP(LightweightModule):
             w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
         )
         ttnn.deallocate(w3_out)
+
+        if _fine:
+            ft2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w3_matmul_rs", ft2 - ft1)
+
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
@@ -274,12 +314,20 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
+
+        if _fine:
+            ft3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("silu_mul", ft3 - ft2)
+
         w2_in_gathered = self.tt_ccl.line_all_gather(
             w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
         )
         ttnn.deallocate(w2_in)
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        if _fine:
+            ft4 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w2_all_gather", ft4 - ft3)
+
         if seq_len < 4096:
             w2_out = ttnn.linear(
                 w2_in_gathered,
@@ -298,10 +346,18 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+        if _fine:
+            ft5 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w2_matmul", ft5 - ft4)
+
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
         ttnn.deallocate(w2_out)
+
+        if _fine:
+            ft6 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("w2_all_reduce", ft6 - ft5)
 
         if 1024 <= seq_len < 4096:
             original_shape = w2_out_reduced.shape

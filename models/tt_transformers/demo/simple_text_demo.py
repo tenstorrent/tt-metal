@@ -17,6 +17,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
+
+try:
+    from models.demos.llama3_70b_galaxy.tt import profiling_utils
+except ImportError:
+    profiling_utils = None
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
@@ -999,6 +1004,10 @@ def test_demo_text(
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
+        # ── Profiling config ──
+        _enable_fine = os.environ.get("PROFILING_FINE", "0") == "1"
+        _profiling_output = os.environ.get("PROFILING_OUTPUT", "")
+
         if mode == "prefill" or mode == "full":
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
@@ -1011,6 +1020,12 @@ def test_demo_text(
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
 
+            # ── Profiling: enable for prefill ──
+            if profiling_utils and _profiling_output:
+                profiling_utils.reset()
+                profiling_utils.enable_profiling(coarse=True, fine=_enable_fine)
+                profiling_utils.set_phase("prefill")
+
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)
             logits = generator.prefill_forward_text(
@@ -1022,6 +1037,10 @@ def test_demo_text(
             prefilled_token = torch.argmax(logits, dim=-1)
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Prefill finished")
+
+            # ── Profiling: switch to decode phase ──
+            if profiling_utils and _profiling_output:
+                profiling_utils.set_phase("decode")
         else:
             # CI expects profiler to have these measurement keys so
             # they must be inserted regardless of whether we run prefill or not
@@ -1030,6 +1049,12 @@ def test_demo_text(
             profiler.start(f"inference_prefill", iteration=batch_idx)
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Skipping prefill forward pass when decode mode is enabled")
+
+            # ── Profiling: enable for decode-only mode ──
+            if profiling_utils and _profiling_output:
+                profiling_utils.reset()
+                profiling_utils.enable_profiling(coarse=True, fine=_enable_fine)
+                profiling_utils.set_phase("decode")
 
             prefilled_token = torch.zeros(global_batch_size, 1, 1)
 
@@ -1105,11 +1130,12 @@ def test_demo_text(
             if token_accuracy:
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
-            # Run decode forward
+            # Run decode forward (disable trace when profiling)
+            _is_prof = profiling_utils and profiling_utils.is_profiling_enabled()
             logits, log_probs = generator.decode_forward_text(
                 out_tok,
                 current_pos,
-                enable_trace=enable_trace,
+                enable_trace=enable_trace and not _is_prof,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
@@ -1201,6 +1227,12 @@ def test_demo_text(
                         f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                     )
             profiler.end(f"log_saving_file", iteration=batch_idx)
+
+        # ── Profiling: print summary and export ──
+        if profiling_utils and _profiling_output:
+            profiling_utils.disable_profiling()
+            profiling_utils.print_summary()
+            profiling_utils.export_json(_profiling_output)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 

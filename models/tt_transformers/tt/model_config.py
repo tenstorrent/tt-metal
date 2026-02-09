@@ -918,7 +918,10 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            n_kv_heads_per_device = self.n_kv_heads // self.cluster_shape[1]
+            self.min_kv_prefill_shard_seqlen = (
+                (self.tile_size * 8 * 8) / n_kv_heads_per_device if n_kv_heads_per_device > 0 else float("inf")
+            )
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary

@@ -7,6 +7,7 @@ import torch
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
+from models.demos.llama3_70b_galaxy.tt import profiling_utils
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
@@ -564,8 +565,25 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        _prof = profiling_utils.is_profiling_enabled()
+
+        if _prof:
+            profiling_utils.begin_section("rot_mat")
+            t0 = profiling_utils.sync_and_time(self.mesh_device)
+
         rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+
+        if _prof:
+            t1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("rot_mat", t1 - t0)
+            profiling_utils.begin_section("embedding")
+
         x_embd = self.embd(x)
+
+        if _prof:
+            t2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("embedding", t2 - t1)
+
         tt_logits = self.forward(
             x_embd,
             current_pos,
@@ -574,7 +592,18 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        # Note: forward() sets begin_section internally for its sub-sections
+
+        if _prof:
+            profiling_utils.begin_section("increment_pos")
+            t3 = profiling_utils.sync_and_time(self.mesh_device)
+
         self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
+
+        if _prof:
+            t4 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("increment_pos", t4 - t3)
+            profiling_utils.begin_section("sampling")
 
         if return_logits:
             tt_logits = self.tt_ccl.line_all_gather(
@@ -610,6 +639,11 @@ class TtTransformer(LightweightModule):
             tt_out_tok=x,
             enable_trace=False,
         )
+
+        if _prof:
+            t5 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("sampling", t5 - t4)
+
         return tt_toks
 
     def switch_mode(self, mode):
@@ -659,7 +693,10 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
+        _prof = profiling_utils.is_profiling_enabled()
+
         if mode == "decode":
+            # DRAM prefetcher is async, so we don't profile it (sync would defeat the purpose)
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
@@ -696,13 +733,29 @@ class TtTransformer(LightweightModule):
 
         if mode == "prefill":
             return x
+
+        if _prof:
+            profiling_utils.begin_section("final_norm")
+            t0 = profiling_utils.sync_and_time(self.mesh_device)
+
         # Output norm
         x, res = self.norm(x, res=None, mode=mode)
+
+        if _prof:
+            t1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("final_norm", t1 - t0)
+            profiling_utils.begin_section("lm_head")
 
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]
 
-        return self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
+        result = self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
+
+        if _prof:
+            t2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("lm_head", t2 - t1)
+
+        return result
 
     def __del__(self):
         self.tt_ccl.close()

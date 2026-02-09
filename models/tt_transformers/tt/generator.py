@@ -20,6 +20,12 @@ from models.common.llama_models import (
     sample_top_p,
 )
 from models.common.sampling.generator import format_sampling_params
+
+try:
+    from models.demos.llama3_70b_galaxy.tt import profiling_utils
+except ImportError:
+    profiling_utils = None
+
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_block_size,
@@ -656,6 +662,12 @@ class Generator:
         Performs text decode step.
         Returns tt_logits on device
         """
+        _prof = profiling_utils and profiling_utils.is_profiling_enabled()
+
+        if _prof:
+            profiling_utils.begin_section("prepare_inputs")
+            tp0 = profiling_utils.sync_and_time(self.mesh_device)
+
         tt_output = []
         tt_tokens = []
         tt_current_pos = []
@@ -674,6 +686,10 @@ class Generator:
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
+
+        if _prof:
+            tp1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("prepare_inputs", tp1 - tp0)
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None

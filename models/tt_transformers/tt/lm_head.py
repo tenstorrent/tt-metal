@@ -10,6 +10,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
+try:
+    from models.demos.llama3_70b_galaxy.tt import profiling_utils
+except ImportError:
+    profiling_utils = None
+
 
 class LMHead(LightweightModule):
     def __init__(
@@ -148,6 +153,11 @@ class LMHead(LightweightModule):
             ]
 
     def forward(self, x: ttnn.Tensor):
+        _fine = profiling_utils and profiling_utils.is_fine_enabled()
+
+        if _fine:
+            tl0 = profiling_utils.sync_and_time(self.mesh_device)
+
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             output = ttnn.linear(
@@ -169,6 +179,10 @@ class LMHead(LightweightModule):
             outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
         )
 
+        if _fine:
+            tl1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("lm_head_matmul", tl1 - tl0)
+
         output = tt_all_reduce(
             output,
             self.mesh_device,
@@ -180,5 +194,9 @@ class LMHead(LightweightModule):
             sharded=False,
             use_composite=True,
         )
+
+        if _fine:
+            tl2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("lm_head_allreduce", tl2 - tl1)
 
         return output

@@ -13,6 +13,11 @@ from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
+try:
+    from models.demos.llama3_70b_galaxy.tt import profiling_utils
+except ImportError:
+    profiling_utils = None
+
 
 class Attention(LightweightModule):
     def __init__(
@@ -446,11 +451,15 @@ class Attention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
+        _fine = profiling_utils and profiling_utils.is_fine_enabled()
 
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+
+        if _fine:
+            t0 = profiling_utils.sync_and_time(self.mesh_device)
 
         xqkv_fused_sharded = ttnn.linear(
             x,
@@ -500,6 +509,10 @@ class Attention(LightweightModule):
             xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
         )
 
+        if _fine:
+            t1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("qkv", t1 - t0)
+
         ###
         # Reshape and rotary embeddings
         ###
@@ -540,6 +553,10 @@ class Attention(LightweightModule):
             )
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
+
+        if _fine:
+            t2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("rotary", t2 - t1)
 
         ###
         # KV update
@@ -599,6 +616,10 @@ class Attention(LightweightModule):
             )
 
         ttnn.deallocate(q_heads_1BQD)
+
+        if _fine:
+            t3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("sdpa", t3 - t2)
 
         attn_output_11BH = ttnn.to_memory_config(
             attn_output_1G4D,
@@ -661,6 +682,11 @@ class Attention(LightweightModule):
                 ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+
+            if _fine:
+                t4 = profiling_utils.sync_and_time(self.mesh_device)
+                profiling_utils.record_fine("output_proj", t4 - t3)
+
             return dense_out_sharded
 
         else:
@@ -726,6 +752,10 @@ class Attention(LightweightModule):
                     dense_out_reduced, self.model_config["DECODE_RESIDUAL_MEMCFG"]
                 )
 
+            if _fine:
+                t4 = profiling_utils.sync_and_time(self.mesh_device)
+                profiling_utils.record_fine("output_proj", t4 - t3)
+
             return dense_out_reduced
 
     def forward_prefill(
@@ -738,11 +768,15 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
+        _fine = profiling_utils and profiling_utils.is_fine_enabled()
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
         ###
+
+        if _fine:
+            t0 = profiling_utils.sync_and_time(self.mesh_device)
 
         # reshaping long sequence to matmul fit on device
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
@@ -799,6 +833,10 @@ class Attention(LightweightModule):
         # Rotary embeddings
         ###
 
+        if _fine:
+            t1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("qkv", t1 - t0)
+
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
@@ -822,6 +860,10 @@ class Attention(LightweightModule):
             is_decode_mode=False,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
+
+        if _fine:
+            t2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("rotary", t2 - t1)
 
         # Fill KV-Cache
         if kv_cache:
@@ -912,6 +954,10 @@ class Attention(LightweightModule):
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
 
+        if _fine:
+            t3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("sdpa", t3 - t2)
+
         ###
         # Output matmul
         ###
@@ -966,6 +1012,10 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
             )
 
+        if _fine:
+            t4 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record_fine("output_proj", t4 - t3)
+
         return output_11SH
 
     def forward(
@@ -1002,6 +1052,6 @@ class Attention(LightweightModule):
         # Get every 4th tensor starting from user_id // 8
         single_column_tensors = tensors[user_id // self.batch_size_per_device_group :: 4]
         # Create multi-device tensor
-        multi_device_tensor = ttnn.combine_device_tensors(single_column_tensors)
+        multi_device_tensor = ttnn.combine_device_tensors(tensors=single_column_tensors)
 
         return multi_device_tensor

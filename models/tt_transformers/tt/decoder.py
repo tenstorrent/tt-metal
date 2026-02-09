@@ -12,6 +12,11 @@ from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
+try:
+    from models.demos.llama3_70b_galaxy.tt import profiling_utils
+except ImportError:
+    profiling_utils = None
+
 
 class TransformerBlock(LightweightModule):
     def __init__(
@@ -221,8 +226,20 @@ class TransformerBlock(LightweightModule):
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
         )
 
+        _prof = profiling_utils and profiling_utils.is_profiling_enabled()
+
+        if _prof:
+            profiling_utils.begin_section("attention_norm")
+            t0 = profiling_utils.sync_and_time(self.mesh_device)
+
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
+
+        if _prof:
+            t1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("attention_norm", t1 - t0)
+            profiling_utils.begin_section("attention")
+
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -238,6 +255,11 @@ class TransformerBlock(LightweightModule):
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
+        if _prof:
+            t2 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("attention", t2 - t1)
+            profiling_utils.begin_section("ff_norm")
+
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
@@ -248,6 +270,11 @@ class TransformerBlock(LightweightModule):
         else:
             hidden_states = attn_out
         hidden_states = self.ff_norm(hidden_states, mode)
+
+        if _prof:
+            t3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("ff_norm", t3 - t2)
+            profiling_utils.begin_section("mlp")
         if self.pre_ff_norm is not None:
             # The output of the ff_norm is replicated across the device
             # but the residual is fractured across the devices
@@ -278,6 +305,11 @@ class TransformerBlock(LightweightModule):
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
 
+        if _prof:
+            t4 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("mlp", t4 - t3)
+            profiling_utils.begin_section("residual_add")
+
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
@@ -306,5 +338,9 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+
+        if _prof:
+            t5 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("residual_add", t5 - t4)
 
         return out  # fractured across devices

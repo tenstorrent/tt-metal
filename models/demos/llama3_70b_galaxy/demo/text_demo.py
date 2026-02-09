@@ -13,6 +13,7 @@ import os
 import ttnn
 
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
+from models.demos.llama3_70b_galaxy.tt import profiling_utils
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.tt_transformers.tt.common import (
@@ -848,6 +849,12 @@ def test_demo_text(
 
         profiler.start(f"inference_prefill", iteration=batch_idx)
 
+        # Enable profiling for prefill phase
+        _enable_fine = os.environ.get("PROFILING_FINE", "0") == "1"
+        profiling_utils.reset()
+        profiling_utils.set_phase("prefill")
+        profiling_utils.enable_profiling(coarse=True, fine=_enable_fine)
+
         try:
             tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
             if prefill_profile:
@@ -857,7 +864,7 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
-                enable_trace=prefill_enable_trace,
+                enable_trace=False if profiling_utils.is_profiling_enabled() else prefill_enable_trace,
                 tt_out_logits_all_users=tt_out_logits_all_users,
                 sampling_params=device_sampling_params,
             )
@@ -866,6 +873,9 @@ def test_demo_text(
         except Exception as e:
             logger.error(f"Error during prefill: {str(e)}")
             raise e
+
+        # Disable profiling after prefill
+        profiling_utils.disable_profiling()
 
         # Check the output tokens after prefill
         if pcc_check:
@@ -948,7 +958,9 @@ def test_demo_text(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Determine whether to enable trace
-            if apc_test:
+            if profiling_utils.is_profiling_enabled():
+                is_enable_trace = False  # Disable trace so Python model code runs (needed for profiling)
+            elif apc_test:
                 is_enable_trace = iteration != 0  # First iteration is compile time and checks PCC
             else:
                 is_enable_trace = enable_trace if not pcc_check else False
@@ -984,6 +996,11 @@ def test_demo_text(
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
                 logger.info(f"Iteration {iteration} (compile): {1000*decode_iteration_time:.4f}ms")
+                # Enable profiling for decode phase after compile iteration
+                profiling_utils.reset_phase("decode")
+                profiling_utils.set_phase("decode")
+                profiling_utils.enable_profiling(coarse=True, fine=_enable_fine)
+                logger.info(f"Profiling ENABLED for decode iterations (coarse{' + fine' if _enable_fine else ''})")
             # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
             # If it's apc_test we do not teacher force, but we still check PCC for only iteration == 0
             teacher_forcing = (
@@ -1043,6 +1060,9 @@ def test_demo_text(
                 if not pcc_check:
                     for user in range(batch_size):
                         user_tok = out_tok.tolist()[user]
+                        while isinstance(user_tok, list):
+                            user_tok = user_tok[0]
+                        user_tok = int(user_tok)
                         if (
                             user_tok not in tokenizer.stop_tokens and user_done[user] == False
                         ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
@@ -1097,6 +1117,12 @@ def test_demo_text(
             # Upper limit of generated tokens for each user; if users_decoding is already False (say by hitting eos), then we don't need to check the max_generated_tokens.
             if users_decoding:
                 users_decoding = iteration < max_generated_tokens
+
+            # Print coarse profiling summary when decoding is done
+            if not users_decoding:
+                profiling_utils.disable_profiling()
+                profiling_utils.print_summary()
+                profiling_utils.export_json(os.environ.get("PROFILING_OUTPUT", "profiling_data.json"))
 
             # Final print
             if not users_decoding and not pcc_check:

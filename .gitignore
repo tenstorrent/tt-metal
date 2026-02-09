@@ -151,3 +151,5 @@ Testing
 models/experimental/petr/resources/*.pth
 
 .claude
+
+profiling

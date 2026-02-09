@@ -24,6 +24,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
+from models.demos.llama3_70b_galaxy.tt import profiling_utils
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -270,6 +271,11 @@ class Generator:
         self, tokens, page_table, user_id, last_token_idx, kv_cache=None, tt_out_logits_saved=None, batch_size=1
     ):
         seq_len = tokens.shape[-1]
+        _prof = profiling_utils.is_profiling_enabled()
+
+        if _prof:
+            profiling_utils.begin_section("prepare_inputs")
+            t0 = profiling_utils.sync_and_time(self.mesh_device)
 
         prefill_input, tt_user_id, page_table_tt, _ = self.model.prepare_inputs_prefill(
             tokens,
@@ -278,19 +284,32 @@ class Generator:
             batch_size=batch_size,
         )
 
+        if _prof:
+            t1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("prepare_inputs", t1 - t0)
+
         tt_toks = self.model.ttnn_prefill_forward(
             prefill_input,
             rot_mats=None,
             user_id=tt_user_id,
             page_table=page_table_tt,
-            get_last_token=last_token_idx,  # (last_token_idx // 32) * 32,
+            get_last_token=last_token_idx,
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
+        # Forward pass time is already broken down inside decoder layers
+
+        if _prof:
+            profiling_utils.begin_section("process_output")
+            t2 = profiling_utils.sync_and_time(self.mesh_device)
 
         tt_toks = self.model.process_output_prefill(
             tt_toks, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
         )
+
+        if _prof:
+            t3 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("process_output", t3 - t2)
 
         return tt_toks
 
@@ -492,9 +511,22 @@ class Generator:
         Performs text decode step.
         Returns tt_logits on device
         """
+        _prof = profiling_utils.is_profiling_enabled()
+
+        if _prof:
+            profiling_utils.begin_section("prepare_inputs")
+            t0 = profiling_utils.sync_and_time(self.mesh_device)
+
         tt_tokens, tt_current_pos, rot_mat_idxs, tt_page_table = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
         )
+
+        if _prof:
+            t1 = profiling_utils.sync_and_time(self.mesh_device)
+            profiling_utils.record("prepare_inputs", t1 - t0)
+
+        # When profiling, run sampling in Python so "sampling" (topK) is recorded once per decode like lm_head
+        capture_sampling = self.enable_split_sampling and not _prof
         tt_tok = self.model.ttnn_decode_forward(
             tt_tokens,
             tt_current_pos,
@@ -504,7 +536,7 @@ class Generator:
             tt_out_logits_saved=tt_out_logits_saved,
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
-            capture_sampling_trace=self.enable_split_sampling,
+            capture_sampling_trace=capture_sampling,
         )
         return tt_tok
 
