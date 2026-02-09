@@ -487,6 +487,16 @@ void device_module(nb::module_& m_device) {
         "get_max_worker_l1_unreserved_size",
         &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
         "Return the maximum size of the worker L1 unreserved memory.");
+
+    m_device.def(
+        "get_dram_alignment",
+        &tt::tt_metal::hal::get_dram_alignment,
+        "Return the DRAM alignment requirement in bytes for the current architecture.");
+
+    m_device.def(
+        "get_l1_alignment",
+        &tt::tt_metal::hal::get_l1_alignment,
+        "Return the L1 alignment requirement in bytes for the current architecture.");
 }
 
 void py_device_module(nb::module_& mod) {

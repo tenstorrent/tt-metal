@@ -154,6 +154,12 @@ for core in all_cores:
     compute_grid_size,  # e.g., device.compute_with_storage_grid_size()
     total_work_units    # e.g., total number of tiles
 )
+
+# Additional utilities:
+block_size = ttnn.find_max_divisor(num_tiles_w, 8)  # optimal block size (excludes 5, 7)
+cores = ttnn.grid_to_cores(num_cores, grid_x, grid_y)  # list of CoreCoord
+num_tiles = ttnn.div_up(width, 32)  # ceiling division
+aligned_sz = ttnn.round_up(stick_size, ttnn.get_dram_alignment())  # align to DRAM
 ```
 
 ### Tensor Accessor (for Reader/Writer)
