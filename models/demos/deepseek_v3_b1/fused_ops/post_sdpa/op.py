@@ -8,13 +8,13 @@ Post SDPA fused operation with CCL All-Reduce.
 This implements Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce as a fused execution:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (8x8 grid)
 - Gather1: Collect results from all 64 cores to [1, 8192] on gather core (12, 9)
-- Mcast: Broadcast [1, 8192] to 117 cores (13x9 grid, rectangular for efficient mcast)
+- Mcast: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular for efficient mcast)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (rows 0-7 full 13 + row 8 cols 0-7)
 - Gather2: Collect results from all 112 active cores to [1, 7168] on gather core (12, 9)
 - CCL All-Reduce: Exchange [1, 7168] between devices and reduce (local + remote + residual)
 
-The 13x9 mcast grid contains 117 cores, but only 112 are active for matmul2.
-The 5 inactive cores (row 8, cols 8-12) receive mcast data but skip matmul via is_matmul2_core=false.
+The 13x10 mcast grid contains 130 cores, but only 112 are active for matmul2.
+The 18 inactive cores (row 8 cols 8-12, row 9 cols 0-12) receive mcast data but skip matmul via is_matmul2_core=false.
 
 CCL All-Reduce uses:
 - CCL Receiver core = Gather core (12, 9) - already has local data after Gather2
@@ -25,7 +25,7 @@ CB Layout:
 - CB 1: matmul1_in1 (8x8 grid)
 - CB 2: matmul1_out (8x8 grid)
 - CB 3: gather1_dst = mcast_src (gather core)
-- CB 4: mcast_dst = matmul2_in0 (13x9 grid)
+- CB 4: mcast_dst = matmul2_in0 (13x10 grid)
 - CB 5: matmul2_in1 (112 active matmul2 cores)
 - CB 6: matmul2_out (112 active matmul2 cores)
 - CB 7: gather2_dst = ccl_local_data (gather core)
@@ -176,17 +176,17 @@ class PostSDPA:
         ccl_sender_core = ttnn.CoreCoord(11, 9)
         ccl_sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ccl_sender_core, ccl_sender_core)])
 
-        # Mcast grid: 13x9 = 117 cores (full rectangular for efficient mcast)
+        # Mcast grid: 13x10 = 130 cores (full rectangular for efficient mcast)
         MCAST_GRID_START_X = 0
         MCAST_GRID_START_Y = 0
         MCAST_GRID_END_X = 12  # 13 columns (0-12)
-        MCAST_GRID_END_Y = 8  # 9 rows (0-8)
+        MCAST_GRID_END_Y = 9  # 10 rows (0-9)
         mcast_grid = ttnn.CoreRange(
             ttnn.CoreCoord(MCAST_GRID_START_X, MCAST_GRID_START_Y),
             ttnn.CoreCoord(MCAST_GRID_END_X, MCAST_GRID_END_Y),
         )
         mcast_core_grid = ttnn.CoreRangeSet([mcast_grid])
-        num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y  # 117
+        num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y  # 130
 
         # Active Matmul2 cores: 112 cores (rows 0-7 full 13 cols + row 8 cols 0-7)
         matmul2_grid_main = ttnn.CoreRange(
@@ -228,7 +228,7 @@ class PostSDPA:
         matmul1_in1_cb = 1  # Matmul1 weights (8x8)
         matmul1_out_cb = 2  # Matmul1 output (8x8)
         gather1_dst_cb = 3  # Gather1 output = Mcast source (gather core)
-        matmul2_in0_cb = 4  # Mcast dst = Matmul2 input (13x9 mcast grid)
+        matmul2_in0_cb = 4  # Mcast dst = Matmul2 input (13x10 mcast grid)
         matmul2_in1_cb = 5  # Matmul2 weights (112 active cores)
         matmul2_out_cb = 6  # Matmul2 output (112 active cores)
         gather2_dst_cb = 7  # Gather2 output = CCL local data (gather core)
@@ -249,7 +249,7 @@ class PostSDPA:
         gather1_noc1_num_senders = 0
 
         # ========================================================================
-        # Mcast parameters: [1, 8192] to 117 cores (13x9 grid)
+        # Mcast parameters: [1, 8192] to 130 cores (13x10 grid)
         # ========================================================================
         mcast_data_size_bytes = gather1_dst_num_pages * tile_1x32_size  # 256 * 64 = 16384 bytes
         mcast_src_num_pages = gather1_dst_num_pages  # 256 pages
