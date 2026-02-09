@@ -1,0 +1,16 @@
+Tests:
+
+  - name: "SequentialNeighborExchangeLatency"
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ntype: unicast_write
+      size: 4096
+      ftype: unicast
+      num_packets: 1  # number of latency samples per iteration
+
+    patterns:
+      - type: sequential_neighbor_exchange
