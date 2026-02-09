@@ -139,8 +139,7 @@ Synchronization with the reader and writer kernels, as well as between the three
 #include <compute_kernel_api/common.h>
 #include <compute_kernel_api/eltwise_binary.h>
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t n_tiles = get_arg_val<uint32_t>(0);
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
@@ -170,7 +169,6 @@ void MAIN {
 
         cb_push_back(cb_out, 1);                    // Pack
     }
-}
 }
 ```
 

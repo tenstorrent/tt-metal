@@ -18,39 +18,32 @@
 
 #include "api/debug/dprint.h"
 
-#if defined DATA_MOVEMENT or ERISC
-namespace {
 void kernel_main() {
-#endif
-#ifdef COMPUTE
-    namespace NAMESPACE {
-    void MAIN {
-#endif
-        constexpr volatile uint32_t outer_loop = get_compile_time_arg_val(0);
-        constexpr volatile uint32_t middle_loop = get_compile_time_arg_val(1);
-        constexpr volatile uint32_t inner_loop = get_compile_time_arg_val(2);
+    constexpr volatile uint32_t outer_loop = get_compile_time_arg_val(0);
+    constexpr volatile uint32_t middle_loop = get_compile_time_arg_val(1);
+    constexpr volatile uint32_t inner_loop = get_compile_time_arg_val(2);
 
-        // Go through all the CBs + Semaphores + RTArgs and confirm the data looks correct
-        constexpr volatile uint32_t num_cbs = get_compile_time_arg_val(3);
-        constexpr volatile uint32_t num_sems = get_compile_time_arg_val(4);
-        constexpr volatile uint32_t num_unique_rt_args = get_compile_time_arg_val(5);
-        constexpr volatile uint32_t num_common_rt_args = get_compile_time_arg_val(6);
-        constexpr volatile uint32_t page_size = get_compile_time_arg_val(7);
+    // Go through all the CBs + Semaphores + RTArgs and confirm the data looks correct
+    constexpr volatile uint32_t num_cbs = get_compile_time_arg_val(3);
+    constexpr volatile uint32_t num_sems = get_compile_time_arg_val(4);
+    constexpr volatile uint32_t num_unique_rt_args = get_compile_time_arg_val(5);
+    constexpr volatile uint32_t num_common_rt_args = get_compile_time_arg_val(6);
+    constexpr volatile uint32_t page_size = get_compile_time_arg_val(7);
 
-        for (uint32_t i = 0; i < num_cbs; i++) {
-            tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-            uint32_t kernel_config_base = mailboxes->launch[mailboxes->launch_msg_rd_ptr]
-                                              .kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
-            uint32_t tt_l1_ptr* cb_l1_base =
-                (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                      mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.local_cb_offset);
-            uint32_t cb_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_l1_base + i * 4)[3];
-            uint32_t expected = ((i + 1) * page_size);
-            if (cb_val != expected) {
-                DPRINT << "Problem with CB idx: " << i << " Expected: " << expected << " Got: " << cb_val << ENDL();
-                while (true);  // Purposefully hang the kernel if CBs did not arrive correctly
-            }
+    for (uint32_t i = 0; i < num_cbs; i++) {
+        tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+        uint32_t kernel_config_base = mailboxes->launch[mailboxes->launch_msg_rd_ptr]
+                                          .kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
+        uint32_t tt_l1_ptr* cb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                  mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.local_cb_offset);
+        uint32_t cb_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_l1_base + i * 4)[3];
+        uint32_t expected = ((i + 1) * page_size);
+        if (cb_val != expected) {
+            DPRINT << "Problem with CB idx: " << i << " Expected: " << expected << " Got: " << cb_val << ENDL();
+            while (true);  // Purposefully hang the kernel if CBs did not arrive correctly
         }
+    }
 
 #ifdef DATA_MOVEMENT
         for (uint32_t i = 0; i < num_sems; i++) {
@@ -93,5 +86,4 @@ void kernel_main() {
                 }
             }
         }
-    }
-    }
+}

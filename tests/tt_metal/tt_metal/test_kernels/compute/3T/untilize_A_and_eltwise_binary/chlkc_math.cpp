@@ -7,9 +7,7 @@
 #include "llk_math_binary_api.h"
 #include "llk_math_unary_datacopy_api.h"
 
-namespace NAMESPACE {
-
-void math_main() {
+void kernel_main() {
     uint32_t per_core_num_blocks = get_compile_time_arg_val(0);
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
@@ -35,4 +33,3 @@ void math_main() {
         }
     }
 }
-}  // namespace NAMESPACE

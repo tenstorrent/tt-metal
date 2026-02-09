@@ -6,8 +6,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
@@ -52,4 +51,3 @@ void MAIN {
 
     cb_push_back(cb_out0, 1);  // Pack
 }
-}  // namespace NAMESPACE

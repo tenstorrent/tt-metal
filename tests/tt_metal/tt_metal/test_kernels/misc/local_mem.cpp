@@ -14,15 +14,12 @@ volatile uint32_t nonzero[4] = {
 };
 volatile uint32_t zero[4] = {0, 0, 0, 0};
 
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
-void kernel_main() {
-#else
+#if !defined(COMPILE_FOR_BRISC) && !defined(COMPILE_FOR_NCRISC) && !defined(COMPILE_FOR_ERISC) && \
+    !defined(COMPILE_FOR_IDLE_ERISC) && !defined(COMPILE_FOR_AERISC)
 #include "api/compute/common.h"
-namespace NAMESPACE {
-void MAIN {
 #endif
 
+void kernel_main() {
     if (nonzero[0] != 0xAABB0000 || nonzero[1] != 0xAABB0001 || nonzero[2] != 0xAABB0002 || nonzero[3] != 0xAABB0003) {
         ASSERT(0);
         while (1);
@@ -48,10 +45,4 @@ void MAIN {
         ASSERT(0);
         while (1);
     }
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 }
-#else
-}
-}
-#endif

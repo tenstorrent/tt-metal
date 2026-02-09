@@ -11,11 +11,8 @@ extern uint32_t __stack_base[];
 
 #if defined(COMPILE_FOR_TRISC)
 #include "api/compute/common.h"
-namespace NAMESPACE {
-void MAIN {
-#else
-void kernel_main() {
 #endif
+void kernel_main() {
     uint32_t usage = get_compile_time_arg_val (0);
     auto point = &__stack_base[usage / sizeof(uint32_t)];
     uint32_t *sp;
@@ -25,6 +22,3 @@ void kernel_main() {
     if (sp > point)
         *point = 0;
 }
-#if defined(COMPILE_FOR_TRISC)
-}  // namespace NAMESPACE
-#endif

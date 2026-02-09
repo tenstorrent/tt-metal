@@ -50,7 +50,7 @@ static FORCE_INLINE void signal_dispatcher_completion() {
         true);
 }
 
-void kernel_main() {
+void core_agnostic_main() {
     write_args_to_l1(get_write_ptr(tt::CBIndex::c_0));
 
 #if defined(MAX_RTA_IDX) || defined(MAX_CRTA_IDX)
@@ -70,8 +70,7 @@ void kernel_main() {
 
 #else  // Compute Kernel
 
-namespace NAMESPACE {
-void MAIN {
+void core_agnostic_main() {
     UNPACK({
         // Pass the CB base address as a compile time arg
         write_args_to_l1(get_compile_time_arg_val(0));
@@ -94,5 +93,6 @@ void MAIN {
 #endif
     })
 }
-}  // namespace NAMESPACE
 #endif
+
+void kernel_main() { core_agnostic_main(); }
