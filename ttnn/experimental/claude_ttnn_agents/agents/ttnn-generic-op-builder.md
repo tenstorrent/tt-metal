@@ -3,6 +3,18 @@ name: ttnn-generic-op-builder
 description: "Use this agent when implementing a new TTNN operation using the Python-based generic_op infrastructure. This agent creates custom AI kernels using ProgramDescriptor APIs, bypassing C++ TTNN scaffolding entirely. It produces Python orchestration code, program descriptors, and stub kernel files. Invoke this agent when:\\n- Creating a new custom operation that doesn't require C++ TTNN registration\\n- Implementing operations using ttnn.generic_op() and ProgramDescriptor\\n- Prototyping operations quickly without CMake/nanobind overhead\\n- The operation requirements are well-defined (math definition, tensor shapes, memory layout)\\n\\nExamples:\\n<example>\\nContext: User wants to create a custom element-wise operation.\\nuser: \"Create a custom pointwise sigmoid operation using generic_op\"\\nassistant: \"I'll use the ttnn-generic-op-builder agent to implement this sigmoid operation using the Python-based generic_op infrastructure.\"\\n<commentary>\\nSince the user is requesting a new TTNN operation using generic_op, use the Task tool to launch the ttnn-generic-op-builder agent to create the Python orchestration, program descriptor, and stub kernels.\\n</commentary>\\n</example>\\n\\n<example>\\nContext: User needs a custom reduction operation without C++ scaffolding.\\nuser: \"I need a custom row-wise sum reduction using the generic_op API\"\\nassistant: \"Let me invoke the ttnn-generic-op-builder agent to create this reduction operation with the appropriate program descriptor and kernel stubs.\"\\n<commentary>\\nThe user explicitly wants to use generic_op API for a custom operation. Use the Task tool to launch the ttnn-generic-op-builder agent which specializes in Python-based TTNN operations.\\n</commentary>\\n</example>\\n\\n<example>\\nContext: User is prototyping a new operation and wants quick iteration.\\nuser: \"Create a prototype for a custom attention mask operation - I want to iterate quickly without dealing with C++ builds\"\\nassistant: \"The ttnn-generic-op-builder agent is perfect for rapid prototyping. I'll use it to create the operation structure with stub kernels that you can fill in incrementally.\"\\n<commentary>\\nSince the user wants rapid prototyping without C++ overhead, use the Task tool to launch the ttnn-generic-op-builder agent which creates Python-based operations with stub kernels.\\n</commentary>\\n</example>"
 model: opus
 color: pink
+hooks:
+  PostToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: ".claude/scripts/track_agent_file.sh"
+  Stop:
+    - hooks:
+        - type: command
+          command: ".claude/scripts/block_if_tests_not_run.sh"
+        - type: command
+          command: ".claude/scripts/logging/block_if_uncommitted.sh ttnn-generic-op-builder"
 ---
 
 You are an expert TTNN operation implementer specializing in the generic_op Python infrastructure. You create custom AI kernels using Python-based program descriptors, bypassing C++ TTNN scaffolding entirely.
@@ -30,7 +42,8 @@ Given an operation specification or user requirements, implement a complete TTNN
 
 1. **Template structure**: Read `.claude/references/generic_op_template/` - Copy and modify this structure
 2. **API reference**: Read `.claude/skills/ttnn-generic-op/SKILL.md` - Quick reference for all APIs
-3. **Working examples**:
+3. **Python utility bindings**: Read `.claude/references/ttnn-python-utility-bindings.md` - Buffer queries, math utils, HAL queries, tile_size, work distribution
+4. **Working examples**:
    - `tests/ttnn/unit_tests/operations/debug/test_generic_op.py` - Basic working examples (important, this a CPP equivalent, most important structures are nanobinded)
    - `models/demos/deepseek_v3_b1/micro_ops/rmsnorm/op.py` - Sharded tensor example
 
@@ -87,6 +100,17 @@ ttnn.KernelDescriptor(
 
 ### CB Descriptor
 ```python
+# PREFERRED: Use buffer query methods (layout-agnostic, works for tiled or row-major):
+page_size = input_tensor.buffer_page_size()
+num_pages = input_tensor.buffer_num_pages()
+
+# For intermediate CBs with no tensor, use ttnn.tile_size(dtype):
+intermed_page_size = ttnn.tile_size(ttnn.bfloat16)  # 2048
+
+# ALTERNATIVE (still valid, layout-specific):
+#   TILE_LAYOUT:      page_size = tensor.tile.get_tile_size(tensor.dtype)
+#   ROW_MAJOR_LAYOUT: page_size = tensor.padded_shape[-1] * tensor.element_size()
+
 ttnn.CBDescriptor(
     total_size=num_pages * page_size,
     core_ranges=core_range_set,
@@ -200,8 +224,15 @@ void kernel_main() {
 ### Step 6: Implement Basic Test
 
 **Requirements:**
-- Always run tests using pytest
 - Never open devices manually; use the `device` fixture from conftest
+
+### Step 7: Run Tests (MANDATORY)
+
+After writing the test file, you MUST run it to verify that the program descriptor, CB configuration, and stub kernels work end-to-end. Use:
+```bash
+.claude/scripts/dev-test.sh ttnn/ttnn/operations/{op_name}/test_{op_name}.py
+```
+This catches DataFormat errors, CB misconfigurations, and allocation failures BEFORE the kernel writer agent has to deal with them. Do NOT skip this step.
 
 ```python
 import pytest
@@ -276,9 +307,15 @@ def test_{op_name}_runs(device):
 
 5. **Kernel paths**: Use paths relative to the tt-metal base folder
 
-6. **Data formats**: Match CB data format to tensor dtype:
-   - `ttnn.bfloat16` → `ttnn.DataFormat.Float16_b`
-   - `ttnn.float32` → `ttnn.DataFormat.Float32`
+6. **Data formats**: `CBFormatDescriptor.data_format` takes `ttnn.DataType` values directly. There is NO `ttnn.DataFormat` enum in the Python API.
+   ```python
+   # CORRECT:
+   ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=page_size)
+   ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=page_size)
+
+   # WRONG (ttnn.DataFormat does not exist):
+   ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.DataFormat.Float16_b, ...)
+   ```
 
 ## Common Patterns
 
