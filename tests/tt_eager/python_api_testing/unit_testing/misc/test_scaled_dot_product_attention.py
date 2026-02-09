@@ -563,85 +563,59 @@ def run_test_chunked_sdpa(
             packer_l1_acc=False,
         )
 
-    assert s % prefill_chunk_size == 0, "s must be divisible by prefill_chunk_size"
-    assert prefill_chunk_size % page_block_size == 0, "prefill_chunk_size must be divisible by page_block_size"
-    assert s % page_block_size == 0, "s must be divisible by page_block_size"
-    num_prefill_chunks = s // prefill_chunk_size
-
-    # KV cache is intentionally larger than needed for sequence length s.
-    # This tests that chunked SDPA correctly derives bounds from Q seq len and chunk_start_idx.
-    num_blocks_for_seq = s // page_block_size
-    if flexible:
-        # For flexible path, page table length must be multiple of 8 and larger than needed
-        page_table_len = ((num_blocks_for_seq // 8) + 1) * 8  # next multiple of 8
-        num_blocks_for_cache = page_table_len
-    else:
-        # For legacy path, just one extra block
-        num_blocks_for_cache = num_blocks_for_seq + 1
-    kv_cache_len = num_blocks_for_cache * page_block_size
-    total_cache_blocks = b * num_blocks_for_cache
-
     Q = fa_rand(b, nh, s, d)
-    # Full KV cache (length kv_cache_len >= s): device path sees this entire buffer.
-    # Beyond first s positions the content is random; chunked SDPA must use only [0:s] via Q len + chunk_start_idx.
-    K_full = fa_rand(b, nkv, kv_cache_len, d)
-    V_full = fa_rand(b, nkv, kv_cache_len, d)
-    # Golden model sees only the needed length s (no page table; PyTorch SDPA on contiguous K, V).
-    K = K_full[:, :, :s, :].clone()
-    V = V_full[:, :, :s, :].clone()
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
     K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
     V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K_repeated, V_repeated, is_causal=True)
 
+    # Print shapes of all inputs along with input names
     logger.debug(f"Q: {Q.shape}")
-    logger.debug(f"K (for gt, len=s): {K.shape}")
-    logger.debug(f"K_full (paged cache, len=kv_cache_len): {K_full.shape}")
+    logger.debug(f"K: {K.shape}")
+    logger.debug(f"V: {V.shape}")
+
+    assert s % prefill_chunk_size == 0, "s must be divisible by prefill_chunk_size"
+    assert prefill_chunk_size % page_block_size == 0, "prefill_chunk_size must be divisible by page_block_size"
+    num_prefill_chunks = s // prefill_chunk_size
+    # Prepare K, V paged for TT
+    max_num_blocks_per_seq = s // page_block_size
+    assert max_num_blocks_per_seq * page_block_size == s
+    max_num_blocks = b * max_num_blocks_per_seq
+    assert max_num_blocks * page_block_size == b * s
 
     # Shuffle paged KV cache according to some random page_table
-    permutation = torch.randperm(total_cache_blocks)
+    permutation = torch.randperm(max_num_blocks)
     reverse_permutation = torch.argsort(permutation)
+    # page_table is the reverse permutation from shuffled -> unshuffled, and is used to map
+    # a virtual block to the physical block id.
+    page_table = reverse_permutation.reshape(b, max_num_blocks_per_seq)
 
     def page_cache(cache):
-        """Convert [b, nkv, kv_cache_len, d] to shuffled paged format."""
         paged_cache = (
-            cache.reshape(b, nkv, num_blocks_for_cache, page_block_size, d)
+            cache.reshape(b, nkv, max_num_blocks_per_seq, page_block_size, d)
             .transpose(1, 2)
-            .reshape(total_cache_blocks, nkv, page_block_size, d)
+            .reshape(max_num_blocks, nkv, page_block_size, d)
         )
-        return paged_cache[permutation]
+
+        shuffled_page_cache = paged_cache[permutation]
+        return shuffled_page_cache
 
     def unpage_cache(cache):
-        """Convert shuffled paged format back to [b, nkv, kv_cache_len, d]."""
-        unshuffled = cache[reverse_permutation]
-        return (
-            unshuffled.reshape(b, num_blocks_for_cache, nkv, page_block_size, d)
+        unshuffled_page_cache = cache[reverse_permutation]
+        paged_cache_back = (
+            unshuffled_page_cache.reshape(b, nkv, max_num_blocks_per_seq, page_block_size, d)
             .transpose(1, 2)
-            .reshape(b, nkv, kv_cache_len, d)
+            .reshape(b, nkv, s, d)
         )
+        return paged_cache_back
 
-    # Sanity check paging round-trip
-    assert torch.allclose(unpage_cache(page_cache(K_full)), K_full), "K_full paging round-trip failed"
-    assert torch.allclose(unpage_cache(page_cache(V_full)), V_full), "V_full paging round-trip failed"
+    # Check that we can convert from normal to paged to normal
+    assert torch.allclose(unpage_cache(page_cache(K)), K), "K is not equal to unpage_cache(page_cache(K))"
+    assert torch.allclose(unpage_cache(page_cache(V)), V), "V is not equal to unpage_cache(page_cache(V))"
 
-    # Page table: for flexible path, include extra entries (longer than strictly needed, multiple of 8).
-    # For legacy path, page table length matches exactly the blocks needed for s.
-    # page_table maps virtual block index -> physical block index.
-    if not flexible:
-        page_table_len = num_blocks_for_seq  # exact length needed for legacy
-    # flexible path: page_table_len already set above (multiple of 8, > num_blocks_for_seq)
-    page_table = reverse_permutation[: b * page_table_len].reshape(b, page_table_len)
-
-    # Verify test setup: golden uses only s tokens; flexible path sees longer KV cache and page table.
-    assert K.shape[2] == s and V.shape[2] == s, "Golden must see only length s"
-    if flexible:
-        assert kv_cache_len > s, "Flexible path must see longer KV cache"
-        assert page_table_len > num_blocks_for_seq, "Flexible path must see longer page table"
-        assert page_table_len % 8 == 0, "Flexible page table length must be multiple of 8"
-
-    paged_K = page_cache(K_full)
-    paged_V = page_cache(V_full)
-    tt_paged_K = ttnn.Tensor(paged_K, k_dtype).to(ttnn.TILE_LAYOUT).to(device)
-    tt_paged_V = ttnn.Tensor(paged_V, k_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    tt_paged_K = ttnn.Tensor(page_cache(K), k_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    tt_paged_V = ttnn.Tensor(page_cache(V), k_dtype).to(ttnn.TILE_LAYOUT).to(device)
     page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     def _params_str(chunk_idx=None, op="sdpa"):
@@ -758,10 +732,10 @@ def run_test_chunked_sdpa(
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
-@pytest.mark.parametrize("prefill_chunk_size", [1024])
-@pytest.mark.parametrize("page_block_size", [64])
-@pytest.mark.parametrize("flexible", [False, True], ids=["legacy", "flexible"])
-# @pytest.mark.parametrize("flexible", [True], ids=["flexible"])
+@pytest.mark.parametrize("prefill_chunk_size", [1024, 2048])
+@pytest.mark.parametrize("page_block_size", [64, 128])
+# @pytest.mark.parametrize("flexible", [False, True], ids=["legacy", "flexible"])
+@pytest.mark.parametrize("flexible", [True], ids=["flexible"])
 # @pytest.mark.parametrize("flexible", [False], ids=["legacy"])
 @pytest.mark.parametrize(
     "trace,device_params",
