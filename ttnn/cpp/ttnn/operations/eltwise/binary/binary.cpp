@@ -596,7 +596,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
 
     return detail::invoke_binary_ng(
         lhs,

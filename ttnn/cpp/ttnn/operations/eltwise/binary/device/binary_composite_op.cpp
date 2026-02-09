@@ -201,12 +201,12 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    TT_FATAL(*use_legacy != true, "not accept use_legacy as true");
+    TT_FATAL(!use_legacy.value_or(false), "not accept use_legacy as true");
     const bool is_int32 = input.dtype() == DataType::INT32;
 
     if (is_int32) {
         TT_FATAL(
-            (!use_legacy.value_or(false) && !fast_and_approximate_mode),
+            !use_legacy.value_or(false) && !fast_and_approximate_mode,
             "Integer Division does not support use_legacy=true {} or fast_and_approximate_mode=true {}",
             use_legacy,
             fast_and_approximate_mode);
@@ -312,10 +312,10 @@ Tensor ExecuteDiv::invoke(
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    TT_FATAL(*use_legacy != true, "not accept use_legacy as true");
+    TT_FATAL(!use_legacy.value_or(false), "not accept use_legacy as true");
     if (is_int32) {
         TT_FATAL(
-            (!use_legacy.value_or(false) && !fast_and_approximate_mode),
+            !use_legacy.value_or(false) && !fast_and_approximate_mode,
             "Integer Division does not support use_legacy=true {} or fast_and_approximate_mode=true {}",
             use_legacy,
             fast_and_approximate_mode);
@@ -366,7 +366,7 @@ Tensor ExecuteDiv::invoke(
             sub_core_grids);
     }
 
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     TT_FATAL(
         (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
@@ -890,7 +890,7 @@ Tensor ExecuteRsub::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
 
     return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::RSUB>::invoke(
         input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -906,7 +906,7 @@ Tensor ExecuteBitwiseAnd::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
         input_tensor_a,
         input_tensor_b,
@@ -928,7 +928,7 @@ Tensor ExecuteBitwiseAnd::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     return ttnn::operations::unary::
         ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::BITWISE_AND, int32_t>::invoke(
             input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -944,7 +944,7 @@ Tensor ExecuteBitwiseOr::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
         input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
@@ -958,7 +958,7 @@ Tensor ExecuteBitwiseOr::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     return ttnn::operations::unary::
         ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::BITWISE_OR, int32_t>::invoke(
             input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -974,7 +974,7 @@ Tensor ExecuteBitwiseXor::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
         input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
@@ -988,7 +988,7 @@ Tensor ExecuteBitwiseXor::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     return ttnn::operations::unary::
         ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::BITWISE_XOR, int32_t>::invoke(
             input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -1004,7 +1004,7 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     return BinaryOperationSfpu<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
         input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
@@ -1018,7 +1018,7 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
 
     return ttnn::operations::unary::
         ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::LEFT_SHIFT, int32_t>::invoke(
@@ -1035,7 +1035,7 @@ Tensor ExecuteBitwiseRightShift::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     return BinaryOperationSfpu<operations::binary::BinaryOpType::RIGHT_SHIFT>::invoke(
         input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
@@ -1049,7 +1049,7 @@ Tensor ExecuteBitwiseRightShift::invoke(
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     [[maybe_unused]] tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     [[maybe_unused]] std::optional<bool> use_legacy) {
-    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
+    TT_FATAL(!use_legacy.value_or(false), "invoke should not be called with use_legacy=True");
     return ttnn::operations::unary::
         ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::RIGHT_SHIFT, int32_t>::invoke(
             input_tensor_a, input_b, memory_config, optional_output_tensor);
