@@ -1882,8 +1882,6 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
     [
         (8193, 512, 2048),
         (11008, 256, 2048),
-        # (11008, 8192, 4096), #Original issue: too slow to run, also requires lower PCC
-        # (50272, 16384, 384), #Original issue: too slow to run, also requires lower PCC
     ],
 )
 @pytest.mark.parametrize("transpose_a", [True])  # "False, " makes torch.matmul() too slow
