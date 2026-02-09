@@ -359,6 +359,55 @@ jobs:
       run-ttsim-integration-tests: true
       run-metal-cpp-unit-tests: false
 
+  # Compare JIT content between .deb packages and Python wheel to catch
+  # discrepancies early.  Both packaging formats must ship the same kernel
+  # sources and supporting headers for the runtime JIT compiler.
+  compare-packaging-content:
+    needs: [ build ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts/compare-deb-whl-content.py
+          sparse-checkout-cone-mode: false
+
+      - name: Download packages (.deb)
+        uses: actions/download-artifact@v4
+        with:
+          name: >-
+            ${{ needs.build.outputs.packages-artifact-name ||
+                'packages artifact unresolved!' }}
+          path: pkgs/
+
+      - name: Download wheel (.whl)
+        uses: actions/download-artifact@v4
+        with:
+          name: >-
+            ${{ needs.build.outputs.wheel-artifact-name ||
+                'wheel artifact unresolved!' }}
+          path: wheelhouse/
+
+      - name: Compare .deb and .whl JIT content
+        run: |
+          set -euo pipefail
+
+          METALIUM_DEB=$(ls pkgs/tt-metalium_*.deb | head -1)
+          NN_DEB=$(ls pkgs/tt-nn_*.deb | head -1)
+          WHL=$(ls wheelhouse/*.whl | head -1)
+
+          echo "Comparing JIT content between packaging formats:"
+          echo "  Metalium .deb : $METALIUM_DEB"
+          echo "  NN .deb       : $NN_DEB"
+          echo "  Wheel         : $WHL"
+          echo
+
+          python3 .github/scripts/compare-deb-whl-content.py \
+            --metalium-deb "$METALIUM_DEB" \
+            --nn-deb "$NN_DEB" \
+            --whl "$WHL"
+
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
   model-charts-sync:
@@ -516,6 +565,7 @@ jobs:
       - build-tt-train
       - metalium-examples
       - ttsim-integration-tests
+      - compare-packaging-content
       - clang-tidy-light
       - model-charts-sync
       - build-docs
@@ -524,7 +574,7 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "asan-build, build, build-tt-train"
+          required-jobs: "asan-build, build, build-tt-train, compare-packaging-content"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             ttsim-integration-tests, model-charts-sync, build-docs
