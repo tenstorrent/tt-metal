@@ -1,0 +1,171 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Single-core Tilize 8x32 operation.
+
+This implements tilize operation on a single core where:
+- Input: [8, N] in row-major format (HEIGHT_SHARDED)
+- Output: [8, N] in tiled format (HEIGHT_SHARDED), tiled into 8x32 blocks
+"""
+
+import torch
+
+import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    UnifiedCompileTimeCoreDescriptor,
+    UnifiedKernelDescriptor,
+)
+
+
+def golden(input_tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Golden reference implementation of tilize 8x32 operation.
+
+    Converts row-major 8xN tensor to tiled format with 8x32 blocks.
+    This simulates what tilize_block does: reorganizes data within each 8x32 block
+    from row-major to tiled format.
+
+    The tilize operation reorganizes data so that within each tile block,
+    data is accessed column-first rather than row-first.
+
+    Args:
+        input_tensor: Input tensor [8, N] in row-major format (N must be divisible by 32)
+
+    Returns:
+        Tiled tensor [8, N] in tiled format
+    """
+    H, W = input_tensor.shape
+    assert H == 8, f"Expected height=8, got {H}"
+    assert W % 32 == 0, f"Width must be divisible by 32, got {W}"
+
+    tile_H = 8
+    tile_W = 32
+    num_blocks = W // tile_W
+
+    # Create output tensor
+    output = torch.zeros_like(input_tensor)
+
+    # For each 8x32 block (column block)
+    for block_col in range(num_blocks):
+        ws = block_col * tile_W  # Starting column of this block
+
+        # Tilize reorganizes: for each column in the block, then each row
+        # This is the standard tilize pattern: column-major within the tile
+        for col_in_block in range(tile_W):
+            for row_in_block in range(tile_H):
+                # Source: row-major layout
+                src_row = row_in_block
+                src_col = ws + col_in_block
+                src_idx = src_row * W + src_col
+
+                # Destination: tiled layout (column-first within tile)
+                # Within the block, data is organized column by column
+                dst_idx = ws * tile_H + col_in_block * tile_H + row_in_block
+
+                output.view(-1)[dst_idx] = input_tensor.view(-1)[src_idx]
+
+    return output
+
+
+def tilize_8x32_kernel(input_tensor, output_tensor):
+    """
+    Execute tilize 8x32 operation using generic_op.
+
+    Args:
+        input_tensor: Input tensor [8, N] in row-major format (must be HEIGHT_SHARDED)
+        output_tensor: Pre-allocated output tensor [8, N] (must be HEIGHT_SHARDED)
+
+    Returns:
+        Output tensor with tilized data
+    """
+    # Get shard spec from input tensor
+    shard_spec = input_tensor.memory_config().shard_spec
+    shard_shape = shard_spec.shape
+
+    # Get core grid from shard spec
+    core_grid = shard_spec.grid
+
+    # Calculate dimensions
+    # Input is [8, N] where N should be divisible by 32
+    H = shard_shape[0]  # Should be 8
+    W = shard_shape[1]  # N (256 or 64)
+    assert H == 8, f"Expected height=8, got {H}"
+    assert W % 32 == 0, f"Width must be divisible by 32, got {W}"
+
+    # Tilize 8x256 at a time
+    num_blocks = max(1, W // 256)
+    block_size = min(8, W // 32)
+
+    # CB indices
+    in_cb = 0
+    out_cb = 16  # Output operands start at 16
+
+    # ========================================================================
+    # Circular Buffer Descriptors
+    # ========================================================================
+
+    # CB 0: Input (sharded tensor, row-major format)
+    input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in_cb, input_tensor)
+
+    # CB 16: Output (sharded tensor, tiled format)
+    output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
+
+    # ========================================================================
+    # Unified Kernel Descriptor (handles NCRISC, BRISC, TRISC)
+    # ========================================================================
+
+    # Named compile-time args for NCRISC (reader - no-op for tilize)
+    ncrisc_named_compile_time_args = []
+
+    # Named compile-time args for BRISC (writer - no-op for tilize)
+    brisc_named_compile_time_args = []
+
+    # Named compile-time args for TRISC (compute)
+    trisc_named_compile_time_args = [
+        ("in_cb", in_cb),
+        ("out_cb", out_cb),
+        ("num_blocks", num_blocks),
+        ("block_size", block_size),
+    ]
+
+    # Unified kernel descriptor
+    unified_kernel = UnifiedKernelDescriptor(
+        kernel_source="models/demos/deepseek_v3_b1/micro_ops/tilize_8x32/kernels/tilize_8x32_kernel.cpp",
+        core_ranges=core_grid,
+        ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+        brisc_named_compile_time_args=brisc_named_compile_time_args,
+        trisc_named_compile_time_args=trisc_named_compile_time_args,
+        trisc_compute_config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            dst_full_sync_en=False,
+        ),
+        unified_compile_time_core_descriptors=[
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_active_core",
+                core_range=core_grid,
+                value=1,
+                other_value=0,
+            ),
+        ],
+    )
+
+    # ========================================================================
+    # Program Descriptor
+    # ========================================================================
+    program_descriptor = ttnn.ProgramDescriptor(
+        kernels=unified_kernel.get_kernel_descriptors().kernels,
+        cbs=[
+            input_cb_descriptor,
+            output_cb_descriptor,
+        ],
+    )
+
+    # Execute generic op
+    io_tensors = [input_tensor, output_tensor]
+    output = ttnn.generic_op(io_tensors, program_descriptor)
+
+    return output
