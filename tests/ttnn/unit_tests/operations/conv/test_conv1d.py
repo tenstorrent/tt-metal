@@ -444,25 +444,3 @@ def test_with_prepare_weights(
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.995)
     print(pcc_msg)
     assert passing
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize("batch_size", [1, 2])
-@pytest.mark.parametrize("output_channels", [32, 64])
-def test_conv1d_workflow_validation_new(device, use_program_cache, batch_size, output_channels):
-    """Test added to verify validate-test-count workflow catches new tests"""
-    run_conv(
-        device=device,
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        activations_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
-        output_dtype=ttnn.bfloat16,
-        batch_size=batch_size,
-        output_channels=output_channels,
-        input_channels=64,
-        input_length=128,
-        kernel_size=3,
-        stride=1,
-        padding=1,
-        use_1d_systolic_array=True,
-        config_override=None,
-    )
