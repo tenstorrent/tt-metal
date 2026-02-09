@@ -37,7 +37,13 @@ FROM ${TOOL_OPENMPI_IMAGE} AS openmpi-layer
 FROM quay.io/pypa/manylinux_2_34_x86_64
 
 # manylinux_2_34_x86_64 is AlmaLinux 9.7
-# ENV needed
+
+# OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
+# The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
+ARG OMPI_TAG=v5.0.7
+ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+
+# Environment setup for OpenMPI and build tools
 ENV PATH=${OMPI_PREFIX}/bin:/usr/local/bin:$PATH
 ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
 ENV CPATH=${OMPI_PREFIX}/include

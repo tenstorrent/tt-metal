@@ -114,6 +114,15 @@ FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
+# The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
+ARG OMPI_TAG=v5.0.7
+ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+ENV PATH=${OMPI_PREFIX}/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
+
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=openmpi-layer /install/ /opt/
 COPY --from=cmake-layer /install/ /usr/local/

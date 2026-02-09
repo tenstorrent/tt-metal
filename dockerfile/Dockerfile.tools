@@ -36,6 +36,10 @@ ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c2
 ARG YQ_VERSION=v4.44.6
 ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
 
+# NOTE: OMPI_TAG is the single source of truth for the OpenMPI version.
+# If you change this value, you MUST also update the OMPI_TAG ARG default in:
+#   - dockerfile/Dockerfile (base stage)
+#   - dockerfile/Dockerfile.manylinux
 ARG OMPI_TAG=v5.0.7
 ARG OMPI_SHA256=119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd
 
