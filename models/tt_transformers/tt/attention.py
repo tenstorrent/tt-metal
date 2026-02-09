@@ -539,9 +539,15 @@ class Attention(LightweightModule):
         )
         # This is done because rotary_embedding outputs are padded in the num_heads dimension both steps
         # reshape (indicating the padding size) as the slicing are required for attention to work properly
-        q_heads_1BQD = ttnn.reshape(q_heads_1BQD, (1, 1, self.n_local_heads, self.head_dim), (1, 1, 32, self.head_dim))
+        q_heads_1BQD = ttnn.reshape(
+            q_heads_1BQD,
+            (1, self.batch_size_per_device_group, self.n_local_heads, self.head_dim),
+            (1, self.batch_size_per_device_group, 32, self.head_dim),
+        )
         k_heads_1BKD = ttnn.reshape(
-            k_heads_1BKD, (1, 1, self.n_local_kv_heads, self.head_dim), (1, 1, 32, self.head_dim)
+            k_heads_1BKD,
+            (1, self.batch_size_per_device_group, self.n_local_kv_heads, self.head_dim),
+            (1, self.batch_size_per_device_group, 32, self.head_dim),
         )
 
         q_heads_1BQD = q_heads_1BQD[:, :, : self.n_local_heads]
