@@ -38,7 +38,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     PACK((llk_pack_init(ocb)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
-    MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE>(icb, icb)));
+    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #endif
 }
 

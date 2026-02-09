@@ -106,7 +106,7 @@ ALWI void mm_init(
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));  // transpose not yet implemented
 
     MATH((llk_math_matmul_init<MATH_FIDELITY>()));
-    MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
 
     PACK((llk_pack_hw_configure(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));

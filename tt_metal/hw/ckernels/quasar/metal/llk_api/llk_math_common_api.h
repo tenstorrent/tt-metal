@@ -47,7 +47,7 @@ inline bool is_src_fmt_int32_dest_compatible(const DataFormat src_reg_fmt) {
  * @param srcb_operand: The srcB input operand circular buffer, used to infer srcB data_format if not implied math
  * format
  */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST_FORMAT>
+template <bool EN_32BIT_DEST_FORMAT>
 inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
     const std::uint32_t srca_operand_id = get_operand_id(srca_operand);
     const std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
@@ -61,16 +61,22 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST_FORMAT
     if (EN_32BIT_DEST_FORMAT && is_src_fmt_fp32_dest_compatible(srca_format) &&
         is_src_fmt_fp32_dest_compatible(srcb_format)) {
-        _llk_math_srcAB_hw_configure_<EN_IMPLIED_MATH_FORMAT, true /*Fp32 dest*/, false /*Int32 dest*/>(
-            srca_format, srcb_format);
+        _llk_math_srcAB_hw_configure_<
+            EN_IMPLIED_MATH_FORMAT,
+            true /*EN_FP32_DEST_FORMAT*/,
+            false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     } else if (
         EN_32BIT_DEST_FORMAT && is_src_fmt_int32_dest_compatible(srca_format) &&
         is_src_fmt_int32_dest_compatible(srcb_format)) {
-        _llk_math_srcAB_hw_configure_<EN_IMPLIED_MATH_FORMAT, false /*Fp32 dest*/, true /*Int32 dest*/>(
-            srca_format, srcb_format);
+        _llk_math_srcAB_hw_configure_<
+            EN_IMPLIED_MATH_FORMAT,
+            false /*EN_FP32_DEST_FORMAT*/,
+            true /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     } else {
-        _llk_math_srcAB_hw_configure_<EN_IMPLIED_MATH_FORMAT, false /*Fp32 dest*/, false /*Int32 dest*/>(
-            srca_format, srcb_format);
+        _llk_math_srcAB_hw_configure_<
+            EN_IMPLIED_MATH_FORMAT,
+            false /*EN_FP32_DEST_FORMAT*/,
+            false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     }
 }
 

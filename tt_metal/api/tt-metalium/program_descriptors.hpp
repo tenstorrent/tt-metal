@@ -91,6 +91,7 @@ struct ComputeConfigDescriptor {
     UnpackToDestModes unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
+    bool en_implied_math_format = false;
 };
 struct EthernetConfigDescriptor {
     Eth eth_mode = Eth::SENDER;

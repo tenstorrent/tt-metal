@@ -14,6 +14,7 @@
 #include "chlkc_dst_sync_mode.h"
 #include "chlkc_math_approx_mode.h"
 #include "chlkc_math_fidelity.h"
+#include "chlkc_implied_math_format.h"
 #include "chlkc_unpack_data_format.h"
 #include "chlkc_unpack_tile_dims.h"
 #include "chlkc_math.cpp"

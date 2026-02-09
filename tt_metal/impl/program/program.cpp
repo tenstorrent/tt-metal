@@ -289,6 +289,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
                         .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
                         .math_approx_mode = compute_descriptor.math_approx_mode,
+                        .en_implied_math_format = compute_descriptor.en_implied_math_format,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),

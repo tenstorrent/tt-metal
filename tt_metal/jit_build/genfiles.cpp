@@ -541,6 +541,22 @@ void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
+void generate_implied_math_format_descriptor(JitBuildOptions& options) {
+    string implied_math_format_descriptor = options.path + "chlkc_implied_math_format.h";
+
+    ofstream file_stream;
+
+    file_stream.open(implied_math_format_descriptor);
+
+    if (options.en_implied_math_format) {
+        file_stream << "constexpr bool EN_IMPLIED_MATH_FORMAT = true;" << endl;
+    } else {
+        file_stream << "constexpr bool EN_IMPLIED_MATH_FORMAT = false;" << endl;
+    }
+
+    file_stream.close();
+}
+
 }  // namespace
 
 // clang-format off
@@ -556,12 +572,14 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
         std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
         std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
         std::thread ts( [&]() { generate_dst_sync_mode_descriptor(options); } );
+        std::thread ti( [&]() { generate_implied_math_format_descriptor(options); } );
         td.join();
         tt.join();
         tm.join();
         ta.join();
         tf.join();
         ts.join();
+        ti.join();
     } catch (std::runtime_error& ex) {
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
     }
