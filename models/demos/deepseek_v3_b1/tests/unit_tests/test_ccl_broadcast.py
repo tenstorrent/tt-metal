@@ -86,15 +86,6 @@ def test_ccl_broadcast_dual_axis(
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
-    submesh.load_sub_device_manager(sub_device_manager)
-    submesh.set_sub_device_stall_group(sub_device_stall_group)
 
     # Set up sharded memory config
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -243,10 +234,6 @@ def test_ccl_broadcast_dual_axis(
             logger.info(f"Device {device_idx}: PASSED")
 
     assert all_passed, f"Not all devices received the correct broadcast data)"
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
 
     assert all_passed, "Not all devices received the correct broadcast data"
     logger.info("CCL broadcast dual-axis test passed!")
