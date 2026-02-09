@@ -11,7 +11,6 @@ on:
         options:
           - all
           - falcon7b
-          - mamba
           - functional_unet
           - stable_diffusion
           - sentence_bert
@@ -57,7 +56,7 @@ on:
   workflow_call:
     inputs:
       model:
-        description: "Select model to test (all, falcon7b, mamba, functional_unet, stable_diffusion, etc.)"
+        description: "Select model to test (all, falcon7b, functional_unet, stable_diffusion, etc.)"
         required: false
         type: string
         default: "all"
