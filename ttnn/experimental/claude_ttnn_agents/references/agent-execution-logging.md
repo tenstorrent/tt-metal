@@ -204,7 +204,7 @@ mkdir -p {operation_path}/agent_logs
 
 **Parameters:**
 - `operation_path`: The operation directory. Path depends on workflow:
-  - Generic op workflow: `ttnn/experimental/{operation_name}` (see `ttnn-generic-op-workflow.md`)
+  - Generic op workflow: `ttnn/ttnn/operations/{operation_name}` (see `ttnn-generic-op-workflow.md`)
   - Standard C++ workflow: `ttnn/cpp/ttnn/operations/{category}/{operation_name}`
 - `agent_name`: e.g., `ttnn-operation-scaffolder`, `ttnn-generic-op-builder`
 - `operation_name`: e.g., `my_op`

@@ -8,7 +8,7 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: ".claude/scripts/logging/auto_commit.sh ttnn-riscv-debugger"
+          command: ".claude/scripts/logging/block_if_uncommitted.sh ttnn-riscv-debugger"
 ---
 
 # ORCHESTRATOR INSTRUCTIONS

@@ -14,24 +14,27 @@ This workflow uses the **generic_op** infrastructure which bypasses C++ TTNN sca
 All generic_op operations MUST be created at:
 
 ```
-ttnn/experimental/{operation_name}/
+ttnn/ttnn/operations/{operation_name}/
 ```
 
 This is the **single source of truth** for operation location. All agents in this pipeline read this path from here.
 
-**Directory structure**:
+This places operations within the `ttnn` package, enabling direct imports:
+```python
+from ttnn.operations.<op_name> import <op_name>
 ```
-ttnn/experimental/{operation_name}/
-├── op/
-│   ├── __init__.py                         # Re-export main function
-│   ├── {operation_name}.py                 # Entry point with output allocation
-│   ├── {operation_name}_program_descriptor.py  # CB config, work distribution, kernel setup
-│   └── kernels/
-│       ├── {operation_name}_reader.cpp     # Data movement: DRAM → L1
-│       ├── {operation_name}_compute.cpp    # FPU/SFPU operations
-│       └── {operation_name}_writer.cpp     # Data movement: L1 → DRAM
-├── tests/
-│   └── test_{operation_name}.py            # PyTorch reference comparison
+
+**Directory structure** (flat, with tests colocated):
+```
+ttnn/ttnn/operations/{operation_name}/
+├── __init__.py                             # Re-export main function
+├── {operation_name}.py                     # Entry point with output allocation
+├── {operation_name}_program_descriptor.py  # CB config, work distribution, kernel setup
+├── test_{operation_name}.py                # PyTorch reference comparison (colocated)
+├── kernels/
+│   ├── {operation_name}_reader.cpp         # Data movement: DRAM → L1
+│   ├── {operation_name}_compute.cpp        # FPU/SFPU operations
+│   └── {operation_name}_writer.cpp         # Data movement: L1 → DRAM
 ├── agent_logs/                             # Execution logs (if logging enabled)
 │   ├── {agent_name}_breadcrumbs.jsonl
 │   └── {agent_name}_execution_log.md
@@ -41,19 +44,22 @@ ttnn/experimental/{operation_name}/
 
 **Example**: For an operation named `row_centralize`:
 ```
-ttnn/experimental/row_centralize/
-├── op/
-│   ├── __init__.py
-│   ├── row_centralize.py
-│   ├── row_centralize_program_descriptor.py
-│   └── kernels/
-│       ├── row_centralize_reader.cpp
-│       ├── row_centralize_compute.cpp
-│       └── row_centralize_writer.cpp
-├── tests/
-│   └── test_row_centralize.py
+ttnn/ttnn/operations/row_centralize/
+├── __init__.py
+├── row_centralize.py
+├── row_centralize_program_descriptor.py
+├── test_row_centralize.py
+├── kernels/
+│   ├── row_centralize_reader.cpp
+│   ├── row_centralize_compute.cpp
+│   └── row_centralize_writer.cpp
 ├── row_centralize_spec.md
 └── kernel_design.md
+```
+
+**Running tests**:
+```bash
+pytest ttnn/ttnn/operations/row_centralize/test_row_centralize.py -v
 ```
 
 ## Pipeline Structure
@@ -80,9 +86,26 @@ When user requests a new TTNN operation via generic_op, STOP and answer these qu
 
 ### Step 2: Discovery Checklist (if references not specified)
 
+**⚠️ CRITICAL: COMPUTE REQUIRES TILES**
+All compute operations (FPU/SFPU) require tilized data. Even if BOTH input AND output are row-major:
+- Row-major input → MUST tilize before compute
+- Compute operates on 32×32 tiles ONLY
+- Row-major output → MUST untilize after compute
+
+Pattern: `RM input → read sticks → tilize → compute (tiles) → untilize → write sticks → RM output`
+
+□ **First: Determine if operation has compute**:
+  - ANY math operation (reduction, eltwise, matrix ops) → REQUIRES tilized data
+  - Row-major input + compute → MUST include tilize reference (Hybrid Mode)
+  - Compute + row-major output → MUST include untilize reference (Hybrid Mode)
+  - Row-major input + compute + row-major output → Hybrid Mode with 3 references:
+    1. tilize (input_stage)
+    2. compute operation (compute_core)
+    3. untilize (output_stage)
+
 □ Parse for format keywords:
-  - "row-major input" + "tilize" → need tilize reference
-  - "untilize" + "row-major output" → need untilize reference
+  - "row-major input" + ANY compute → need tilize reference
+  - ANY compute + "row-major output" → need untilize reference
   - "sharded" → need sharded-input reference (layernorm, etc.)
 
 □ Select appropriate variant:
@@ -380,6 +403,6 @@ Invoke `ttnn-riscv-debugger` with:
 
 ## Additional Resources
 
-- `ttnn/experimental/claude_ttnn_agents/subagent_breakdown.md` - Detailed workflow breakdown
-- `ttnn/experimental/claude_ttnn_agents/references/ttnn-operation-workflow.md` - Standard C++ workflow
+- `.claude/subagent_breakdown.md` - Detailed workflow breakdown
+- `.claude/references/ttnn-operation-workflow.md` - Standard C++ workflow
 - https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html - Official docs

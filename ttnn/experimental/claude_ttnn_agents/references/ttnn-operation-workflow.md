@@ -111,5 +111,5 @@ See `.claude/references/logging/` for per-agent logging instructions.
 
 ## Additional Resources
 
-- `ttnn/experimental/claude_ttnn_agents/subagent_breakdown.md` - Detailed workflow breakdown
+- `.claude/subagent_breakdown.md` - Detailed workflow breakdown
 - https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html - Official docs

@@ -731,6 +731,7 @@ void pytensor_module(nb::module_& mod) {
         .def_prop_ro("dtype", [](const Tensor& self) { return self.dtype(); })
         .def_prop_ro("layout", [](const Tensor& self) { return self.layout(); })
         .def_prop_ro("tile", [](const Tensor& self) { return self.tensor_spec().tile(); })
+        .def("element_size", &Tensor::element_size, "Get element size in bytes for this tensor's data type")
         .def(
             "deallocate",
             [](Tensor& self, bool force) { self.deallocate(force); },
