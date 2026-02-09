@@ -114,9 +114,6 @@ FROM ci-build AS ci-test
 ARG UBUNTU_VERSION=22.04
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
-# needed for setuptools dep tree
-RUN apt install python3-pkg-resources
-
 # Create directories for infra
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
@@ -131,6 +128,9 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requireme
 # Configure PyTorch CPU index and install Python packages using uv
 # index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
 # that are not explicitly listed in the requirements.txt files
+# no-build-isolation is for pulling in pkg_resources from the system package
+# which setuptools removed in version 82. The old setuptools wheels apparently
+# do not automatically pull in pkg_resources
 RUN umask 000 && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
     uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
