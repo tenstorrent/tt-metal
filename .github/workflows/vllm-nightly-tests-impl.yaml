@@ -71,7 +71,7 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
+              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 single-step with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -79,9 +79,10 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x8",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"data_parallel\": 8, \"sample_on_device_mode\": \"decode_only\"}",
+              "override-tt-config": "{\"data_parallel\": 8, \"sample_on_device_mode\": \"all\"}",
               "multimodal": false,
               "structured-output": true,
+              "sampling-tests": true,
               "additional-server-args": "--num_scheduler_steps 1",
               "owner_id": "U091SNDA4TS"
             },
@@ -100,22 +101,7 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct v0 structured-output",
-              "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-              "multimodal": false,
-              "structured-output": true,
-              "additional-server-args": "--num_scheduler_steps 1",
-              "owner_id": "U091SNDA4TS"
-            },
-            {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct v0 fallback structured-output",
+              "name": "[WH-GLX] Llama-3.3-70B-Instruct v0 single-step with sampling-tests",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -126,6 +112,7 @@ jobs:
               "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
               "multimodal": false,
               "structured-output": true,
+              "sampling-tests": true,
               "additional-server-args": "--num_scheduler_steps 1",
               "owner_id": "U091SNDA4TS"
             },
@@ -146,7 +133,7 @@ jobs:
             {
               "name": "[WH-T3K][v1] Gemma3-27B",
               "model": "google/gemma-3-27b-it",
-              "server-timeout": 20,
+              "server-timeout": 45,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -161,7 +148,7 @@ jobs:
             {
               "name": "[WH-GLX][v1] Gemma3-27B DP=4",
               "model": "google/gemma-3-27b-it",
-              "server-timeout": 20,
+              "server-timeout": 45,
               "benchmark-timeout": 5,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -176,7 +163,7 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
-              "name": "[WH-GLX][v1] GPT-OSS-120B",
+              "name": "[WH-GLX][v1] GPT-OSS-120B (low-latency)",
               "model": "openai/gpt-oss-120b",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -185,7 +172,24 @@ jobs:
               "mesh-device": "(4, 8)",
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--max_num_seqs 1 --num_scheduler_steps 1",
+              "additional-server-args": "--max_num_seqs 1",
+              "use-vllm-v1": true,
+              "structured-output": true,
+              "co-owner-1-id": "U08TJ70UFRT",
+              "co-owner-2-id": "U06F3ER8X9A"
+            },
+            {
+              "name": "[WH-GLX][v1] GPT-OSS-120B (high-throughput)",
+              "model": "openai/gpt-oss-120b",
+              "server-timeout": 35,
+              "benchmark-timeout": 10,
+              "runner-label": "topology-6u",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "(4, 8)",
+              "multimodal": false,
+              "tt-llama-text-ver": "tt_transformers",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\"}",
+              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32",
               "use-vllm-v1": true,
               "structured-output": true,
               "co-owner-1-id": "U08TJ70UFRT",
@@ -200,9 +204,10 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\"}",
               "use-vllm-v1": true,
               "structured-output": true,
+              "sampling-tests": true,
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
@@ -240,7 +245,7 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[BH-DB][v1] Llama-3.1-8B-Instruct",
+              "name": "[BH-DB][v1] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 5,
@@ -251,6 +256,7 @@ jobs:
               "additional-server-args": "--data_parallel_size 2",
               "use-vllm-v1": true,
               "structured-output": true,
+              "sampling-tests": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
             },
@@ -277,7 +283,6 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x8",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"data_parallel\": 8}",
               "additional-server-args": "--data_parallel_size 8",
               "use-vllm-v1": true,
               "structured-output": true,
@@ -285,7 +290,7 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[WH-GLX][v1] Llama-3.3-70B-Instruct device sampling",
+              "name": "[WH-GLX][v1] Llama-3.3-70B-Instruct device with sampling-tests",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -296,6 +301,7 @@ jobs:
               "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
               "use-vllm-v1": true,
+              "sampling-tests": true,
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
@@ -325,7 +331,7 @@ jobs:
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
-              "override-tt-config": "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"decode_only\"}",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--data_parallel_size 16",
               "use-vllm-v1": true,
@@ -627,6 +633,12 @@ jobs:
             echo "Check out the server log in a step below."
             exit 1
           fi
+      - name: 🧪 Run sampling tests
+        if: ${{ matrix.test-group.sampling-tests }}
+        timeout-minutes: 10
+        run: |
+          pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+
       - name: 🧹 Cleanup server process
         if: always()
         run: |

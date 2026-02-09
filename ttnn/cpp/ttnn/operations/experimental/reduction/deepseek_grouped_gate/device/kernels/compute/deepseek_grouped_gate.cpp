@@ -6,18 +6,18 @@
 #define REDUCE_DIM ReduceDim::REDUCE_COL
 
 #include <cstdint>
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
 #include "ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "api/compute/reduce.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 
 #include "debug/dprint_tensix.h"
 

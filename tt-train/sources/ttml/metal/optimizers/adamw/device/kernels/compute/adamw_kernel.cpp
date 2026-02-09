@@ -4,17 +4,17 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/binary_max_min.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/rounding.h"
-#include "compute_kernel_api/eltwise_unary/sqrt.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/binary_max_min.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/rounding.h"
+#include "api/compute/eltwise_unary/sqrt.h"
+#include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 constexpr auto cb_param_idx = tt::CBIndex::c_0;

@@ -46,24 +46,24 @@
   team: fabric
   timeout: 15
 
-# Blackhole Galaxy e2e tests #issue #36869 for all BH GLX tests
-# - name: BH Galaxy CCL tests
-#   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
-#   sku: bh_galaxy
-#   owner_id: U05ACKAJTHS # Naif Tarafdar, Camilo Vega
-#   team: ttnn
-#   timeout: 40
+# Blackhole Galaxy e2e tests
+- name: BH Galaxy CCL tests
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
+  sku: bh_galaxy
+  owner_id: U05ACKAJTHS # Naif Tarafdar, Camilo Vega
+  team: ttnn
+  timeout: 40
 
-# - name: BH Galaxy Fabric unit tests
-#   cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
-#   sku: bh_galaxy
-#   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-#   team: fabric
-#   timeout: 30
+- name: BH Galaxy Fabric unit tests
+  cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
+  sku: bh_galaxy
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: fabric
+  timeout: 30
 
-# - name: BH Galaxy Fabric Torus Stability Tests
-#   cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml
-#   sku: bh_galaxy
-#   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-#   team: fabric
-#   timeout: 20
+- name: BH Galaxy Fabric Torus Stability Tests
+  cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml
+  sku: bh_galaxy
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: fabric
+  timeout: 20
