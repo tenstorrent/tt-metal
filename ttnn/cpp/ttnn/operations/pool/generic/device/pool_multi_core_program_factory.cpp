@@ -181,8 +181,10 @@ static Tensor create_scalar_config_tensor(
 
     TT_FATAL(
         entries_per_core != 0,
-        "entries_per_core cannot be zero. max_scalars_cnt: {}, memory_layout not supported or num_iterations is zero",
-        max_scalars_cnt);
+        "entries_per_core cannot be zero. max_scalars_cnt: {}, num_iterations: {}, in_memory_layout: {}",
+        max_scalars_cnt,
+        num_iterations,
+        in_memory_layout);
 
     switch (in_memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
