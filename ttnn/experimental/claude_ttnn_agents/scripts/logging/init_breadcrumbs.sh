@@ -8,8 +8,8 @@
 #   init_breadcrumbs.sh ttnn/cpp/ttnn/operations/reduction/my_op ttnn-some-agent my_op ttnn-factory-builder spec.md input2.txt
 #
 # Example (generic_op workflow - see ttnn-generic-op-workflow.md for canonical path):
-#   init_breadcrumbs.sh ttnn/experimental/my_op ttnn-generic-op-builder my_op "" spec.md
-#   init_breadcrumbs.sh ttnn/experimental/my_op ttnn-kernel-writer my_op ttnn-kernel-designer spec.md
+#   init_breadcrumbs.sh ttnn/ttnn/operations/my_op ttnn-generic-op-builder my_op "" spec.md
+#   init_breadcrumbs.sh ttnn/ttnn/operations/my_op ttnn-kernel-writer my_op ttnn-kernel-designer spec.md
 
 set -e
 

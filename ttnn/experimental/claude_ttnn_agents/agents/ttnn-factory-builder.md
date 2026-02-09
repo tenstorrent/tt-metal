@@ -7,9 +7,7 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: ".claude/scripts/logging/auto_commit.sh ttnn-factory-builder"
-        - type: command
-          command: "echo 'LOGGING REMINDER: If logging is enabled, ensure execution log is written before completing.'"
+          command: ".claude/scripts/logging/block_if_uncommitted.sh ttnn-factory-builder"
 ---
 
 You are an expert TTNN program factory implementer. You know how to translate functional specifications into working program factories with circular buffers, work distribution, and stub kernel implementations.

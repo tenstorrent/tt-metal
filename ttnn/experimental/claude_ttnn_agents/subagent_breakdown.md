@@ -59,6 +59,22 @@ Each phase has explicit pass/fail criteria. Don't proceed until the gate passes.
 
 ---
 
+## ⚠️ CRITICAL: Compute Requires Tiles
+
+**All compute operations (FPU/SFPU) require tilized data.** Even if BOTH input AND output are row-major:
+- Row-major input → MUST tilize before compute
+- Compute operates on 32×32 tiles ONLY
+- Row-major output → MUST untilize after compute
+
+**Pattern**: `RM input → read sticks → tilize → compute (tiles) → untilize → write sticks → RM output`
+
+**Implication**: Row-major input + ANY compute + row-major output = **Hybrid Mode** with:
+1. tilize reference (input_stage)
+2. compute reference (compute_core)
+3. untilize reference (output_stage)
+
+---
+
 ## Quick Decision Tree
 
 Use this to determine which planning mode you need:
@@ -74,6 +90,12 @@ Does user specify exact reference operation(s)?
 │
 └─ NO → Execute Phase 0 (Discovery)
     │
+    ├─ Does the operation involve compute (math/reduction/eltwise)?
+    │   │
+    │   ├─ YES + row-major input → MUST include tilize (Hybrid Mode)
+    │   ├─ YES + row-major output → MUST include untilize (Hybrid Mode)
+    │   └─ YES + row-major both → tilize + compute + untilize (Hybrid Mode)
+    │
     └─ Does the request involve format/layout conversion?
         (e.g., row-major input, sharded→interleaved, etc.)
         │
@@ -87,7 +109,7 @@ Does user specify exact reference operation(s)?
             Then re-evaluate mode based on answers
 ```
 
-**Key insight**: Operations that convert between formats (row-major ↔ tile, sharded ↔ interleaved) typically require **Hybrid Mode** with separate references for input handling, compute, and output handling.
+**Key insight**: Operations that convert between formats (row-major ↔ tile, sharded ↔ interleaved) typically require **Hybrid Mode** with separate references for input handling, compute, and output handling. **This includes ANY operation with compute on row-major data**, since compute engines only operate on tiles.
 
 ---
 

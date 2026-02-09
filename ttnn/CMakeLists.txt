@@ -122,6 +122,7 @@ target_sources(
             cpp/ttnn/kernel/kernel_utils.hpp
             cpp/ttnn/kernel_lib/tilize_helpers.hpp
             cpp/ttnn/kernel_lib/untilize_helpers.hpp
+            cpp/ttnn/kernel_lib/scalar_helpers.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp

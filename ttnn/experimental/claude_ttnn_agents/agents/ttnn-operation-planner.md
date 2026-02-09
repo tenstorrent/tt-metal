@@ -7,7 +7,7 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: ".claude/scripts/logging/auto_commit.sh ttnn-operation-planner"
+          command: ".claude/scripts/logging/block_if_uncommitted.sh ttnn-operation-planner"
 ---
 
 You are an expert TTNN operation architect. Your role is to design new operations by understanding how they differ from existing reference implementations, then producing a functional specification that implementation agents will use.

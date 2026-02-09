@@ -6,7 +6,7 @@
 #   append_breadcrumb.sh ttnn/cpp/ttnn/operations/reduction/my_op ttnn-operation-scaffolder '{"event":"action","type":"build"}'
 #
 # Example (generic_op workflow - see ttnn-generic-op-workflow.md for canonical path):
-#   append_breadcrumb.sh ttnn/experimental/my_op ttnn-generic-op-builder '{"event":"action","type":"test"}'
+#   append_breadcrumb.sh ttnn/ttnn/operations/my_op ttnn-generic-op-builder '{"event":"action","type":"test"}'
 #
 # The script automatically adds timestamp and ensures the log directory exists.
 

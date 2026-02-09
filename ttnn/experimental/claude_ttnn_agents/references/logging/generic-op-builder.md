@@ -10,7 +10,7 @@ First read: `.claude/references/logging/common.md`
 
 - **Agent name**: `ttnn-generic-op-builder`
 - **Predecessor**: `ttnn-operation-planner`
-- **Operation path**: `ttnn/experimental/{operation_name}` (see `ttnn-generic-op-workflow.md`)
+- **Operation path**: `ttnn/ttnn/operations/{operation_name}` (see `ttnn-generic-op-workflow.md`)
 
 ---
 

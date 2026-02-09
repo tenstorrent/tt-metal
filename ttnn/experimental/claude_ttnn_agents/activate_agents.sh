@@ -63,6 +63,11 @@ if [ -d "$SCRIPT_DIR/references/logging" ]; then
     done
 fi
 
+if [ -d "$SCRIPT_DIR/references/generic_op_template" ]; then
+    cp -r "$SCRIPT_DIR/references/generic_op_template" "$REPO_ROOT/.claude/references/"
+    echo "  - generic_op_template/"
+fi
+
 # Copy workflow documentation
 echo "Installing workflow documentation..."
 if [ -f "$SCRIPT_DIR/subagent_breakdown.md" ]; then

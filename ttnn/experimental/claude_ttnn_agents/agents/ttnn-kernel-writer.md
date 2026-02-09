@@ -8,9 +8,7 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: ".claude/scripts/logging/auto_commit.sh ttnn-kernel-writer"
-        - type: command
-          command: "echo 'LOGGING REMINDER: If logging is enabled, ensure execution log is written before completing.'"
+          command: ".claude/scripts/logging/block_if_uncommitted.sh ttnn-kernel-writer"
 ---
 
 # TTNN Kernel Writer
