@@ -6,13 +6,23 @@
 Test for GitHub issue #14421: DRAM interleaved and L1 interleaved inputs
 in the relu op should have different kernel duration times.
 
-L1 interleaved input → L1 interleaved output should be faster than
-DRAM interleaved input → L1 interleaved output.
+Tests all 4 memory layout combinations (input × output):
+  1. DRAM → DRAM
+  2. DRAM → L1
+  3. L1   → DRAM
+  4. L1   → L1
+
+Expected ordering: L1→L1 is fastest, DRAM→DRAM is slowest.
 """
 
 import pytest
 import torch
 import ttnn
+
+MEMORY_CONFIGS = {
+    "DRAM": ttnn.DRAM_MEMORY_CONFIG,
+    "L1": ttnn.L1_MEMORY_CONFIG,
+}
 
 
 def _enable_profiler(monkeypatch):
@@ -37,9 +47,6 @@ def _get_max_kernel_duration(device) -> int:
     """
     Read device profiler and return the max kernel duration (ns) from the
     latest program execution data.
-
-    Returns the maximum 'duration' value found across all analysis results
-    for the latest profiler read.
     """
     ttnn.synchronize_device(device)
     ttnn.ReadDeviceProfiler(device)
@@ -62,9 +69,22 @@ def _get_max_kernel_duration(device) -> int:
     return max_duration
 
 
-def _run_relu(device, input_tensor):
-    """Run relu and return the result tensor (stays on device)."""
-    return ttnn.relu(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+def _measure_relu(device, input_tensor, output_memory_config, warmup_iterations=2):
+    """Run relu with warmup, then return measured kernel duration (ns)."""
+    # Warmup
+    for _ in range(warmup_iterations):
+        out = ttnn.relu(input_tensor, memory_config=output_memory_config)
+        ttnn.deallocate(out)
+
+    # Flush profiler state
+    ttnn.synchronize_device(device)
+    ttnn.ReadDeviceProfiler(device)
+
+    # Measured run
+    out = ttnn.relu(input_tensor, memory_config=output_memory_config)
+    duration = _get_max_kernel_duration(device)
+    ttnn.deallocate(out)
+    return duration
 
 
 @pytest.mark.parametrize(
@@ -75,10 +95,15 @@ def _run_relu(device, input_tensor):
     ],
     ids=["1x1x1024x1024", "1x4x2048x2048"],
 )
-def test_relu_l1_input_faster_than_dram_input(shape, monkeypatch):
+def test_relu_memory_layout_kernel_duration(shape, monkeypatch):
     """
-    Verify that relu with L1 interleaved input has lower kernel duration
-    than relu with DRAM interleaved input (both with L1 interleaved output).
+    Measure relu kernel duration for all 4 input/output memory layout
+    combinations and verify expected ordering:
+      - L1→L1 < DRAM→L1  (L1 input should be faster than DRAM input)
+      - L1→L1 < L1→DRAM  (L1 output should be faster than DRAM output)
+      - L1→L1 < DRAM→DRAM (fully L1 should be fastest)
+
+    See https://github.com/tenstorrent/tt-metal/issues/14421
     """
     _check_profiler_available()
     _enable_profiler(monkeypatch)
@@ -98,66 +123,42 @@ def test_relu_l1_input_faster_than_dram_input(shape, monkeypatch):
         torch.manual_seed(0)
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
-        warmup_iterations = 2
+        durations = {}
+        for in_name, in_mem_config in MEMORY_CONFIGS.items():
+            input_tensor = ttnn.from_torch(
+                torch_input,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=in_mem_config,
+            )
+            for out_name, out_mem_config in MEMORY_CONFIGS.items():
+                label = f"{in_name}→{out_name}"
+                durations[label] = _measure_relu(device, input_tensor, out_mem_config)
 
-        # --- Measure DRAM interleaved input → L1 interleaved output ---
-        dram_input = ttnn.from_torch(
-            torch_input,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Warmup
-        for _ in range(warmup_iterations):
-            out = _run_relu(device, dram_input)
-            ttnn.deallocate(out)
-
-        # Measured run — flush profiler state first
-        ttnn.synchronize_device(device)
-        ttnn.ReadDeviceProfiler(device)
-
-        out = _run_relu(device, dram_input)
-        dram_duration = _get_max_kernel_duration(device)
-        ttnn.deallocate(out)
-        ttnn.deallocate(dram_input)
-
-        # --- Measure L1 interleaved input → L1 interleaved output ---
-        l1_input = ttnn.from_torch(
-            torch_input,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-        # Warmup
-        for _ in range(warmup_iterations):
-            out = _run_relu(device, l1_input)
-            ttnn.deallocate(out)
-
-        # Measured run — flush profiler state first
-        ttnn.synchronize_device(device)
-        ttnn.ReadDeviceProfiler(device)
-
-        out = _run_relu(device, l1_input)
-        l1_duration = _get_max_kernel_duration(device)
-        ttnn.deallocate(out)
-        ttnn.deallocate(l1_input)
-
+            ttnn.deallocate(input_tensor)
     finally:
         ttnn.close_device(device)
 
+    # Print results
     print(f"\nShape: {shape}")
-    print(f"  DRAM→L1 kernel duration: {dram_duration} ns")
-    print(f"  L1→L1   kernel duration: {l1_duration} ns")
-    if dram_duration > 0:
-        speedup = dram_duration / l1_duration
-        print(f"  Speedup (DRAM/L1): {speedup:.2f}x")
+    for label, duration in durations.items():
+        print(f"  {label:12s} kernel duration: {duration} ns")
+    if durations["DRAM→DRAM"] > 0:
+        baseline = durations["DRAM→DRAM"]
+        for label, duration in durations.items():
+            print(f"  {label:12s} relative to DRAM→DRAM: {duration / baseline:.2f}x")
 
-    assert l1_duration < dram_duration, (
-        f"Expected L1 interleaved input to be faster than DRAM interleaved input, "
-        f"but L1 duration ({l1_duration} ns) >= DRAM duration ({dram_duration} ns). "
+    # Assertions: L1→L1 should be strictly faster than the other 3 combinations
+    assert durations["L1→L1"] < durations["DRAM→L1"], (
+        f"Expected L1→L1 ({durations['L1→L1']} ns) < DRAM→L1 ({durations['DRAM→L1']} ns). "
+        f"See https://github.com/tenstorrent/tt-metal/issues/14421"
+    )
+    assert durations["L1→L1"] < durations["L1→DRAM"], (
+        f"Expected L1→L1 ({durations['L1→L1']} ns) < L1→DRAM ({durations['L1→DRAM']} ns). "
+        f"See https://github.com/tenstorrent/tt-metal/issues/14421"
+    )
+    assert durations["L1→L1"] < durations["DRAM→DRAM"], (
+        f"Expected L1→L1 ({durations['L1→L1']} ns) < DRAM→DRAM ({durations['DRAM→DRAM']} ns). "
         f"See https://github.com/tenstorrent/tt-metal/issues/14421"
     )
