@@ -35,6 +35,43 @@ from tests.nightly.tg.ccl.test_moe_compute_6U import (
 )
 
 
+def load_expert_weights_from_state_dict(
+    state_dict,
+    num_layers,
+    experts_per_device,
+    hidden_size,
+    N,
+    expert_start_index=0,
+):
+    """
+    Load expert weights from a reference model state_dict (e.g. DeepseekV3MoE).
+
+    state_dict keys expected: experts.{e}.gate_proj.weight, experts.{e}.up_proj.weight,
+    experts.{e}.down_proj.weight for e in [expert_start_index, expert_start_index + experts_per_device).
+
+    Returns:
+        torch_w0: (num_layers, experts_per_device, hidden_size, N) - gate_proj per expert
+        torch_w1: (num_layers, experts_per_device, hidden_size, N) - up_proj per expert
+        torch_w2: (num_layers, experts_per_device, N, hidden_size) - down_proj per expert
+    """
+    torch_w0 = torch.empty((num_layers, experts_per_device, hidden_size, N), dtype=torch.bfloat16)
+    torch_w1 = torch.empty((num_layers, experts_per_device, hidden_size, N), dtype=torch.bfloat16)
+    torch_w2 = torch.empty((num_layers, experts_per_device, N, hidden_size), dtype=torch.bfloat16)
+
+    for layer_id in range(num_layers):
+        for local_e in range(experts_per_device):
+            e = expert_start_index + local_e
+            # PyTorch Linear stores (out_features, in_features)
+            gate = state_dict[f"experts.{e}.gate_proj.weight"]  # (N, hidden_size)
+            up = state_dict[f"experts.{e}.up_proj.weight"]  # (N, hidden_size)
+            down = state_dict[f"experts.{e}.down_proj.weight"]  # (hidden_size, N)
+            torch_w0[layer_id, local_e] = gate.T.to(torch.bfloat16)  # (hidden_size, N)
+            torch_w1[layer_id, local_e] = up.T.to(torch.bfloat16)  # (hidden_size, N)
+            torch_w2[layer_id, local_e] = down.T.to(torch.bfloat16)  # (N, hidden_size)
+
+    return torch_w0, torch_w1, torch_w2
+
+
 def get_moe_compute_result(
     mesh_device,
     total_tokens,
@@ -46,6 +83,7 @@ def get_moe_compute_result(
     cluster_axis=1,
     dtype=ttnn.bfloat16,
     enable_trace=False,
+    state_dict=None,
 ):
     """
     total_tokens is the total number of tokens in the batch, equal to num_tokens below
@@ -224,9 +262,39 @@ def get_moe_compute_result(
     dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
     dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
 
-    torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
-    torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
-    torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
+    if state_dict is not None:
+        # Load reference weights per device and shard across mesh so each device has its experts
+        w0_w1_list = []
+        w2_list = []
+        for device_id in range(num_devices):
+            expert_start = device_id * experts_per_device
+            torch_w0_d, torch_w1_d, torch_w2_d = load_expert_weights_from_state_dict(
+                state_dict,
+                num_layers,
+                experts_per_device,
+                hidden_size,
+                N,
+                expert_start_index=expert_start,
+            )
+            w0_w1_list.append(
+                prepare_w0_w1_tensor(torch_w0_d, torch_w1_d, num_layers, experts_per_device, hidden_size, N, ring2cores)
+            )
+            w2_list.append(prepare_w2_tensor(torch_w2_d, num_layers, experts_per_device, N, hidden_size, ring2cores))
+        torch_w0_w1_reordered = torch.stack(w0_w1_list, dim=0)
+        torch_w2_reordered = torch.stack(w2_list, dim=0)
+        w0_w1_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        w2_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        logger.info("Loaded expert weights from state_dict (sharded by device)")
+    else:
+        torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
+        torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
+        torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
+        torch_w0_w1_reordered = prepare_w0_w1_tensor(
+            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+        )
+        torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
+        w0_w1_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        w2_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w0_w1
@@ -254,12 +322,6 @@ def get_moe_compute_result(
 
     w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
 
-    # ------------------------------------------------------------------------
-    # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    torch_w0_w1_reordered = prepare_w0_w1_tensor(
-        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
-    )
-
     # Create tt_w0_w1 tensor with DRAM sharding
     tt_w0_w1 = ttnn.from_torch(
         torch_w0_w1_reordered,
@@ -267,12 +329,8 @@ def get_moe_compute_result(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w0_w1_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=w0_w1_mesh_mapper,
     )
-
-    # ------------------------------------------------------------------------
-    # Prepare w2 tensor (padded and reordered)
-    torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
 
     # Create tt_w2 tensor with DRAM sharding
     tt_w2 = ttnn.from_torch(
@@ -281,7 +339,7 @@ def get_moe_compute_result(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w2_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=w2_mesh_mapper,
     )
 
     #########################################
@@ -290,7 +348,6 @@ def get_moe_compute_result(
 
     def run_op():
         moe_compute_outputs = []
-
         for layer_id in range(num_layers):
             # if only running a single layer, we can fit the single set of inputs in L1 initially
             # otherwise with multiple layers, and multiple sets of inputs, we need to move inputs into L1 before a given
@@ -323,7 +380,16 @@ def get_moe_compute_result(
                 layer_id=layer_id,
                 cluster_axis=cluster_axis,
             )
-            # we cannot convert it to torch tensor since it's too huge. Converting it could cause hang.
+            import pdb
+
+            pdb.set_trace()
+            torch_output = ttnn.to_torch(
+                l1_output_tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
+            moe_compute_outputs.append(torch_output)
 
             # deallocate L1 inputs
             # if running with multiple layers, we have to deallocate previous inputs to free up L1 space
@@ -445,8 +511,6 @@ def test_forward_pass(
     topk_fallback,
 ):
     """Test forward pass against reference model."""
-    print(reference_model.state_dict().keys())
-
     # Get state dict from actual model - pass directly to convert_weights
     state_dict = add_inv_scale_to_state_dict(
         reference_model.state_dict(),
@@ -494,6 +558,8 @@ def test_forward_pass(
 
     # get_moe_compute_result uses 6U-specific layout (1x16 mesh, 12 DRAM banks). Skip on other meshes to avoid segfault.
     if tuple(mesh_device.shape) == (1, 16):
+        # Use reference model weights so moe_compute output can be verified against reference
+        reference_state_dict = reference_model.state_dict()
         tt_output_moe_compute = get_moe_compute_result(
             mesh_device,
             num_tokens,
@@ -504,6 +570,7 @@ def test_forward_pass(
             hf_config.moe_intermediate_size,
             1,
             ttnn.bfloat16,
+            state_dict=reference_state_dict,
         )
         assert tt_output_moe_compute == reference_output, "MoE compute output does not match TTNN forward pass"
     # Verify output memory config matches expected
