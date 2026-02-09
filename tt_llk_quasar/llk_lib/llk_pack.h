@@ -55,7 +55,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
  * @param num_tiles: number of tiles to pack at a time
  */
 template <std::uint8_t PACK_SEL>
-inline void _llk_pack_init_(const std::uint8_t buf_desc_id, const std::uint32_t num_tiles)
+inline void _llk_pack_init_(const std::uint8_t buf_desc_id, const std::uint32_t num_tiles = NUM_TILES_PER_PACK)
 {
     _llk_pack_mop_config_<PACK_SEL>(buf_desc_id, num_tiles);
 }

@@ -33,6 +33,10 @@ constexpr static std::uint32_t NUM_FACES = 4;
 static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
 static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;
 
+// Number of tiles processed per one unpack/pack call
+static constexpr std::uint32_t NUM_TILES_PER_UNPACK = 1;
+static constexpr std::uint32_t NUM_TILES_PER_PACK   = 1;
+
 // Points to the config space
 std::uint32_t volatile* const cfg = (std::uint32_t volatile*)TENSIX_CFG_BASE;
 // Points to the buffer table

@@ -267,7 +267,7 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
  * @param rt_dim: number of tiles in the row dimension for a matrix multiply
  */
 
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_DI, bool EN_X2>
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_DI = false, bool EN_X2 = false>
 inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     if constexpr (EN_DI || EN_X2)
