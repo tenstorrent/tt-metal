@@ -4,57 +4,72 @@ Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication
 Introduction
 ************
 
-In Lab 2 you implemented **multi core matrix multiplication with data reuse within each core**. Each core read tiles of input matrices from DRAM into its own circular buffers (CBs) and reused them locally across multiple multiply-accumulate steps. However, **data was not reused across cores**: each core independently read its own tiles from DRAM, even when neighbor cores needed the exact same data.
+In Lab 2 you implemented multi core matrix multiplication with data reuse within each core.
+Each core read tiles of input matrices from DRAM into its own circular buffers (CBs) and
+reused them locally across multiple multiply-accumulate steps. However, data was not reused across cores:
+each core independently read its own tiles from DRAM, even when neighboring cores needed the exact same data.
 
-Ideally, each piece of data should be fetched from DRAM only once and then reused by all cores that need it. On Tenstorrent devices, cores do not have direct access to each other's L1 CBs, but they are connected by a 2D on-chip **Network-on-Chip (NOC)**. The NOC supports **multicast**, which allows a sender core to write the same data to multiple destination cores in a single NOC operation. In this lab you will:
+Ideally, each piece of data should be fetched from DRAM only once and then reused by all cores that need it.
+On Tenstorrent devices, cores do not have direct access to each other's L1 CBs, but they are connected by a
+2D **Network-on-Chip (NOC)**. The NOC supports **unicast** and **multicast** operations.
+Unicast allows a sender core to write data to a single destination core.
+Multicast allows a sender core to write the same data to multiple destination cores in a single NOC operation.
+In this lab you will:
 
-* Use simple multicast to send tiles from one "coordinator" core to multiple receiver cores.
+* Use simple multicast to send tiles from one sender core to multiple receiver cores.
 * Understand how semaphores, device coordinates, and multicast addressing work together.
-* Apply multicast to your Lab 2 multi core matmul so that tiles of A and B are reused **across cores**, not just within a single core.
+* Apply multicast to your Lab 2 multi core matrix multiplication so that tiles of A and B are reused across cores,
+not just within a single core.
 
 High level motivation
 =====================
 
-In Lab 2, you already reduced DRAM bandwidth by reusing tiles locally. However, consider a row of cores that all work on different columns of the same row block of matrix A. Each core separately loaded the same A tiles from DRAM into its L1. This is wasteful: DRAM bandwidth and energy are spent multiple times on identical data.
+In Lab 2, you already reduced DRAM bandwidth by reusing tiles locally. However, consider an example
+matrix multiplication shown in Figure 1.
 
-The natural next step is to **load a tile from DRAM once and share it across cores**. For example, the leftmost core in each row could read a tile of A and then forward it to all other cores in that row that also need it. Similarly, in each column, the topmost core could read a tile of B and forward it to all cores below.
+.. figure:: images/data_reuse_no_multicast.png
+   :alt: Example matrix multiplication on a 3x3 core grid
+   :width: 700
+   :align: center
 
-Because cores cannot peek into each other's CBs, this sharing must happen explicitly through the NOC. The idea is:
+   Figure 1: Example matrix multiplication on a 3x3 core grid
 
-* For any given tile, **one core is responsible for reading it from DRAM**.
-* That core stores the tile in its own CBs (for its own computation), and also **multicasts it to other cores** that need the same tile.
-* All receiving cores place the tile into their own input CBs and then proceed with computation.
+Each square in Figure 1 represents a tile, and dimensions of matrices are ``9x6`` tiles
+for ``A`` and ``6x9`` tiles for ``B``, resulting in a ``9x9`` tile output matrix ``C``.
+The squares in the middle of the figure represent the core grid, with each square labeled
+with its core coordinates ``(x, y)``.
+Arrows indicate reads of tiles from DRAM into the core's on-chip memory.
+As can be seen, all cores in the same row read the same rows of tiles of ``A``,
+and all cores in the same column read the same columns of tiles of ``B``.
 
-In the context of multi core matmul:
+Since DRAM bandwidth is limited, this is inefficent because same data is read multiple times from DRAM.
+Instead, we would like to load a tile from DRAM once and share it across all cores that need it.
+Because cores cannot read from each other's CBs, this sharing must happen explicitly through the NOC
+One possible way to achive this is shown in Figure 2.
 
-* Tiles of A can be read once per row of cores and multicasted **down the column**.
-* Tiles of B can be read once per column of cores and multicasted **across the row**.
-* Every core receives the A and B tiles it needs from its row/column multicast senders, while also performing its share of compute.
+.. figure:: images/data_reuse_with_multicast.png
+   :alt: Example matrix multiplication on a 3x3 core grid with multicast
+   :width: 700
+   :align: center
 
-In the rest of this lab, you will first work through a **standalone multicast example**, then retrofit the same ideas into your Lab 2 matrix multiplication solution.
+   Figure 2: Example matrix multiplication on a 3x3 core grid with multicast
 
-Lab objectives
-==============
+In the example in Figure 2, only the leftmost core in each grid row reads tiles of ``A`` from DRAM,
+depicted by thin arrows in the figure.
+The core stores the tiles of ``A`` into its own CBs for its own computation, just as it did in Lab 2.
+However, it now also multicasts the tiles of ``A`` it read from DRAM to all the other cores that
+need these same tiles, which is all the cores in that row.
+Similarly, only the topmost core in each grid column reads tiles of ``B`` from DRAM, storing them into
+its own CBs for its own computation, and it multicasts these tiles to all the other cores that need
+these same tiles, which is all the cores in that column.
 
-By the end of this lab you should be able to:
+The multicast operation is depicted by thick arrows in the figure. While each multicast is depicted
+by two arrows, this is only to clearly denote all the recipients of the operation;
+the thick arrows of the same color are actually part of the same multicast operation.
 
-* Describe, at a high level, how the Tenstorrent NOC and multicast work.
-* Use **device coordinates** (NOC coordinates) together with ``worker_core_from_logical_core`` to configure multicast.
-* Use semaphores and NOC APIs to synchronize a sender core with multiple receivers.
-* Explain the interaction between multicast and double buffering.
-* Modify your multi core matmul with intra core reuse so that tiles of A and B are **multicasted across cores**.
+In the rest of this lab, you will first work through a simple example program demonstrating NOC and
+multicast features, then retrofit the same ideas into your Lab 2 matrix multiplication solution.
 
-Prerequisites
-=============
-
-This lab assumes that you have:
-
-* Completed Lab 1 and are comfortable with:
-  * Tiled matmul on a single core.
-  * Using CBs, dataflow kernels, and compute kernels.
-* Completed Lab 2 and are comfortable with:
-  * Multi core matmul with data reuse inside each core.
-  * Setting up core ranges, splitting work across cores, and using CBs for double buffering.
 
 Background: Tenstorrent NOC and Multicast
 *****************************************
@@ -62,31 +77,37 @@ Background: Tenstorrent NOC and Multicast
 NOC overview
 ============
 
-Tenstorrent devices organize Tensix cores in a **2D grid** connected by a Network-on-Chip. Each core has **NOC coordinates** of the form ``(x, y)`` indicating its position in this grid. The NOC allows:
+The Network-on-Chip (NoC) is a 2D mesh interconnect that connects:
+* All Tensix cores
+* DRAM controllers
+* PCIe interfaces
+* Ethernet cores (for multi-device systems)
 
-* Point-to-point (unicast) data transfers, e.g., from one core to exactly one other core.
-* **Multicast** transfers, where a single source sends the same payload to multiple destination cores in a single NOC operation.
+NOC is used to transfer data between different components of the device, including transferring
+data between DRAM and on-chip memory. As you have seen in the preceding labs, TT-Metalium programmer
+doesn't need to understand all the details of the underlying hardware to use the NOC.
+In this lab, we will expand our use of the NOC to include multicast operations to transfer data between cores.
+For more detailed information about the NOC, refer to the resources listed in the Additional Information
+section at the end of this lab.
 
-Conceptually, you can think of the NOC as a grid of cores, each with an L1 memory:
+In TT-Metalium, NoC multicast is a data movement operation where one core writes directly into the L1
+on-chip memory of multiple other cores with a single command. The sender core specifies a group of
+destination cores and a destination L1 address, and the NoC hardware delivers the data to that
+address on every destination core.
+Unlike a "pull" model where receivers issue read requests, multicast is a "push" model: the sender
+pushes the data into the receivers' L1 on-chip memories.
 
-.. code-block:: text
+From the receiving core's point of view, a multicast operation writes tiles straight into its L1,
+typically into a location it has already set aside in a circular buffer (CB). The receiver does not
+need to perform any explicit read or copy for the data itself; it only needs to prepare space and
+indicate that it is ready to accept a tile (for example, by reserving a CB slot). Once multicast
+completes, the tile is simply present in the CB, ready to be consumed by the compute or writer
+kernels just like any other locally produced data.
 
-   y
-   ^
-   |   (0,2)   (1,2)   (2,2)   (3,2)
-   |   +-----+ +-----+ +-----+ +-----+
-   |   |     | |     | |     | |     |
-   |   +-----+ +-----+ +-----+ +-----+
-   |   (0,1)   (1,1)   (2,1)   (3,1)
-   |   +-----+ +-----+ +-----+ +-----+
-   |   |     | |     | |     | |     |
-   |   +-----+ +-----+ +-----+ +-----+
-   |   (0,0)   (1,0)   (2,0)   (3,0)  -> x
-   |   +-----+ +-----+ +-----+ +-----+
-   |   |     | |     | |     | |     |
-   +   +-----+ +-----+ +-----+ +-----+
 
-Multicast uses this structure to **replicate a stream of tiles from one core to many**. For example, a sender at ``(0,0)`` could multicast a tile to receivers ``(1,0)``, ``(2,0)``, and ``(3,0)`` in one operation.
+
+Multicast uses this structure to **replicate a stream of tiles from one core to many**.
+For example, a sender at ``(0,0)`` could multicast a tile to receivers ``(1,0)``, ``(2,0)``, and ``(3,0)`` in one operation.
 
 Logical vs device coordinates
 =============================
@@ -394,32 +415,32 @@ They **cannot** be an arbitrary set of cores.
 For ``noc_async_write_multicast`` the documented and implemented constraints are:
 
 1. **Rectangular grid only (base API)**
-   The targets must be all Tensix worker cores in a **contiguous rectangle** ``[x_start..x_end] × [y_start..y_end]`` on the NoC, all at the same L1 address.
+   The targets must be all Tensix worker cores in a **contiguous rectangle** ``[x_start..x_end] x [y_start..y_end]`` on the NoC, all at the same L1 address.
    The docs say explicitly:
 
-   - “The destination nodes can only be a set of Tensix cores + L1 memory address.”
-   - “The destination nodes must form a **rectangular grid**.”
+   - "The destination nodes can only be a set of Tensix cores + L1 memory address."
+   - "The destination nodes must form a **rectangular grid**."
 
-   So: not “same row” or “same column” only; but **any axis‑aligned rectangle** is fine.
+   So: not "same row" or "same column" only; but **any axis-aligned rectangle** is fine.
 
-2. **L‑shaped variant = rectangle minus rectangle**
-   There is a separate API (multicast with exclude region) where you specify a rectangle and then subtract a rectangular “exclusion zone” to get an **L‑shaped** pattern, but even that is *“rect grid minus sub‑rect grid”*, not an arbitrary subset.
+2. **L-shaped variant = rectangle minus rectangle**
+   There is a separate API (multicast with exclude region) where you specify a rectangle and then subtract a rectangular "exclusion zone" to get an **L-shaped** pattern, but even that is *"rect grid minus sub-rect grid"*, not an arbitrary subset.
 
 3. **Same L1 address on all destinations**
-   All destination cores must use the **same L1 address**; the multicast NOC address encodes one local address plus the rectangular coord range, not per‑core offsets.
+   All destination cores must use the **same L1 address**; the multicast NOC address encodes one local address plus the rectangular coord range, not per-core offsets.
 
 4. **Sender cannot be in the destination set (for this API)**
    The base ``noc_async_write_multicast`` excludes the sender core; if you want the sender included you must use the ``*_loopback_src`` variant.
 
 5. **Cardinality is otherwise unconstrained**
-   Aside from “non‑zero” and “<= number of cores − 1”, the number of destinations can be as large as “full chip rectangle.”
+   Aside from "non-zero" and "<= number of cores - 1", the number of destinations can be as large as "full chip rectangle."
 
-So if you need to hit an **arbitrary set of scattered cores** (e.g. “this triangle” or a few disjoint islands), you have to implement that as:
+So if you need to hit an **arbitrary set of scattered cores** (e.g. "this triangle" or a few disjoint islands), you have to implement that as:
 
-- multiple multicast calls to different rectangles / L‑shapes, or
+- multiple multicast calls to different rectangles / L-shapes, or
 - fall back to multiple unicast writes.
 
-A single ``noc_async_write_multicast`` call always targets a **rectangular (or L‑shaped via the exclude API) contiguous region**, not an arbitrary mask of cores.
+A single ``noc_async_write_multicast`` call always targets a **rectangular (or L-shaped via the exclude API) contiguous region**, not an arbitrary mask of cores.
 
 
 
@@ -646,6 +667,9 @@ At the end of Exercise 1, you should have:
   * CBs and double buffering fit into the pipeline.
 
 
+Remind students to use ``tt-smi -r`` to reset the device after encountering hangs/issues.
+
+
 Applying multicast to multi core matmul
 ***************************************
 
@@ -655,8 +679,8 @@ In Lab 2, you reduced DRAM traffic in multi core matrix multiplication by:
 * Splitting the inner ``K`` dimension into **K-blocks** of size ``K_block_tiles``, so that ``Kt = K / TILE_WIDTH`` is divided into ``num_k_blocks = Kt / K_block_tiles`` equal chunks.
 * For each core and each K-block index ``b`` (``0 .. num_k_blocks - 1``), defining:
 
-  * ``A_slab(b)``: a **slab** of tiles from ``A`` of size ``M_block_tiles x K_block_tiles``, covering the rows of that core’s ``C_block`` and the K indices in block ``b``.
-  * ``B_slab(b)``: a **slab** of tiles from ``B`` of size ``K_block_tiles x N_block_tiles``, covering the columns of that core’s ``C_block`` and the K indices in block ``b``.
+  * ``A_slab(b)``: a **slab** of tiles from ``A`` of size ``M_block_tiles x K_block_tiles``, covering the rows of that core's ``C_block`` and the K indices in block ``b``.
+  * ``B_slab(b)``: a **slab** of tiles from ``B`` of size ``K_block_tiles x N_block_tiles``, covering the columns of that core's ``C_block`` and the K indices in block ``b``.
 
 Each core in Lab 2:
 
@@ -963,7 +987,7 @@ To maintain correctness:
 
 * You must not reuse a CB slot (for slab ``b+1``) until:
 
-  * The compute kernel has called ``cb_pop_front`` for the tile held in that slot (freeing it from the CB’s perspective), and
+  * The compute kernel has called ``cb_pop_front`` for the tile held in that slot (freeing it from the CB's perspective), and
   * The source kernel has ensured that all multicast transfers involving that tile have completed (using ``noc_async_write_barrier``).
 
 As long as these two conditions are enforced, double buffering and multicast coexist correctly with slab-based processing.
@@ -1003,7 +1027,7 @@ Follow these steps:
      * CB1 for ``B_slab(b)`` of size ``K_block_tiles * N_block_tiles`` tiles.
 
    * Loads ``A_slab(b)`` and ``B_slab(b)`` into CBs in slab row-major order.
-   * Uses the blocked compute structure shown in Lab 2’s pseudocode.
+   * Uses the blocked compute structure shown in Lab 2's pseudocode.
 
 #. **Assign core roles**
 
@@ -1027,15 +1051,15 @@ Follow these steps:
 
    * For each row ``y``, allocate:
 
-     * A row-specific “receivers ready” semaphore for A,
-     * A row-specific “tile sent” semaphore for A.
+     * A row-specific "receivers ready" semaphore for A,
+     * A row-specific "tile sent" semaphore for A.
 
    For B slabs:
 
    * For each column ``x``, allocate:
 
-     * A column-specific “receivers ready” semaphore for B,
-     * A column-specific “tile sent” semaphore for B.
+     * A column-specific "receivers ready" semaphore for B,
+     * A column-specific "tile sent" semaphore for B.
 
    These can be created on the corresponding source cores and passed as runtime arguments to all source and receiver kernels that need them.
 
@@ -1067,10 +1091,10 @@ Follow these steps:
        * For each K-block and each tile index in the slab:
 
          * Reserves CB0 space,
-         * Signals readiness to the row’s A-source core,
+         * Signals readiness to the row's A-source core,
            Observe that receivers no longer read data from DRAM, so they don't need to calculate offsets within the slab.
            All such computations are done by the sender core which pushes data into CB..
-         * Waits on the row’s A “tile sent” semaphore,
+         * Waits on the row's A "tile sent" semaphore,
          * Pushes the received tile into CB0.
 
    At the end of slab loading for K-block ``b``, every core in the row should have the same ``A_slab(b)`` in CB0.
@@ -1090,8 +1114,8 @@ Follow these steps:
      * For each K-block and each tile index in the slab:
 
        * Reserve CB1 space,
-       * Signal readiness to the column’s B-source core,
-       * Wait for the column’s B “tile sent” semaphore,
+       * Signal readiness to the column's B-source core,
+       * Wait for the column's B "tile sent" semaphore,
        * Push the received tile into CB1.
 
    After slab loading for each K-block, every core in a given column should have the same ``B_slab(b)`` in CB1.
@@ -1124,7 +1148,7 @@ Make sure to account for the fact that number of receivers for A may be differen
 
    * For each A-receiver core:
 
-     * Pass device coordinates of its row’s A-source core,
+     * Pass device coordinates of its row's A-source core,
      * Row-specific semaphore indices,
      * Slab tile count.
 
@@ -1221,3 +1245,8 @@ In this lab, you refined the multi core, slab-based matrix multiplication implem
   * The same compute and writer kernels from Lab 2.
 
 This lab shows how higher-level algorithmic structure (blocked matmul with slabs) can be combined with low-level architectural features (NoC multicast and semaphores) to further reduce DRAM traffic and potentially improve performance, without changing the core mathematical computation.
+
+Additional information about Tenstorrent NOC can be found in the following resources:
+* NoC (Network on Chip) Readme: https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md
+* Networks and Communication Lesson: https://github.com/tenstorrent/tt-vscode-toolkit/blob/main/content/lessons/cs-fundamentals-04-networks.md
+* Introduction to Data Movement in TT-Metal: https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/general/intro_to_dm.md
