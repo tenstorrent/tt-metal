@@ -21,6 +21,8 @@ void kernel_main() {
     const uint32_t tile_offset_col = get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t num_k_blocks = Kt / K_block_tiles;
+    const uint32_t A_slab_tiles = M_block_tiles * K_block_tiles;
+    const uint32_t B_slab_tiles = K_block_tiles * N_block_tiles;
 
     // The circular buffers to read the tiles into.
     constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
@@ -50,72 +52,37 @@ void kernel_main() {
     // Finally, construct the address generator for the second input buffer.
     const auto src1_addr_gen = TensorAccessor(src1_layout_args, src1_base_addr, tile_size_bytes_1);
 
-    // Kt dimension is split into K-blocks of size K_block_tiles,
-    // such that Kt = num_k_blocks * K_block_tiles.
-    // So we have K-block index b in range (0, 1, ..., num_k_blocks-1).
-    // Loop over all the K-blocks.
+    // Kt dimension is split into K-blocks. For each K-block, read full A and B slabs from DRAM,
+    // then push them into the circular buffers in one operation per slab.
     for (uint32_t b = 0; b < num_k_blocks; ++b) {
-        // Loop over all the slabs within a K-block, and push them into CB0 and CB1:
-
-        // ``A_slab(b)`` (size: ``M_block_tiles * K_block_tiles``).
-        // Order tiles within each slab in the CB in row-major order.
+        // ``A_slab(b)`` (size: M_block_tiles * K_block_tiles). Read entire slab, then push.
+        cb_reserve_back(cb_in0, A_slab_tiles);
+        uint32_t cb_in0_addr = get_write_ptr(cb_in0);
         for (uint32_t slab_a_row = 0; slab_a_row < M_block_tiles; slab_a_row++) {
-            // Compute effective row index of the slab within the A matrix
-            // based on the offset of the C_block that this core is responsible for,
-            // and the index of the current slab.
             uint32_t A_slab_effective_row = tile_offset_row + slab_a_row;
             for (uint32_t slab_a_col = 0; slab_a_col < K_block_tiles; slab_a_col++) {
-                // Make sure there is space for one tile in the circular buffer
-                cb_reserve_back(cb_in0, 1);
-
-                uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-                // Read the tiles from DRAM into the circular buffers.
-
-                // Compute effective column index of the slab within the A matrix
-                // based on the offset of the C_block that this core is responsible for,
-                // and the index of the current slab, with K_block_tiles as the stride.
                 uint32_t A_slab_effective_col = b * K_block_tiles + slab_a_col;
-                // Now that we have effective row and column indices, the rest is a simple
-                // 2D to 1D index conversion.
                 uint32_t a_tile_index = A_slab_effective_row * Kt + A_slab_effective_col;
-                // Recall that src0_addr_gen and src1_addr_gen are address generators for the input buffers.
-                // They are used to determine the address to read the tiles from. a_tile_index is the index of the tile
-                // to read.
                 noc_async_read_tile(a_tile_index, src0_addr_gen, cb_in0_addr);
-
-                // Wait until the read is done before signaling the circular buffer that the tile is ready.
-                noc_async_read_barrier();
-                // Mark the tile in circular buffer as ready.
-                // After this, any kernel (e.g. compute kernel) calling `cb_wait_front` will see this tile.
-                cb_push_back(cb_in0, 1);
+                cb_in0_addr += tile_size_bytes_0;
             }
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_in0, A_slab_tiles);
 
-        // ``B_slab(b)`` (size: ``K_block_tiles * N_block_tiles``).
-        // All the indexing logic is equivalent as for A_slab(b) above.
-        // Order tiles within each slab in the CB in row-major order.
+        // ``B_slab(b)`` (size: K_block_tiles * N_block_tiles). Read entire slab, then push.
+        cb_reserve_back(cb_in1, B_slab_tiles);
+        uint32_t cb_in1_addr = get_write_ptr(cb_in1);
         for (uint32_t slab_b_row = 0; slab_b_row < K_block_tiles; slab_b_row++) {
             uint32_t B_slab_effective_row = b * K_block_tiles + slab_b_row;
             for (uint32_t slab_b_col = 0; slab_b_col < N_block_tiles; slab_b_col++) {
-                // Make sure there is space for one tile in the circular buffer
-                cb_reserve_back(cb_in1, 1);
-
-                uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-                // Read the tiles from DRAM into the circular buffers.
-
                 uint32_t B_slab_effective_col = tile_offset_col + slab_b_col;
                 uint32_t b_tile_index = B_slab_effective_row * Nt + B_slab_effective_col;
-                // Recall that src0_addr_gen and src1_addr_gen are address generators for the input buffers.
-                // They are used to determine the address to read the tiles from. b_tile_index is the index of the tile
-                // to read.
                 noc_async_read_tile(b_tile_index, src1_addr_gen, cb_in1_addr);
-
-                // Wait until the read is done before signaling the circular buffer that the tile is ready.
-                noc_async_read_barrier();
-                // Mark the tile in circular buffer as ready.
-                // After this, any kernel (e.g. compute kernel) calling `cb_wait_front` will see this tile.
-                cb_push_back(cb_in1, 1);
+                cb_in1_addr += tile_size_bytes_1;
             }
         }
-    }  // K-block loop
+        noc_async_read_barrier();
+        cb_push_back(cb_in1, B_slab_tiles);
+    }
 }
