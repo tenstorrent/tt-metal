@@ -91,15 +91,17 @@ void kernel_main() {
     uint64_t remote_credit_addr =
         get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, credit_address);
     volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_address);
-    DPRINT << "socket forward wait for handshake" << ENDL();
+    DPRINT << "socket forward waiting for credit" << ENDL();
     while (*credit_addr == 0) {
         invalidate_l1_cache();
     }
+    DPRINT << "socket forward received credit" << ENDL();
     downstream_data_packet_header_addr->to_noc_unicast_atomic_inc(
         NocUnicastAtomicIncCommandHeader{remote_credit_addr, 1});
     downstream_fabric_connection.wait_for_empty_write_slot();
     downstream_fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    DPRINT << "socket forward sent credit downstream" << ENDL();
     // Done handshake
 
     for (uint32_t i = 0; i < 100; ++i) {
@@ -150,7 +152,9 @@ void kernel_main() {
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
         }
+        DPRINT << "socket forward on latency it: " << BF16(i) << ENDL();
     }
+    DPRINT << "socket forward performed latency tests" << ENDL();
     update_socket_config(send_socket);
     update_socket_config(recv_socket);
     upstream_fabric_connection.close();

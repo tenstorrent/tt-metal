@@ -111,6 +111,7 @@ void kernel_main() {
     // This allows us to accurately measure loopback latency
 
     // 1. Send credit downstream
+    DPRINT << "Send async sent credit downstream" << ENDL();
     uint64_t remote_credit_addr =
         get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, credit_address);
     volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_address);
@@ -123,6 +124,7 @@ void kernel_main() {
     while (*credit_addr == 0) {
         invalidate_l1_cache();
     }
+    DPRINT << "Send async received credit " << ENDL();
     // Measure roundtrip latency: Time it takes for the data to be picked up from L1 + pipeline latency
     uint32_t measurement_addr = credit_address;
     auto l1_read_addr = get_read_ptr(data_cb_id);
@@ -141,6 +143,7 @@ void kernel_main() {
             dst_addr += whole_packet_size;
             l1_read_addr += whole_packet_size;
         }
+        DPRINT << "Send async sent on link0" << ENDL();
 
         for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
             write_data_to_remote_core_with_ack(
@@ -153,6 +156,8 @@ void kernel_main() {
             dst_addr += whole_packet_size;
             l1_read_addr += whole_packet_size;
         }
+        DPRINT << "Send async sent on link1" << ENDL();
+
         if constexpr (aligned_partial_packet_size) {
             write_data_to_remote_core_with_ack(
                 fabric_connection_2,
@@ -173,19 +178,27 @@ void kernel_main() {
         //     }
         //     val++;
         // }
+        DPRINT << "send async Received pages" << ENDL();
         socket_pop_pages(receiver_socket, 1);
+        DPRINT << "send async Popped pages" << ENDL();
         if ((i & 7) == 0) {
+            DPRINT << "send async start" << ENDL();
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
+            DPRINT << "send async end" << ENDL();
         }
         uint64_t end_timestamp = get_timestamp();
         uint64_t latency = end_timestamp - start_timestamp;
         *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(measurement_addr) = latency;
         measurement_addr += sizeof(uint64_t);
+
+        DPRINT << "Send async on latency it: " << BF16(i) << ENDL();
     }
+    DPRINT << "Send async Completed latency recordings" << ENDL();
+
     update_socket_config(sender_socket);
     update_socket_config(receiver_socket);
     fabric_connection.close();

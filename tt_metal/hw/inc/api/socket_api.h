@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "internal/circular_buffer_interface.h"
 #include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "noc_parameters.h"
 #include "internal/risc_attribs.h"
 #include "hostdev/socket.h"
@@ -297,9 +298,13 @@ FORCE_INLINE void fabric_socket_notify_sender_stateful(
     uint64_t upstream_bytes_acked_noc_addr) {
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
+    DPRINT << "unicast_addr" << ENDL();
+    // dead here
     fabric_connection.wait_for_empty_write_slot();
+    DPRINT << "empty writie slot" << ENDL();
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+    DPRINT << "send payload" << ENDL();
 }
 #endif
 
