@@ -62,11 +62,26 @@ def tilize_8x32_kernel(input_tensor, output_tensor):
     # Input is [8, N] where N should be divisible by 32
     H = shard_shape[0]  # Should be 8
     W = shard_shape[1]  # N (256 or 64)
-    assert H == 8, f"Expected height=8, got {H}"
-    assert W % 32 == 0, f"Width must be divisible by 32, got {W}"
 
-    # Tilize up to 8x256 at a time
-    block_size = min(8, W // 32)
+    # Use explicit ValueError instead of assert (which can be stripped with -O optimization)
+    if H != 8:
+        raise ValueError(f"Expected height=8, got {H}")
+    if W % 32 != 0:
+        raise ValueError(f"Width must be divisible by 32, got {W}")
+
+    # Calculate number of 8x32 tiles along width
+    num_tiles = W // 32
+
+    # This kernel supports up to width 256 (8 tiles of 32)
+    # Enforce this limit explicitly so partial results don't silently occur
+    if num_tiles > 8:
+        raise ValueError(
+            f"tilize_8x32 kernel supports up to width 256 (8 tiles of 32), got width {W} ({num_tiles} tiles). "
+            f"For larger widths, loop over chunks and call this kernel multiple times with appropriate CB offsets."
+        )
+
+    # Tilize all tiles (up to 8 tiles maximum)
+    block_size = num_tiles
 
     # CB indices
     in_cb = 0
