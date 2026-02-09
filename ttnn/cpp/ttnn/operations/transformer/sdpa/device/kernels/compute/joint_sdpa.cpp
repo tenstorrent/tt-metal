@@ -7,7 +7,7 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include "compute_common.hpp"
 
 void kernel_main() {

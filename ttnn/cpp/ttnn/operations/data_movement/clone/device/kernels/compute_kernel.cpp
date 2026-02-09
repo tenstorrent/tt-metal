@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
 
 void kernel_main() {
     uint32_t src_cb_id = get_compile_time_arg_val(0);

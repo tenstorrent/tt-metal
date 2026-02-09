@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from models.common.utility_functions import is_watcher_enabled, is_n300
 
 torch.manual_seed(0)
 
@@ -238,6 +239,20 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
     ),
 )
 def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, groups, dtype, core_grid, layout):
+    # Test failing with watcher enabled on N300 only
+    if (
+        is_watcher_enabled()
+        and is_n300()
+        and input_shapes == ((1, 1, 512, 128), (1, 1, 512, 64))
+        and output_shape == (1, 1, 512, 192)
+        and core_grid == ttnn.CoreGrid(x=8, y=1)
+        and layout == ttnn.TILE_LAYOUT
+        and dtype == ttnn.int32
+        and groups == 1
+        and dim == 3
+    ):
+        pytest.skip("Test is hanging with watcher enabled github issue #29557")
+
     torch_input_tensors = [random_torch_tensor(dtype, shapes) for idx, shapes in enumerate(input_shapes)]
 
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:

@@ -158,6 +158,7 @@ from ttnn._ttnn.fabric import (
     FabricTensixConfig,
     FabricUDMMode,
     FabricManagerMode,
+    FabricRouterConfig,
     set_fabric_config,
     get_tt_fabric_packet_header_size_bytes,
     get_tt_fabric_max_payload_size_bytes,
@@ -416,7 +417,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology
+from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,

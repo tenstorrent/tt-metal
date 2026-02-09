@@ -78,6 +78,10 @@ public:
     virtual int num_dram_channels() const = 0;
     virtual uint32_t l1_size_per_core() const = 0;
     virtual uint32_t dram_size_per_channel() const = 0;
+    // Returns the AI clock frequency in MHz for this device.
+    // This value is queried from the actual hardware via the cluster API
+    // and reflects the device's current operating frequency.
+    virtual int get_clock_rate_mhz() const = 0;
     virtual CoreCoord grid_size() const = 0;
     virtual CoreCoord logical_grid_size() const = 0;
     virtual CoreCoord dram_grid_size() const = 0;

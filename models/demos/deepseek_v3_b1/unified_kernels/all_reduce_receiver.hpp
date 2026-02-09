@@ -21,7 +21,7 @@ using namespace tt::tt_fabric::linear::experimental;
 using namespace tt::tt_fabric::common::experimental;
 
 #elif defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -50,7 +50,8 @@ struct AllReduceReceiver {
         uint32_t numStandardTiles,
         uint32_t cbResidual,
         uint32_t hasResidual,
-        uint32_t usingPersistentBuffer>
+        uint32_t usingPersistentBuffer,
+        uint32_t skipLocalPush = 0>  // Skip cb_reserve/push on cb_in2 when fused with gather
     struct ReaderCTArgs {
         static constexpr uint32_t packet_header_cb_id = packetHeaderCbId;
         static constexpr uint32_t cb_in1 = cbIn1;
@@ -62,6 +63,7 @@ struct AllReduceReceiver {
         static constexpr uint32_t cb_residual = cbResidual;
         static constexpr bool has_residual = hasResidual;
         static constexpr bool using_persistent_buffer = usingPersistentBuffer;
+        static constexpr bool skip_local_push = skipLocalPush;
     };
 
     // Compute CTArgs (TRISC)
@@ -151,8 +153,11 @@ struct AllReduceReceiver {
             }
 
             // Push local and residual tiles to compute immediately (they're ready)
-            cb_reserve_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
-            cb_push_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
+            // Skip local push if data is already in CB (e.g., from preceding gather operation)
+            if constexpr (!ReaderCT::skip_local_push) {
+                cb_reserve_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
+                cb_push_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
+            }
 
             if constexpr (ReaderCT::has_residual) {
                 cb_reserve_back(ReaderCT::cb_residual, ReaderCT::num_standard_tiles);
