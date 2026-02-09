@@ -51,6 +51,8 @@ struct CoreChainInfo {
     CoreCoord prev_physical = CoreCoord{0, 0};
     CoreCoord next_physical = CoreCoord{0, 0};
     uint32_t next_core_q_chunks = 0;
+    bool use_mcast = false;
+    uint32_t mcast_num_dests = 0;  // receiver count (chain_size - 1), injector only
 };
 
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
@@ -378,6 +380,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     reader_compile_time_args.push_back(0);  // sender_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -490,28 +493,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
 
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
-
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
-
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+    // NOTE: CreateKernel calls are deferred until after chain construction so that
+    // the mcast_enabled compile-time arg can be determined first.
 
     // Create circular buffers
 
@@ -676,6 +659,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     std::vector<CoreChainInfo> core_chain_info(num_cores);
     const uint32_t total_heads = B * NQH;
     std::vector<std::vector<HeadSegmentRef>> head_segments;
+    uint32_t mcast_chains = 0;
 
     if (!is_causal && !is_chunked) {
         head_segments.resize(total_heads);
@@ -878,7 +862,150 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             "Chain construction complete: {} chains built, {} skipped due to conflicts",
             chains_built,
             chains_skipped);
+
+        // Third pass: Check multicast eligibility — all-or-nothing policy.
+        // First, check if ALL multi-core chains are eligible. Only if every chain
+        // qualifies do we configure mcast (compile-time decision for the kernel).
+        struct McastCandidate {
+            std::vector<uint32_t> core_indices;
+            uint32_t ref_q_chunks;
+        };
+        std::vector<McastCandidate> candidates;
+        bool all_eligible = true;
+        uint32_t total_multi_core_chains = 0;
+
+        for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
+            auto& segments = head_segments[head_id];
+            if (segments.size() < 2) {
+                continue;
+            }
+
+            // Collect chain core indices that actually participate in this head's chain
+            std::vector<uint32_t> chain_core_indices;
+            for (const auto& seg : segments) {
+                if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
+                    core_chain_info[seg.core_idx].batch == (head_id / NQH) &&
+                    core_chain_info[seg.core_idx].head == (head_id % NQH)) {
+                    chain_core_indices.push_back(seg.core_idx);
+                }
+            }
+
+            if (chain_core_indices.size() < 2) {
+                continue;
+            }
+
+            total_multi_core_chains++;
+
+            // Check eligibility condition 1: All physical cores share the same Y coordinate
+            const uint32_t ref_y = core_work[chain_core_indices[0]].physical_core.y;
+            bool same_row = true;
+            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
+                if (core_work[chain_core_indices[ci]].physical_core.y != ref_y) {
+                    same_row = false;
+                    break;
+                }
+            }
+
+            if (!same_row) {
+                all_eligible = false;
+                log_debug(tt::LogOp, "Head {}: mcast ineligible - cores span multiple rows", head_id);
+                break;
+            }
+
+            // Note: Physical X contiguity is NOT required. Harvested (non-worker) cores
+            // in the multicast rectangle safely discard the data.
+
+            // Check eligibility condition 2: All chain cores have equal q_chunk_count
+            const uint32_t ref_q_chunks = core_chain_info[chain_core_indices[0]].q_chunk_count;
+            bool equal_q_chunks = true;
+            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
+                if (core_chain_info[chain_core_indices[ci]].q_chunk_count != ref_q_chunks) {
+                    equal_q_chunks = false;
+                    break;
+                }
+            }
+
+            if (!equal_q_chunks) {
+                all_eligible = false;
+                log_debug(tt::LogOp, "Head {}: mcast ineligible - unequal q_chunk_count across chain", head_id);
+                break;
+            }
+
+            candidates.push_back(McastCandidate{std::move(chain_core_indices), ref_q_chunks});
+        }
+
+        // Only configure mcast if ALL multi-core chains are eligible (all-or-nothing)
+        if (all_eligible && !candidates.empty()) {
+            mcast_chains = candidates.size();
+            for (const auto& cand : candidates) {
+                const uint32_t injector_idx = cand.core_indices[0];
+                const uint32_t chain_size = cand.core_indices.size();
+                const uint32_t num_receivers = chain_size - 1;
+
+                const CoreCoord first_receiver_phys = core_work[cand.core_indices[1]].physical_core;
+                const CoreCoord last_receiver_phys = core_work[cand.core_indices[chain_size - 1]].physical_core;
+
+                // Configure injector
+                auto& injector_chain = core_chain_info[injector_idx];
+                injector_chain.use_mcast = true;
+                injector_chain.prev_physical = first_receiver_phys;  // mcast rect start
+                injector_chain.next_physical = last_receiver_phys;   // mcast rect end
+                injector_chain.mcast_num_dests = num_receivers;
+                injector_chain.next_core_q_chunks = cand.ref_q_chunks;
+
+                // Configure receivers
+                for (size_t ci = 1; ci < cand.core_indices.size(); ++ci) {
+                    auto& receiver_chain = core_chain_info[cand.core_indices[ci]];
+                    receiver_chain.use_mcast = true;
+                    receiver_chain.prev_physical = core_work[injector_idx].physical_core;
+                    receiver_chain.is_sink = true;
+                }
+
+                log_debug(
+                    tt::LogOp,
+                    "Head: mcast enabled - {} receivers, injector core {} -> rect ({},{}) to ({},{})",
+                    num_receivers,
+                    injector_idx,
+                    first_receiver_phys.x,
+                    first_receiver_phys.y,
+                    last_receiver_phys.x,
+                    last_receiver_phys.y);
+            }
+        }
+
+        log_info(
+            tt::LogOp,
+            "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
+            mcast_chains,
+            total_multi_core_chains);
     }
+
+    // Update mcast_enabled compile-time arg now that chain construction is complete
+    reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
+
+    // Create kernels (deferred until after chain construction for mcast_enabled flag)
+    auto reader_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
+        core_grid,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
+
+    auto writer_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
+        core_grid,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+
+    auto compute_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp",
+        core_grid,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_compile_time_args,
+            .defines = defines});
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -947,6 +1074,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
             reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
             reader_args.push_back(chain.next_core_q_chunks);
+            reader_args.push_back(chain.mcast_num_dests);
         }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
