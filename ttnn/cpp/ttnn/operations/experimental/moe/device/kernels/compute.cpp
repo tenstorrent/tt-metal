@@ -110,8 +110,6 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
-    uint32_t in0_offset_per_expert = 0;
-    uint32_t out_offset_per_expert = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         //---------------------------------------------------------------------
         // Compute in @ {W0,W1}
@@ -142,10 +140,10 @@ void kernel_main() {
 
             // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
             // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
-            TTI_SEMWAIT(
+            PACK(TTI_SEMWAIT(
                 p_stall::STALL_TDMA | p_stall::STALL_CFG,
                 semaphore::t6_sem(semaphore::MATH_PACK),
-                p_stall::STALL_ON_ZERO);
+                p_stall::STALL_ON_ZERO));
 
             // Make SFPU access the appropriate half of the destination registers
             PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
