@@ -207,7 +207,7 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
     return false;
 }
 
-inline auto is_binary_ng_only(const Tensor& a, const auto& b) {
+inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binary_op_type) {
     if constexpr (requires {
                       b.dtype();
                       b.is_sharded();
@@ -231,22 +231,11 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b) {
             a.logical_shape()[-1] == 1) {
             return true;
         }
-        // Legacy binary doesn't support subtile broadcasts for non-ADD/SUB/MUL ops
-        const auto& a_shape = a.logical_shape();
-        const auto& b_shape = b.logical_shape();
-        bool width_broadcast_block_format =
-            ((a_shape[-1] == 1 && b_shape[-1] > 1) || (b_shape[-1] == 1 && a_shape[-1] > 1)) &&
-            (is_block_format(a.dtype()) || is_block_format(b.dtype()));
-
-        if ((any_non_llk_row_broadcasted(a, b) || width_broadcast_block_format) &&
+        // Legacy binary doesn't support subtile broadcast for non-ADD/SUB/MUL ops with block format
+        if (any_subtile_broadcasted_block_format(a, b) &&
             (binary_op_type != BinaryOpType::ADD && binary_op_type != BinaryOpType::SUB &&
              binary_op_type != BinaryOpType::MUL)) {
             return true;
-        }
-
-        if (any_non_llk_row_broadcasted(a, b) and (is_block_format(a.dtype()) or is_block_format(b.dtype()))) {
-            // TODO
-            // return true;
         }
     }
     return false;
@@ -319,22 +308,24 @@ inline auto invoke_binary_ng(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
-                         (not detail::is_binary_ng_only(lhs, rhs))) {
+                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
         const std::vector activations(post_activations.begin(), post_activations.end());
         const std::optional lhs_activation =
             lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
 
         if constexpr (requires { detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
             auto [a, b] = detail::preprocess_inputs(binary_op_type, lhs, rhs);
-            std::cout << "legacy binary" << std::endl;
+            // std::cout << "Legacy binary" << std::endl;
+
             return ttnn::prim::binary(a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
         } else {
-            std::cout << "legacy binary" << std::endl;
+            // std::cout << "Legacy binary" << std::endl;
             return ttnn::prim::binary(
                 lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
         }
     }
 
+    // std::cout << "NG binary" << std::endl;
     const auto a_dtype = lhs.dtype();
     const DataType b_dtype = [&] {
         if constexpr (requires { rhs.dtype(); }) {
@@ -669,7 +660,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
-                         (not detail::is_binary_ng_only(lhs, rhs))) {
+                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
         {
             return detail::binary_impl(binary_op_type, lhs, rhs, dtype, memory_config, output);
         }
