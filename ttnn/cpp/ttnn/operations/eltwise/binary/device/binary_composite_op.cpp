@@ -639,12 +639,6 @@ Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    // // INT32 inputs are handled by the kernel directly via binary_ng, skip composite path
-    // const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    // if (is_int32) {
-    //     return ttnn::prim::binary_ng(
-    //         input_a, input_b, BinaryOpType::FMOD, std::nullopt, output_mem_config, std::nullopt);
-    // }
     return ttnn::prim::binary_ng(input_a, input_b, BinaryOpType::FMOD, std::nullopt, output_mem_config, std::nullopt);
 }
 
