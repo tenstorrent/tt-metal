@@ -38,6 +38,10 @@ FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-build-venv-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="${PYTHON_ENV_DIR}/bin:/usr/local/bin:${PATH}"
+
+# Install uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
 # Install Python and required build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,9 +50,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Install uv from official distroless image
-COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
 # Create relocatable virtual environment and install base packages
 # umask 000 ensures the venv is world-writable for runtime pip installs
@@ -71,7 +72,11 @@ FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-test-venv-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="${PYTHON_ENV_DIR}/bin:/usr/local/bin:${PATH}"
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+# Install uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
 # Install Python and required build dependencies
 # Some packages require compilation, so we need build-essential and dev headers
@@ -87,9 +92,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Install uv from official distroless image
-COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
 # Create directory structure for requirements files
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
@@ -111,10 +113,10 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
 # setuptools is installed early because mmcv needs pkg_resources at build time
 # but doesn't declare it as a build dependency; --no-build-isolation-package mmcv
 # tells uv to skip build isolation for mmcv so it can find setuptools from the venv
+
 RUN umask 000 && \
     uv venv --relocatable $PYTHON_ENV_DIR && \
-    export PATH="$PYTHON_ENV_DIR/bin:$PATH" && \
-    uv pip install --no-cache setuptools && \
+    uv pip install --no-cache uv build setuptools && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
     uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation-package mmcv -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
