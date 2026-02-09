@@ -373,7 +373,13 @@ void kernel_main() {
                     }
                 }
 
-                for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
+                // Backward worker: write second half of tiles in the packet
+                uint32_t start_tile = 0;
+                uint32_t end_tile = tiles_to_put_in_current_packet;
+                if (tiles_to_put_in_current_packet > 1) {
+                    start_tile = tiles_to_put_in_current_packet / 2;
+                }
+                for (uint32_t i = start_tile; i < end_tile; i++) {
                     noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
                 }
                 noc_async_write_barrier();
@@ -396,7 +402,13 @@ void kernel_main() {
                             NocUnicastCommandHeader{noc_addrs[0]});
                     }
                 }
-                for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
+                // Forward worker: write first half of tiles in the packet
+                uint32_t start_tile = 0;
+                uint32_t end_tile = tiles_to_put_in_current_packet;
+                if (tiles_to_put_in_current_packet > 1) {
+                    end_tile = tiles_to_put_in_current_packet / 2;
+                }
+                for (uint32_t i = start_tile; i < end_tile; i++) {
                     noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
                 }
                 noc_async_write_barrier();
