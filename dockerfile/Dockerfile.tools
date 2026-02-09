@@ -251,7 +251,6 @@ RUN dnf install -y \
     git \
     libevent-devel \
     libibverbs-devel \
-    libfabric-devel \
     libmpc-devel \
     libzstd-devel \
     mpfr-devel \
