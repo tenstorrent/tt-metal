@@ -340,6 +340,48 @@ inline __attribute__((always_inline)) void noc_increment_nonposted_writes_issued
     noc_nonposted_writes_num_issued[noc] += delta;
 }
 
+/**
+ * Increments the read transactions issued counter by the specified delta.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                    | Data type | Valid range | Required |
+ * |----------|------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                      | uint32_t  | 0 or 1      | True     |
+ * | delta    | Amount to increment the counter by             | uint32_t  | 0..2^32-1   | True     |
+ */
+inline __attribute__((always_inline)) void noc_increment_reads_issued(uint32_t noc, uint32_t delta) {
+    noc_reads_num_issued[noc] += delta;
+}
+
+/**
+ * Increments the nonposted atomic acknowledgments counter by the specified delta.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                    | Data type | Valid range | Required |
+ * |----------|------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                      | uint32_t  | 0 or 1      | True     |
+ * | delta    | Amount to increment the counter by             | uint32_t  | 0..2^32-1   | True     |
+ */
+inline __attribute__((always_inline)) void noc_increment_nonposted_atomics_acked(uint32_t noc, uint32_t delta) {
+    noc_nonposted_atomics_acked[noc] += delta;
+}
+
+/**
+ * Increments the posted write transactions issued counter by the specified delta.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                    | Data type | Valid range | Required |
+ * |----------|------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                      | uint32_t  | 0 or 1      | True     |
+ * | delta    | Amount to increment the counter by             | uint32_t  | 0..2^32-1   | True     |
+ */
+inline __attribute__((always_inline)) void noc_increment_posted_writes_issued(uint32_t noc, uint32_t delta) {
+    noc_posted_writes_num_issued[noc] += delta;
+}
+
 // True if hardware nonposted-writes-sent count has reached expected_count (wrap-around safe).
 inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_at_count(uint32_t noc, uint32_t expected_count) {
     uint32_t sent = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
@@ -421,6 +463,25 @@ inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr(uint32_t noc
 // Debug only: returns NOC_AT_LEN_BE for cmd_buf (transaction length). Requires NOC_LOGGING_ENABLED.
 inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t noc, uint32_t cmd_buf) {
     return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN_BE);
+}
+
+// Returns true if the command buffer has the NOC_CMD_VC_LINKED bit set in its control register.
+inline __attribute__((always_inline)) bool noc_cmd_buf_is_linked(uint32_t noc, uint32_t cmd_buf) {
+    return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CTRL) & NOC_CMD_VC_LINKED;
+}
+
+/**
+ * Sets the nonposted write acknowledgments counter to the specified value.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                    | Data type | Valid range | Required |
+ * |----------|------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                      | uint32_t  | 0 or 1      | True     |
+ * | val      | Value to set the counter to                    | uint32_t  | 0..2^32-1   | True     |
+ */
+inline __attribute__((always_inline)) void noc_set_nonposted_writes_acked(uint32_t noc, uint32_t val) {
+    noc_nonposted_writes_acked[noc] = val;
 }
 
 inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {

@@ -376,13 +376,8 @@ __attribute__((noinline)) void quick_push() {
     (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)))
 
     // tt-metal/issues/22578 - forbid quick_push if any cmd buffer has NOC_CMD_VC_LINKED bit set
-    auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
-    uint32_t read_buf_reg = NOC_CMD_BUF_READ_REG(noc_index, read_cmd_buf, NOC_CTRL);
-    uint32_t write_buf_reg = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
-    uint32_t write_reg_buf_reg = NOC_CMD_BUF_READ_REG(noc_index, write_reg_cmd_buf, NOC_CTRL);
-    uint32_t write_at_buf_reg = NOC_CMD_BUF_READ_REG(noc_index, write_at_cmd_buf, NOC_CTRL);
-    if (linked_bit_is_set(read_buf_reg) || linked_bit_is_set(write_buf_reg) || linked_bit_is_set(write_reg_buf_reg) ||
-        linked_bit_is_set(write_at_buf_reg)) {
+    if (noc_cmd_buf_is_linked(noc_index, read_cmd_buf) || noc_cmd_buf_is_linked(noc_index, write_cmd_buf) ||
+        noc_cmd_buf_is_linked(noc_index, write_reg_cmd_buf) || noc_cmd_buf_is_linked(noc_index, write_at_cmd_buf)) {
         return;
     }
     if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS] || get_dropped_timestamps(myRiscID)) {
@@ -461,9 +456,7 @@ void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
     if (!linked) {
         return;
     }
-    uint32_t cmd_buf_reg_val = NOC_CMD_BUF_READ_REG(noc_index, cmd_buf, NOC_CTRL);
-    bool cmd_buf_currently_linked = cmd_buf_reg_val & NOC_CMD_VC_LINKED;
-    if (!cmd_buf_currently_linked) {
+    if (!noc_cmd_buf_is_linked(noc_index, cmd_buf)) {
         kernel_profiler::quick_push();
     }
 #endif
