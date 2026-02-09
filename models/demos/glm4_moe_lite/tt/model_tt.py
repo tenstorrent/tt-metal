@@ -20,6 +20,7 @@ from models.common.rmsnorm import RMSNorm
 from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.demos.glm4_moe_lite.tt.decoder_layer_tt import (
     prepare_decode_rope_and_positions_tt,
+    prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt,
     run_decoder_layer_decode_one_step_update_cache_tt,
     run_decoder_layer_prefill_update_cache_tt,
 )
@@ -534,7 +535,10 @@ class Glm4MoeLiteDenseOnlyTT:
                 token_count=profile_token_count,
                 layer_filter=profile_layer,
             )
-        return torch.stack(out_logits, dim=0).unsqueeze(1)  # [B,1,vocab]
+        # vLLM expects prefill logits as [B, 1, vocab] so it can slice the last
+        # prompt position with `logits[:, -1, :]`. Each entry in out_logits is
+        # [1, vocab], so stacking already yields [B, 1, vocab].
+        return torch.stack(out_logits, dim=0)  # [B, 1, vocab]
 
     @torch.no_grad()
     def decode(
@@ -546,12 +550,14 @@ class Glm4MoeLiteDenseOnlyTT:
         kv_cache: list[ttnn.Tensor],  # per-layer KVPE cache tensors
         sampling_params: Any | None = None,
         enable_trace: bool = False,
-    ) -> torch.Tensor:
+    ) -> Any:
         """Run a decode step, updating KV cache.
 
         Returns:
         - logits on host as torch float32 [active, 1, vocab] when sampling_params is None
-        - next token ids on host as torch int32 [active] when sampling_params is not None
+        - when sampling_params is not None (sample-on-device):
+          - enable_trace=True: returns TT device tensors for async readback by the vLLM wrapper
+          - enable_trace=False: returns next token ids on host as torch int32 [active]
         """
         if tokens.ndim != 2 or tokens.shape[1] != 1:
             raise ValueError(f"expected tokens [B,1], got {tuple(tokens.shape)}")
@@ -604,6 +610,23 @@ class Glm4MoeLiteDenseOnlyTT:
         tt_positions, cos_batch, sin_batch = prepare_decode_rope_and_positions_tt(
             device=self.device, rope=self.rope, positions=positions
         )
+
+        # Decode-mode RoPE is faster but has been observed to be brittle during
+        # bring-up. Default to the non-decode rotary kernel for correctness,
+        # and only enable decode-mode when tracing (or explicitly requested).
+        use_decode_rope = enable_trace or os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip() == "1"
+        cos_decode = sin_decode = trans_decode = rope_sharded_cfg = None
+        if use_decode_rope:
+            cos_decode, sin_decode, trans_decode, rope_sharded_cfg = (
+                prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
+                    device=self.device,
+                    cos_batch=cos_batch,
+                    sin_batch=sin_batch,
+                    trans_matrix=self.rope["trans_matrix"],
+                    batch=active,
+                    rope_dim=int(self.hparams.qk_rope_head_dim),
+                )
+            )
         if profile_on:
             decode_profile["prep_inputs_s"] = decode_profile.get("prep_inputs_s", 0.0) + (time.perf_counter() - t0)
 
@@ -613,6 +636,10 @@ class Glm4MoeLiteDenseOnlyTT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.reshape(x, (1, active, 1, int(self.hparams.hidden_size)))
         x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
+        # Some TT tile-layout ops materialize/preserve tile padding in the logical
+        # shape. Keep the decode batch dimension tight so downstream kernels (MoE,
+        # FlashMLA, RoPE) do not execute inflated work on padded lanes.
+        x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, int(self.hparams.hidden_size)])
         if profile_on:
             decode_profile["embed_s"] = decode_profile.get("embed_s", 0.0) + (time.perf_counter() - t0)
 
@@ -631,10 +658,15 @@ class Glm4MoeLiteDenseOnlyTT:
                 cos_batch=cos_batch,
                 sin_batch=sin_batch,
                 trans_matrix=self.rope["trans_matrix"],
+                cos_decode=cos_decode,
+                sin_decode=sin_decode,
+                trans_decode=trans_decode,
+                rope_sharded_cfg=rope_sharded_cfg,
                 w=w,
                 hparams=self.hparams,
                 moe_runtime=self.moe_runtime,
                 profile=layer_profile,
+                use_decode_rope=use_decode_rope,
             )
             if layer_profile is not None:
                 for key, value in layer_profile.items():
@@ -642,6 +674,12 @@ class Glm4MoeLiteDenseOnlyTT:
                     decode_profile[stage_key] = decode_profile.get(stage_key, 0.0) + float(value)
             ttnn.deallocate(x)
             x = x_next
+
+        if use_decode_rope:
+            assert cos_decode is not None and sin_decode is not None and trans_decode is not None
+            ttnn.deallocate(cos_decode)
+            ttnn.deallocate(sin_decode)
+            ttnn.deallocate(trans_decode)
 
         t0 = time.perf_counter() if profile_on else 0.0
         x = self.final_norm(x, mode="decode")
@@ -792,7 +830,6 @@ class Glm4MoeLiteDenseOnlyTT:
 
         if (
             self._trace_tokens_tt is not None
-            and self._trace_x_tt is not None
             and self._trace_positions_tt is not None
             and self._trace_rot_idxs_tt is not None
             and self._trace_cos_batch_tt is not None
@@ -805,11 +842,54 @@ class Glm4MoeLiteDenseOnlyTT:
         ):
             return
 
-        # Shapes changed. Drop any previous trace.
+        # Shapes changed. Drop any previous trace and free associated buffers.
+        if self._decode_trace_id_sampling is not None:
+            # Ensure no in-flight trace replay/capture uses these buffers.
+            try:
+                ttnn.synchronize_device(self.device)
+            except Exception:
+                pass
+            try:
+                ttnn.release_trace(self.device, self._decode_trace_id_sampling)
+            except Exception:
+                # Best-effort: if release fails (e.g. trace id already gone),
+                # we still want to proceed with re-capture.
+                pass
         self._decode_trace_id_sampling = None
+        for t in (self._trace_logits_tt, self._trace_top1_values_tt, self._trace_top1_indices_tt):
+            if t is not None:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
         self._trace_logits_tt = None
         self._trace_top1_values_tt = None
         self._trace_top1_indices_tt = None
+
+        # Free old persistent inputs before re-allocating them. These are kept
+        # alive across trace replays; without explicit deallocation, repeated
+        # shape changes can leak device buffers and eventually OOM.
+        for t in (
+            self._trace_tokens_tt,
+            self._trace_positions_tt,
+            self._trace_rot_idxs_tt,
+            self._trace_cos_batch_tt,
+            self._trace_sin_batch_tt,
+            self._trace_trans_matrix_tt,
+            self._trace_page_table_tt,
+        ):
+            if t is not None:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+        self._trace_tokens_tt = None
+        self._trace_positions_tt = None
+        self._trace_rot_idxs_tt = None
+        self._trace_cos_batch_tt = None
+        self._trace_sin_batch_tt = None
+        self._trace_trans_matrix_tt = None
+        self._trace_page_table_tt = None
 
         is_mesh_device = _is_mesh_device(self.device)
         mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None
@@ -819,15 +899,6 @@ class Glm4MoeLiteDenseOnlyTT:
             device=self.device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
-        hidden = int(self.hparams.hidden_size)
-        self._trace_x_tt = ttnn.from_torch(
-            torch.zeros((1, 1, batch, hidden), dtype=torch.bfloat16),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
@@ -914,7 +985,6 @@ class Glm4MoeLiteDenseOnlyTT:
         """Copy host decode inputs into persistent device tensors."""
         if (
             self._trace_tokens_tt is None
-            or self._trace_x_tt is None
             or self._trace_positions_tt is None
             or self._trace_rot_idxs_tt is None
             or self._trace_cos_batch_tt is None
@@ -943,22 +1013,6 @@ class Glm4MoeLiteDenseOnlyTT:
             mesh_mapper=mapper,
         )
         ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens_tt)
-
-        # Build and copy embedded token input for the trace.
-        x = ttnn.embedding(
-            self._trace_tokens_tt,
-            self.embed_w,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        batch = int(tokens.shape[0])
-        hidden = int(self.hparams.hidden_size)
-        x = ttnn.reshape(x, (1, batch, 1, hidden))
-        x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
-        ttnn.copy(x, self._trace_x_tt)
-        ttnn.deallocate(x)
 
         host_pos = ttnn.from_torch(
             start_pos.to(torch.int32),
@@ -1013,7 +1067,6 @@ class Glm4MoeLiteDenseOnlyTT:
     def _decode_step_tt_logits(self, *, kv_cache: list[ttnn.Tensor]) -> ttnn.Tensor:
         """Decode step using persistent TT inputs, producing device logits."""
         assert self._trace_tokens_tt is not None
-        assert self._trace_x_tt is not None
         assert self._trace_positions_tt is not None
         assert self._trace_cos_batch_tt is not None
         assert self._trace_sin_batch_tt is not None
@@ -1025,7 +1078,21 @@ class Glm4MoeLiteDenseOnlyTT:
         cos_batch = self._trace_cos_batch_tt
         sin_batch = self._trace_sin_batch_tt
         trans_matrix = self._trace_trans_matrix_tt
-        x = self._trace_x_tt
+        hidden = int(self.hparams.hidden_size)
+        # Match DeepSeek trace pattern: embed tokens *inside* the trace graph.
+        # This avoids device allocations outside trace replay and keeps input
+        # staging limited to host->device copies.
+        x = ttnn.embedding(
+            self._trace_tokens_tt,
+            self.embed_w,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.reshape(x, (1, batch, 1, hidden))
+        x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
+        x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, batch, hidden])
 
         for layer_idx in range(self.num_layers_to_run):
             w = self._ensure_layer_weights(layer_idx)
@@ -1038,14 +1105,21 @@ class Glm4MoeLiteDenseOnlyTT:
                 cos_batch=cos_batch,
                 sin_batch=sin_batch,
                 trans_matrix=trans_matrix,
+                # Trace inputs store RoPE tensors already sharded in decode layout
+                # ([1, B, 1, D] height-sharded). Reuse them directly to avoid
+                # re-preparing RoPE inputs in every layer and to keep the trace
+                # capture path free of layout transforms (e.g. transpose).
+                cos_decode=cos_batch,
+                sin_decode=sin_batch,
+                trans_decode=trans_matrix,
+                rope_sharded_cfg=self._trace_rope_sharded_mem_config,
                 w=w,
                 hparams=self.hparams,
                 moe_runtime=self.moe_runtime,
                 profile=None,
                 use_decode_rope=True,
             )
-            if x is not self._trace_x_tt:
-                ttnn.deallocate(x)
+            ttnn.deallocate(x)
             x = x_next
 
         x = self.final_norm(x, mode="decode")
@@ -1083,6 +1157,25 @@ class Glm4MoeLiteDenseOnlyTT:
         # Warm-up the trace path itself (not captured) so ops like `ttnn.embedding`
         # do any one-time compilation/program uploads outside trace capture.
         logits_warm = self._decode_step_tt_logits(kv_cache=kv_cache)
+        # Warm-up any sampling ops we plan to run inside the trace. After trace
+        # capture, allocating device buffers becomes unsafe, so sampling must be
+        # fully trace-contained.
+        logits_rm_warm = ttnn.to_layout(logits_warm, ttnn.ROW_MAJOR_LAYOUT)
+        if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
+            next_ids_warm = ttnn.argmax(logits_rm_warm, dim=3, keepdim=False, use_multicore=True)
+            ttnn.deallocate(next_ids_warm)
+        else:
+            max_out_warm = ttnn.max(logits_rm_warm, dim=3, keepdim=True)
+            if isinstance(max_out_warm, tuple):
+                local_max_warm, local_argmax_warm = max_out_warm
+                ttnn.deallocate(local_max_warm)
+                ttnn.deallocate(local_argmax_warm)
+            else:
+                local_max_warm = max_out_warm
+                local_argmax_warm = ttnn.argmax(logits_rm_warm, dim=3, keepdim=False, use_multicore=True)
+                ttnn.deallocate(local_max_warm)
+                ttnn.deallocate(local_argmax_warm)
+        ttnn.deallocate(logits_rm_warm)
         ttnn.synchronize_device(self.device)
         ttnn.deallocate(logits_warm)
 
@@ -1093,13 +1186,26 @@ class Glm4MoeLiteDenseOnlyTT:
 
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         logits_tt = self._decode_step_tt_logits(kv_cache=kv_cache)
+        # Capture greedy sampling inside the trace to avoid allocating any
+        # device buffers while an active trace exists.
+        logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
+        if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
+            top1_values_tt = None
+            top1_indices_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
+        else:
+            max_out = ttnn.max(logits_rm, dim=3, keepdim=True)
+            if isinstance(max_out, tuple):
+                top1_values_tt, top1_indices_tt = max_out
+            else:
+                top1_values_tt = max_out
+                top1_indices_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
 
         self._decode_trace_id_sampling = trace_id
         self._trace_logits_tt = logits_tt
-        self._trace_top1_values_tt = None
-        self._trace_top1_indices_tt = None
+        self._trace_top1_values_tt = top1_values_tt
+        self._trace_top1_indices_tt = top1_indices_tt
 
     def _decode_trace_sampling(
         self,
@@ -1108,69 +1214,29 @@ class Glm4MoeLiteDenseOnlyTT:
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
         kv_cache: list[ttnn.Tensor],
-    ) -> torch.Tensor:
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        # vLLM pads decode batches up to max_num_seqs. If the padded batch or
+        # page table width changes (e.g., max_num_seqs differs between runs),
+        # we must drop and re-capture the trace to avoid shape mismatches.
+        self._ensure_decode_trace_inputs(batch=int(tokens.shape[0]), page_table_width=int(page_table.shape[1]))
         if self._decode_trace_id_sampling is None:
             self._capture_decode_trace_sampling(tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache)
         assert self._decode_trace_id_sampling is not None
         assert self._trace_logits_tt is not None
+        assert self._trace_top1_indices_tt is not None
 
         self._copy_decode_trace_inputs(tokens=tokens, start_pos=start_pos, page_table=page_table)
-        ttnn.execute_trace(self.device, self._decode_trace_id_sampling, cq_id=0, blocking=True)
-
-        batch = int(tokens.shape[0])
-        vocab = int(self.hparams.vocab_size)
-
-        # Greedy sampling outside the trace. This avoids any uint32 layout
-        # conversions or top-k index writes during trace capture.
-        logits_rm = ttnn.to_layout(self._trace_logits_tt, ttnn.ROW_MAJOR_LAYOUT)
+        # Non-blocking allows vLLM async out processing to overlap host work with device execution.
+        ttnn.execute_trace(self.device, self._decode_trace_id_sampling, cq_id=0, blocking=False)
 
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
-            next_ids_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
-            ttnn.deallocate(logits_rm)
+            # Fully trace-contained greedy sampling: return device token ids.
+            return self._trace_top1_indices_tt
 
-            next_ids_torch = _tt_to_torch_for_vllm_output(tensor=next_ids_tt, device=self.device)
-            next_ids_flat = next_ids_torch.reshape(-1).to(dtype=torch.int64).cpu()
-            ttnn.deallocate(next_ids_tt)
-
-            next_ids_flat = torch.clamp(next_ids_flat, 0, max(0, vocab - 1))
-            return next_ids_flat.to(dtype=torch.int32)[:batch]
-
-        # Vocab-sharded LM head: compute per-shard max+argmax and reduce on host.
-        tp_size = int(self.device.shape[0]) * int(self.device.shape[1])
-        selected_device_ids = list(range(tp_size))
-        shard_indices = list(range(tp_size))
-
-        max_out = ttnn.max(logits_rm, dim=3, keepdim=True)
-        if isinstance(max_out, tuple):
-            local_max_tt, local_argmax_tt = max_out
-        else:
-            local_max_tt = max_out
-            local_argmax_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
-        ttnn.deallocate(logits_rm)
-
-        local_argmax_torch = _mesh_to_torch_selected(tensor=local_argmax_tt, device_ids=selected_device_ids)
-        local_max_torch = _mesh_to_torch_selected(tensor=local_max_tt, device_ids=selected_device_ids)
-        ttnn.deallocate(local_argmax_tt)
-        ttnn.deallocate(local_max_tt)
-
-        vocab_per_shard = int(self.lm_head_vocab_per_shard)
-        next_ids = torch.empty((batch,), dtype=torch.int32)
-        for b in range(batch):
-            best_val = None
-            best_global = None
-            for shard_idx, (val_tensor, idx_tensor) in enumerate(zip(local_max_torch, local_argmax_torch)):
-                max_val = float(val_tensor.reshape(-1)[b].item())
-                local_idx = int(idx_tensor.reshape(-1)[b].item())
-                global_idx = int(shard_idx * vocab_per_shard + local_idx)
-                if global_idx >= vocab:
-                    continue
-                if best_val is None or max_val > best_val:
-                    best_val = max_val
-                    best_global = global_idx
-            if best_global is None:
-                best_global = max(0, vocab - 1)
-            next_ids[b] = int(best_global)
-        return next_ids
+        # Vocab-sharded LM head: return per-shard (max, argmax). Host reduction is
+        # performed by the vLLM model wrapper after async readback completes.
+        assert self._trace_top1_values_tt is not None
+        return (self._trace_top1_values_tt, self._trace_top1_indices_tt)
 
     def _decode_trace_logits(
         self,
@@ -1185,6 +1251,7 @@ class Glm4MoeLiteDenseOnlyTT:
         This path avoids any post-trace device allocations by composing sharded
         logits on the host (no device all-gather).
         """
+        self._ensure_decode_trace_inputs(batch=int(tokens.shape[0]), page_table_width=int(page_table.shape[1]))
         if self._decode_trace_id_sampling is None:
             self._capture_decode_trace_sampling(tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache)
         assert self._decode_trace_id_sampling is not None

@@ -316,6 +316,8 @@ def convert_decoder_layer_weights(
 
     # ---- Norms ----
     dense_dtype = _env_dense_dtype()
+    tp_enabled = _env_tp_enabled()
+    tp_axis, tp_size = _tp_axis_and_size(device)
 
     input_layernorm = RMSNorm(
         device=device,
@@ -363,23 +365,50 @@ def convert_decoder_layer_weights(
     )
 
     # ---- Attention projections ----
+    attn_row_mapper = None
+    attn_variant = ""
+    if tp_enabled and tp_size > 1:
+        hidden = int(hparams.hidden_size)
+        q_lora = int(hparams.q_lora_rank)
+        kv_lora = int(hparams.kv_lora_rank)
+        qk_nope = int(hparams.qk_nope_head_dim)
+        in_o = int(hparams.num_attention_heads) * int(hparams.v_head_dim)
+        if hidden % int(tp_size) != 0:
+            raise ValueError(f"TP enabled but hidden_size={hidden} not divisible by tp_size={tp_size}")
+        if q_lora % int(tp_size) != 0:
+            raise ValueError(f"TP enabled but q_lora_rank={q_lora} not divisible by tp_size={tp_size}")
+        if kv_lora % int(tp_size) != 0:
+            raise ValueError(f"TP enabled but kv_lora_rank={kv_lora} not divisible by tp_size={tp_size}")
+        if qk_nope % int(tp_size) != 0:
+            raise ValueError(f"TP enabled but qk_nope_head_dim={qk_nope} not divisible by tp_size={tp_size}")
+        if in_o % int(tp_size) != 0:
+            raise ValueError(
+                f"TP enabled but attention out in_dim={in_o} (num_heads*v_head_dim) not divisible by tp_size={tp_size}"
+            )
+        # Attention projection weights use row-parallel sharding (shard input dim).
+        attn_variant = f"tp{tp_size}"
+        attn_row_mapper = _tp_mesh_mapper(device, shard_dim=2)
+
     w_q_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_a_proj.weight"],
-        cache_file=c("w_q_a"),
+        cache_file=c("w_q_a", attn_variant),
         dtype=dense_dtype,
+        mesh_mapper=attn_row_mapper,
     )
     w_q_b = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_b_proj.weight"],
-        cache_file=c("w_q_b"),
+        cache_file=c("w_q_b", attn_variant),
         dtype=dense_dtype,
+        mesh_mapper=attn_row_mapper,
     )
     w_kv_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight"],
-        cache_file=c("w_kv_a"),
+        cache_file=c("w_kv_a", attn_variant),
         dtype=dense_dtype,
+        mesh_mapper=attn_row_mapper,
     )
     w_q_kv_a: Optional[ttnn.Tensor] = None
     if _env_fuse_qkv_a():
@@ -394,11 +423,13 @@ def convert_decoder_layer_weights(
                 f"q_a and kv_a must share input dim; got q_a_in={int(q_a_torch.shape[1])} kv_a_in={int(kv_a_torch.shape[1])}"
             )
         fused_out_in = torch.cat([q_a_torch, kv_a_torch], dim=0)
+        fused_variant = f"fused_{attn_variant}_v1" if attn_variant else "fused_v1"
         w_q_kv_a = _linear_weight_tt(
             device=device,
             torch_weight_out_in=fused_out_in,
-            cache_file=c("w_q_kv_a", "fused_v1"),
+            cache_file=c("w_q_kv_a", fused_variant),
             dtype=dense_dtype,
+            mesh_mapper=attn_row_mapper,
         )
 
     kv_b = state[f"model.layers.{layer_idx}.self_attn.kv_b_proj.weight"]  # [num_heads*(qk_nope+v), kv_lora]
@@ -406,18 +437,39 @@ def convert_decoder_layer_weights(
     w_kv_b1_torch = kv_b[:, : hparams.qk_nope_head_dim, :].contiguous()  # [H, qk_nope, kv_lora]
     w_kv_b2_torch = kv_b[:, -hparams.v_head_dim :, :].transpose(1, 2).contiguous()  # [H, kv_lora, v]
 
+    # `ttnn.mesh_partition` (used for row-parallel activation sharding) requires tile-aligned
+    # slice boundaries on tilized tensors. Some attention per-head dims (e.g., qk_nope=192)
+    # are divisible by tp_size=8 but not by TILE_SIZE*tp_size, so row-parallel sharding
+    # would fail at runtime. Fall back to replication for those weights.
+    w_kv_b1_mapper = attn_row_mapper
+    w_kv_b1_variant = attn_variant
+    if tp_enabled and tp_size > 1:
+        qk_nope_per_shard = int(hparams.qk_nope_head_dim) // int(tp_size)
+        if qk_nope_per_shard % int(ttnn.TILE_SIZE) != 0:
+            w_kv_b1_mapper = None  # replicate
+            w_kv_b1_variant = f"{attn_variant}_rep"
+
     w_kv_b1 = _per_head_weight_tt(
-        device=device, torch_weight=w_kv_b1_torch, cache_file=c("w_kv_b1"), dtype=dense_dtype
+        device=device,
+        torch_weight=w_kv_b1_torch,
+        cache_file=c("w_kv_b1", w_kv_b1_variant),
+        dtype=dense_dtype,
+        mesh_mapper=w_kv_b1_mapper,
     )
     w_kv_b2 = _per_head_weight_tt(
-        device=device, torch_weight=w_kv_b2_torch, cache_file=c("w_kv_b2"), dtype=dense_dtype
+        device=device,
+        torch_weight=w_kv_b2_torch,
+        cache_file=c("w_kv_b2", attn_variant),
+        dtype=dense_dtype,
+        mesh_mapper=attn_row_mapper,
     )
 
     w_o = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
-        cache_file=c("w_o"),
+        cache_file=c("w_o", attn_variant),
         dtype=dense_dtype,
+        mesh_mapper=attn_row_mapper,
     )
 
     # ---- MLP (dense or shared expert as dense) ----
@@ -426,9 +478,6 @@ def convert_decoder_layer_weights(
         mlp_prefix = f"model.layers.{layer_idx}.mlp."
     else:
         mlp_prefix = f"model.layers.{layer_idx}.mlp.shared_experts."
-
-    tp_enabled = _env_tp_enabled()
-    tp_axis, tp_size = _tp_axis_and_size(device)
 
     mlp_gate_mapper = None
     mlp_down_mapper = None
