@@ -11,9 +11,9 @@ import ttnn
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, CLIPTextModel
 
-from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
-from models.experimental.tt_dit.utils.check import assert_quality
+from models.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.utils.check import assert_quality
 
 
 @pytest.mark.parametrize(

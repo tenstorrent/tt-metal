@@ -9,10 +9,15 @@
 #include <iostream>
 #include <typeinfo>
 #include <filesystem>
+#include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tests/tt_metal/tt_fabric/common/utils.hpp"
 
 namespace {
 
@@ -35,6 +40,8 @@ TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto";
     [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
+
+    check_asic_mapping_against_golden("TestCustom2x2ControlPlaneInit", "ControlPlaneFixture_Custom2x2");
 }
 
 TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
@@ -52,6 +59,8 @@ TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInitMGD2) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto";
     [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
+
+    check_asic_mapping_against_golden("TestCustom2x2ControlPlaneInitMGD2", "ControlPlaneFixture_Custom2x2");
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

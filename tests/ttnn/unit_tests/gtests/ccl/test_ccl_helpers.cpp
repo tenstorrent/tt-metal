@@ -62,10 +62,6 @@ TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingM
 }
 
 TEST(CclHelpers, EriscDatamoverConfig_GetEdmHandshakeAddress_GT_0) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
     ttnn::ccl::EriscDatamoverConfig config;
     for (std::size_t i = 0; i < 8; i++) {
         ASSERT_TRUE(config.get_edm_handshake_address() > 0);

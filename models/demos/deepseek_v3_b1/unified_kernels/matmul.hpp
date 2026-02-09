@@ -10,10 +10,10 @@
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/matmul.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/tile_move_copy.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -44,9 +44,10 @@ struct Matmul {
     struct WriterCTArgs {};
 
     // Compute CTArgs (TRISC): out_w (output width in tiles)
-    template <uint32_t out_w_>
+    template <uint32_t out_w_, bool transpose_ = false>
     struct ComputeCTArgs {
         static constexpr uint32_t out_w = out_w_;
+        static constexpr bool transpose = transpose_;
     };
 
     // ========================================================================
@@ -95,8 +96,12 @@ struct Matmul {
             constexpr uint32_t out_subblock_h = 1;
             constexpr uint32_t out_subblock_w = 1;
             constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
-            constexpr bool transpose = false;
             constexpr uint32_t out_w = CTArgs::out_w;
+            constexpr bool transpose = CTArgs::transpose;
+            constexpr bool split_acc = true;
+            constexpr bool dense_packing = true;
+            constexpr bool finalize = split_acc && true;
+            constexpr bool read_transposed = transpose && true;
 
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
@@ -106,51 +111,21 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            if constexpr (out_w <= 8) {
-                // Use optimized custom_mm API for up to 8 output tiles (half-DST)
-                custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
+            custom_mm_block_init<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
 
-                tile_regs_acquire();
+            tile_regs_acquire();
 
-                for (uint32_t w = 0; w < out_w; w++) {
-                    custom_mm_block(args.in0, args.in1, 0, w, w, transpose, args.k_num_tiles, out_w);
-                }
+            custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
 
-                tile_regs_commit();
+            tile_regs_commit();
 
-                tile_regs_wait();
-                for (uint32_t w = 0; w < out_w; w++) {
-                    pack_tile(w, args.out, w);
-                }
-                tile_regs_release();
-            } else {
-                // Use optimized custom_mm API with blocking for out_w > 8
-                // Process in blocks of 8 tiles (half-DST with SyncHalf mode)
-                constexpr uint32_t dst_tiles = 8;  // Half-DST for reliable blocking
-                constexpr uint32_t num_blocks = (out_w + dst_tiles - 1) / dst_tiles;
-
-                for (uint32_t block = 0; block < num_blocks; block++) {
-                    uint32_t block_start = block * dst_tiles;
-                    uint32_t tiles_in_block = ((block_start + dst_tiles) < out_w) ? dst_tiles : (out_w - block_start);
-
-                    // Re-init for each block to reset MOP state
-                    custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
-
-                    tile_regs_acquire();
-
-                    for (uint32_t w = 0; w < tiles_in_block; w++) {
-                        custom_mm_block(args.in0, args.in1, 0, block_start + w, w, transpose, args.k_num_tiles, out_w);
-                    }
-
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    for (uint32_t w = 0; w < tiles_in_block; w++) {
-                        pack_tile(w, args.out, block_start + w);
-                    }
-                    tile_regs_release();
-                }
+            tile_regs_wait();
+            for (uint32_t dst_idx = 0; dst_idx < out_w; dst_idx++) {
+                pack_tile(dst_idx, args.out, dst_idx);
             }
+            tile_regs_release();
+
+            custom_mm_block_uninit<dense_packing>();
 
             // Pop inputs
             if constexpr (pop_in0) {

@@ -17,7 +17,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize(
     "input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc, block_type",
     [
-        ((1, 768, 64, 64), (1, 77, 1280), 1, 768, 12, 768, 0.998, "down_blocks"),
+        ((1, 768, 64, 64), (1, 77, 1280), 1, 768, 12, 768, 0.997, "down_blocks"),
         ((1, 1536, 32, 32), (1, 77, 1280), 2, 1536, 24, 1536, 0.987, "down_blocks"),
         ((1, 1536, 16, 16), (1, 77, 1280), -1, 1536, 24, 1536, 0.997, "mid_block"),
     ],

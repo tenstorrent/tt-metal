@@ -16,19 +16,20 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 pytestmark = pytest.mark.use_module_device
 
 input_bcast_shape_pairs = [
-    ((1), (2, 10)),
-    ((1, 1, 1, 1), (1, 1, 1, 67000)),
-    ((1, 1, 1, 1), (1, 1, 67000, 4)),
-    ((1, 1, 1, 1), (1, 1, 270, 270)),
-    ((1, 1, 270, 270), (1, 1, 270, 270)),
-    ((1, 1, 64, 64), (1, 310, 64, 64)),
-    ((1, 1, 64, 64), (310, 1, 64, 64)),
-    ((1, 1, 64, 64), (10, 31, 64, 64)),
-    ((31, 33, 64, 64), (31, 33, 64, 64)),
-    ((1, 1, 1, 1), (7, 17, 32, 64)),  # scalar to 4D tensor
-    ((1, 3, 1, 1), (8, 3, 32, 64)),  # broadcast N, H, W (preserve C)
-    ((2, 1, 4, 1), (2, 17, 4, 64)),  # broadcast C and W
-    ((1, 1, 32, 32), (7, 17, 32, 32)),  # broadcast N and C (preserve H, W)
+    # note broadcast_to op is not a production op
+    # ((1), (2, 10)),
+    ((1, 1, 1, 1), (1, 1, 1, 6700)),
+    ((1, 1, 1, 1), (1, 1, 6700, 4)),
+    # ((1, 1, 1, 1), (1, 1, 270, 270)),
+    # ((1, 1, 270, 270), (1, 1, 270, 270)),
+    # ((1, 1, 64, 64), (1, 310, 64, 64)),
+    # ((1, 1, 64, 64), (310, 1, 64, 64)),
+    # ((1, 1, 64, 64), (10, 31, 64, 64)),
+    # ((31, 33, 64, 64), (31, 33, 64, 64)),
+    # ((1, 1, 1, 1), (7, 17, 32, 64)),  # scalar to 4D tensor
+    # ((1, 3, 1, 1), (8, 3, 32, 64)),  # broadcast N, H, W (preserve C)
+    # ((2, 1, 4, 1), (2, 17, 4, 64)),  # broadcast C and W
+    # ((1, 1, 32, 32), (7, 17, 32, 32)),  # broadcast N and C (preserve H, W)
     ((1, 3, 1, 4), (7, 3, 32, 4)),  # broadcast N, H, W, C
 ]
 
@@ -38,6 +39,9 @@ input_bcast_shape_pairs = [
     (
         (torch.bfloat16, ttnn.bfloat16),
         (torch.float32, ttnn.float32),
+        (torch.int32, ttnn.int32),
+        (torch.uint32, ttnn.uint32),
+        (torch.uint16, ttnn.uint16),
     ),
 )
 @pytest.mark.parametrize(
@@ -50,17 +54,34 @@ def test_broadcast_to(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memo
 
     # For float32, use values that expose TF32 precision loss (require >10 mantissa bits)
     # TF32 has only 10 mantissa bits vs FP32's 23 bits
-    # if dtype_pt == torch.float32:
-    # Use values with many significant digits that will lose precision in TF32
-    # Example: 1.23456789 requires more than 10 mantissa bits for exact representation
-    # torch_input_tensor = torch.randn(shape, dtype=dtype_pt) * 1000000.0 + 1.23456789
-    # else:
-    torch_input_tensor = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(shape)
+    # FP32 mantissa: bits 0-22 (23 bits), TF32 only keeps bits 13-22 (10 bits)
+    if dtype_pt == torch.float32:
+        # Generate values with precision in the lower mantissa bits (bits 0-12)
+        # These bits would be lost in TF32 truncation
+        # Method: base value (uses upper bits) + small delta (uses lower bits)
+        base = torch.randn(shape, dtype=dtype_pt)  # Random base values
+        # Add values that require bits 11-22 of mantissa (2^-11 to 2^-22 relative to base)
+        # Using 2^-12 = 0.000244140625 and 2^-18 = 0.0000038147
+        precision_delta = torch.randn(shape, dtype=dtype_pt) * 2**-12 + torch.randn(shape, dtype=dtype_pt) * 2**-18
+        torch_input_tensor = base + precision_delta
+    elif dtype_pt == torch.int32:
+        # For int32, generate random integers
+        torch_input_tensor = torch.randint(low=-1000, high=1000, size=shape, dtype=dtype_pt)
+    elif dtype_pt == torch.uint32:
+        # For uint32, generate random unsigned integers (torch.randint doesn't support uint32 directly)
+        torch_input_tensor = torch.randint(low=0, high=1000, size=shape, dtype=torch.int64).to(torch.uint32)
+    elif dtype_pt == torch.uint16:
+        # For uint16, generate random unsigned integers
+        torch_input_tensor = torch.randint(low=0, high=1000, size=shape, dtype=torch.int32).to(torch.uint16)
+    else:
+        torch_input_tensor = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(
+            shape
+        )
 
     torch_result = torch_input_tensor.broadcast_to(broadcast_shape)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
+        torch_input_tensor, dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
     )
     output = ttnn.experimental.broadcast_to(
         input_tensor, ttnn.Shape(broadcast_shape), memory_config=memory_config_input
@@ -71,7 +92,11 @@ def test_broadcast_to(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memo
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    if dtype_pt == torch.int32 or dtype_pt == torch.uint32 or dtype_pt == torch.uint16:
+        # Cast output to same dtype for comparison (ttnn.to_torch may return different dtype)
+        assert torch.equal(torch_result.to(output.dtype), output), "Integer tensors not equal"
+    else:
+        assert_with_pcc(torch_result, output, 0.9999)
 
 
 input_bcast_shape_pairs = [

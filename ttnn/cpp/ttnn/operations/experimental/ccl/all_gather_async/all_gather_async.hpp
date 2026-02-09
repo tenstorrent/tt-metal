@@ -24,7 +24,9 @@ struct ExecuteAllGatherAsync {
         bool use_optimal_ccl_for_llama = false,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         bool reverse_order = false,
-        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+        std::optional<uint32_t> num_workers_per_link = std::nullopt,
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -76,7 +78,9 @@ struct ExecuteAllGatherAsync {
         bool use_optimal_ccl_for_llama = false,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         bool reverse_order = false,
-        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+        std::optional<uint32_t> num_workers_per_link = std::nullopt,
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 };
 
 struct ExecuteAllGatherAsyncReversed {
@@ -91,7 +95,9 @@ struct ExecuteAllGatherAsyncReversed {
         bool use_optimal_ccl_for_llama = false,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         bool reverse_order = false,
-        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+        std::optional<uint32_t> num_workers_per_link = std::nullopt,
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -125,7 +131,9 @@ struct ExecuteAllGatherAsyncReversed {
         bool use_optimal_ccl_for_llama = false,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         bool reverse_order = false,
-        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+        std::optional<uint32_t> num_workers_per_link = std::nullopt,
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl
