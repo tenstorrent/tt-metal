@@ -216,10 +216,8 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
     state->ret_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID);
 }
 
-// Clears NOC_PACKET_TAG register for the specified cmd_buf.
-inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t noc, uint32_t cmd_buf) {
-    return;  // No packet tag register on Quasar
-}
+// Dummy function, does nothing on Quasar. There is no NOC_PACKET_TAG register on Quasar.
+inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t /* noc */, uint32_t /* cmd_buf */) {}
 
 // Restores cmd_buf from state; waits for cmd_buf ready before writing.
 inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
