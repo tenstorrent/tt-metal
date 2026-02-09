@@ -86,7 +86,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "These test directories have a locked test count to maintain stable APC runtime." >> $GITHUB_STEP_SUMMARY
             echo "Please look into removing existing lower priority tests to add new tests." >> $GITHUB_STEP_SUMMARY
-            exit 0
+            exit 1
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
