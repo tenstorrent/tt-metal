@@ -53,8 +53,10 @@ void kernel_main() {
     constexpr uint32_t block_size_t = get_compile_time_arg_val(20);
     constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(21);
     constexpr uint32_t use_attention_sink = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t use_mla = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t mla_kv_overlap = get_compile_time_arg_val(24) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<23>();
+    constexpr auto q_args = TensorAccessorArgs<25>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -111,6 +113,10 @@ void kernel_main() {
     constexpr uint32_t q_heads_per_k = NQH / NKH;
     constexpr uint32_t q_heads_per_v = NQH / NVH;
 
+    DPRINT << "q_heads_per_k: " << q_heads_per_k << ENDL();
+    DPRINT << "q_heads_per_v: " << q_heads_per_v << ENDL();
+    DPRINT << "use_mla: " << use_mla << ENDL();
+    DPRINT << "mla_kv_overlap: " << mla_kv_overlap << ENDL();
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
     const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
@@ -126,8 +132,8 @@ void kernel_main() {
         TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
     DPRINT << "q chunks per core: " << q_chunks_per_core << ENDL();
 
-    const uint32_t skip_src_cols = (v_addr == k_addr) ? DHt - vDHt : 0;
-    DPRINT << "skip_src_cols: " << skip_src_cols << ENDL();
+    constexpr uint32_t skip_src_cols = (use_mla && mla_kv_overlap) ? DHt - vDHt : 0;
+
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
     const auto v_tile_shape = TensorTileShape(B, NVH, valid_Skt, vDHt);
@@ -223,12 +229,12 @@ void kernel_main() {
                     read_chunk_with_padding<q_tile_bytes>(
                         q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
                     noc_async_read_barrier();
-                    DPRINT << "Printing Q tiles... " << ENDL();
-                    for (uint32_t i = 0; i < 9; i++) {
-                        DPRINT << "Q Tile id: " << i << ENDL();
-                        dprint_cb_tile_sdpa<false, false>(cb_q_in, i);
-                        DPRINT << ENDL();
-                    }
+                    // DPRINT << "Printing Q tiles... " << ENDL();
+                    // for (uint32_t i = 0; i < 9; i++) {
+                    //     DPRINT << "Q Tile id: " << i << ENDL();
+                    //     dprint_cb_tile_sdpa<false, false>(cb_q_in, i);
+                    //     DPRINT << ENDL();
+                    // }
                     q_chunk = chunked_q_chunk_offset + q_chunk;
                     uint32_t q_low_idx =
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
@@ -241,7 +247,7 @@ void kernel_main() {
 
                     const uint32_t k_head = nq / q_heads_per_k;
                     const uint32_t v_head = nq / q_heads_per_v;
-                    // Fix this
+                    DPRINT << "v_head: " << v_head << ENDL();
                     DPRINT << "k_head: " << k_head << ENDL();
 
                     // loop while k_low < q_high
@@ -254,6 +260,9 @@ void kernel_main() {
                         const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                         const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
                         const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, k_head, kv_row_start_tile, 0);
+                        const uint32_t v_start_tile_id = (!use_mla || (use_mla && mla_kv_overlap))
+                                                             ? k_start_tile_id
+                                                             : v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
 
                         if constexpr (is_chunked) {
                             // Use page table to read K chunk
@@ -288,12 +297,12 @@ void kernel_main() {
                         // K transposed is read
                         noc_async_read_barrier();
 
-                        DPRINT << "Printing transposed K tiles... " << ENDL();
-                        for (uint32_t i = 0; i < 9; i++) {
-                            DPRINT << "K Tile id: " << i << ENDL();
-                            dprint_cb_tile_sdpa<false, false>(cb_k_in, i);
-                            DPRINT << ENDL();
-                        }
+                        // DPRINT << "Printing transposed K tiles... " << ENDL();
+                        // for (uint32_t i = 0; i < 9; i++) {
+                        //     DPRINT << "K Tile id: " << i << ENDL();
+                        //     dprint_cb_tile_sdpa<false, false>(cb_k_in, i);
+                        //     DPRINT << ENDL();
+                        // }
 
                         if constexpr (use_provided_mask) {
                             // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
@@ -331,7 +340,6 @@ void kernel_main() {
                         if constexpr (is_chunked) {
                             // Use page table to read V chunk
                             const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                            const uint32_t skip_src_cols = (v_addr == k_addr) ? DHt - vDHt : 0;
                             read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                                 v_reader,
                                 cb_v_in,
@@ -347,10 +355,9 @@ void kernel_main() {
                                 false,
                                 skip_src_cols);
                         } else {
-                            uint32_t v_start_tile_id = k_start_tile_id;
-                            if (v_addr != k_addr) {
-                                v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
-                            }
+                            // if (v_addr != k_addr) {
+                            //     v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
+                            // }
                             // const ReaderType& reader,
                             // const uint32_t cb_id,
                             // uint32_t start_tile_id,
@@ -383,12 +390,12 @@ void kernel_main() {
                             // DHt - vDHt /* src_skip_cols */);
                             //  V is read
                             noc_async_read_barrier();
-                            DPRINT << "Printing V tile... " << ENDL();
-                            for (uint32_t i = 0; i < 1; i++) {
-                                DPRINT << "V Tile id: " << i << ENDL();
-                                dprint_cb_tile_sdpa<false, false>(cb_v_in, i);
-                                DPRINT << ENDL();
-                            }
+                            // DPRINT << "Printing V tile... " << ENDL();
+                            // for (uint32_t i = 0; i < 1; i++) {
+                            //     DPRINT << "V Tile id: " << i << ENDL();
+                            //     dprint_cb_tile_sdpa<false, false>(cb_v_in, i);
+                            //     DPRINT << ENDL();
+                            // }
                         }
                     }
                 }

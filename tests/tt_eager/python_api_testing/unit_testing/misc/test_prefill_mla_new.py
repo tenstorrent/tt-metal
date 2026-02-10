@@ -307,9 +307,7 @@ def run_flash_mla_prefill_impl(
     print("tt_v_out shape is: ", tt_v_out.shape)
     tt_v_pre_sdpa = ttnn.linear(tt_v_post_repeat, tt_v_out)
 
-    # Repeat K as a current limitation of the SDPA op
     print("tt_k shape pre repeat is: ", tt_k.shape)
-    # tt_k_post_repeat = ttnn.repeat(tt_k, [1, nh, 1, 1])
     tt_k_post_repeat = tt_k
     print("Calling SDPA with shapes: ", tt_q.shape, tt_k_post_repeat.shape, tt_v_pre_sdpa.shape)
 

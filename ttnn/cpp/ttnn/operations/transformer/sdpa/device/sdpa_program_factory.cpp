@@ -37,6 +37,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     auto program_config = operation_attributes.program_config;
     const bool use_mla = operation_attributes.use_mla;
+    const bool mla_kv_overlap = use_mla && !tensor_args.v.has_value();
     const uint32_t head_dim_v = operation_attributes.head_dim_v.value_or(input_tensor_q.logical_shape()[3]);
     const auto& sliding_window_size = operation_attributes.sliding_window_size;
 
@@ -362,30 +363,34 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
-    std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      B,
-                                                      NQH,
-                                                      NKH,
-                                                      NVH,
-                                                      Sqt,
-                                                      Skt,
-                                                      valid_Sqt,
-                                                      valid_Skt,
-                                                      DHt,
-                                                      vDHt,
-                                                      Sq_chunk_t,
-                                                      q_num_chunks,
-                                                      Sk_chunk_t,
-                                                      k_num_chunks,
-                                                      num_cores,
-                                                      (std::uint32_t)is_causal,
-                                                      (std::uint32_t)use_provided_mask,
-                                                      (std::uint32_t)broadcast_provided_mask_heads,
-                                                      (std::uint32_t)use_padded_mask,
-                                                      (uint32_t)is_chunked,
-                                                      block_size_t,
-                                                      page_table_stick_size,
-                                                      (std::uint32_t)use_attention_sink};
+    std::vector<uint32_t> reader_compile_time_args = {
+        // interleaved accessor args
+        B,
+        NQH,
+        NKH,
+        NVH,
+        Sqt,
+        Skt,
+        valid_Sqt,
+        valid_Skt,
+        DHt,
+        vDHt,
+        Sq_chunk_t,
+        q_num_chunks,
+        Sk_chunk_t,
+        k_num_chunks,
+        num_cores,
+        (std::uint32_t)is_causal,
+        (std::uint32_t)use_provided_mask,
+        (std::uint32_t)broadcast_provided_mask_heads,
+        (std::uint32_t)use_padded_mask,
+        (uint32_t)is_chunked,
+        block_size_t,
+        page_table_stick_size,
+        (std::uint32_t)use_attention_sink,
+        (std::uint32_t)use_mla,
+        (std::uint32_t)mla_kv_overlap,
+    };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
