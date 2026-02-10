@@ -13,41 +13,27 @@
 # LOCAL BUILD INSTRUCTIONS (without GHCR)
 # =============================================================================
 #
-# Step 1: Build all tool images
+# RECOMMENDED: Use the build-local.sh script which automatically builds any
+# missing tool/venv images before building the main image:
 #
-#   docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
-#   docker build -f dockerfile/Dockerfile.tools --target mold -t tool-mold:local .
-#   docker build -f dockerfile/Dockerfile.tools --target doxygen -t tool-doxygen:local .
-#   docker build -f dockerfile/Dockerfile.tools --target cba -t tool-cba:local .
-#   docker build -f dockerfile/Dockerfile.tools --target gdb -t tool-gdb:local .
-#   docker build -f dockerfile/Dockerfile.tools --target cmake -t tool-cmake:local .
-#   docker build -f dockerfile/Dockerfile.tools --target yq -t tool-yq:local .
-#   docker build -f dockerfile/Dockerfile.tools --target sfpi -t tool-sfpi:local .
-#   docker build -f dockerfile/Dockerfile.tools --target openmpi -t tool-openmpi:local .
+#   ./dockerfile/build-local.sh dev              # Build dev image
+#   ./dockerfile/build-local.sh ci-test          # Build ci-test image
+#   ./dockerfile/build-local.sh --ubuntu 24.04 dev
+#   ./dockerfile/build-local.sh --help           # Show all options
 #
-# Step 2: Build Python venv images
+# MANUAL: If you prefer to build images manually or need finer control:
 #
+# Step 1: Build tool images (Dockerfile.tools)
+#   docker build -f dockerfile/Dockerfile.tools --target <tool> -t tool-<tool>:local .
+#   # Tools: ccache, mold, doxygen, cba, gdb, cmake, yq, sfpi, openmpi
+#
+# Step 2: Build Python venv images (Dockerfile.python)
 #   docker build -f dockerfile/Dockerfile.python --target ci-build-venv \
 #     --build-arg UBUNTU_VERSION=22.04 -t python-ci-build-venv:local .
 #   docker build -f dockerfile/Dockerfile.python --target ci-test-venv \
 #     --build-arg UBUNTU_VERSION=22.04 -t python-ci-test-venv:local .
 #
-# Step 3: Build the main image (e.g., dev target)
-#
-#   docker build -f dockerfile/Dockerfile --target dev \
-#     --build-arg UBUNTU_VERSION=22.04 \
-#     --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \
-#     --build-arg TOOL_MOLD_IMAGE=tool-mold:local \
-#     --build-arg TOOL_DOXYGEN_IMAGE=tool-doxygen:local \
-#     --build-arg TOOL_CBA_IMAGE=tool-cba:local \
-#     --build-arg TOOL_GDB_IMAGE=tool-gdb:local \
-#     --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local \
-#     --build-arg TOOL_YQ_IMAGE=tool-yq:local \
-#     --build-arg TOOL_SFPI_IMAGE=tool-sfpi:local \
-#     --build-arg TOOL_OPENMPI_IMAGE=tool-openmpi:local \
-#     --build-arg PYTHON_CI_BUILD_VENV_IMAGE=python-ci-build-venv:local \
-#     --build-arg PYTHON_CI_TEST_VENV_IMAGE=python-ci-test-venv:local \
-#     -t tt-metalium-dev:local .
+# Step 3: Build the main image with all --build-arg values (see build-local.sh)
 #
 # Available targets: ci-build, ci-test, dev, release, release-models
 # =============================================================================
@@ -61,8 +47,8 @@
 ARG UBUNTU_VERSION=22.04
 
 # Tool images from GHCR (built by Dockerfile.tools, pushed by build-docker-artifact.yaml)
-# These default to placeholder values; the CI workflow passes actual GHCR tags.
-# For local builds, either build the tool images first or let Docker build from scratch.
+# These default to scratch (empty image); CI workflow passes actual GHCR tags.
+# For local builds, you MUST build the tool images first (see instructions above).
 ARG TOOL_CCACHE_IMAGE=scratch
 ARG TOOL_MOLD_IMAGE=scratch
 ARG TOOL_DOXYGEN_IMAGE=scratch
@@ -76,7 +62,7 @@ ARG TOOL_OPENMPI_IMAGE=scratch
 # Python venv images from GHCR (built by Dockerfile.python, pushed by build-docker-artifact.yaml)
 # These contain pre-built virtual environments with all Python dependencies installed.
 # Using pre-built venvs saves 5-10 minutes per build by avoiding pip install operations.
-# Set to scratch to fall back to building venv in-place (slower but works without GHCR).
+# For local builds, you MUST build the venv images first (see instructions above).
 ARG PYTHON_CI_BUILD_VENV_IMAGE=scratch
 ARG PYTHON_CI_TEST_VENV_IMAGE=scratch
 
@@ -321,7 +307,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR \
     && umask 022 \
-    && "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc \
+    && echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc \
     && mkdir -p /etc \
     && echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
 

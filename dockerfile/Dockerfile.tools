@@ -239,6 +239,7 @@ RUN FILES=(/etc/yum.repos.d/*.repo) && \
 
 RUN dnf remove -y epel-release || true
 # Build deps matching manylinux (AlmaLinux 9) for ABI compatibility
+# Note: slurm-devel is required for --with-slurm in install-openmpi.sh
 RUN dnf install -y \
     autoconf \
     automake \
@@ -259,6 +260,7 @@ RUN dnf install -y \
     libzstd-devel \
     mpfr-devel \
     pmix-devel \
+    slurm-devel \
     zlib-devel \
     wget \
     && dnf clean all

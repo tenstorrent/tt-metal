@@ -5,7 +5,7 @@
 # to avoid repeated downloads from upstream sources.
 #
 # Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
-# For local builds without GHCR, tools default to scratch (build will fail without tools).
+# For local builds, you MUST build the tool images first (see build-local.sh or below).
 #
 # To build locally, first build tool images:
 #   docker build -f dockerfile/Dockerfile.tools --target cmake -t tool-cmake:local .
@@ -109,12 +109,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     python3-pip \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Install runtime deps (SFPI will be copied from tool image below)
-COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
-COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
-RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 
 # Copy SFPI from pre-built tool image
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \

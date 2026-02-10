@@ -82,4 +82,4 @@ build-verbosity = 2
 link-mode = "copy"
 
 [tool.uv.extra-build-dependencies]
-mmcv = ["pkg_resources"]
+mmcv = ["setuptools"]
