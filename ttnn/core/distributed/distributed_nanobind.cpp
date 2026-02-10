@@ -540,6 +540,7 @@ void py_module(nb::module_& mod) {
         .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"));
 
     auto py_tensor_to_mesh = static_cast<nb::class_<TensorToMesh>>(mod.attr("CppTensorToMesh"));
+    py_tensor_to_mesh.def("get_config", &TensorToMesh::get_config, nb::rv_policy::reference_internal);
 
     auto py_mesh_to_tensor = static_cast<nb::class_<MeshToTensor>>(mod.attr("CppMeshToTensor"));
 
@@ -644,10 +645,31 @@ void py_module(nb::module_& mod) {
                col_dim Optional[int]: The column dimension to shard / replicate over.
                mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
                )doc")
-        .def("__repr__", [](const MeshMapperConfig& config) {
-            std::ostringstream str;
-            str << config;
-            return str.str();
+        .def(
+            "__repr__",
+            [](const MeshMapperConfig& config) {
+                std::ostringstream str;
+                str << config;
+                return str.str();
+            })
+        .def_prop_ro(
+            "placements",
+            [](const MeshMapperConfig& config) {
+                nb::list pl;
+                for (const auto& p : config.placements) {
+                    if (std::holds_alternative<MeshMapperConfig::Replicate>(p)) {
+                        pl.append(std::get<MeshMapperConfig::Replicate>(p));
+                    } else {
+                        pl.append(std::get<MeshMapperConfig::Shard>(p));
+                    }
+                }
+                return pl;
+            })
+        .def_prop_ro("mesh_shape_override", [](const MeshMapperConfig& config) -> nb::object {
+            if (config.mesh_shape_override.has_value()) {
+                return nb::cast(config.mesh_shape_override.value());
+            }
+            return nb::none();
         });
     auto py_mesh_composer_config = static_cast<nb::class_<MeshComposerConfig>>(mod.attr("MeshComposerConfig"));
     py_mesh_composer_config

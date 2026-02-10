@@ -375,6 +375,19 @@ INSTANTIATE_TEST_SUITE_P(
     TensorDistribution2x4Test2D,
     ::testing::Values(MeshShape(1, 1), MeshShape(2, 2), MeshShape(2, 4), MeshShape(1, 3)));
 
+TEST_F(TensorDistribution2x4Test, TensorToMeshGetConfigReturnsMatchingConfig) {
+    // Call create_mesh_mapper with explicit config: get_config() should return the same config
+    const auto mesh_mapper_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
+        .mesh_shape_override = MeshShape(2, 4),
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, mesh_mapper_config);
+    const MeshMapperConfig& returned_config = mapper->get_config();
+    EXPECT_EQ(returned_config.placements, mesh_mapper_config.placements);
+    ASSERT_TRUE(returned_config.mesh_shape_override.has_value());
+    EXPECT_EQ(*returned_config.mesh_shape_override, *mesh_mapper_config.mesh_shape_override);
+}
+
 TEST_F(TensorDistribution2x4Test, NdMapperInvalidShape) {
     EXPECT_ANY_THROW(create_mesh_mapper(
         *mesh_device_,

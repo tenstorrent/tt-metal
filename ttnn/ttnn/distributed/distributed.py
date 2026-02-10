@@ -723,6 +723,9 @@ class ReplicateTensorToMeshWrapper:
     def unwrap(self):
         return self._mapper
 
+    def get_config(self):
+        return self._mapper.get_config()
+
 
 # Deprecated. Use `ttnn.replicate_tensor_to_mesh_mapper` directly.
 def ReplicateTensorToMesh(mesh_device: MeshDevice):
