@@ -71,7 +71,7 @@ The physical groupings file uses protobuf text format with schema validation. Ke
 - **Required Groupings**: The "meshes" grouping must be defined (enforced by validation)
 - **Multiple Definitions**: The same grouping name can be defined multiple times (useful for custom groupings)
 
-See `tt_metal/fabric/protobuf/physical_groupings.proto` for the complete schema definition.
+See `tt_metal/fabric/protobuf/physical_grouping_descriptor.proto` for the complete schema definition.
 
 ## Groupings Explained
 

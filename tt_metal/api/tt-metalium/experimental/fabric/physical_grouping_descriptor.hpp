@@ -4,13 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
-#include <string_view>
 #include <filesystem>
 #include <memory>
 #include <vector>
-#include <unordered_set>
-#include <unordered_map>
 
 #include <tt_stl/assert.hpp>
 
@@ -82,15 +80,8 @@ private:
     // Static validation - returns vector of error strings (similar to MeshGraphDescriptor)
     static std::vector<std::string> static_validate(const proto::PhysicalGroupings& proto);
 
-    // Collect warnings (non-fatal recommendations)
-    static std::vector<std::string> collect_warnings(const proto::PhysicalGroupings& proto);
-
     // Helper to get validation report from error vector
     static std::string get_validation_report(const std::vector<std::string>& errors);
-
-    // Helper to get validation report from error and warning vectors
-    static std::string get_validation_report(
-        const std::vector<std::string>& errors, const std::vector<std::string>& warnings);
 
     // Population method (called after validation passes)
     void populate();

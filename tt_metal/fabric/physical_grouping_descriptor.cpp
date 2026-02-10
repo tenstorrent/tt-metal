@@ -153,34 +153,6 @@ std::string PhysicalGroupingDescriptor::get_validation_report(const std::vector<
     return report.str();
 }
 
-std::string PhysicalGroupingDescriptor::get_validation_report(
-    const std::vector<std::string>& errors, const std::vector<std::string>& warnings) {
-    if (errors.empty() && warnings.empty()) {
-        return "No validation errors or warnings found.\n";
-    }
-
-    std::ostringstream report;
-    report << "=== PhysicalGroupingDescriptor Validation Report ===\n\n";
-
-    if (!errors.empty()) {
-        report << "Errors:\n";
-        for (const auto& error : errors) {
-            report << "  - " << error << "\n";
-        }
-        report << "\n";
-    }
-
-    if (!warnings.empty()) {
-        report << "Warnings:\n";
-        for (const auto& warning : warnings) {
-            report << "  - " << warning << "\n";
-        }
-        report << "\n";
-    }
-
-    return report.str();
-}
-
 std::vector<std::string> PhysicalGroupingDescriptor::static_validate(const proto::PhysicalGroupings& proto) {
     std::vector<std::string> all_errors;
 
@@ -204,20 +176,6 @@ std::vector<std::string> PhysicalGroupingDescriptor::static_validate(const proto
     return all_errors;
 }
 
-std::vector<std::string> PhysicalGroupingDescriptor::collect_warnings(const proto::PhysicalGroupings& proto) {
-    std::vector<std::string> warnings;
-
-    // Optional: Warn about recommended groupings
-    if (!grouping_exists(proto, "trays")) {
-        warnings.push_back("Recommended grouping 'trays' is not defined");
-    }
-    if (!grouping_exists(proto, "hosts")) {
-        warnings.push_back("Recommended grouping 'hosts' is not defined");
-    }
-
-    return warnings;
-}
-
 void PhysicalGroupingDescriptor::populate() {
     // Currently no additional population needed beyond storing the proto
     // This method is here for consistency with MeshGraphDescriptor pattern
@@ -231,6 +189,15 @@ void PhysicalGroupingDescriptor::validate_required_groupings(
     if (!grouping_exists(proto, "meshes")) {
         errors.push_back(
             "Required grouping 'meshes' is missing. At least one grouping with name 'meshes' must be defined.");
+    }
+
+    // Validate grouping names are non-empty
+    for (int i = 0; i < proto.groupings_size(); ++i) {
+        const auto& grouping = proto.groupings(i);
+        if (grouping.name().empty()) {
+            errors.push_back(
+                fmt::format("Grouping at index {} has an empty name; grouping names must be non-empty", i));
+        }
     }
 }
 
@@ -259,7 +226,7 @@ void PhysicalGroupingDescriptor::validate_grouping_references(
                     continue;
                 }
 
-                if (!grouping_names.count(ref_name)) {
+                if (!grouping_names.contains(ref_name)) {
                     errors.push_back(
                         fmt::format("Grouping '{}' references non-existent grouping '{}'", name, ref_name));
                 }
@@ -274,14 +241,18 @@ void PhysicalGroupingDescriptor::validate_counts(
         const auto& grouping = proto.groupings(i);
         const std::string& name = grouping.name();
 
-        // Count how many grouping_ref items this grouping has
-        int grouping_ref_count = 0;
+        // Calculate total logical item count (expanded counts)
+        uint32_t total_logical_items = 0;
         for (int j = 0; j < grouping.items_size(); ++j) {
-            if (grouping.items(j).has_grouping_ref()) {
-                grouping_ref_count++;
+            const auto& item = grouping.items(j);
+            if (item.has_asic_location()) {
+                total_logical_items += 1;
+            } else if (item.has_grouping_ref()) {
+                total_logical_items += item.grouping_ref().count();
             }
         }
 
+        // Validate counts for grouping_ref items
         for (int j = 0; j < grouping.items_size(); ++j) {
             const auto& item = grouping.items(j);
 
@@ -297,11 +268,11 @@ void PhysicalGroupingDescriptor::validate_counts(
                     }
                 } else {
                     // For non-meshes groupings:
-                    // - If there's only one grouping_ref item, it must have count >= 2
-                    // - If there are multiple grouping_ref items, each can have count >= 1
-                    if (grouping_ref_count == 1 && count < 2) {
+                    // - If there's only one item total (any type), it must have count >= 2
+                    // - If there are multiple items, each can have count >= 1
+                    if (grouping.items_size() == 1 && count < 2) {
                         errors.push_back(fmt::format(
-                            "Grouping '{}' has a single grouping_ref with count {}; groupings other than meshes must "
+                            "Grouping '{}' has a single item with count {}; groupings other than meshes must "
                             "have count >= 2 when there is only one item",
                             name,
                             count));
@@ -311,6 +282,15 @@ void PhysicalGroupingDescriptor::validate_counts(
                     }
                 }
             }
+        }
+
+        // Validate total logical item count for non-meshes groupings
+        if (name != "meshes" && total_logical_items < 2) {
+            errors.push_back(fmt::format(
+                "Grouping '{}' has {} total logical items; groupings other than meshes must have at least 2 logical "
+                "items",
+                name,
+                total_logical_items));
         }
     }
 }
