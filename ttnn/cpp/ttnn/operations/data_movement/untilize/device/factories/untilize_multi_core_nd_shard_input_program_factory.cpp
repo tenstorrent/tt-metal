@@ -26,7 +26,6 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     const UntilizeOperationAttributes& operation_attributes,
     const UntilizeTensorArgs& tensor_args,
     const UntilizeTensorReturnValue& output) {
-    std::cout << "CALLINF ND SHARD MULTICORE PF\n";
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;

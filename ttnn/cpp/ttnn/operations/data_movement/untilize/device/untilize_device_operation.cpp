@@ -267,46 +267,6 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    // We always support uneven input sharding for the multicore implementation. For legacy 2D sharding, uneven output
-    // sharding is only supported if the input and output memory layouts are identical (i.e. height->height,
-    // width->width, block->block) and the input and output shard specs are identical. Otherwise uneven output sharding
-    // is not supported. For ND sharding, uneven output sharding is supported.
-    // if (output_is_sharded) {
-    //     bool output_is_uneven_sharded = false;
-    //     uint32_t output_shard_width;
-    //     uint32_t output_shard_height;
-    //     if (operation_attributes.output_mem_config.shard_spec().has_value()) {
-    //         std::array<uint32_t, 2> output_shard_shape =
-    //             operation_attributes.output_mem_config.shard_spec().value().shape;
-    //         output_shard_width = output_shard_shape[1];
-    //         output_shard_height = output_shard_shape[0];
-    //         output_is_uneven_sharded =
-    //             (tensor_width % output_shard_width != 0) || (tensor_height % output_shard_height != 0);
-    //     }
-    //     if (output_is_uneven_sharded) {
-    //         TT_FATAL(
-    //             input_memory_layout == output_memory_layout,
-    //             "Input and output memory layouts must be identical if output is uneven sharded");
-
-    //         if (input_tensor_a.shard_spec().has_value() &&
-    //             operation_attributes.output_mem_config.shard_spec().has_value()) {
-    //             TT_FATAL(
-    //                 input_tensor_a.shard_spec().value() ==
-    //                 operation_attributes.output_mem_config.shard_spec().value(), "Input and output shard specs must
-    //                 be identical if output is uneven sharded");
-    //         } else if (
-    //             input_tensor_a.nd_shard_spec().has_value() &&
-    //             operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-    //             TT_FATAL(
-    //                 input_tensor_a.nd_shard_spec().value() ==
-    //                     operation_attributes.output_mem_config.nd_shard_spec().value(),
-    //                 "Input and output nd shard specs must be identical if output is uneven sharded");
-    //         } else {
-    //             TT_FATAL(false, "Input and output shard specs must be identical if output is uneven sharded");
-    //         }
-    //     }
-    // }
-
     // Multicore implementation doesn't support input DRAM sharding
     if (operation_attributes.use_multicore && input_is_sharded) {
         TT_FATAL(input_buffer_type == BufferType::L1, "Multicore implementation doesn't support DRAM sharding");

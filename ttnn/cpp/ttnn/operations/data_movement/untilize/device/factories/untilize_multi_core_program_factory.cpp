@@ -6,14 +6,13 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
-#include <algorithm>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include "untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 
@@ -79,8 +78,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         ShardSpec input_shard_spec = a.shard_spec().value();
         input_shard_height = input_shard_spec.shape[0];
         input_shard_width = input_shard_spec.shape[1];
-        // compute_core_range = input_shard_spec.grid;
-        // full_compute_core_range = input_shard_spec.grid;
         num_compute_cores = input_shard_spec.grid.num_cores();
 
         // Note: Accounting for uneven input shards
@@ -91,36 +88,18 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
         num_shards_height = tt::div_up(tensor_height, input_shard_height);
         num_shards = num_shards_height * num_input_blocks_across_width;
-        std::cout << "BEFORE IF STATEMENT" << std::endl;
-        std::cout << "num_compute_cores: " << num_compute_cores << std::endl;
-        std::cout << "num_shards: " << num_shards << std::endl;
-        if (num_compute_cores > num_shards) {
-            // if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-
-            std::cout << "INSIDE IF STATEMENT" << std::endl;
-            if (a.buffer()->buffer_distribution_spec().has_value()) {
-                std::cout << "INSIDE IF STATEMENT 2" << std::endl;
-                // BufferDistributionSpec itself does not expose the strategy.
+        if (num_compute_cores >
+            num_shards) {  // If the user specified more compute cores than there are data, we need to figure out which
+                           // cores have data on them and only activate those cores. To do this, we use information
+                           // encoded in the buffer distribution spec.
+            if (a.buffer()->buffer_distribution_spec().has_value()) {  // If the tensor also has an nd_shard_spec, then
+                                                                       // it has a bufferdistributionspec. Use it.
                 auto buffer_dist_spec = a.buffer()->buffer_distribution_spec().value();
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
                 has_ordered_cores_with_data = true;
                 compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(buffer_dist_spec.cores_with_data()));
-                std::cout << "a.shard_spec().has_value(): " << a.shard_spec().has_value() << std::endl;
-                std::cout << "a.nd_shard_spec().has_value(): " << a.nd_shard_spec().has_value() << std::endl;
-                std::cout << "a.shard_spec().value().orientation: "
-                          << (a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR ? "row_major"
-                                                                                                : "col_major")
-                          << std::endl;
-                std::cout << "a.nd_shard_spec().value().orientation: "
-                          << (a.nd_shard_spec().value().orientation == ShardOrientation::ROW_MAJOR ? "row_major"
-                                                                                                   : "col_major")
-                          << std::endl;
-
-            } else {
-                std::cout << "INSIDE ELSE STATEMENT" << std::endl;
-                std::cout << "input_shard_spec.orientation: "
-                          << (input_shard_spec.orientation == ShardOrientation::ROW_MAJOR ? "row_major" : "col_major")
-                          << std::endl;
+            } else {  // If the tensor does not have an nd_shard_spec, then we need to create a bufferdistributionspec
+                      // from the shard_spec.
                 auto buffer_dist_spec = BufferDistributionSpec::from_shard_spec(
                     a.padded_shape(),
                     Shape({input_shard_height, input_shard_width}),
@@ -204,23 +183,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             compute_core_range,
             ReaderDataMovementConfig(reader_compile_time_args));
     }
-
-    // // Writer compile-time args
-    // uint32_t output_num_blocks_across_width = 1;
-    // if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-    //     output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-    //     uint32_t output_shard_width;
-    //     if (output.shard_spec().has_value()) {
-    //         output_shard_width = output.shard_spec().value().shape[1];
-    //     } else {
-    //         output_shard_width = output.nd_shard_spec().value().shard_shape[-1];
-    //     }
-    //     output_num_blocks_across_width = tensor_width / output_shard_width;
-    // }
-    // uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
-    // uint32_t output_element_size = output.element_size();
-    // uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
-    // uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;
 
     // Writer compile-time args
     uint32_t output_element_size = output.element_size();
@@ -326,145 +288,10 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     // Run-time args (full cores)
     // Note: For sharded input, these are the only cores used
     bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
-    std::cout << " is_row_major: " << is_row_major << std::endl;
     std::vector<CoreCoord> full_cores = has_ordered_cores_with_data
                                             ? ordered_cores_with_data
                                             : corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
-    // std::vector<CoreCoord> full_cores_with_data;
-    // if (input_is_sharded) { // For block sharded input, we may have the situation where a user specifies a larger 2D
-    // grid of cores than the number of shards. We thus need to ensure we are running only cores which have a shard.
-    // Using corerange_to_cores will split the block shards across all cores specified in the grid without consideration
-    // for mapping shards to their proper core considering their 2D spatial location. E.g., for a tensor requiring 3
-    // shards x 3 shards, if the user specifies a 4x4 core grid, then corerange_to_cores will indicate that core (3, 0)
-    // will have the shard which is actually located on core (0,1), leading to incorrect outputs (core (3,0) has no
-    // shard in this example!).
-    //     const auto& shard_spec = a.shard_spec().value();
-
-    //     const auto bbox = shard_spec.grid.bounding_box();
-    //     const auto grid_size = bbox.grid_size();
-    //     const uint32_t grid_width = grid_size.y;
-    //     const uint32_t grid_height = grid_size.x;
-    //     full_cores_with_data.reserve(num_shards);
-    //     if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-    //         const uint32_t required_grid_x = is_row_major ? num_input_blocks_across_width : num_shards_height;
-    //         const uint32_t required_grid_y = is_row_major ? num_shards_height : num_input_blocks_across_width;
-    //         TT_FATAL(
-    //             required_grid_x <= grid_width && required_grid_y <= grid_height,
-    //             "Shard grid {}x{} is too small for {}x{} shards (orientation: {})",
-    //             grid_width,
-    //             grid_height,
-    //             required_grid_x,
-    //             required_grid_y,
-    //             is_row_major ? "row_major" : "col_major");
-    //         if (is_row_major) {
-    //             for (uint32_t shard_row = 0; shard_row < num_shards_height; ++shard_row) {
-    //                 for (uint32_t shard_col = 0; shard_col < num_input_blocks_across_width; ++shard_col) {
-    //                     CoreCoord core{bbox.start_coord.x + shard_col, bbox.start_coord.y + shard_row};
-    //                     if (shard_spec.grid.contains(core)) {
-    //                         full_cores_with_data.push_back(core);
-    //                     }
-    //                 }
-    //             }
-    //         } else {
-    //             for (uint32_t shard_col = 0; shard_col < num_input_blocks_across_width; ++shard_col) {
-    //                 for (uint32_t shard_row = 0; shard_row < num_shards_height; ++shard_row) {
-    //                     CoreCoord core{bbox.start_coord.x + shard_col, bbox.start_coord.y + shard_row};
-    //                     if (shard_spec.grid.contains(core)) {
-    //                         full_cores_with_data.push_back(core);
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-    //         if (is_row_major) {
-    //             TT_FATAL(
-    //                 num_shards_height <= grid_height,
-    //                 "Shard grid {}x{} is too small for {}x{} shards (orientation: {})",
-    //                 grid_width,
-    //                 grid_height,
-    //                 num_shards_height,
-    //                 num_input_blocks_across_width,
-    //                 is_row_major ? "row_major" : "col_major");
-    //             for (uint32_t shard_row = 0; shard_row < num_shards_height; ++shard_row) {
-    //                 CoreCoord core{bbox.start_coord.x, bbox.start_coord.y + shard_row};
-    //                 if (shard_spec.grid.contains(core)) {
-    //                     full_cores_with_data.push_back(core);
-    //                 }
-    //             }
-    //         } else {
-    //             TT_FATAL(
-    //                 num_shards_height <= grid_width,
-    //                 "Shard grid {}x{} is too small for {}x{} shards (orientation: {})",
-    //                 grid_width,
-    //                 grid_height,
-    //                 num_shards_height,
-    //                 num_input_blocks_across_width,
-    //                 is_row_major ? "row_major" : "col_major");
-    //             for (uint32_t shard_col = 0; shard_col < num_shards_height; ++shard_col) {
-    //                 CoreCoord core{bbox.start_coord.x + shard_col, bbox.start_coord.y};
-    //                 if (shard_spec.grid.contains(core)) {
-    //                     full_cores_with_data.push_back(core);
-    //                 }
-    //             }
-
-    //         }
-    //     } else { // Width sharded case
-    //         if (is_row_major) {
-    //             std::cout << " grid_width: " << grid_width << std::endl;
-    //             std::cout << " num_input_blocks_across_width: " << num_input_blocks_across_width << std::endl;
-    //             TT_FATAL(
-    //                 num_input_blocks_across_width <= grid_width,
-    //                 "Shard grid {}x{} is too small for {}x{} shards (orientation: {})",
-    //                 grid_width,
-    //                 grid_height,
-    //                 num_shards_height,
-    //                 num_input_blocks_across_width,
-    //                 is_row_major ? "row_major" : "col_major");
-    //             auto shard_grid_cores = corerange_to_cores(shard_spec.grid, std::nullopt, is_row_major);
-    //             std::cout << " shard_spec.grid cores: ";
-    //             for (const auto& grid_core : shard_grid_cores) {
-    //                 std::cout << "(" << grid_core.x << "," << grid_core.y << ") ";
-    //             }
-    //             std::cout << std::endl;
-
-    //             for (uint32_t shard_col = 0; shard_col < num_input_blocks_across_width; ++shard_col) {
-    //                 CoreCoord core{bbox.start_coord.x + shard_col, bbox.start_coord.y};
-    //                 std::cout << " core: " << core.x << ", " << core.y << std::endl;
-    //                 std::cout << " shard_spec.grid.contains(core): " << shard_spec.grid.contains(core) << std::endl;
-    //                 if (shard_spec.grid.contains(core)) {
-    //                     full_cores_with_data.push_back(core);
-    //                 }
-    //             }
-    //         } else {
-    //             std::cout << " I AM HEREEEEEE" << std::endl;
-    //             TT_FATAL(
-    //                 num_input_blocks_across_width <= grid_height,
-    //                 "Shard grid {}x{} is too small for {}x{} shards (orientation: {})",
-    //                 grid_width,
-    //                 grid_height,
-    //                 num_shards_height,
-    //                 num_input_blocks_across_width,
-    //                 is_row_major ? "row_major" : "col_major");
-    //             for (uint32_t shard_row = 0; shard_row < num_input_blocks_across_width; ++shard_row) {
-    //                 CoreCoord core{bbox.start_coord.x, bbox.start_coord.y + shard_row};
-    //                 if (shard_spec.grid.contains(core)) {
-    //                     full_cores_with_data.push_back(core);
-    //                 }
-    //             }
-    //         }
-
-    //     }
-
-    //     TT_FATAL(
-    //         full_cores_with_data.size() == num_shards,
-    //         "Shard core mapping mismatch: expected {} shards, got {} cores",
-    //         num_shards,
-    //         full_cores_with_data.size());
-    // } else {
-    //     full_cores_with_data = full_cores;
-    // }
     for (uint32_t i = 0; i < full_cores.size(); ++i) {
-        std::cout << " full_cores[i]: " << full_cores[i].x << ", " << full_cores[i].y << std::endl;
         CoreCoord core = full_cores[i];
         uint32_t height_wise_input_block_start_index =
             (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
@@ -534,96 +361,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         // Update index of first tile to read
         tile_start_index += num_tiles_per_input_block * num_input_blocks_per_full_core;
     }
-    // uint32_t active_core_count = 0;
-    // for (const auto& core : full_cores) {
-    //     const auto core_it = std::find(full_cores_with_data.begin(), full_cores_with_data.end(), core);
-    //     uint32_t height_wise_input_block_start_index;
-    //     uint32_t width_wise_input_block_index;
-    //     uint32_t num_unpadded_cols_per_input_block;
-    //     uint32_t num_input_blocks_to_process;
-    //     uint32_t num_tiles_to_read;
-    //     bool has_data_on_core = !(core_it == full_cores_with_data.end());
-    //         std::cout << "has_data_on_core: " << has_data_on_core << std::endl;
-    //     if (has_data_on_core) {
-    //         height_wise_input_block_start_index =
-    //             (active_core_count / num_input_blocks_across_width) * num_input_blocks_per_full_core;
-    //         width_wise_input_block_index = active_core_count % num_input_blocks_across_width;
-
-    //         // Handle uneven input sharding width wise (writer run-time arg)
-    //         num_unpadded_cols_per_input_block = num_cols_per_input_block;
-    //         if (input_is_sharded) {
-    //             bool is_last_input_shard_in_row = width_wise_input_block_index == num_input_blocks_across_width - 1;
-    //             if (is_last_input_shard_in_row) {
-    //                 uint32_t input_shard_width = a.shard_spec().value().shape[1];
-    //                 num_unpadded_cols_per_input_block =
-    //                     num_cols_per_input_block - (tt::round_up(tensor_width, input_shard_width) - tensor_width);
-    //             }
-    //         }
-
-    //         // Handle uneven input sharding height wise (reader, compute, writer run-time arg)
-    //         num_input_blocks_to_process = num_input_blocks_per_full_core;
-    //         if (input_is_sharded) {
-    //             uint32_t input_shard_height = a.shard_spec().value().shape[0];
-    //             uint32_t height_wise_shard_index = active_core_count / num_input_blocks_across_width;
-    //             uint32_t num_shards_height_wise = tt::div_up(tensor_height, input_shard_height);
-    //             bool is_last_input_shard_in_col = height_wise_shard_index == num_shards_height_wise - 1;
-    //             if (is_last_input_shard_in_col) {
-    //                 num_input_blocks_to_process =
-    //                     num_input_blocks_per_full_core -
-    //                     (tt::round_up(tensor_height, input_shard_height) - tensor_height) / tile_height;
-    //             }
-    //         }
-
-    //         // Reader run-time args
-    //         num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
-
-    //     } else {
-    //         num_input_blocks_to_process = 0; // This core has no data on it, do not read anything
-    //         num_tiles_to_read = 0; // This core has no data on it, do not read anything
-    //         height_wise_input_block_start_index = 0;
-    //         width_wise_input_block_index = 0;
-    //         num_unpadded_cols_per_input_block = 0;
-    //     }
-    //     std::vector<uint32_t> reader_run_time_args;
-    //     if (input_is_sharded) {
-    //         // Sharded input
-    //         reader_run_time_args = {num_tiles_to_read};
-    //     } else {
-    //         // Interleaved input
-    //         reader_run_time_args = {
-    //             src0_buffer->address(),
-    //             num_tiles_to_read,
-    //             tile_start_index,
-    //         };
-    //     }
-
-    //     // Writer run-time args
-    //     uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
-    //     uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
-    //     uint32_t num_cols_already_processed_in_first_output_block =
-    //         input_block_global_col_index % num_cols_per_output_block;
-    //     std::vector<uint32_t> writer_run_time_args = {
-    //         dst_buffer->address(),
-    //         num_input_blocks_to_process,
-    //         height_wise_input_block_start_index,
-    //         num_unpadded_cols_per_input_block,
-    //         width_wise_output_block_start_index,
-    //         num_cols_already_processed_in_first_output_block};
-
-    //     // Compute run-time args
-    //     std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
-
-    //     // Set run-time arg
-    //     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
-    //     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
-    //     tt::tt_metal::SetRuntimeArgs(program, untilize_kernel_id, core, compute_run_time_args);
-
-    //     // Update index of first tile to read
-    //     if (has_data_on_core) {
-    //         tile_start_index += num_tiles_per_input_block * num_input_blocks_per_full_core;
-    //         active_core_count++;
-    //     }
-    // }
 
     // Run-time args (cliff core)
     // Note: Only applicable if input is interleaved (sharded input will never have a cliff core)
