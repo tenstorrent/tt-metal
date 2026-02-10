@@ -14,14 +14,22 @@
 
 void kernel_main() {
     volatile uint32_t tt_l1_ptr* results = (volatile uint32_t tt_l1_ptr*)RESULTS_ADDR;
-    int i;
-    for (i = 0; i < NUM_RUNTIME_ARGS; i++) {
+    constexpr uint32_t kCommonRTASeparation = 1024;
+    uint64_t hartid = 0;
+    for (uint32_t i = 0; i < NUM_RUNTIME_ARGS; i++) {
 #ifdef COMMON_RUNTIME_ARGS
-            constexpr uint32_t kCommonRTASeparation = 1024;
-            results[i + kCommonRTASeparation] = get_common_arg_val<uint32_t>(i);
+#ifdef COMPILE_FOR_DM
+            // Quasar only: Get DM processor ID
+            asm volatile("csrr %0, mhartid" : "=r"(hartid));
+#endif
+            results[i + kCommonRTASeparation + hartid * NUM_RUNTIME_ARGS] = get_common_arg_val<uint32_t>(i);
 #endif
             results[i] = get_arg_val<uint32_t>(i);
     }
+#ifdef COMPILE_FOR_DM
+    // Quasar only: write the actual L1 base addresses at the end of CRTA payload from all DMs
+    results[kCommonRTASeparation + MAX_DMS * NUM_RUNTIME_ARGS + hartid] = static_cast<uint32_t>(get_common_arg_addr(0));
+#endif
 
 #ifdef COORDS_ADDR
 #ifdef DATA_MOVEMENT

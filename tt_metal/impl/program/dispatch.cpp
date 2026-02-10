@@ -143,8 +143,6 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset) {
     const auto& hal = MetalContext::instance().hal();
-    // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
-    // whereas the RTA allocation is separate for DM0/DM1/COMPUTE.
     std::vector<uint32_t> max_rtas(kernels.size());
     uint32_t max_unique_rta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
@@ -212,7 +210,7 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     uint32_t max_crta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
-    // Find the max # common RTAs across all KGs
+    // Compute CRTA offsets and sizes for each kernel group
     for (auto& kg : kernel_groups) {
         std::ranges::fill(max_crtas, 0);
         for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
@@ -220,7 +218,6 @@ uint32_t configure_crta_offsets_for_kernel_groups(
             max_crtas[idx] = std::max<uint32_t>(max_crtas[idx], kernel->common_runtime_args().size());
         }
 
-        // Derive crta offsets and sizes for this KG
         uint32_t offset = 0;
         kg->crta_offsets.resize(kg->kernel_ids.size());
         kg->crta_sizes.resize(kg->kernel_ids.size());
@@ -239,12 +236,12 @@ uint32_t configure_crta_offsets_for_kernel_groups(
         kernel->set_common_runtime_args_count(kernel->common_runtime_args().size());
     }
 
-    // Set the kernel group common runtime arg offsets use in the launch message
+    // Set the kernel group common runtime arg offsets used in the launch message
     for (auto& kg : kernel_groups) {
         for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
             const auto& kernel = kernels.at(kg->kernel_ids[idx]);
             // Per-kernel check: Only set actual offset if this kernel has CRTAs
-            if (max_crtas[idx] > 0) {
+            if (kg->crta_sizes[idx] > 0) {
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
                     uint32_t processor_index = hal.get_processor_index(
                         kernel->get_kernel_programmable_core_type(),

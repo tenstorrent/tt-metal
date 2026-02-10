@@ -69,10 +69,10 @@ void assemble_device_commands(
 struct KernelGroup {
     uint32_t programmable_core_type_index{};
     CoreRangeSet core_ranges;
-    // kernel_ids are ordered by dispatch class
+    // kernel_ids are ordered by processor index
     std::vector<KernelHandle> kernel_ids;
+    // RTA/CRTA layout for each kernel
     std::vector<uint32_t> rta_sizes;
-    // Common RTA offsets and sizes.
     std::vector<uint32_t> crta_offsets;
     std::vector<uint32_t> crta_sizes;
     uint32_t total_rta_size{};
