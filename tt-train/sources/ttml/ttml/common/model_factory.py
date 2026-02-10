@@ -103,9 +103,9 @@ class TransformerModelFactory:
         lcfg.dropout_prob = self.transformer_config.dropout_prob
 
         # Optional fields
-        if self.transformer_config.intermediate_dim is not None:
-            lcfg.intermediate_dim = self.transformer_config.intermediate_dim
-        if self.transformer_config.theta is not None:
+        if self.transformer_config.intermediate_dim:
+            lcfg.intermediate_dim = int(self.transformer_config.intermediate_dim)
+        if self.transformer_config.theta:
             lcfg.theta = self.transformer_config.theta
 
         # Runner type (simple mapping like GPT2)
@@ -149,6 +149,49 @@ class TransformerModelFactory:
             return ttml.models.distributed.llama.create_llama_model(lcfg)
         return ttml.models.llama.create_llama_model(lcfg)
 
+    def _create_qwen3(self):
+        qcfg = ttml.models.qwen3.Qwen3Config()
+        qcfg.num_heads = int(self.transformer_config.num_heads)
+        qcfg.num_groups = int(self.transformer_config.num_groups)
+        qcfg.embedding_dim = int(self.transformer_config.embedding_dim)
+        if self.transformer_config.head_dim:
+            qcfg.head_dim = int(self.transformer_config.head_dim)
+        qcfg.num_blocks = int(self.transformer_config.num_blocks)
+        vs = self.transformer_config.vocab_size
+        qcfg.vocab_size = adjust_vocab_size(
+            vs, self.device_config.enable_tp, self.device_config.total_devices()
+        )
+        qcfg.max_sequence_length = int(self.transformer_config.max_sequence_length)
+        qcfg.dropout_prob = float(self.transformer_config.dropout_prob)
+        if self.transformer_config.theta:
+            qcfg.theta = float(self.transformer_config.theta)
+        if self.transformer_config.rms_norm_eps:
+            qcfg.rms_norm_eps = float(self.transformer_config.rms_norm_eps)
+        qcfg.runner_type = map_runner_type(self.transformer_config.runner_type)
+        if self.transformer_config.weight_tying:
+            qcfg.weight_tying = (
+                ttml.models.WeightTyingType.Enabled
+                if "enabled" in self.transformer_config.weight_tying
+                else ttml.models.WeightTyingType.Disabled
+            )
+        rope = self.transformer_config.rope
+        if rope:
+            if self.transformer_config.scaling_factor:
+                qcfg.scaling_factor = float(self.transformer_config.scaling_factor)
+            if self.transformer_config.high_freq_factor:
+                qcfg.high_freq_factor = float(self.transformer_config.high_freq_factor)
+            if self.transformer_config.low_freq_factor:
+                qcfg.low_freq_factor = float(self.transformer_config.low_freq_factor)
+            if self.transformer_config.original_context_length:
+                qcfg.original_context_length = int(
+                    self.transformer_config.original_context_length
+                )
+
+        if self.transformer_config.intermediate_dim:
+            qcfg.set_intermediate_dim(int(self.transformer_config.intermediate_dim))
+
+        return ttml.models.qwen3.create_qwen3_model(qcfg)
+
     def create_model(self):
         """Create model based on model_type configuration.
 
@@ -162,5 +205,7 @@ class TransformerModelFactory:
             return self._create_gpt2()
         elif self.model_type == "llama":
             return self._create_llama()
+        elif self.model_type == "qwen3":
+            return self._create_qwen3()
         else:
             raise ValueError(f"Model type {self.model_type} not supported")

@@ -42,7 +42,7 @@ private:
     RunnerType runner_type = RunnerType::Default;
     LlamaConfig m_config;
     std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
-    std::vector<std::shared_ptr<ModuleBase>> blocks;
+    std::vector<std::shared_ptr<modules::LlamaBlock>> blocks;
     std::shared_ptr<ModuleBase> ln_fc;
     std::shared_ptr<ttml::modules::ModuleBase> fc;
     ops::RotaryEmbeddingParams m_rope_params;
@@ -62,8 +62,7 @@ public:
 
     ttml::autograd::TensorPtr operator()(
         const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override {
-        // When kv_cache is nullptr, new_tokens is not used, so pass 0
-        return (*this)(x, mask, std::shared_ptr<common::transformer::KvCache>(), 0);
+        return (*this)(x, mask, nullptr, 0);
     }
 
     // Get the original vocabulary size for token validation

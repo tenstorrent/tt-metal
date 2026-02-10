@@ -15,6 +15,7 @@
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/concat_op.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
@@ -228,6 +229,13 @@ void py_module(nb::module_& m) {
             nb::arg("kvs"),
             nb::arg("num_heads"),
             nb::arg("num_groups"));
+        py_multi_head_utils.def(
+            "scaled_dot_product_attention",
+            &ttml::ops::scaled_dot_product_attention,
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = nb::none());
     }
 
     {
@@ -362,6 +370,8 @@ void py_module(nb::module_& m) {
         py_unary.def("log_softmax", &ttml::ops::log_softmax, nb::arg("tensor"), nb::arg("dim"));
         py_unary.def("log_softmax_moreh", &ttml::ops::log_softmax_moreh, nb::arg("tensor"), nb::arg("dim"));
     }
+
+    m.def("concat", &ttml::ops::concat, nb::arg("tensors"), nb::arg("dim"));
 }
 
 }  // namespace ttml::nanobind::ops

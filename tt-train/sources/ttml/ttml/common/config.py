@@ -124,6 +124,10 @@ class TransformerConfig:
         self.theta = tc.get("theta", None)
         self.num_groups = tc.get("num_groups", 3)
 
+        # Qwen3-specific
+        self.head_dim = tc.get("head_dim", None)
+        self.rms_norm_eps = tc.get("rms_norm_eps", None)
+
         # RoPE
         self.rope = tc.get("rope_scaling", None)
         if self.rope:

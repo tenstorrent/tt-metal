@@ -40,6 +40,7 @@
 #include <ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp>               // NOLINT
 #include <ttnn/operations/data_movement/transpose/transpose.hpp>                                           // NOLINT
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>                                             // NOLINT
+#include <ttnn/operations/data_movement/view/view.hpp>                                                     // NOLINT
 #include <ttnn/operations/eltwise/binary/binary.hpp>                                                       // NOLINT
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>                                     // NOLINT
 #include <ttnn/operations/eltwise/quantization/quantization.hpp>                                           // NOLINT

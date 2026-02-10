@@ -69,6 +69,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/qwen3.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/qwen3.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.cpp
@@ -103,6 +105,10 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/positional_embeddings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/positional_embeddings.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen3_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen3_block.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen3_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen3_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rms_norm_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rms_norm_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rotary_embedding.cpp
@@ -111,6 +117,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/concat_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/concat_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
@@ -176,6 +184,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/weight_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/weight_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.cpp
