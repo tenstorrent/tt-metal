@@ -56,11 +56,8 @@ BernoulliDeviceOperation::spec_return_value_t BernoulliDeviceOperation::compute_
 
 BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.output.has_value()) {
-        return tensor_args.output.value();
-    }
-
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
+    return ttnn::device_operation::default_create_output_tensors<BernoulliDeviceOperation>(
+        operation_attributes, tensor_args, tensor_args.output);
 }
 
 }  // namespace ttnn::operations::bernoulli

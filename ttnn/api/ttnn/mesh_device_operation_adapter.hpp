@@ -15,6 +15,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::device_operation {
@@ -88,7 +89,19 @@ struct MeshDeviceOperationAdapter {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        return DeviceOperation::create_output_tensors(attrs, tensor_args);
+        if constexpr (HasCreateOutputTensors<DeviceOperation>) {
+            return DeviceOperation::create_output_tensors(attrs, tensor_args);
+        } else {
+            static_assert(
+                std::is_same_v<tensor_return_value_t, Tensor>,
+                "create_output_tensors must be defined for operations with non-Tensor return types "
+                "(e.g. std::vector<Tensor>, std::tuple<Tensor, ...>). "
+                "Use default_create_output_tensors<Op> helper for preallocated output patterns. "
+                "See: ttnn/api/ttnn/device_operation.hpp or docs/source/ttnn/ttnn/adding_new_ttnn_operation.rst");
+            auto output_spec = DeviceOperation::compute_output_specs(attrs, tensor_args);
+            auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+            return create_device_tensor(output_spec, first_tensor.value().device());
+        }
     }
 
     static tt::stl::hash::hash_t compute_program_hash(
