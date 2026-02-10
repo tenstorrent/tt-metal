@@ -112,14 +112,14 @@ Note: To test the demo with your own images, replace images with `models/demos/y
 ## Current Model Performance Summary
 
 **Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | Pretrained Weights | Segmentation PCC (threshold:0.99) | Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N150) | Detection Performance (FPS, N150) | Demo Status |
-|------------|--------------------|-----------------------------------|-------------------------------|---------------------------------------|-----------------------------------|
-| 640x640    | True               |  0.9993999                        |0.9993025                      | 85                                    | 98                                | Passed      |
+| Resolution | Segmentation PCC (threshold:0.99) | Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N150) | Detection Performance (FPS, N150) | Demo Status |
+|------------|----------------------------------|-------------------------------|---------------------------------------|------------------------|-----------|
+| 640x640    |  0.9993999                        |0.9993025                      | 85                                    | 98                                | Passed      |
 
 
-| Resolution | Pretrained Weights | Segmentation PCC (threshold:0.99) |Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N300) | Detection Performance (FPS, N300) | Demo Status |
-|------------|--------------------|-----------------------------------|------------------------------|---------------------------------------|----------------------------------|----------|
-| 640x640    | True               | 0.9993999                         | 0.9993025                    |152                                    |172                               | Passed      |
+| Resolution | Segmentation PCC (threshold:0.99) |Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N300) | Detection Performance (FPS, N300) | Demo Status |
+|------------|-----------------------------------|------------------------------|---------------------------------------|----------------------------------|----------|
+| 640x640    | 0.9993999                         | 0.9993025                    |152                                    |172                               | Passed      |
 
 
 ### Web Demo

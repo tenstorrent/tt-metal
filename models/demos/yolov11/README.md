@@ -45,13 +45,13 @@ pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py
 ## Model Performance Summary
 
 **Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
-|------------|--------------------|----------------------|-------------------------|-------------|
-| 640x640     | True              | 0.9996607            | 228                     | Passed     |
+| Resolution | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
+|------------|----------------------|-------------------------|-------------|
+| 640x640    | 0.9996607            | 228                     | Passed     |
 
-| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
-|------------|------------------- |----------------------|-------------------------|-------------|
-| 640x640    | True               | 0.9996607            | 370                     | Passed      |
+| Resolution | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
+|------------|----------------------|-------------------------|-------------|
+| 640x640    | 0.9996607            | 370                     | Passed      |
 
 ### Demo with Trace+2CQ
 
