@@ -1,0 +1,159 @@
+# Test Physical Groupings File for Pods and Clusters
+# This file defines groupings with pods and clusters for testing higher-level matching
+
+groupings {
+  name: "trays"
+  items: [
+    { asic_location: ASIC_LOCATION_1 },
+    { asic_location: ASIC_LOCATION_2 },
+    { asic_location: ASIC_LOCATION_3 },
+    { asic_location: ASIC_LOCATION_4 },
+    { asic_location: ASIC_LOCATION_5 },
+    { asic_location: ASIC_LOCATION_6 },
+    { asic_location: ASIC_LOCATION_7 },
+    { asic_location: ASIC_LOCATION_8 }
+  ]
+}
+
+groupings {
+  name: "meshes"
+  items: [
+    { grouping_ref { grouping_name: "trays" count: 2 } }  # Each mesh = 2 trays, 16 ASICs
+  ]
+}
+
+groupings {
+  name: "meshes"
+  items: [
+    { grouping_ref { grouping_name: "trays" count: 1 } }  # Each mesh = 1 tray, 8 ASICs
+  ]
+}
+
+# Pods groupings - different configurations
+groupings {
+  name: "pods"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Pod with 2 meshes
+  ]
+}
+
+groupings {
+  name: "pods"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 3 } }  # Pod with 3 meshes
+  ]
+}
+
+groupings {
+  name: "pods"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 4 } }  # Pod with 4 meshes
+  ]
+}
+
+# Clusters groupings - different configurations
+groupings {
+  name: "clusters"
+  items: [
+    { grouping_ref { grouping_name: "pods" count: 2 } }  # Cluster with 2 pods
+  ]
+}
+
+groupings {
+  name: "clusters"
+  items: [
+    { grouping_ref { grouping_name: "pods" count: 3 } }  # Cluster with 3 pods
+  ]
+}
+
+# Mixed composition: superpods with both meshes and pods
+groupings {
+  name: "superpods"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 2 } },
+    { grouping_ref { grouping_name: "pods" count: 1 } }  # Superpod with 2 meshes + 1 pod
+  ]
+}
+
+groupings {
+  name: "superpods"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 1 } },
+    { grouping_ref { grouping_name: "pods" count: 4 } }  # Superpod with 1 mesh + 4 pods
+  ]
+}
+
+# Widgets groupings - same composition as pods but different name (for testing name independence)
+groupings {
+  name: "widgets"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Widget with 2 meshes (same as pods)
+  ]
+}
+
+groupings {
+  name: "widgets"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 3 } }  # Widget with 3 meshes (same as pods)
+  ]
+}
+
+groupings {
+  name: "widgets"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 5 } }  # Widget with 5 meshes (for closest fit test)
+  ]
+}
+
+# Additional meshes configurations for various test scenarios
+groupings {
+  name: "meshes"
+  items: [
+    { grouping_ref { grouping_name: "trays" count: 4 } }  # Each mesh = 4 trays, 32 ASICs
+  ]
+}
+
+# Hosts grouping for tests that need it
+groupings {
+  name: "hosts"
+  items: [
+    { grouping_ref { grouping_name: "trays" count: 4 } }  # Each host = 4 trays, 32 ASICs
+  ]
+}
+
+# Additional meshes grouping for 128 ASIC meshes (4 hosts)
+groupings {
+  name: "meshes"
+  items: [
+    { grouping_ref { grouping_name: "hosts" count: 4 } }  # Each mesh = 4 hosts, 128 ASICs
+  ]
+}
+
+# Top-level groupings for FABRIC graph instances (composition-based matching)
+# For triple_pod_16x8: meshes match to 128 ASIC grouping (4 hosts), so we need groupings
+# that can accommodate that. Since meshes are matched to "meshes" grouping with 4 hosts,
+# a grouping with {meshes: 3} needs 3 * 128 = 384 ASICs.
+# We create groupings that reference "hosts" directly to ensure correct ASIC count calculation.
+# Alternative top grouping that references hosts directly for correct ASIC count
+# This ensures the grouping has 3 * 4 hosts = 12 hosts = 384 ASICs
+# Used for triple_pod_16x8 test which needs 3 meshes with 128 ASICs each
+groupings {
+  name: "top"
+  items: [
+    { grouping_ref { grouping_name: "hosts" count: 12 } }  # Top with 3 meshes (3 * 4 hosts = 12 hosts = 384 ASICs)
+  ]
+}
+
+groupings {
+  name: "top"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 48 } }  # Top with 48 meshes
+  ]
+}
+
+groupings {
+  name: "top"
+  items: [
+    { grouping_ref { grouping_name: "clusters" count: 3 } }  # Top with 3 clusters (for multiple cluster test)
+  ]
+}

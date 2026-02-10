@@ -133,6 +133,22 @@ public:
     const std::vector<GlobalNodeId>& all_meshes() const { return mesh_instances_; }
     const std::vector<GlobalNodeId>& all_graphs() const { return graph_instances_; }
     const std::vector<GlobalNodeId>& all_switches() const { return switch_instances_; }
+    const std::unordered_set<std::string> all_names() const {
+        std::unordered_set<std::string> names;
+        names.reserve(instances_by_name_.size());
+        for (const auto& [name, _] : instances_by_name_) {
+            names.insert(name);
+        }
+        return names;
+    }
+    const std::unordered_set<std::string> all_types() const {
+        std::unordered_set<std::string> types;
+        types.reserve(instances_by_type_.size());
+        for (const auto& [type, _] : instances_by_type_) {
+            types.insert(type);
+        }
+        return types;
+    }
 
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
@@ -164,6 +180,23 @@ public:
             source_device_id);
         return it->second;
     }
+    const std::string& type_by_name(const std::string& name) const {
+        const auto& ids = instances_by_name(name);
+        return get_instance(ids[0]).type;
+    }
+
+    // Calculate chip count from device_topology dimensions for a mesh instance
+    // Returns the product of all dimensions in device_topology.dims()
+    // Example: [4, 4] = 4 × 4 = 16 chips
+    // Example: [8, 2] = 8 × 2 = 16 chips
+    // Example: [32, 4] = 32 × 4 = 128 chips
+    uint32_t get_chip_count(GlobalNodeId mesh_instance_id) const;
+    uint32_t get_chip_count(const InstanceData& mesh_instance) const;
+
+    // Count instances by type
+    // Returns a map from type name to count of instances with that type
+    // Example: count_instances_by_type({"MESH", "POD"}) returns {MESH: 4, POD: 2}
+    std::unordered_map<std::string, uint32_t> count_instances_by_type(const std::vector<std::string>& types) const;
 
     // TODO: This will disappear after we move to Physical discovery
     proto::Architecture get_arch() const;

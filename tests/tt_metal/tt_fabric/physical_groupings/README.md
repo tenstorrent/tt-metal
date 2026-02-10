@@ -565,7 +565,7 @@ groupings {
 Physical groupings files are located in: `tests/tt_metal/tt_fabric/physical_groupings/`
 
 - **`3_pod_16x8_bh_galaxy_physical_groupings.textproto`**: Main configuration file for 3-pod 16x8 Blackhole Galaxy cluster
-- **`triple_16x8_quad_bh_galaxy_blitz_48_stage_physical_groupings.textproto`**: Blitz pipelined 48-stage configuration
+- **`triple_16x8_quad_bh_galaxy_physical_groupings.textproto`**: Blitz pipelined 48-stage configuration
 - **`examples/`**: Directory containing example files demonstrating different grouping patterns
 
 ## Schema Definition
