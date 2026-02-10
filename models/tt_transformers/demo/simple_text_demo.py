@@ -212,6 +212,7 @@ def prepare_generator_args(
     paged_attention,
     num_layers,
     use_prefetcher,
+    use_hf_rope,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -242,6 +243,7 @@ def prepare_generator_args(
             state_dict=state_dict,
             num_layers=num_layers,
             use_prefetcher=use_prefetcher,
+            use_hf_rope=use_hf_rope,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -852,6 +854,7 @@ def test_demo_text(
         use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
+    use_hf_rope = request.config.getoption("--use_hf_rope")
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -942,6 +945,7 @@ def test_demo_text(
         paged_attention=paged_attention,
         num_layers=num_layers,
         use_prefetcher=use_prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     # Skip ci-eval tests on P100 devices
