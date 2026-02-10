@@ -9,40 +9,18 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-// #include <tt-metalium/program.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 #include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
 
 namespace tt::tt_metal {
-class Program;
 struct KernelGroup;
 }
 
-namespace tt::tt_metal::experimental::dfb {
-
-struct DataflowBufferConfig {
-    uint32_t entry_size = 0;
-    uint32_t num_entries = 0;
-    uint16_t producer_risc_mask = 0x0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
-    uint8_t num_producers = 1;
-    ::experimental::AccessPattern pap = ::experimental::AccessPattern::STRIDED;
-    uint16_t consumer_risc_mask = 0x0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
-    uint8_t num_consumers = 1;
-    ::experimental::AccessPattern cap = ::experimental::AccessPattern::STRIDED;
-    bool enable_implicit_sync = false;
-};
-
-// Returns logical DFB id
-uint32_t CreateDataflowBuffer(
-    Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const DataflowBufferConfig& config);
-
-namespace detail {
+namespace tt::tt_metal::experimental::dfb::detail {
 
 // Per-risc config matching dfb_initializer_per_risc_t (40 bytes)
 struct LocalDFBInterfaceHost {
@@ -112,6 +90,4 @@ uint32_t finalize_dfbs(
     uint32_t& dfb_offset,
     uint32_t& dfb_size);
 
-}  // namespace detail
-
-}  // namespace tt::tt_metal::experimental::dfb
+}  // namespace tt::tt_metal::experimental::dfb::detail
