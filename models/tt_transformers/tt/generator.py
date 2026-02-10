@@ -125,15 +125,6 @@ class Generator(DecodeWarmupMixin):
         "supports_prefix_caching": True,
     }
 
-    @property
-    def supports_non_greedy_decoding_on_device(self):
-        if not hasattr(self, "model") or not self.model:
-            return False
-
-        model_instance = self.model[0] if isinstance(self.model, list) else self.model
-        sampling_module = getattr(model_instance, "sampling", None)
-        return sampling_module is not None
-
     def _chunk_sampling_param(self, values):
         if isinstance(values, List):
             return split_list(values, self.data_parallel)
@@ -197,6 +188,9 @@ class Generator(DecodeWarmupMixin):
                     )
                     break
                 for param in sampling_params:
+                    logger.info(
+                        f"Warming up prefill for sequence length: {supported_length} with sampling params: {param}"
+                    )
                     self.prefill_forward_text(
                         warmup_tokens,
                         page_table_warmup,
