@@ -352,6 +352,74 @@ class _MoeSharedExpertContext:
     ag_sender_idx_core_values: list
     bg_sender_idx_core_values: list
 
+    # Down proj mcast (gated reduce output → all cores)
+    down_mcast_dst_cb: int
+    down_mcast_data_size_bytes: int
+    K_down_tiles: int
+
+    # Down proj matmul (SRAM matmul on 112 non-DRAM cores)
+    down_matmul_in1_cb: int
+    down_matmul_out_cb: int
+    out_w_per_core: int
+    matmul_core_grid: Any
+
+    # Residual mcast (bias → all cores)
+    residual_mcast_src_cb: int
+    residual_mcast_dst_cb: int
+    residual_mcast_data_size_bytes: int
+    total_residual_add_tiles: int
+
+    # Residual add (on 112 matmul cores)
+    residual_add_out_cb: int
+
+    # Output gather (112 cores → sender)
+    output_gather_dst_cb: int
+    output_gather_data_size_bytes: int
+    output_gather_src_num_pages: int
+    output_gather_dst_num_pages: int
+    output_gather_receiver_data_addr: int
+
+    # Output mcast (sender → all 130 cores, only DRAM cores use)
+    output_mcast_dst_cb: int  # same as routed add_cb_in1
+    output_mcast_data_size_bytes: int
+    output_mcast_dst_num_pages: int
+
+    # Mcast grid / NOC coordinates
+    all_cores: Any  # CoreRangeSet for 13x10 grid
+    mcast_dest_noc_start: Any
+    mcast_dest_noc_end: Any
+    num_mcast_cores: int
+    mcast_is_part_of_receiver_grid: bool
+    mcast_receiver_grid: Any
+
+    # Semaphore IDs for new mcasts and gather
+    mcast_data_sender_semaphore_id: int
+    mcast_data_receiver_semaphore_id: int
+    output_gather_noc0_receiver_semaphore_id: int
+    output_gather_noc1_receiver_semaphore_id: int
+
+    # CB descriptors for new CBs
+    down_mcast_dst_cb_descriptor: Any
+    down_matmul_in1_cb_descriptor: Any
+    down_matmul_out_cb_descriptor: Any
+    residual_mcast_src_cb_descriptor: Any
+    residual_mcast_dst_cb_descriptor: Any
+    residual_add_out_cb_descriptor: Any
+    output_gather_dst_cb_descriptor: Any
+    output_mcast_dst_cb_descriptor: Any
+
+    # Tile info
+    tile_1x32_size: int
+    tile_1x32_descriptor: Any
+    data_format: Any
+    input_tile: Any
+
+    # Down matmul core count (112)
+    num_down_matmul_cores: int
+
+    # Per-core values for output gather
+    output_gather_sender_idx_core_values: list
+
 
 class MoeRoutedExpertOp:
     """
@@ -487,8 +555,16 @@ class MoeRoutedExpertOp:
         down_proj_in1_buf_tensor,
         mul_scalar_buf_tensor,
         use_hardcoded_expert_index=False,
+        num_dram_cores_for_add=None,
     ):
-        """Compute all dimensions, grids, setup params, CB descriptors, and per-core values."""
+        """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
+
+        Args:
+            ...
+            fused_add_tensor: Shared expert output tensor for eltwise add. None in fused mode
+                (CB is filled by output mcast instead of being tensor-backed).
+            num_dram_cores_for_add: Number of DRAM cores. Required when fused_add_tensor is None.
+        """
 
         # ==================================================================
         # Tensor properties
@@ -762,14 +838,68 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Eltwise Add: down_proj + fused_add
         # ==================================================================
-        add_params = setup_eltwise_add(
-            in0_tensor=down_proj_output_tensor,
-            in1_tensor=fused_add_tensor,
-            out_tensor=final_output_tensor,
-            cb_in0_index=add_cb_in0,
-            cb_in1_index=add_cb_in1,
-            cb_out_index=add_cb_out,
-        )
+        if fused_add_tensor is not None:
+            add_params = setup_eltwise_add(
+                in0_tensor=down_proj_output_tensor,
+                in1_tensor=fused_add_tensor,
+                out_tensor=final_output_tensor,
+                cb_in0_index=add_cb_in0,
+                cb_in1_index=add_cb_in1,
+                cb_out_index=add_cb_out,
+            )
+        else:
+            # Fused mode: cb_in1 is filled by shared expert output mcast.
+            # Compute params without fused_add_tensor.
+            assert num_dram_cores_for_add is not None, "num_dram_cores_for_add required in fused mode"
+            in0_shard_shape = down_proj_output_tensor.memory_config().shard_spec.shape
+            width_per_core = in0_shard_shape[1]
+            total_width = num_dram_cores_for_add * width_per_core
+            element_size_bytes = 2  # bfloat16
+            slice_size_bytes = width_per_core * element_size_bytes
+            in0_size_bytes = slice_size_bytes
+            in1_size_bytes = total_width * element_size_bytes
+            in0_wait_tiles = 1
+            in1_wait_tiles = in1_size_bytes // in0_size_bytes
+
+            cb_tile_h, cb_tile_w = 32, 32
+            cb_tile_size_bytes = cb_tile_h * cb_tile_w * element_size_bytes
+            cb_tile = ttnn.Tile([cb_tile_h, cb_tile_w])
+            cb_tile_desc = ttnn.TileDescriptor(cb_tile)
+
+            out_shard_shape = final_output_tensor.memory_config().shard_spec.shape
+            out_shard_elements = out_shard_shape[0] * out_shard_shape[1]
+            num_tiles = out_shard_elements // (cb_tile_h * cb_tile_w)
+
+            core_ranges = down_proj_output_tensor.memory_config().shard_spec.grid
+            compute_cores_list = ttnn.corerange_to_cores(core_ranges, row_wise=True)
+
+            # CB for in0 (tensor-backed, aliased 32x32 view)
+            cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(add_cb_in0, down_proj_output_tensor)
+            cb_in0_descriptor.total_size = in0_size_bytes
+            cb_in0_descriptor.format_descriptors[0].tile = cb_tile_desc
+            cb_in0_descriptor.format_descriptors[0].page_size = in0_size_bytes
+
+            # CB for out (tensor-backed)
+            cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(add_cb_out, final_output_tensor)
+            cb_out_descriptor.total_size = num_tiles * cb_tile_size_bytes
+            cb_out_descriptor.format_descriptors[0].tile = cb_tile_desc
+            cb_out_descriptor.format_descriptors[0].page_size = cb_tile_size_bytes
+
+            sender_index_core_values = [(core, idx) for idx, core in enumerate(compute_cores_list)]
+
+            add_params = {
+                "cb_in0": add_cb_in0,
+                "cb_in1": add_cb_in1,
+                "cb_out": add_cb_out,
+                "num_tiles": num_tiles,
+                "slice_size_bytes": slice_size_bytes,
+                "cb_in0_wait_tiles": in0_wait_tiles,
+                "cb_in1_wait_tiles": in1_wait_tiles,
+                "cb_in0_descriptor": cb_in0_descriptor,
+                "cb_in1_descriptor": None,  # Filled by output mcast in fused mode
+                "cb_out_descriptor": cb_out_descriptor,
+                "sender_index_core_values": sender_index_core_values,
+            }
 
         # ==================================================================
         # Per-core bank_id, vc, sender_idx
@@ -1132,7 +1262,7 @@ class MoeRoutedExpertOp:
     @staticmethod
     def _build_cb_descriptors(ctx):
         """Build circular buffer descriptors for routed expert."""
-        return [
+        descs = [
             ctx.input_cb_descriptor,
             ctx.gate_mm_input_cb_descriptor,
             ctx.gate_mm_params["weights_cb_descriptor"],
@@ -1156,9 +1286,13 @@ class MoeRoutedExpertOp:
             ctx.down_proj_params["cb_in1_descriptor"],
             ctx.down_proj_params["cb_out_descriptor"],
             ctx.add_params["cb_in0_descriptor"],
-            ctx.add_params["cb_in1_descriptor"],
             ctx.add_params["cb_out_descriptor"],
         ]
+        # In fused mode, cb_in1 is filled by shared expert output mcast (manual CB).
+        # In standalone mode, cb_in1 is tensor-backed from fused_add_tensor.
+        if ctx.add_params["cb_in1_descriptor"] is not None:
+            descs.append(ctx.add_params["cb_in1_descriptor"])
+        return descs
 
     @staticmethod
     def _build_core_descriptors(ctx):
@@ -1249,6 +1383,9 @@ class MoeSharedExpertOp:
     def _setup_dimensions(
         device,
         shared_gate_up_weights_tensor,
+        shared_down_weights_tensor,
+        shared_bias_tensor,
+        shared_output_tensor,
         num_tiles_k,
         tile_1x32_size,
         data_format,
@@ -1256,6 +1393,8 @@ class MoeSharedExpertOp:
         input_tile_size,
         sender_core,
         sender_core_grid,
+        routed_add_cb_in1,
+        routed_add_params,
         k_parallel=8,
         n_parallel=8,
     ):
@@ -1265,6 +1404,9 @@ class MoeSharedExpertOp:
         Args:
             device: TT device (single chip)
             shared_gate_up_weights_tensor: Gate/Up weights tensor for shared expert
+            shared_down_weights_tensor: Down proj weights (WIDTH_SHARDED on 112 non-DRAM cores)
+            shared_bias_tensor: Bias/residual tensor (HEIGHT_SHARDED on sender core)
+            shared_output_tensor: Output tensor (HEIGHT_SHARDED on sender core)
             num_tiles_k: Number of K tiles (from routed expert context)
             tile_1x32_size: Size of a 1x32 tile in bytes
             data_format: Data format (dtype)
@@ -1272,12 +1414,15 @@ class MoeSharedExpertOp:
             input_tile_size: Size of input tile in bytes
             sender_core: The mcast/gather core (e.g., CoreCoord(12, 9))
             sender_core_grid: CoreRangeSet for sender core
+            routed_add_cb_in1: CB index for the eltwise add in1 (shared with output mcast dst)
+            routed_add_params: The routed expert's add_params dict (for format info)
             k_parallel: K parallelism factor
             n_parallel: N parallelism factor
 
         Returns:
             _MoeSharedExpertContext
         """
+        from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
         from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 
         # ==================================================================
@@ -1289,6 +1434,15 @@ class MoeSharedExpertOp:
         shared_group2_cb = 29  # up gather dst on sender
         shared_intermed_cb = 30  # gated reduce intermediate on sender
         shared_mcast_src_cb = 31  # gated reduce output on sender
+        shared_down_mcast_dst_cb = 32  # gated reduce output mcast dst / down matmul in0
+        shared_down_matmul_in1_cb = 33  # down proj weights (tensor-backed)
+        shared_down_matmul_out_cb = 34  # down proj output
+        shared_residual_mcast_src_cb = 35  # bias on sender (tensor-backed)
+        shared_residual_mcast_dst_cb = 36  # bias mcast dst (all 130 cores)
+        shared_residual_add_out_cb = 37  # residual add output
+        shared_output_gather_dst_cb = 38  # output gather dst on sender (tensor-backed)
+        # CB 24 (routed add_cb_in1) is reused as output mcast destination
+        shared_output_mcast_dst_cb = routed_add_cb_in1
 
         # ==================================================================
         # Dimensions
@@ -1334,6 +1488,12 @@ class MoeSharedExpertOp:
         bg_receiver_semaphore_id = 7
         ag_noc1_receiver_semaphore_id = 8
         bg_noc1_receiver_semaphore_id = 9
+        # Mcasts (gated reduce output, residual, output) reuse same pair (sequential)
+        shared_mcast_data_sender_semaphore_id = 10
+        shared_mcast_data_receiver_semaphore_id = 11
+        # Output gather
+        shared_output_gather_noc0_receiver_semaphore_id = 12
+        shared_output_gather_noc1_receiver_semaphore_id = 13
 
         # ==================================================================
         # Core grids
@@ -1436,6 +1596,136 @@ class MoeSharedExpertOp:
         )
 
         # ==================================================================
+        # Mcast grid (13x10 = 130 cores, same as routed expert)
+        # ==================================================================
+        mcast_grid = ttnn.CoreRange(
+            ttnn.CoreCoord(0, 0),
+            ttnn.CoreCoord(DownProj.MCAST_GRID_X - 1, DownProj.MCAST_GRID_Y - 1),
+        )
+        all_cores = ttnn.CoreRangeSet([mcast_grid])
+        num_mcast_cores = DownProj.MCAST_GRID_X * DownProj.MCAST_GRID_Y  # 130
+        mcast_is_part_of_receiver_grid = mcast_grid.contains(sender_core)
+
+        mcast_receiver_grid = DownProj.build_mcast_receiver_grid()
+
+        mcast_dest_noc_start = device.worker_core_from_logical_core(mcast_grid.start)
+        mcast_dest_noc_end = device.worker_core_from_logical_core(mcast_grid.end)
+
+        # ==================================================================
+        # Down proj dimensions (SRAM matmul on 112 non-DRAM cores)
+        # ==================================================================
+        matmul_core_grid = DownProj.build_matmul_core_grid()
+        K_down_tiles = n_parallel  # same as standalone shared expert
+        down_weights_shard_spec = shared_down_weights_tensor.memory_config().shard_spec
+        TILE_1x32 = ttnn.Tile((1, 32))
+        tile_1x32_descriptor = ttnn.TileDescriptor(TILE_1x32)
+        n_per_core = down_weights_shard_spec.shape[1]
+        out_w_per_core = n_per_core // TILE_1x32.tile_shape[1]  # tiles per core
+
+        # Mcast data sizes
+        down_mcast_data_size_bytes = K_down_tiles * input_tile_size
+        total_residual_add_tiles = DownProj.NUM_MATMUL_CORES * out_w_per_core
+        residual_mcast_data_size_bytes = total_residual_add_tiles * tile_1x32_size
+
+        # Output gather
+        output_gather_data_size_bytes = out_w_per_core * tile_1x32_size
+        output_gather_src_num_pages = out_w_per_core
+        output_gather_dst_num_pages = DownProj.NUM_MATMUL_CORES * out_w_per_core
+        output_gather_receiver_data_addr = shared_output_tensor.buffer_address()
+
+        # Output mcast (to DRAM cores via add_cb_in1)
+        # Use format info from routed expert's add_params
+        output_mcast_data_size_bytes = routed_add_params["cb_in1_wait_tiles"] * routed_add_params["slice_size_bytes"]
+        output_mcast_dst_num_pages = routed_add_params["cb_in1_wait_tiles"]
+
+        # ==================================================================
+        # CB descriptors for new CBs
+        # ==================================================================
+        # CB 32: Gated reduce output mcast dst / down matmul in0 (all 130 cores)
+        down_mcast_dst_format = ttnn.CBFormatDescriptor(
+            buffer_index=shared_down_mcast_dst_cb,
+            data_format=data_format,
+            page_size=input_tile_size,
+            tile=input_tile_desc,
+        )
+        down_mcast_dst_cb_descriptor = ttnn.CBDescriptor(
+            total_size=K_down_tiles * input_tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[down_mcast_dst_format],
+        )
+
+        # CB 33: Down proj weights (tensor-backed on 112 matmul cores)
+        down_matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            shared_down_matmul_in1_cb, shared_down_weights_tensor
+        )
+
+        # CB 34: Down proj output (on 112 matmul cores)
+        down_matmul_out_format = ttnn.CBFormatDescriptor(
+            buffer_index=shared_down_matmul_out_cb,
+            data_format=data_format,
+            page_size=tile_1x32_size,
+            tile=tile_1x32_descriptor,
+        )
+        down_matmul_out_cb_descriptor = ttnn.CBDescriptor(
+            total_size=out_w_per_core * tile_1x32_size,
+            core_ranges=matmul_core_grid,
+            format_descriptors=[down_matmul_out_format],
+        )
+
+        # CB 35: Residual mcast source — bias on sender (tensor-backed)
+        residual_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            shared_residual_mcast_src_cb, shared_bias_tensor
+        )
+
+        # CB 36: Residual mcast dst (all 130 cores)
+        residual_mcast_dst_format = ttnn.CBFormatDescriptor(
+            buffer_index=shared_residual_mcast_dst_cb,
+            data_format=data_format,
+            page_size=tile_1x32_size,
+            tile=tile_1x32_descriptor,
+        )
+        residual_mcast_dst_cb_descriptor = ttnn.CBDescriptor(
+            total_size=total_residual_add_tiles * tile_1x32_size,
+            core_ranges=all_cores,
+            format_descriptors=[residual_mcast_dst_format],
+        )
+
+        # CB 37: Residual add output (on 112 matmul cores)
+        residual_add_out_format = ttnn.CBFormatDescriptor(
+            buffer_index=shared_residual_add_out_cb,
+            data_format=data_format,
+            page_size=tile_1x32_size,
+            tile=tile_1x32_descriptor,
+        )
+        residual_add_out_cb_descriptor = ttnn.CBDescriptor(
+            total_size=out_w_per_core * tile_1x32_size,
+            core_ranges=matmul_core_grid,
+            format_descriptors=[residual_add_out_format],
+        )
+
+        # CB 38: Output gather dst on sender (tensor-backed)
+        output_gather_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            shared_output_gather_dst_cb, shared_output_tensor
+        )
+
+        # CB 24 (output mcast dst = add_cb_in1): manual CB on all 130 cores
+        # Replaces the routed expert's tensor-backed add_cb_in1 descriptor
+        add_page_size = routed_add_params["slice_size_bytes"]
+        add_total_size = routed_add_params["cb_in1_wait_tiles"] * add_page_size
+        add_tile_desc = ttnn.TileDescriptor(ttnn.Tile((32, 32)))
+        output_mcast_dst_format = ttnn.CBFormatDescriptor(
+            buffer_index=shared_output_mcast_dst_cb,
+            data_format=ttnn.bfloat16,
+            page_size=add_page_size,
+            tile=add_tile_desc,
+        )
+        output_mcast_dst_cb_descriptor = ttnn.CBDescriptor(
+            total_size=add_total_size,
+            core_ranges=all_cores,
+            format_descriptors=[output_mcast_dst_format],
+        )
+
+        # ==================================================================
         # Per-core values
         # ==================================================================
         # K-offset for matmul
@@ -1458,6 +1748,10 @@ class MoeSharedExpertOp:
 
         ag_sender_idx_core_values = compute_gu_sender_indices(a_cores_list)
         bg_sender_idx_core_values = compute_gu_sender_indices(b_cores_list)
+
+        # Output gather sender indices (per 112 matmul cores)
+        matmul_cores_list = ttnn.corerange_to_cores(matmul_core_grid)
+        output_gather_sender_idx_core_values = [(core, idx) for idx, core in enumerate(matmul_cores_list)]
 
         return _MoeSharedExpertContext(
             gu_weights_cb=shared_gu_weights_cb,
@@ -1509,6 +1803,61 @@ class MoeSharedExpertOp:
             mcast_src_cb_descriptor=mcast_src_cb_descriptor,
             ag_sender_idx_core_values=ag_sender_idx_core_values,
             bg_sender_idx_core_values=bg_sender_idx_core_values,
+            # Down proj mcast
+            down_mcast_dst_cb=shared_down_mcast_dst_cb,
+            down_mcast_data_size_bytes=down_mcast_data_size_bytes,
+            K_down_tiles=K_down_tiles,
+            # Down proj matmul
+            down_matmul_in1_cb=shared_down_matmul_in1_cb,
+            down_matmul_out_cb=shared_down_matmul_out_cb,
+            out_w_per_core=out_w_per_core,
+            matmul_core_grid=matmul_core_grid,
+            # Residual mcast
+            residual_mcast_src_cb=shared_residual_mcast_src_cb,
+            residual_mcast_dst_cb=shared_residual_mcast_dst_cb,
+            residual_mcast_data_size_bytes=residual_mcast_data_size_bytes,
+            total_residual_add_tiles=total_residual_add_tiles,
+            # Residual add
+            residual_add_out_cb=shared_residual_add_out_cb,
+            # Output gather
+            output_gather_dst_cb=shared_output_gather_dst_cb,
+            output_gather_data_size_bytes=output_gather_data_size_bytes,
+            output_gather_src_num_pages=output_gather_src_num_pages,
+            output_gather_dst_num_pages=output_gather_dst_num_pages,
+            output_gather_receiver_data_addr=output_gather_receiver_data_addr,
+            # Output mcast
+            output_mcast_dst_cb=shared_output_mcast_dst_cb,
+            output_mcast_data_size_bytes=output_mcast_data_size_bytes,
+            output_mcast_dst_num_pages=output_mcast_dst_num_pages,
+            # Mcast grid
+            all_cores=all_cores,
+            mcast_dest_noc_start=mcast_dest_noc_start,
+            mcast_dest_noc_end=mcast_dest_noc_end,
+            num_mcast_cores=num_mcast_cores,
+            mcast_is_part_of_receiver_grid=mcast_is_part_of_receiver_grid,
+            mcast_receiver_grid=mcast_receiver_grid,
+            # Semaphores
+            mcast_data_sender_semaphore_id=shared_mcast_data_sender_semaphore_id,
+            mcast_data_receiver_semaphore_id=shared_mcast_data_receiver_semaphore_id,
+            output_gather_noc0_receiver_semaphore_id=shared_output_gather_noc0_receiver_semaphore_id,
+            output_gather_noc1_receiver_semaphore_id=shared_output_gather_noc1_receiver_semaphore_id,
+            # CB descriptors
+            down_mcast_dst_cb_descriptor=down_mcast_dst_cb_descriptor,
+            down_matmul_in1_cb_descriptor=down_matmul_in1_cb_descriptor,
+            down_matmul_out_cb_descriptor=down_matmul_out_cb_descriptor,
+            residual_mcast_src_cb_descriptor=residual_mcast_src_cb_descriptor,
+            residual_mcast_dst_cb_descriptor=residual_mcast_dst_cb_descriptor,
+            residual_add_out_cb_descriptor=residual_add_out_cb_descriptor,
+            output_gather_dst_cb_descriptor=output_gather_dst_cb_descriptor,
+            output_mcast_dst_cb_descriptor=output_mcast_dst_cb_descriptor,
+            # Tile info
+            tile_1x32_size=tile_1x32_size,
+            tile_1x32_descriptor=tile_1x32_descriptor,
+            data_format=data_format,
+            input_tile=input_tile,
+            # Per-core
+            num_down_matmul_cores=DownProj.NUM_MATMUL_CORES,
+            output_gather_sender_idx_core_values=output_gather_sender_idx_core_values,
         )
 
     @staticmethod
@@ -1544,6 +1893,43 @@ class MoeSharedExpertOp:
             ("shared_bg_src_cb", ctx.gu_out_cb),
             ("shared_bg_src_num_pages", 1),
             ("shared_bg_receiver_data_addr", ctx.bg_receiver_data_addr),
+            # Down mcast receiver (gated reduce output → all 130 cores)
+            ("shared_mcast1_data_receiver_semaphore", ctx.mcast_data_receiver_semaphore_id),
+            ("shared_mcast1_dst_cb", ctx.down_mcast_dst_cb),
+            ("shared_mcast1_dst_num_pages", ctx.K_down_tiles),
+            # Down proj weights setup (setup_sharded_buffer on 112 matmul cores)
+            ("shared_down_matmul_in1", ctx.down_matmul_in1_cb),
+            ("shared_down_matmul_k_num_tiles", ctx.K_down_tiles),
+            ("shared_down_matmul_out_w_per_core", ctx.out_w_per_core),
+            # Residual mcast source (bias on sender)
+            ("shared_mcast2_src_cb", ctx.residual_mcast_src_cb),
+            ("shared_mcast2_src_num_pages", ctx.total_residual_add_tiles),
+            # Residual mcast receiver
+            ("shared_mcast2_data_receiver_semaphore", ctx.mcast_data_receiver_semaphore_id),
+            ("shared_mcast2_dst_cb", ctx.residual_mcast_dst_cb),
+            ("shared_mcast2_dst_num_pages", ctx.total_residual_add_tiles),
+            # Down proj matmul (NCRISC: no-op for SRAM matmul)
+            ("shared_down_matmul_in0", ctx.down_mcast_dst_cb),
+            ("shared_down_matmul_out", ctx.down_matmul_out_cb),
+            # Residual add
+            ("shared_residual_add_out_w", ctx.out_w_per_core),
+            # Output gather sender (112 matmul cores → sender)
+            ("shared_output_gather_dest_noc_x", ctx.gather_dest_noc_core.x),
+            ("shared_output_gather_dest_noc_y", ctx.gather_dest_noc_core.y),
+            ("shared_output_gather_data_size_bytes", ctx.output_gather_data_size_bytes),
+            ("shared_output_gather_receiver_semaphore_id", ctx.output_gather_noc0_receiver_semaphore_id),
+            ("shared_output_gather_src_cb", ctx.residual_add_out_cb),
+            ("shared_output_gather_src_num_pages", ctx.output_gather_src_num_pages),
+            ("shared_output_gather_sender_grid_start_x", 0),
+            ("shared_output_gather_sender_grid_start_y", 0),
+            ("shared_output_gather_sender_grid_end_x", 0),
+            ("shared_output_gather_sender_grid_end_y", 0),
+            ("shared_output_gather_row_major", 1),
+            ("shared_output_gather_receiver_data_addr", ctx.output_gather_receiver_data_addr),
+            # Output mcast receiver (sender → all 130 cores for eltwise add)
+            ("shared_output_mcast_data_receiver_semaphore", ctx.mcast_data_receiver_semaphore_id),
+            ("shared_output_mcast_dst_cb", ctx.output_mcast_dst_cb),
+            ("shared_output_mcast_dst_num_pages", ctx.output_mcast_dst_num_pages),
         ]
         brisc_args = [
             # Gate gather (A) receiver
@@ -1558,6 +1944,48 @@ class MoeSharedExpertOp:
             ("shared_bg_noc1_receiver_semaphore_id", ctx.bg_noc1_receiver_semaphore_id),
             ("shared_bg_dst_cb", ctx.group2_cb),
             ("shared_bg_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
+            # Down mcast sender (gated reduce output → all 130 cores)
+            ("shared_mcast1_dest_noc_start_x", ctx.mcast_dest_noc_start.x),
+            ("shared_mcast1_dest_noc_start_y", ctx.mcast_dest_noc_start.y),
+            ("shared_mcast1_dest_noc_end_x", ctx.mcast_dest_noc_end.x),
+            ("shared_mcast1_dest_noc_end_y", ctx.mcast_dest_noc_end.y),
+            ("shared_mcast1_num_cores", ctx.num_mcast_cores),
+            ("shared_mcast1_data_sender_semaphore", ctx.mcast_data_sender_semaphore_id),
+            ("shared_mcast1_data_receiver_semaphore", ctx.mcast_data_receiver_semaphore_id),
+            ("shared_mcast1_data_size_bytes", ctx.down_mcast_data_size_bytes),
+            ("shared_mcast1_src_cb", ctx.mcast_src_cb),
+            ("shared_mcast1_src_num_pages", ctx.mcast_src_num_pages),
+            ("shared_mcast1_dst_cb", ctx.down_mcast_dst_cb),
+            ("shared_mcast1_is_part_of_receiver_grid", ctx.mcast_is_part_of_receiver_grid),
+            # Residual mcast sender (bias → all 130 cores)
+            ("shared_mcast2_data_sender_semaphore", ctx.mcast_data_sender_semaphore_id),
+            ("shared_mcast2_data_receiver_semaphore", ctx.mcast_data_receiver_semaphore_id),
+            ("shared_mcast2_data_size_bytes", ctx.residual_mcast_data_size_bytes),
+            ("shared_mcast2_src_cb", ctx.residual_mcast_src_cb),
+            ("shared_mcast2_src_num_pages", ctx.total_residual_add_tiles),
+            ("shared_mcast2_dst_cb", ctx.residual_mcast_dst_cb),
+            # Residual add
+            ("shared_residual_add_out_w", ctx.out_w_per_core),
+            # Output gather receiver (on sender core)
+            ("shared_output_gather_noc0_num_senders", ctx.num_down_matmul_cores),
+            ("shared_output_gather_noc1_num_senders", 0),
+            ("shared_output_gather_noc0_receiver_semaphore_id", ctx.output_gather_noc0_receiver_semaphore_id),
+            ("shared_output_gather_noc1_receiver_semaphore_id", ctx.output_gather_noc1_receiver_semaphore_id),
+            ("shared_output_gather_dst_cb", ctx.output_gather_dst_cb),
+            ("shared_output_gather_dst_num_pages", ctx.output_gather_dst_num_pages),
+            # Output mcast sender (sender → all 130 cores for eltwise add)
+            ("shared_output_mcast_dest_noc_start_x", ctx.mcast_dest_noc_start.x),
+            ("shared_output_mcast_dest_noc_start_y", ctx.mcast_dest_noc_start.y),
+            ("shared_output_mcast_dest_noc_end_x", ctx.mcast_dest_noc_end.x),
+            ("shared_output_mcast_dest_noc_end_y", ctx.mcast_dest_noc_end.y),
+            ("shared_output_mcast_num_cores", ctx.num_mcast_cores),
+            ("shared_output_mcast_data_sender_semaphore", ctx.mcast_data_sender_semaphore_id),
+            ("shared_output_mcast_data_receiver_semaphore", ctx.mcast_data_receiver_semaphore_id),
+            ("shared_output_mcast_data_size_bytes", ctx.output_mcast_data_size_bytes),
+            ("shared_output_mcast_src_cb", ctx.output_gather_dst_cb),
+            ("shared_output_mcast_src_num_pages", ctx.output_gather_dst_num_pages),
+            ("shared_output_mcast_dst_cb", ctx.output_mcast_dst_cb),
+            ("shared_output_mcast_is_part_of_receiver_grid", ctx.mcast_is_part_of_receiver_grid),
         ]
         trisc_args = [
             # Gate/Up matmul
@@ -1573,6 +2001,18 @@ class MoeSharedExpertOp:
             ("shared_gated_reduce_mcast_src_cb", ctx.mcast_src_cb),
             ("shared_gated_reduce_tiles_per_k", ctx.kernel_tiles_per_k),
             ("shared_gated_reduce_k_num_tiles", ctx.kernel_k_num_tiles),
+            # Down proj SRAM matmul (compute)
+            ("shared_down_matmul_in0", ctx.down_mcast_dst_cb),
+            ("shared_down_matmul_in1", ctx.down_matmul_in1_cb),
+            ("shared_down_matmul_out", ctx.down_matmul_out_cb),
+            ("shared_down_matmul_k_num_tiles", ctx.K_down_tiles),
+            ("shared_down_matmul_out_w_per_core", ctx.out_w_per_core),
+            # Residual add
+            ("shared_residual_add_in0", ctx.down_matmul_out_cb),
+            ("shared_residual_add_in1", ctx.residual_mcast_dst_cb),
+            ("shared_residual_add_out", ctx.residual_add_out_cb),
+            ("shared_residual_add_out_w", ctx.out_w_per_core),
+            ("shared_residual_add_total_in1_tiles", ctx.total_residual_add_tiles),
         ]
         return ncrisc_args, brisc_args, trisc_args
 
@@ -1580,12 +2020,27 @@ class MoeSharedExpertOp:
     def _build_cb_descriptors(shared_ctx):
         """Build CB descriptors for shared expert."""
         return [
+            # Gate/Up matmul + gather + gated reduce
             shared_ctx.gu_weights_cb_descriptor,
             shared_ctx.gu_out_cb_descriptor,
             shared_ctx.group1_cb_descriptor,
             shared_ctx.group2_cb_descriptor,
             shared_ctx.intermed_cb_descriptor,
             shared_ctx.mcast_src_cb_descriptor,
+            # Down mcast dst (all 130 cores)
+            shared_ctx.down_mcast_dst_cb_descriptor,
+            # Down proj matmul (112 matmul cores)
+            shared_ctx.down_matmul_in1_cb_descriptor,
+            shared_ctx.down_matmul_out_cb_descriptor,
+            # Residual mcast (bias → all 130 cores)
+            shared_ctx.residual_mcast_src_cb_descriptor,
+            shared_ctx.residual_mcast_dst_cb_descriptor,
+            # Residual add output (112 matmul cores)
+            shared_ctx.residual_add_out_cb_descriptor,
+            # Output gather dst (sender core)
+            shared_ctx.output_gather_dst_cb_descriptor,
+            # Output mcast dst (all 130 cores, replaces routed add_cb_in1)
+            shared_ctx.output_mcast_dst_cb_descriptor,
         ]
 
     @staticmethod
@@ -1601,6 +2056,7 @@ class MoeSharedExpertOp:
             (unified_descs, per_core_descs) - lists to append to routed expert descriptors
         """
         unified = [
+            # Gate/Up KN-sliced matmul
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_shared_compute_core",
                 core_range=shared_ctx.compute_core_grid,
@@ -1619,19 +2075,54 @@ class MoeSharedExpertOp:
                 value=1,
                 other_value=0,
             ),
+            # Gated reduce + mcast sender
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_shared_gated_reduce_core",
                 core_range=sender_core_grid,
                 value=1,
                 other_value=0,
             ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_shared_mcast_sender_core",
+                core_range=sender_core_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_shared_mcast_receiver_core",
+                core_range=shared_ctx.mcast_receiver_grid,
+                value=1,
+                other_value=0,
+            ),
+            # Down proj matmul (112 non-DRAM cores)
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_shared_down_matmul_core",
+                core_range=shared_ctx.matmul_core_grid,
+                value=1,
+                other_value=0,
+            ),
+            # Output gather (sender = matmul cores, receiver = sender core)
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_shared_output_gather_receiver_core",
+                core_range=sender_core_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="shared_output_gather_use_per_core_sender_idx",
+                core_range=shared_ctx.matmul_core_grid,
+                value=1,
+                other_value=0,
+            ),
         ]
         per_core = [
+            # Gate/Up matmul K-offset
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="shared_gu_k_offset",
                 core_values=shared_ctx.gu_k_offset_core_values,
                 other_value=0,
             ),
+            # Gate/Up gather sender indices
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="shared_ag_sender_idx",
                 core_values=shared_ctx.ag_sender_idx_core_values,
@@ -1640,6 +2131,12 @@ class MoeSharedExpertOp:
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="shared_bg_sender_idx",
                 core_values=shared_ctx.bg_sender_idx_core_values,
+                other_value=0,
+            ),
+            # Output gather sender index (per 112 matmul core)
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="shared_output_gather_sender_idx",
+                core_values=shared_ctx.output_gather_sender_idx_core_values,
                 other_value=0,
             ),
         ]
@@ -1677,7 +2174,6 @@ class MoeOp:
         down_proj_mcast_output_tensor,
         down_proj_weights_tensor,
         down_proj_output_tensor,
-        fused_add_tensor,
         final_output_tensor,
         gate_proj_in1_buf_tensor,
         up_proj_in1_buf_tensor,
@@ -1685,6 +2181,9 @@ class MoeOp:
         mul_scalar_buf_tensor,
         # Shared expert tensors
         shared_gate_up_weights_tensor,
+        shared_down_weights_tensor,
+        shared_bias_tensor,
+        shared_output_tensor,
         shared_k_parallel,
         shared_n_parallel,
         use_hardcoded_expert_index=False,
@@ -1692,12 +2191,22 @@ class MoeOp:
         """
         Execute the full fused MoE operation (routed + shared expert).
 
+        In fused mode, the routed expert's eltwise add input (CB 24) is filled
+        by the shared expert's output mcast rather than a pre-computed tensor.
+        fused_add_tensor is NOT needed.
+
         Returns:
             (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor)
         """
         # ==================================================================
         # Setup routed expert context
         # ==================================================================
+        # Get num_dram_cores for eltwise add parameter computation
+        device_tensor = ttnn.get_device_tensors(input_tensor)[0]
+        device = device_tensor.device()
+        gate_proj_optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        num_dram_cores = len(gate_proj_optimal_workers)
+
         routed_ctx = MoeRoutedExpertOp._setup_dimensions(
             input_tensor,
             mcast_output_tensor,
@@ -1719,26 +2228,28 @@ class MoeOp:
             down_proj_mcast_output_tensor,
             down_proj_weights_tensor,
             down_proj_output_tensor,
-            fused_add_tensor,
+            None,  # fused_add_tensor = None in fused mode (CB filled by output mcast)
             final_output_tensor,
             gate_proj_in1_buf_tensor,
             up_proj_in1_buf_tensor,
             down_proj_in1_buf_tensor,
             mul_scalar_buf_tensor,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
+            num_dram_cores_for_add=num_dram_cores,
         )
 
         # ==================================================================
         # Setup shared expert context
         # ==================================================================
-        # Get input tile info from the input tensor
-        device_tensor = ttnn.get_device_tensors(input_tensor)[0]
         input_tile = device_tensor.get_tile()
         input_tile_size = input_tile.get_tile_size(routed_ctx.data_format)
 
         shared_ctx = MoeSharedExpertOp._setup_dimensions(
             device=routed_ctx.device,
             shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
+            shared_down_weights_tensor=shared_down_weights_tensor,
+            shared_bias_tensor=shared_bias_tensor,
+            shared_output_tensor=shared_output_tensor,
             num_tiles_k=routed_ctx.num_tiles_k,
             tile_1x32_size=routed_ctx.tile_1x32_size,
             data_format=routed_ctx.data_format,
@@ -1746,6 +2257,8 @@ class MoeOp:
             input_tile_size=input_tile_size,
             sender_core=routed_ctx.sender_core,
             sender_core_grid=routed_ctx.input_core_grid,
+            routed_add_cb_in1=routed_ctx.add_cb_in1,
+            routed_add_params=routed_ctx.add_params,
             k_parallel=shared_k_parallel,
             n_parallel=shared_n_parallel,
         )
@@ -1770,6 +2283,7 @@ class MoeOp:
         # Semaphore descriptors
         # ==================================================================
         semaphore_descriptors = [
+            # Routed expert semaphores
             ttnn.SemaphoreDescriptor(
                 id=routed_ctx.mcast_data_sender_semaphore_id,
                 core_ranges=routed_ctx.full_device_grid,
@@ -1800,9 +2314,7 @@ class MoeOp:
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
-        ]
-        # Shared expert gather semaphores
-        semaphore_descriptors += [
+            # Shared expert gate/up gather semaphores
             ttnn.SemaphoreDescriptor(
                 id=shared_ctx.ag_receiver_semaphore_id,
                 core_ranges=routed_ctx.full_device_grid,
@@ -1820,6 +2332,28 @@ class MoeOp:
             ),
             ttnn.SemaphoreDescriptor(
                 id=shared_ctx.bg_noc1_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            # Shared expert mcast semaphores (reused for down mcast, residual mcast, output mcast)
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.mcast_data_sender_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.mcast_data_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            # Shared expert output gather semaphores
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.output_gather_noc0_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.output_gather_noc1_receiver_semaphore_id,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
@@ -1849,15 +2383,17 @@ class MoeOp:
             down_proj_mcast_output_tensor,
             down_proj_weights_tensor,
             down_proj_output_tensor,
-            fused_add_tensor,
             final_output_tensor,
-            # Tensor-backed working buffers
+            # Tensor-backed working buffers (routed)
             gate_proj_in1_buf_tensor,
             up_proj_in1_buf_tensor,
             down_proj_in1_buf_tensor,
             mul_scalar_buf_tensor,
             # Shared expert tensors
             shared_gate_up_weights_tensor,
+            shared_down_weights_tensor,
+            shared_bias_tensor,
+            shared_output_tensor,
             shared_ctx.ag_dummy_tensor,
             shared_ctx.bg_dummy_tensor,
         ]
