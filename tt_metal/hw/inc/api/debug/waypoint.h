@@ -45,7 +45,7 @@ inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t* debug_waypoint) {
 #endif
     debug_waypoint[hartid] = x;
 #else
-    debug_waypoint[PROCESSOR_ID] = x;
+    debug_waypoint[PROCESSOR_INDEX] = x;
 #endif
 }
 
