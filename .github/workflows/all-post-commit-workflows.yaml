@@ -228,6 +228,9 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # FD Model Tests
   models-unit-tests:
@@ -246,6 +249,9 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   tt-train-cpp-unit-tests:
     needs: [build-artifact, tests-to-run]
@@ -264,6 +270,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       gtest_filter: "*-*NIGHTLY_*"
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   run-profiler-regression:
     needs: [build-artifact, tests-to-run]
@@ -284,6 +293,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   t3000-apc-fast-tests:
     if: ${{ needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
     needs: [build-artifact, tests-to-run]
@@ -293,6 +305,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   ops-unit-tests:
     needs: [build-artifact, tests-to-run]
@@ -311,6 +326,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # Enable ops-sanity workflow after issue:30675 resolved
   # ops-sanity:
   #   needs: build-artifact
