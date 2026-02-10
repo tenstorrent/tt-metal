@@ -12,6 +12,8 @@ Tests layer normalization on row-major tensors against PyTorch reference.
 
 import pytest
 
+from loguru import logger
+
 
 def pytorch_reference(input_tensor, gamma, beta, epsilon):
     """
@@ -139,9 +141,27 @@ def test_layer_norm_rm_correctness(device, shape, dtype):
 
     # Use PCC for correctness check (as per spec and MEMORY.md)
     pcc = compute_pcc(torch_output, torch_expected)
+    logger.info(f"Compute PCC is {pcc}")
     assert (
         pcc > 0.99
     ), f"PCC too low: {pcc:.6f} (expected > 0.99). Max diff: {(torch_output - torch_expected).abs().max()}"
+
+    # Additional allclose check with tolerances appropriate for dtype
+    if dtype == "bfloat16":
+        # bfloat16 has ~3 decimal digits of precision
+        rtol = 5e-2
+        atol = 5e-2
+    else:
+        # float32 has ~7 decimal digits of precision
+        rtol = 5e-2
+        atol = 5e-2
+
+    max_diff = (torch_output - torch_expected).abs().max().item()
+    allclose_pass = torch.allclose(torch_output, torch_expected, rtol=rtol, atol=atol)
+    logger.info(
+        f"Allclose check (rtol={rtol}, atol={atol}): {'PASS' if allclose_pass else 'FAIL'}, max_diff={max_diff:.6e}"
+    )
+    assert allclose_pass, f"allclose failed with rtol={rtol}, atol={atol}. Max diff: {max_diff:.6e}"
 
 
 @pytest.mark.parametrize(

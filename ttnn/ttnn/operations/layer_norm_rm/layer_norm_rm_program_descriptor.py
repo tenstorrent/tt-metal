@@ -462,7 +462,7 @@ def create_program_descriptor(
         runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             math_approx_mode=False,
         ),
     )
