@@ -1,0 +1,8 @@
+﻿ttnn.transformer.chunked\_flash\_mla\_prefill
+=============================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.chunked_flash_mla_prefill:
+
+.. autooperation:: ttnn.transformer.chunked_flash_mla_prefill

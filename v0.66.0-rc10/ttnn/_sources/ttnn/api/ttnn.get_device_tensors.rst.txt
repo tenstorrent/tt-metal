@@ -1,0 +1,8 @@
+﻿ttnn.get\_device\_tensors
+=========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.get_device_tensors:
+
+.. autodata:: ttnn.get_device_tensors

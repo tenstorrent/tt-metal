@@ -1,0 +1,8 @@
+﻿ttnn.transformer.flash\_mla\_prefill
+====================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.flash_mla_prefill:
+
+.. autooperation:: ttnn.transformer.flash_mla_prefill
