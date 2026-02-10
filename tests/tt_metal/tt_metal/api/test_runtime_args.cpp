@@ -59,10 +59,9 @@ uint32_t get_runtime_arg_addr(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t num_dm = hal.get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(tt::tt_metal::HalProcessorClassType::DM));
-    const uint32_t cache_offset =
-        (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR)
-            ? MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE)
-            : 0;
+    const uint32_t uncached_l1_offset = (hal.get_arch() == tt::ARCH::QUASAR)
+                                            ? hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE)
+                                            : 0;
 
     switch (processor_class) {
         case tt::tt_metal::HalProcessorClassType::DM:
@@ -82,7 +81,7 @@ uint32_t get_runtime_arg_addr(
     // Common args go after all unique arg slots
     uint32_t total_processors = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
     uint32_t offset = is_common ? total_processors * runtime_args_space : 0;
-    return (result_base + offset + cache_offset);
+    return (result_base + offset + uncached_l1_offset);
 };
 
 distributed::MeshWorkload initialize_program_data_movement(
@@ -163,9 +162,11 @@ std::pair<distributed::MeshWorkload, std::vector<KernelHandle>> initialize_progr
 
     std::map<std::string, std::string> dm_defines = {
         {"DATA_MOVEMENT", "1"},
-        {"MAX_DMS", std::to_string(num_kernels * dm_processors_per_kernel)},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args)},
         {"RESULTS_ADDR", std::to_string(rta_base)}};
+    uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
+        HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
+    dm_defines["MAX_DMS"] = std::to_string(max_dms);
     if (common_rtas) {
         dm_defines["COMMON_RUNTIME_ARGS"] = "1";
     }
@@ -352,29 +353,36 @@ void verify_quasar_crtas(
     auto* device = mesh_device->get_devices()[0];
     uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     uint32_t results_base = get_runtime_arg_addr(l1_base, tt::tt_metal::HalProcessorClassType::DM, 0, true);
+    uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
+        HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
+
+    // Kernel writes to memory using hartid as index, so verification must cover all DMs
+    TT_ASSERT(
+        per_kernel_crtas.size() == max_dms,
+        "per_kernel_crtas.size() ({}) must equal max_dms ({})",
+        per_kernel_crtas.size(),
+        max_dms);
 
     constexpr uint32_t kCommonRTASeparation = 1024;
-    constexpr uint32_t kMaxDMs = 8;
+    // For this test, all CRTAs in all kernels are the same size
     const uint32_t num_crtas = per_kernel_crtas[0].size();
     std::vector<uint32_t> crta_addrs;
 
-    for (uint32_t dm_id = 0; dm_id < per_kernel_crtas.size(); dm_id++) {
+    for (uint32_t dm_id = 0; dm_id < max_dms; dm_id++) {
         const auto& expected_crtas = per_kernel_crtas[dm_id];
-        uint32_t dm_crta_addr =
-            results_base + (kCommonRTASeparation + dm_id * expected_crtas.size()) * sizeof(uint32_t);
+        uint32_t dm_crta_addr = results_base + (kCommonRTASeparation + dm_id * num_crtas) * sizeof(uint32_t);
 
         std::vector<uint32_t> observed;
-        tt_metal::detail::ReadFromDeviceL1(
-            device, core, dm_crta_addr, expected_crtas.size() * sizeof(uint32_t), observed);
+        tt_metal::detail::ReadFromDeviceL1(device, core, dm_crta_addr, num_crtas * sizeof(uint32_t), observed);
 
-        for (size_t i = 0; i < expected_crtas.size(); i++) {
+        for (size_t i = 0; i < num_crtas; i++) {
             EXPECT_EQ(observed[i], expected_crtas[i]) << "DM" << dm_id << " CRTA[" << i << "]";
         }
     }
 
     // Address slot starts right after CRTA values
-    uint32_t addr_base = results_base + (kCommonRTASeparation + kMaxDMs * num_crtas) * sizeof(uint32_t);
-    for (uint32_t dm_id = 0; dm_id < per_kernel_crtas.size(); dm_id++) {
+    uint32_t addr_base = results_base + (kCommonRTASeparation + max_dms * num_crtas) * sizeof(uint32_t);
+    for (uint32_t dm_id = 0; dm_id < max_dms; dm_id++) {
         uint32_t addr_offset = addr_base + dm_id * sizeof(uint32_t);
         std::vector<uint32_t> addr;
         tt_metal::detail::ReadFromDeviceL1(device, core, addr_offset, sizeof(uint32_t), addr);
@@ -942,10 +950,10 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     auto [workload, handles] = unit_tests::runtime_args::initialize_program_data_movement_rta_quasar(
         mesh_device, core_range_set, base_crtas.size(), true, num_kernels, /*dm_processors_per_kernel*/ 1);
     auto& program = workload.get_programs().at(device_range);
-    std::vector<std::vector<uint32_t>> all_crtas;
-    for (uint32_t i = 0; i < handles.size(); i++) {
+    std::vector<std::vector<uint32_t>> all_crtas(num_kernels);
+    for (uint32_t i = 0; i < num_kernels; i++) {
         std::vector<uint32_t> kernel_crtas = {base_crtas[0] + i, base_crtas[1] + i, base_crtas[2] + i};
-        all_crtas.push_back(kernel_crtas);
+        all_crtas[i] = kernel_crtas;
         SetCommonRuntimeArgs(program, handles[i], kernel_crtas);
     }
     distributed::EnqueueMeshWorkload(cq, workload, false);

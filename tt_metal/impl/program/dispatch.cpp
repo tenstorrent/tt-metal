@@ -197,7 +197,7 @@ uint32_t configure_rta_offsets_for_kernel_groups(
         offset = tt::align(offset, l1_alignment);
         max_unique_rta_size = std::max(offset, max_unique_rta_size);
     }
-    return max_unique_rta_size;  // worst-case KG determines L1 reservation
+    return max_unique_rta_size;
 }
 
 uint32_t configure_crta_offsets_for_kernel_groups(
