@@ -50,6 +50,7 @@ target_sources(
         sdpa_windowed/sdpa_windowed.cpp
         split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.cpp
         sdpa_prefill/device/distributed_mla_device_operation.cpp
+        sdpa_prefill/device/distributed_mla_program_factory.cpp
         sdpa_prefill/distributed_mla.cpp
 )
 
