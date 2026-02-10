@@ -23,11 +23,7 @@ void kernel_main() {
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-
-    // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_out = tt::CBIndex::c_2;
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -41,10 +37,13 @@ void kernel_main() {
     constexpr uint32_t w_txns_per_block = matmul_wo_ring::W_TXNS_PER_BLOCK;
     constexpr uint32_t w_tiles_per_txn = matmul_wo_ring::W_TILES_PER_TXN;
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
+    const uint32_t w_blocks_per_iter = (num_tiles_h * num_n_tiles_per_iter) / w_tiles_per_block;
     const uint32_t num_iters = num_w_tiles_w / num_n_tiles_per_iter;
-    const uint32_t num_blocks_per_iter =
-        (num_tiles_h * num_n_tiles_per_iter + w_tiles_per_block - 1) / w_tiles_per_block;
-    const uint32_t w_total_blocks = num_blocks_per_iter * num_iters;
+
+    const uint32_t last_block_tiles = (num_tiles_h * num_n_tiles_per_iter) % w_tiles_per_block;
+    const uint32_t last_block_txns = (last_block_tiles + w_tiles_per_txn - 1) / w_tiles_per_txn;
+
+    const uint32_t w_total_blocks = w_blocks_per_iter * num_iters;
 
     //-------------------------------------------------------------------------
     // Dummy compute
@@ -56,8 +55,8 @@ void kernel_main() {
     }
 
     // Signal to DM1 that the output from this core is ready
-    cb_reserve_back(cb_c2w_rdy, 1);
-    cb_push_back(cb_c2w_rdy, 1);
+    cb_reserve_back(cb_c2w_out, num_iters * num_n_tiles_per_iter);
+    cb_push_back(cb_c2w_out, num_iters * num_n_tiles_per_iter);
 
     // Drain the pipeline - the last dummy push
     cb_wait_front(cb_r2c_w, w_tiles_per_block);

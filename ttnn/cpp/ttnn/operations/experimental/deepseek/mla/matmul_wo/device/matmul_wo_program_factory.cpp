@@ -53,8 +53,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
         ------------------------------------------------------------------------------------
         | cb_r2c_w0      | CBIndex::c_0  | Bfp8_b     | true  |    7*3*2 |      45696      |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    512   |      1048576    |
-        | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
-        | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
+        | cb_c2w_out     | CBIndex::c_2  | Float16_b  | true  |    28     |      57344      |
         ------------------------------------------------------------------------------------
     */
 
@@ -62,8 +61,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     // Note: cb_s2c_in is handled separately as it is sharded CB
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
         {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 7 * 3 * 2},
-        {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
-        {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
+        {"cb_c2w_out", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 28},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;

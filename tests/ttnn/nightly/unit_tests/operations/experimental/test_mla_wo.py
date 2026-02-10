@@ -77,6 +77,17 @@ def run_test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
     w_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
 
     # ------------------------------------------------------------------------
+    # Create DRAM shard spec for output
+    # Tensor shape: (M, N) -> Sharded across 8 cores
+    # ------------------------------------------------------------------------
+    output_shard_height = M
+    output_shard_width = 4 * ttnn.TILE_SIZE
+    output_shard_spec = ttnn.ShardSpec(
+        in0_core_range_set, (output_shard_height, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+
+    # ------------------------------------------------------------------------
     # Prepare the tensors
     # --------------------------------------------------------------------------
     if check_accuracy:
