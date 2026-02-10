@@ -545,10 +545,12 @@ TEST(PhysicalGroupingDescriptorTests, HasGroupingReturnsTrueForExistingGrouping)
         }
     )proto");
 
-    PhysicalGroupingDescriptor desc(text_proto);
-    EXPECT_TRUE(desc.has_grouping("meshes"));
-    EXPECT_TRUE(desc.has_grouping("pods"));
-    EXPECT_FALSE(desc.has_grouping("nonexistent"));
+    EXPECT_NO_THROW({
+        PhysicalGroupingDescriptor desc(text_proto);
+        EXPECT_TRUE(desc.has_grouping("meshes"));
+        EXPECT_TRUE(desc.has_grouping("pods"));
+        EXPECT_FALSE(desc.has_grouping("nonexistent"));
+    });
 }
 
 TEST(PhysicalGroupingDescriptorTests, GetGroupingsByNameReturnsAllDefinitions) {
