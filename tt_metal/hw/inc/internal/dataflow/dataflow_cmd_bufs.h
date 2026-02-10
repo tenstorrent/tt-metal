@@ -12,22 +12,22 @@ constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BU
 constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;
 constexpr uint32_t write_reg_cmd_buf =
     NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_AT_CMD_BUF : DYNAMIC_NOC_BRISC_AT_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf = write_cmd_buf;
 #elif (defined(COMPILE_FOR_NCRISC)) || (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1))
 constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_RD_CMD_BUF : DYNAMIC_NOC_NCRISC_RD_CMD_BUF;
 constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_CMD_BUF;
 constexpr uint32_t write_reg_cmd_buf =
     NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_AT_CMD_BUF : DYNAMIC_NOC_NCRISC_AT_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf = write_cmd_buf;
 #else  // use the default cmf buffers for compute/eth
 constexpr uint32_t read_cmd_buf = NCRISC_RD_CMD_BUF;
 constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
 constexpr uint32_t write_reg_cmd_buf = NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NCRISC_AT_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf = write_cmd_buf;
 #endif
 #else  // FW build
 constexpr uint32_t read_cmd_buf = NCRISC_RD_CMD_BUF;
 constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
 constexpr uint32_t write_reg_cmd_buf = NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NCRISC_AT_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf = write_cmd_buf;
 #endif
