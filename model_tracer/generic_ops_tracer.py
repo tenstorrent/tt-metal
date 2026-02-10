@@ -638,6 +638,10 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     # The operation_tracer.py checks TTNN_OPERATION_TRACE_DIR env var
     env = os.environ.copy()
     env["TTNN_OPERATION_TRACE_DIR"] = trace_dir
+    
+    # Disable fast runtime mode to enable operation tracing
+    # Fast mode skips the tracing decorator for performance
+    env["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": false}'
 
     # Run the command with custom environment (always show live output now)
     # Use a custom command wrapper with tee to capture output while showing it live
