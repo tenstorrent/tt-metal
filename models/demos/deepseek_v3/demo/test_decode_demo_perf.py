@@ -18,16 +18,6 @@ from tracy.process_model_log import get_latest_ops_log_filename, run_device_prof
 
 from models.demos.deepseek_v3.utils.device_perf_utils import compute_e2e_time, filter_profile_csv, process_profile_stats
 
-# ---------------------------------------------------------------------------
-# Expected 2-Layer Model E2E performance values (microseconds)
-# ---------------------------------------------------------------------------
-EXPECTED_TOTAL_KERNEL_DURATION_US = 12373.07
-EXPECTED_TOTAL_OP_TO_OP_LATENCY_US = 189.20
-EXPECTED_E2E_TIME_US = 12562.27
-
-# Acceptable deviation from expected values (fraction, e.g. 0.03 = 3%)
-PERF_MARGIN = 0.03
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,12 +38,15 @@ def _assert_within_margin(metric_name: str, measured: float, expected: float, ma
 # ---------------------------------------------------------------------------
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
-    "margin",
-    [pytest.param(PERF_MARGIN, id="decode_e2e_perf")],
+    "expected_kernel_duration_us, expected_op_to_op_latency_us, expected_e2e_time_us, margin",
+    [
+        pytest.param(12373.07, 189.20, 12562.27, 0.03, id="decode_e2e_perf"),
+    ],
 )
-def test_decode_demo_perf(margin):
+def test_decode_demo_perf(expected_kernel_duration_us, expected_op_to_op_latency_us, expected_e2e_time_us, margin):
     """
     End-to-end device-performance test for the DeepSeek V3 2-layer decode demo.
+    1st layer is dense decoder block and 2nd layer is MoE Decoder Block.
 
     Steps
     -----
@@ -117,8 +110,8 @@ def test_decode_demo_perf(margin):
     # ------------------------------------------------------------------
     logger.info("Step 6: Asserting performance thresholds …")
 
-    _assert_within_margin("E2E Time", e2e_time_us, EXPECTED_E2E_TIME_US, margin)
-    _assert_within_margin("Total Kernel Duration", total_kernel_us, EXPECTED_TOTAL_KERNEL_DURATION_US, margin)
-    _assert_within_margin("Total Op-to-Op Latency", total_latency_us, EXPECTED_TOTAL_OP_TO_OP_LATENCY_US, margin)
+    _assert_within_margin("E2E Time", e2e_time_us, expected_e2e_time_us, margin)
+    _assert_within_margin("Total Kernel Duration", total_kernel_us, expected_kernel_duration_us, margin)
+    _assert_within_margin("Total Op-to-Op Latency", total_latency_us, expected_op_to_op_latency_us, margin)
 
     logger.info("All performance assertions passed!")
