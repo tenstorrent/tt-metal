@@ -54,6 +54,7 @@
 #include "ttnn/operations/experimental/where/where_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/fast_matmul/fast_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 
@@ -129,6 +130,7 @@ void py_module(nb::module_& mod) {
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
+    fast_matmul::detail::bind_fast_matmul(mod);
 
     isin::detail::bind_isin_operation(mod);
 }
