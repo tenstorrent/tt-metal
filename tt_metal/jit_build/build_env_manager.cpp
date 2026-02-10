@@ -16,6 +16,7 @@
 #include <variant>
 
 #include <tt_stl/assert.hpp>
+#include "common/stable_hash.hpp"
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
@@ -108,7 +109,7 @@ uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
 
     // Collect all the parameters that affect the build configuration
-    jit_build::utils::FNV1a hasher;
+    FNV1a hasher;
 
     hasher.update(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()));
     hasher.update(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis()));
@@ -182,8 +183,8 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
     uint64_t build_key = compute_build_key(device_id, num_hw_cqs);
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
-    const size_t fw_compile_hash =
-        std::hash<std::string>{}(tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
+    const size_t fw_compile_hash = static_cast<size_t>(
+        tt::stable_hash_string(tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string()));
     const uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     device_id_to_build_env_[device_id].build_env.init(
         build_key,

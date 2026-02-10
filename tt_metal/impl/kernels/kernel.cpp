@@ -33,6 +33,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
+#include "common/stable_hash.hpp"
 #include "kernel.hpp"
 #include <impl/debug/watcher_server.hpp>
 
@@ -361,21 +362,29 @@ std::string ComputeKernel::config_hash() const {
         unpack_mode_descriptor);
 }
 
-std::string Kernel::compute_hash() const {
-    size_t define_hash_value = 0;
+uint64_t Kernel::compute_hash() const {
+    tt::FNV1a hasher;
+    // defines_ is std::map so iteration order is deterministic (by key).
     for (const auto& [define, value] : this->defines_) {
-        ttsl::hash::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
+        hasher.update(define);
+        hasher.update(value);
     }
-
-    size_t named_args_hash_value = ttsl::hash::hash_objects_with_default_seed(this->named_compile_time_args_);
-
-    return fmt::format(
-        "{}_{}_{}_{}_{}",
-        std::hash<std::string>{}(this->kernel_src_.source_),
-        fmt::join(this->compile_time_args_, "_"),
-        define_hash_value,
-        named_args_hash_value,
-        this->config_hash());
+    // named_compile_time_args_ is unordered_map; sort by key for consistent hash.
+    std::vector<std::string> named_keys;
+    for (const auto& [k, v] : this->named_compile_time_args_) {
+        named_keys.push_back(k);
+    }
+    std::sort(named_keys.begin(), named_keys.end());
+    for (const auto& key : named_keys) {
+        hasher.update(key);
+        hasher.update(static_cast<uint64_t>(this->named_compile_time_args_.at(key)));
+    }
+    hasher.update(this->kernel_src_.source_);
+    for (uint32_t v : this->compile_time_args_) {
+        hasher.update(static_cast<uint64_t>(v));
+    }
+    hasher.update(this->config_hash());
+    return hasher.digest();
 }
 
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
