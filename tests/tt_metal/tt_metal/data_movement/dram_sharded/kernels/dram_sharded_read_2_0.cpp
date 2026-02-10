@@ -38,7 +38,7 @@ void kernel_main() {
             for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
                 noc.set_async_read_state(
                     dram_bank, page_size_bytes, {.bank_id = bank_id, .addr = src_addr});
-            
+
                 for (uint32_t i = 0; i < pages_per_bank; i++) {
                     noc.async_read_with_state(
                         dram_bank,

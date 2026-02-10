@@ -30,7 +30,7 @@ void kernel_main() {
         noc.set_async_write_state(
             unicast_endpoint, packet_size_bytes, {.noc_x = responder_x_coord, .noc_y = responder_y_coord, .addr = subordinate_l1_addr});
 
-        for (uint32_t i = 0; i < num_packets; i++) {        
+        for (uint32_t i = 0; i < num_packets; i++) {
             noc.async_write_with_state(
                 unicast_endpoint,
                 unicast_endpoint,

@@ -81,7 +81,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
         kernels_dir += "_2_0";
     }
     kernels_dir += ".cpp";
-    
+
     // Kernel
     tt::tt_metal::KernelHandle kernel;
     if (test_config.read) {
