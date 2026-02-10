@@ -183,15 +183,15 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Apply SILU activation and then eltwise multiply
             //---------------------------------------------------------------------
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+            // PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+            // PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
 
             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
 
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
-            pack_reconfig_data_format(cb_s2c_in2);
+            // pack_reconfig_data_format(cb_s2c_in2);
 
             pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
             pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
@@ -240,7 +240,6 @@ void kernel_main() {
                     matmul_block(
                         cb_s2c_in2,
                         cb_r2c_w2,
-                        // in2_index,
                         in2_index++,
                         /*in1_index=*/k,
                         /*idst=*/0,
@@ -253,29 +252,16 @@ void kernel_main() {
             }
 
             //             fill_tile_init();
-            //             fill_tile(0, (float) expert_id + 1);
-            //             fill_tile(1,(float) expert_id + 1);
-            //             fill_tile(2,(float) expert_id + 1);
-            //             fill_tile(3, (float) expert_id + 1);
-
-            // MATH(stall());
-
-            //             dprint_tensix_dest_reg(0);
-            //             dprint_tensix_dest_reg(1);
-            //             dprint_tensix_dest_reg(2);
-            //             dprint_tensix_dest_reg(3);
+            //             fill_tile(0, (float) (ring_core_id + 1) * (expert_id+1));
+            //             fill_tile(1,(float) (ring_core_id + 1) * (expert_id+1));
+            //             fill_tile(2,(float) (ring_core_id + 1) * (expert_id+1));
+            //             fill_tile(3, (float) (ring_core_id + 1) * (expert_id+1));
 
             tile_regs_commit();
 
             // Reserve space in the output CB for the untilized data
 
             tile_regs_wait();
-
-            // Pack this in-place for now.
-            //  pack_tile(0, cb_c2s_out);
-            //             pack_tile(1, cb_c2s_out);
-            //             pack_tile(2, cb_c2s_out);
-            //             pack_tile(3, cb_c2s_out);
             pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(
                 cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
 

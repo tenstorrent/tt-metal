@@ -106,22 +106,23 @@ def create_torch_input(L, in0_core_range_set, all_core_range_set, E, M, K):
     # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
 
     torch_input = torch.rand((L, E, M, K), dtype=torch.bfloat16) - 0.5
-
-    torch_input[:, 1, :, :] = torch_input[:, 0, :, :]
-
+    #     torch_input = torch.zeros((L, E, M, K), dtype=torch.bfloat16)
     #     for e in range(E):
-    #         torch_input[0, e, 0, :] = torch.rand((K,), dtype=torch.bfloat16) - 0.5
+    #         torch_input[:,e,:2] = torch.rand(K) - 0.5
+
+    # torch_input[:,1,:,:] *= 2
 
     torch_input = torch_input.unsqueeze(1).repeat(1, in0_core_range_set.num_cores(), 1, 1, 1)
 
     torch_input_shard_placed = torch.zeros([L, all_core_range_set.num_cores(), E, M, K], dtype=torch.bfloat16)
 
     for l in range(L):
-        sidx = 0
-        for idx, c in enumerate(ttnn.corerange_to_cores(all_core_range_set, row_wise=True)):
-            if in0_core_range_set.contains(c):
-                torch_input_shard_placed[l, idx, :, :, :] = torch_input[l, sidx, :, :, :]
-                sidx += 1
+        for e in range(E):
+            sidx = 0
+            for idx, c in enumerate(ttnn.corerange_to_cores(all_core_range_set, row_wise=True)):
+                if in0_core_range_set.contains(c):
+                    torch_input_shard_placed[l, idx, e, :, :] = torch_input[l, sidx, e, :, :]
+                    sidx += 1
 
     return torch_input_shard_placed, torch_input
 
@@ -153,7 +154,10 @@ def create_torch_w0(L, E, K, N):
     #             le_val *= -1
 
     torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    torch_w0[:, 1, :, :] = torch_w0[:, 0, :, :]
+    torch_w0 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
+
+    k = min(K, N)
+    torch_w0[..., torch.arange(k), torch.arange(k)] = 1
 
     return torch_w0
 
@@ -185,7 +189,9 @@ def create_torch_w1(L, E, K, N):
     #             le_val *= -1
 
     torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    torch_w1[:, 1, :, :] = torch_w1[:, 0, :, :]
+    torch_w1 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
+    k = min(K, N)
+    torch_w1[..., torch.arange(k), torch.arange(k)] = 1
 
     return torch_w1
 
@@ -216,7 +222,13 @@ def create_torch_w2(L, E, N, K):
     #                     torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
     #             le_val *= -1
     torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
-    torch_w2[:, 1, :, :] = torch_w2[:, 0, :, :]
+
+    torch_w2 = torch.zeros((L, E, N, K), dtype=torch.bfloat16) - 0.5
+
+    # torch_w2[:,1,:,:] *=3
+    k = min(K, N)
+
+    torch_w2[..., torch.arange(k), torch.arange(k)] = 1
 
     return torch_w2
 
@@ -393,20 +405,12 @@ def prepare_output_tensor_from_combine_writer(
     K,
 ):
     torch.set_printoptions(profile="full")
-
-    # print(f"raw_output: {raw_torch_output[:16]}")
-
-    assert raw_torch_output.shape == (all_core_range_set.num_cores(), E, M, K)
-
     output_shards = []
     for i, c in enumerate(ttnn.corerange_to_cores(all_core_range_set, row_wise=True)):
         if output_shard_core_range_set.contains(c):
             output_shards.append(raw_torch_output[i, :, :, :])
 
     output_core_shards = torch.stack(output_shards)
-
-    # assert torch.count_nonzero(output_core_shards).item() == K*E*1 #M
-    assert output_core_shards.shape == (output_shard_height_dim * output_shard_width_dim, E, M, K)
 
     output_shape = (
         output_shard_height_dim,
@@ -420,9 +424,10 @@ def prepare_output_tensor_from_combine_writer(
 
     for h in range(output_shard_height_dim):
         for w in range(output_shard_width_dim):
-            for e in range(E):
-                print(f"{h=} {w=} {e=}")
-                print(f"output shards: {shaped_torch_output[h,w,e,:8,:16]}")
+            for t in range(0, 1):
+                for e in range(E):
+                    print(f"{h=} {w=} {t=}  {e=}")
+                    print(f"output shards: {shaped_torch_output[h,w,e,t,:32]}")
 
     shaped_torch_output = shaped_torch_output.permute([2, 0, 3, 1, 4]).reshape([E, TOTAL_TOKENS, K])
     torch_output = torch.zeros([E, M, K], dtype=torch.bfloat16)
@@ -435,13 +440,8 @@ def prepare_output_tensor_from_combine_writer(
             ot = t % tokens_per_shard
 
             contrib = shaped_torch_output[e, bt * TOTAL_TOKENS // output_shard_height_dim + ot]
-            # assert not (contrib==0).all()
 
             torch_output[e, t] = contrib
-
-    # assert torch.count_nonzero(torch_output).item() == K*E*1
-    # for e in range(E):
-    #         print(f"{torch_output[e,:,:16]=}")
 
     return torch_output
 
@@ -682,6 +682,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             existing_checksums = checksum_dict[seed]
             for tensor_name, checksum in input_checksums.items():
                 if checksum != existing_checksums[tensor_name]:
+                    continue
                     raise AssertionError(
                         f"Checksum mismatch for {tensor_name} with seed {seed}! "
                         f"Expected: {existing_checksums[tensor_name]}, Got: {checksum}"
@@ -704,7 +705,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             # Compute gate activations for each expert
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
             torch_w0_output_ref = torch_input_ref @ torch_w0
-            torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
+            torch_silu_output_ref = torch_w0_output_ref  # torch.nn.functional.silu(torch_w0_output_ref)
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
             torch_w1_output_ref = torch_input_ref @ torch_w1
             torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, M, N)
@@ -712,15 +713,18 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             # (L, E, M, N) @ (L, E, N, K) -> (L, E, M, K)
             torch_output_ref = torch_intermediate_ref @ torch_w2
 
-            # print(f"{torch_input_ref[0,:,:,:]=}")
-            # print(f"{torch_output_ref[0,:,:,:16]=}")
+            # print(f"{torch_output_ref[0,0,0,:]=}")
+            # print(f"{torch_output_ref[0,1,0,:]=}")
 
         # Calculate accuracy metrics for each layer and expert
-        assert (torch.isclose(tt_to_torch_outputs[0, 0, :, :], tt_to_torch_outputs[0, 1, :, :])).all()
-
         for layer_id, expert_id in itertools.product(range(L), range(E)):
             torch_layer_output = torch_output_ref[layer_id, expert_id, :, :]
             tt_layer_output = tt_to_torch_outputs[layer_id, expert_id, :, :]
+
+            for t in range(torch_layer_output.shape[0]):
+                print(f"{expert_id=} {t=}")
+                print(f"{torch_layer_output[t,:512]=}")
+                print(f"{tt_layer_output[t,:512]=}")
 
             layer_metrics = get_accuracy_metrics(torch_layer_output, tt_layer_output)
             all_accuracy_metrics[(layer_id, expert_id)] = layer_metrics

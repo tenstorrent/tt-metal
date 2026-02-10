@@ -65,16 +65,6 @@ void kernel_main() {
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
     constexpr auto cb_c2s_out = tt::CBIndex::c_5;
 
-    //     auto * source_base_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(source_base_l1_addr);
-    //
-    //     // for(uint32_t i = 0; i<1024; ++i){
-    // //         source_base_l1_ptr[i]=0x4100;
-    // //     }
-    //
-    //     DPRINT<<"INITIAL. Addr: "<<source_base_l1_ptr <<" \n";
-    //     tt::data_movement::common::print_bf16_pages(source_base_l1_addr,32,32);
-    //
-
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
 
@@ -142,6 +132,10 @@ void kernel_main() {
     // Set state for the a2a writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
+    // Set state for the semaphore write
+    noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
+        neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
+
     // TODO get height_blocks from token_counts;
     // noc_semaphore_wait(reinterpret_cast < volatile tt_l1_ptr uint32_t*(metadata_ready_semaphore_addr), 1);
     // uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
@@ -174,7 +168,8 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_a2a_iters; ++i) {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                     // Wait for current data to be ready in cb_s2c_in2
-                    noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
+                    while ((*my_semaphore_ptr) < semaphore_value) {
+                    };
 
                     // Signal to compute core that data is ready
                     cb_reserve_back(cb_w2c_rdy, 1);
@@ -190,11 +185,15 @@ void kernel_main() {
                         local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
                     // Signal neighbor that data is ready (increment their semaphore)
-                    noc_semaphore_inc</*posted=*/true>(
-                        neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+                    noc_inline_dw_write_with_state<
+                        /*update_addr_lo=*/false,
+                        /*update_counter=*/true,
+                        /*posted=*/true,
+                        /*update_addr_hi=*/false,
+                        /*update_val=*/true>(++semaphore_value);
 
                     // Ensure write and semaphore have left the core before continuing
-                    noc_async_posted_atomic_barrier();
+                    noc_async_posted_writes_flushed();
                 }
             }
 
@@ -205,8 +204,6 @@ void kernel_main() {
 
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
-
-            // tt::data_movement::common::print_bf16_pages(source_base_l1_addr,16, 64);
 
             while (width_tiles_to_send > 0) {
                 const uint32_t width_tile_start = width_tile_base + wb;
@@ -238,14 +235,6 @@ void kernel_main() {
 
                     const uint32_t source_l1_addr =
                         source_base_l1_addr + (bt * source_width_tiles + wb) * tile_width_size_bytes;
-
-                    // DPRINT<<"t:"<<t<<" dest_height_shard: "<<dest_height_shard<<" shard_row: "<<shard_row << " wb:
-                    // "<<wb
-                    //                     << " dest_width_shard: "<<dest_width_shard<<" dest_width_offset_tiles:
-                    //                     "<<dest_width_offset_tiles<< " width_transfer_tiles:
-                    //                     "<<width_transfer_tiles<<"\n";
-
-                    // tt::data_movement::common::print_bf16_pages(source_l1_addr,width_transfer_bytes/2 , 1);
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
                 }
