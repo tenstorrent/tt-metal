@@ -76,6 +76,7 @@ public:
 
     void add_barrier_event(const distributed::MeshEvent& event);
 
+    bool lock_may_block() const;
     void* lock();
 
     void unlock();

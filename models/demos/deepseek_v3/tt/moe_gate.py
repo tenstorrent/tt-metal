@@ -373,6 +373,7 @@ class MoEGate(AbstractModule):
             dim=cfg["scatter_top_expert_groups"]["dim"],
         )
         ttnn.deallocate(topk_expert_groups_indices)
+        active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
         active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
 
         # expand active_groups_mask to all the experts
