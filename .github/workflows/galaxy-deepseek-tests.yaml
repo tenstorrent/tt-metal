@@ -56,9 +56,8 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      # TODO: Pass enable-tracy to build-artifact workflow
-      # Requires build-artifact.yaml to support Tracy build flags
-      # enable-tracy: ${{ inputs.enable-tracy || false }}
+      # Enable Tracy profiling support for device performance tests
+      tracy: ${{ inputs.enable-tracy || false }}
   Galaxy-DeepSeek-tests:
     needs: build-artifact
     secrets: inherit
