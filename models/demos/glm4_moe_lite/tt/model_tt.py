@@ -1253,8 +1253,15 @@ class Glm4MoeLiteDenseOnlyTT:
         assert self._trace_top1_indices_tt is not None
 
         self._copy_decode_trace_inputs(tokens=tokens, start_pos=start_pos, page_table=page_table)
-        # Non-blocking allows vLLM async out processing to overlap host work with device execution.
-        ttnn.execute_trace(self.device, self._decode_trace_id_sampling, cq_id=0, blocking=False)
+        # NOTE: Keep trace replay blocking for correctness.
+        #
+        # Our vLLM integration currently reads decode outputs back to host
+        # synchronously (v1 runner uses `read_from_device=True`), and the prefill
+        # fallback path (`decode_loop_trace`) can call traced decode in a tight
+        # loop while discarding the sampled ids. A non-blocking replay would
+        # allow the next iteration to overwrite persistent trace inputs and/or
+        # race KV cache updates, which manifests as gibberish output.
+        ttnn.execute_trace(self.device, self._decode_trace_id_sampling, cq_id=0, blocking=True)
 
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
             # Fully trace-contained greedy sampling: return device token ids.
