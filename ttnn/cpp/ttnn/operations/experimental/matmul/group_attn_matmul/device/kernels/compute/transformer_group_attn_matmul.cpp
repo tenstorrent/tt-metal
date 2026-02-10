@@ -160,11 +160,9 @@ void kernel_main() {
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
                 out_num_tiles,
-                1,
-                compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::disabled(),
-                compute_kernel_lib::tilize_config::PreviousCBs{cb_in1, cb_intermed0});
+                1);
 
             cb_pop_front(cb_in0, in0_block_num_tiles);
         } // Mt loop

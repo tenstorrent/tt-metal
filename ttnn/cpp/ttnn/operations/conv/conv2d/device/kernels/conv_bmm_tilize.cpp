@@ -51,7 +51,8 @@ void tilize_in(
         init_uninit_mode,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::TilizeSpeedMode::Fast,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(in_block_w, in_num_subblocks);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(
+        in_block_w, in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>

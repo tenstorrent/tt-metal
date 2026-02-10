@@ -134,7 +134,7 @@ void kernel_main() {
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
                     in0_block_w, in0_num_subblocks_read);
             }
             reconfig_data_format_srca(tilized_in0_cb_id);

@@ -55,12 +55,16 @@ constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
 /**
  * @brief Controls register datatype reconfiguration mode for untilize operations
  *
- * Reconfigure - reconfigures register datatypes at the start of the helper function
  * NoReconfigure - no register datatype reconfiguration (default)
+ * UnpackReconfigure - reconfigure only unpack registers (srcA)
+ * PackReconfigure - reconfigure only pack registers (output)
+ * UnpackAndPackReconfigure - reconfigure both unpack and pack registers
  */
 enum class ReconfigureRegisterDatatypeMode : uint8_t {
-    Reconfigure,   // Reconfigure register datatypes based on previous CBs
-    NoReconfigure  // No reconfiguration (default)
+    NoReconfigure,            // No reconfiguration (default)
+    UnpackReconfigure,        // Reconfigure unpack registers (srcA/srcB)
+    PackReconfigure,          // Reconfigure pack registers (output)
+    UnpackAndPackReconfigure  // Reconfigure both unpack and pack registers
 };
 
 /**
@@ -87,25 +91,6 @@ enum class WaitMode : uint8_t {
     WaitBlock,    // Default - wait per block/row
     WaitUpfront,  // Wait for all tiles upfront before processing
     NoWait        // Caller manages synchronization (reserved for future use)
-};
-
-/**
- * @brief Collection of previous circular buffers for datatype reconfiguration
- *
- * Used when ReconfigureRegisterDatatypeMode::Reconfigure is set to specify
- * the previous circular buffers whose datatypes should be used for reconfiguration.
- * For untilize, only prev_cb_srca and prev_cb_output are used.
- *
- * Usage:
- *   untilize<width, cb_in, cb_out, ReconfigureRegisterDatatypeMode::Reconfigure>(
- *       num_blocks, PreviousCBs{cb_srcA_prev, cb_output_prev});
- */
-struct PreviousCBs {
-    uint32_t prev_cb_srca;
-    uint32_t prev_cb_output;
-
-    constexpr PreviousCBs(uint32_t srca = INVALID_CB, uint32_t output = INVALID_CB) :
-        prev_cb_srca(srca), prev_cb_output(output) {}
 };
 
 }  // namespace untilize_config
@@ -172,7 +157,6 @@ ALWI void untilize_uninit();
  * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  *
  * @param num_blocks Number of rows/blocks to process
- * @param prev_cbs Previous circular buffers for reconfiguration (used when reconfig_mode = Reconfigure)
  *
  * @example
  *   // Simple untilize (width 4, auto-dispatches to pack_untilize)
@@ -194,13 +178,28 @@ ALWI void untilize_uninit();
  *            WaitMode::WaitUpfront>(num_rows);
  *
  * @example
- *   // Data type reconfiguration
+ *   // Unpack and pack data type reconfiguration
  *   using namespace compute_kernel_lib::untilize_config;
  *   untilize<4, cb_in, cb_out,
  *            InitUninitMode::InitAndUninit,
  *            WaitMode::WaitBlock,
- *            ReconfigureRegisterDatatypeMode::Reconfigure>(10,
- *                PreviousCBs{old_cb_srcA, old_cb_output});
+ *            ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(10);
+ *
+ * @example
+ *   // Only unpack reconfiguration
+ *   using namespace compute_kernel_lib::untilize_config;
+ *   untilize<4, cb_in, cb_out,
+ *            InitUninitMode::InitAndUninit,
+ *            WaitMode::WaitBlock,
+ *            ReconfigureRegisterDatatypeMode::UnpackReconfigure>(10);
+ *
+ * @example
+ *   // Only pack reconfiguration
+ *   using namespace compute_kernel_lib::untilize_config;
+ *   untilize<4, cb_in, cb_out,
+ *            InitUninitMode::InitAndUninit,
+ *            WaitMode::WaitBlock,
+ *            ReconfigureRegisterDatatypeMode::PackReconfigure>(10);
  *
  * @example
  *   // Init only (first in sequence)
@@ -228,7 +227,7 @@ template <
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
-ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs = untilize_config::PreviousCBs());
+ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib
 

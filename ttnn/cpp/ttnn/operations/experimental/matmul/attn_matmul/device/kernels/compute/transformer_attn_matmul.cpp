@@ -65,8 +65,7 @@ void kernel_main() {
                         cb_intermed1,
                         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
-                        1, compute_kernel_lib::untilize_config::PreviousCBs{cb_in1, cb_intermed0});
+                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
 
                     mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
                 }
@@ -80,11 +79,8 @@ void kernel_main() {
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
-                    onetile,
-                    1,
-                    compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::disabled(),
-                    compute_kernel_lib::tilize_config::PreviousCBs{cb_in1, cb_intermed1});
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                    onetile, 1);
 
                 // TODO return here when we start autotuning fast tilize
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);

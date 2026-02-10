@@ -32,11 +32,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cache_cb, untilized_cache_cb);
 
-    // Track previous CBs for reconfiguration in loop
-    // First iteration uses hw_startup CBs as previous
-    uint32_t prev_cb_srca = cache_cb;
-    uint32_t prev_cb_output = untilized_cache_cb;
-
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Untilize a block from the cache with reconfiguration
         compute_kernel_lib::untilize<
@@ -45,8 +40,7 @@ void kernel_main() {
             untilized_cache_cb,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
-            1, compute_kernel_lib::untilize_config::PreviousCBs{prev_cb_srca, prev_cb_output});
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(1);
 
         // Wait on writer to update block. Tilize with reconfiguration
         compute_kernel_lib::tilize<
@@ -55,14 +49,6 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
-            Wt,
-            1,
-            compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::disabled(),
-            compute_kernel_lib::tilize_config::PreviousCBs{cache_cb, untilized_cache_cb});
-
-        // Update previous CBs for next iteration
-        prev_cb_srca = untilized_cache2_cb;
-        prev_cb_output = out_cb;
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(Wt, 1);
     }
 }

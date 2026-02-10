@@ -120,7 +120,7 @@ template <
     untilize_config::InitUninitMode init_uninit_mode,
     untilize_config::WaitMode wait_mode,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
-ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs) {
+ALWI void untilize(uint32_t num_blocks) {
 
     // Compile-time validation
     static_assert(input_cb != output_cb,
@@ -139,30 +139,23 @@ ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs) {
     constexpr bool is_integer = is_integer_format<input_cb>();
 
     // Determine if we're doing data type reconfiguration
-    constexpr bool use_dt = (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure);
+    constexpr bool use_unpack_reconfig =
+        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure) ||
+        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
+
+    constexpr bool use_pack_reconfig =
+        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
+        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
 
     // Reconfigure register datatypes if requested
-    if constexpr (use_dt) {
-        if (prev_cbs.prev_cb_srca != untilize_config::INVALID_CB) {
-            ASSERT(prev_cbs.prev_cb_srca < NUM_CIRCULAR_BUFFERS);
-        }
-        if (prev_cbs.prev_cb_output != untilize_config::INVALID_CB) {
-            ASSERT(prev_cbs.prev_cb_output < NUM_CIRCULAR_BUFFERS);
-        }
+    if constexpr (use_unpack_reconfig) {
+        // Reconfigure srcA for unpack
+        reconfig_data_format_srca(input_cb);
+    }
 
-        // Reconfigure srcA
-        if (prev_cbs.prev_cb_srca != untilize_config::INVALID_CB) {
-            reconfig_data_format_srca(prev_cbs.prev_cb_srca, input_cb);
-        } else {
-            reconfig_data_format_srca(input_cb);
-        }
-
-        // Reconfigure output
-        if (prev_cbs.prev_cb_output != untilize_config::INVALID_CB) {
-            pack_reconfig_data_format(prev_cbs.prev_cb_output, output_cb);
-        } else {
-            pack_reconfig_data_format(output_cb);
-        }
+    if constexpr (use_pack_reconfig) {
+        // Reconfigure output for pack
+        pack_reconfig_data_format(output_cb);
     }
 
     // Determine which dispatch path to use

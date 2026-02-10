@@ -38,8 +38,8 @@ void kernel_main() {
                 untilized_cache_cb,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
-                granularity, compute_kernel_lib::untilize_config::PreviousCBs{prev_cb_srca, prev_cb_output});
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                granularity);
 
             // Wait on writer to update block. Tilize with reconfiguration
             compute_kernel_lib::tilize<
@@ -48,15 +48,10 @@ void kernel_main() {
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
-                Wt,           // block_width_tiles
-                granularity,  // num_blocks
-                compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::disabled(),
-                compute_kernel_lib::tilize_config::PreviousCBs{cache_cb, untilized_cache_cb});
-
-            // Update previous CBs for next inner loop iteration
-            prev_cb_srca = untilized_cache2_cb;
-            prev_cb_output = out_cb;
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                Wt,          // block_width_tiles
+                granularity  // num_blocks
+            );
         }
         reconfig_data_format_srca(cache_cb, in_cb);
     }

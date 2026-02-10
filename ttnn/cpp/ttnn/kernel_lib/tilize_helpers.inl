@@ -23,8 +23,7 @@ template <
 ALWI void tilize(
     uint32_t block_width_tiles,
     uint32_t num_blocks,
-    tilize_config::NonTileAlignedCBWaitConfig config,
-    tilize_config::PreviousCBs prev_cbs) {
+    tilize_config::NonTileAlignedCBWaitConfig config) {
 
     // Compile-time validation
     static_assert(input_cb != output_cb,
@@ -41,22 +40,21 @@ ALWI void tilize(
     // Determine if we're using fast tilize mode (explicit, NOT auto-detected)
     constexpr bool use_fast = (speed_mode == tilize_config::TilizeSpeedMode::Fast);
 
-    // Validate that no valid CB is provided when reconfiguration is NOT requested
-    // Note: This is a runtime validation since prev_cbs is a runtime parameter
-    if constexpr (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure) {
-        bool has_valid_cb = (prev_cbs.prev_cb_srca != tilize_config::INVALID_CB) ||
-                           (prev_cbs.prev_cb_srcb != tilize_config::INVALID_CB) ||
-                           (prev_cbs.prev_cb_output != tilize_config::INVALID_CB);
-        ASSERT(!has_valid_cb);
-    }
-
     // Determine if we're doing data type reconfiguration
-    constexpr bool use_dt = (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure);
+    constexpr bool use_unpack_reconfig =
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure) ||
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
+
+    constexpr bool use_pack_reconfig =
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
 
     // Validate NonTileAlignedCBWaitConfig parameters
     if (config.mode != tilize_config::NonTileAlignedMode::Disabled) {
         ASSERT(config.value > 0);
     }
+
+    // TODO don't wait more than buffer size
 
     // Validate input CB page size for standard tile-aligned mode
     if (config.mode == tilize_config::NonTileAlignedMode::Disabled) {
@@ -65,47 +63,25 @@ ALWI void tilize(
             uint32_t input_page_size_units = get_local_cb_interface(operand_id).fifo_page_size;
             // fifo_page_size is in 16-byte units, convert to actual bytes
             uint32_t input_page_size = input_page_size_units << 4;
-            ASSERT(input_page_size == 1088 || input_page_size == 2048 || input_page_size == 4096);
+            // uint8, uint16,bfp16, uint32,fp32 -> don't hardcode values
+            ASSERT(input_page_size == 1024 || input_page_size == 2048 || input_page_size == 4096);
         })
     }
 
     // Reconfigure register datatypes if requested
-    if constexpr (use_dt) {
-        // Validate previous CB IDs when reconfiguration is requested
-        if (prev_cbs.prev_cb_srca != tilize_config::INVALID_CB) {
-            ASSERT(prev_cbs.prev_cb_srca < NUM_CIRCULAR_BUFFERS);
-        }
-        if (prev_cbs.prev_cb_output != tilize_config::INVALID_CB) {
-            ASSERT(prev_cbs.prev_cb_output < NUM_CIRCULAR_BUFFERS);
-        }
-        if constexpr (use_fast) {
-            if (prev_cbs.prev_cb_srcb != tilize_config::INVALID_CB) {
-                ASSERT(prev_cbs.prev_cb_srcb < NUM_CIRCULAR_BUFFERS);
-            }
-        }
-
-        // Reconfigure srcA
-        if (prev_cbs.prev_cb_srca != tilize_config::INVALID_CB) {
-            reconfig_data_format_srca(prev_cbs.prev_cb_srca, input_cb);
-        } else {
-            reconfig_data_format_srca(input_cb);
-        }
+    if constexpr (use_unpack_reconfig) {
+        // Reconfigure srcA for unpack
+        reconfig_data_format_srca(input_cb);
 
         if constexpr (use_fast) {
             // Reconfigure srcB only in fast mode
-            if (prev_cbs.prev_cb_srcb != tilize_config::INVALID_CB) {
-                reconfig_data_format_srcb(prev_cbs.prev_cb_srcb, input_cb);
-            } else {
-                reconfig_data_format_srcb(input_cb);
-            }
+            reconfig_data_format_srcb(input_cb);
         }
+    }
 
-        // Reconfigure output
-        if (prev_cbs.prev_cb_output != tilize_config::INVALID_CB) {
-            pack_reconfig_data_format(prev_cbs.prev_cb_output, output_cb);
-        } else {
-            pack_reconfig_data_format(output_cb);
-        }
+    if constexpr (use_pack_reconfig) {
+        // Reconfigure output for pack
+        pack_reconfig_data_format(output_cb);
     }
 
     // Compile-time initialization based on InitUninitMode
