@@ -113,7 +113,7 @@ def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
         dtype=dtype,
         use_bias=use_bias,
     )
-    assert check_result["pcc"] > 0.995
+    assert check_result["pcc"] > 0.9995
     assert check_result["relative_rmse"] < 0.02
 
 
@@ -145,7 +145,7 @@ def test_dit_minimal_matmul_addcmul_fused_wan2_shapes(device, M, K, N, config_na
         subblock_h=2,
         subblock_w=2,
     )
-    assert check_result["pcc"] > 0.995
+    assert check_result["pcc"] > 0.9995
     assert check_result["relative_rmse"] < 0.02
 
 
@@ -161,5 +161,5 @@ def test_dit_minimal_matmul_addcmul_fused_scalar_values(device, scalar_value):
         dtype=ttnn.bfloat16,
         use_bias=False,
     )
-    assert check_result["pcc"] > 0.995
+    assert check_result["pcc"] > 0.9995
     assert check_result["relative_rmse"] < 0.02

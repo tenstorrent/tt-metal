@@ -107,7 +107,7 @@ void add_bias_and_addcmul_block(
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(DST_ID, intermediate_cb, tile_id);
+            pack_tile(DST_ID, intermediate_cb);
             tile_regs_release();
         }
     }
@@ -150,7 +150,7 @@ void add_bias_and_addcmul_block(
             tile_regs_commit();
             tile_regs_wait();
 
-            pack_tile(DST_ID, intermediate_cb, tile_id);
+            pack_tile(DST_ID, intermediate_cb);
 
             tile_regs_release();
             tile_id++;
@@ -184,7 +184,7 @@ void add_bias_and_addcmul_block(
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(DST_ID, out_cb, tile_id);
+            pack_tile(DST_ID, out_cb);
             tile_regs_release();
             tile_id++;
         }
