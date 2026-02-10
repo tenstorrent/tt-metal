@@ -142,6 +142,7 @@ inline void llk_pack_dest_dvalid_section_done() {
  *
  * The following functions should be phased out once the dest dvalid scheme is introduced
  */
+// TODO: AM; move from semaphores to a per op programmable dest dvalid scheme, issue #37468
 
 /**
  * @brief Waits until math has finished producing data for the current Destination Register section.

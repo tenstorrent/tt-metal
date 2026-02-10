@@ -94,6 +94,7 @@ inline void llk_math_set_dvalid() {
  *
  * The following functions should be phased out once the dest dvalid scheme is introduced
  */
+// TODO: AM; move from semaphores to a per op programmable dest dvalid scheme, issue #37468
 
 /**
  * @brief Waits until destination register space is available.
