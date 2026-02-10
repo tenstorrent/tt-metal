@@ -947,7 +947,7 @@ TEST_F(TopologyMapperTest, ClosetBoxSuperpodRelaxedPolicyTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_superpod_mgd_relaxed_test.textproto";
 
-    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::GALAXY, galaxy_mesh_graph_desc_path.string());
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
@@ -960,7 +960,8 @@ TEST_F(TopologyMapperTest, ClosetBoxSuperpodRelaxedPolicyTest) {
         local_mesh_binding.mesh_ids = {MeshId{3}};
     }
 
-    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+    auto topology_mapper = TopologyMapper(
+        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
 
     // Verify that the topology mapper was created successfully
     auto current_rank = *tt::tt_metal::MetalContext::instance().global_distributed_context().rank();
@@ -1015,7 +1016,7 @@ TEST_F(TopologyMapperTest, ClosetBoxSuperpodStrictInvalidPolicyTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_superpod_mgd_strict_invalid.textproto";
 
-    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::GALAXY, galaxy_mesh_graph_desc_path.string());
 
     // Verify STRICT policy is read correctly from graph_topology
     EXPECT_FALSE(mesh_graph.is_inter_mesh_policy_relaxed())
@@ -1050,7 +1051,10 @@ TEST_F(TopologyMapperTest, ClosetBoxSuperpodStrictInvalidPolicyTest) {
     // With STRICT policy and invalid mapping conditions (e.g., insufficient channels for inter-mesh connections),
     // TopologyMapper should throw an exception during mapping
     // This test verifies that the STRICT policy correctly enforces validation and fails when conditions are not met
-    EXPECT_THROW(TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding), std::exception)
+    EXPECT_THROW(
+        TopologyMapper(
+            get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding),
+        std::exception)
         << "TopologyMapper should throw with STRICT policy when mapping conditions are invalid (e.g., insufficient "
            "channels for inter-mesh connections)";
 }

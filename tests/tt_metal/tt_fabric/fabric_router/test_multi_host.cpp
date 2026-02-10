@@ -127,10 +127,12 @@ TEST(MultiHost, Test6uSplit8x2ControlPlaneInit) {
     const std::filesystem::path dual_8x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto";
-    auto control_plane = std::make_unique<ControlPlane>(dual_8x2_mesh_graph_desc_path.string());
+    auto control_plane = make_control_plane(
+        dual_8x2_mesh_graph_desc_path,
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     check_asic_mapping_against_golden("Test6uSplit8x2ControlPlaneInit");
 }
@@ -143,10 +145,12 @@ TEST(MultiHost, Test6uSplit4x4ControlPlaneInit) {
     const std::filesystem::path dual_4x4_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x4_mesh_graph_descriptor.textproto";
-    auto control_plane = std::make_unique<ControlPlane>(dual_4x4_mesh_graph_desc_path.string());
+    auto control_plane = make_control_plane(
+        dual_4x4_mesh_graph_desc_path,
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     check_asic_mapping_against_golden("Test6uSplit4x4ControlPlaneInit");
 }

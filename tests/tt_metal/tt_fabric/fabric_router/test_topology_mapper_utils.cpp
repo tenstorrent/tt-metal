@@ -15,6 +15,7 @@
 #include <random>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/cluster.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 
@@ -703,7 +704,7 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_ClosetboxSuperpod) {
         std::filesystem::path(tt_metal_home) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_superpod_mgd.textproto";
 
-    ::tt::tt_fabric::MeshGraph mesh_graph(mesh_graph_desc_path.string());
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::GALAXY, mesh_graph_desc_path.string());
     const auto multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 4u);
@@ -787,7 +788,7 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_StrictModeIntermeshPo
         std::filesystem::path(tt_metal_home) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_strict_connection_mgd.textproto";
 
-    ::tt::tt_fabric::MeshGraph mesh_graph(mesh_graph_desc_path.string());
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::T3K, mesh_graph_desc_path.string());
     const auto multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
 
     // Verify we have 2 meshes
@@ -1024,7 +1025,7 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxed
     }  // File is closed here
 
     // Load MeshGraph from the temporary file (with strict connections between mesh 0-1)
-    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::GALAXY, temp_mgd_path.string());
 
     // Clean up temporary file immediately after loading
     std::filesystem::remove(temp_mgd_path);
@@ -3380,7 +3381,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_InterMeshConnectivity_2x2
     }  // File is closed here
 
     // Load MeshGraph from the temporary file
-    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::GALAXY, temp_mgd_path.string());
 
     // Clean up temporary file immediately after loading
     std::filesystem::remove(temp_mgd_path);
@@ -3586,7 +3587,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstr
     }  // File is closed here
 
     // Load MeshGraph from the temporary file
-    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::GALAXY, temp_mgd_path.string());
 
     // Clean up temporary file immediately after loading
     std::filesystem::remove(temp_mgd_path);
@@ -3815,7 +3816,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConn
     }  // File is closed here
 
     // Load MeshGraph from the MGD file (should succeed when feature is implemented)
-    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::GALAXY, temp_mgd_path.string());
 
     // Build logical multi-mesh graph
     const auto logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
@@ -4065,7 +4066,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     }  // File is closed here
 
     // Load MeshGraph from the temporary file
-    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::GALAXY, temp_mgd_path.string());
 
     // Clean up temporary file immediately after loading
     std::filesystem::remove(temp_mgd_path);
@@ -4523,7 +4524,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     }  // File is closed here
 
     // Load MeshGraph from the temporary file
-    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::GALAXY, temp_mgd_path.string());
 
     // Clean up temporary file immediately after loading
     std::filesystem::remove(temp_mgd_path);
@@ -4805,7 +4806,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     }  // File is closed here
 
     // Load MeshGraph from the temporary file
-    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::GALAXY, temp_mgd_path.string());
 
     // Clean up temporary file immediately after loading
     std::filesystem::remove(temp_mgd_path);
