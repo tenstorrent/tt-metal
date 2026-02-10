@@ -36,6 +36,15 @@ static void WriteRealtimeRecordToCsv(const tt::tt_metal::experimental::ProgramRe
         (record.end_timestamp >= record.start_timestamp) ? (record.end_timestamp - record.start_timestamp) : 0;
     double duration_ns = (record.frequency > 0.0) ? (static_cast<double>(duration_cycles) / record.frequency) : 0.0;
 
+    fmt::print(
+        "realtime record: id={} chip_id={} start={} end={} duration_cycles={} duration_ns={:.2f}\n",
+        record.program_id,
+        record.chip_id,
+        record.start_timestamp,
+        record.end_timestamp,
+        duration_cycles,
+        duration_ns);
+
     std::string kernel_sources_str;
     for (size_t i = 0; i < record.kernel_sources.size(); i++) {
         if (i > 0) {
@@ -78,10 +87,10 @@ static void RunPrograms(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
 
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-
     for (uint32_t i = 0; i < num_programs; i++) {
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
         Program program = CreateProgram();
 
         CreateKernel(
@@ -103,9 +112,8 @@ static void RunPrograms(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
         program.set_runtime_id(static_cast<uint64_t>(i + 1));
 
         workload.add_program(device_range, std::move(program));
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     }
-
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 }
 
 int main(int argc, char** argv) {
