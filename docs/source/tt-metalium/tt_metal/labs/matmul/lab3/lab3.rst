@@ -11,21 +11,25 @@ each core independently read its own tiles from DRAM, even when neighboring core
 
 Ideally, each piece of data should be fetched from DRAM only once and then reused by all cores that need it.
 On Tenstorrent devices, cores do not have direct access to each other's L1 CBs, but they are connected by a
-2D **Network-on-Chip (NOC)**. The NOC supports **unicast** and **multicast** operations.
+2D **Network-on-Chip (NOC)** allowing the cores to pass data to each other.
+While sending data over the NOC is more efficient than reading data from DRAM multiple times,
+it still introduces some overhead. Therefore, we would like to minimize this overhead.
+The NOC supports **unicast** and **multicast** operations.
 Unicast allows a sender core to write data to a single destination core.
-Multicast allows a sender core to write the same data to multiple destination cores in a single NOC operation.
+Multicast allows a sender core to write the same data to multiple destination cores in a single NOC operation,
+minimizing the overhead when the same data needs to be sent to multiple cores.
+
 In this lab you will:
 
-* Use simple multicast to send tiles from one sender core to multiple receiver cores.
+* Learn how to use simple multicast to send tiles from one sender core to multiple receiver cores.
 * Understand how semaphores, device coordinates, and multicast addressing work together.
 * Apply multicast to your Lab 2 multi core matrix multiplication so that tiles of A and B are reused across cores,
-not just within a single core.
+  not just within a single core.
 
 High level motivation
 =====================
 
-In Lab 2, you already reduced DRAM bandwidth by reusing tiles locally. However, consider an example
-matrix multiplication shown in Figure 1.
+Consider an example matrix multiplication shown in Figure 1.
 
 .. figure:: images/data_reuse_no_multicast.png
    :alt: Example matrix multiplication on a 3x3 core grid
@@ -37,15 +41,22 @@ matrix multiplication shown in Figure 1.
 Each square in Figure 1 represents a tile, and dimensions of matrices are ``9x6`` tiles
 for ``A`` and ``6x9`` tiles for ``B``, resulting in a ``9x9`` tile output matrix ``C``.
 The squares in the middle of the figure represent the core grid, with each square labeled
-with its core coordinates ``(x, y)``.
-Arrows indicate reads of tiles from DRAM into the core's on-chip memory.
-As can be seen, all cores in the same row read the same rows of tiles of ``A``,
+with its core coordinates ``(x, y)``. The core coordinates are also shown over the output
+matrix ``C`` to indicate the core that computes the corresponding rectangular block of tiles.
+
+From the basic matrix multiplication algorithm, we know that computing an element of the output matrix ``C``
+requires all elements of the corresponding row of ``A`` and the corresponding column of ``B``.
+Same applies when computing tiles or rectangular blocks of tiles of ``C``.
+This means that all cores in the same row need the same rows of tiles of ``A``,
+and all cores in the same column need the same columns of tiles of ``B``.
+
+Arrows in Figure 1 indicate reads of tiles from DRAM into the core's on-chip memory,
+illustrating the fact that all cores in the same row read the same rows of tiles of ``A``,
 and all cores in the same column read the same columns of tiles of ``B``.
 
 Since DRAM bandwidth is limited, this is inefficent because same data is read multiple times from DRAM.
-Instead, we would like to load a tile from DRAM once and share it across all cores that need it.
-Because cores cannot read from each other's CBs, this sharing must happen explicitly through the NOC
-One possible way to achive this is shown in Figure 2.
+Instead, we would like to load a tile from DRAM once and share it across all cores that need it through the NOC.
+A possible way to achive this is shown in Figure 2.
 
 .. figure:: images/data_reuse_with_multicast.png
    :alt: Example matrix multiplication on a 3x3 core grid with multicast
@@ -56,26 +67,18 @@ One possible way to achive this is shown in Figure 2.
 
 In the example in Figure 2, only the leftmost core in each grid row reads tiles of ``A`` from DRAM,
 depicted by thin arrows in the figure.
-The core stores the tiles of ``A`` into its own CBs for its own computation, just as it did in Lab 2.
-However, it now also multicasts the tiles of ``A`` it read from DRAM to all the other cores that
-need these same tiles, which is all the cores in that row.
+Each leftmost core stores the tiles of ``A`` into its own CBs for its own computation, just as it did in Lab 2.
+However, it now also multicasts the tiles of ``A`` it read from DRAM to all the other cores in the same row.
 Similarly, only the topmost core in each grid column reads tiles of ``B`` from DRAM, storing them into
-its own CBs for its own computation, and it multicasts these tiles to all the other cores that need
-these same tiles, which is all the cores in that column.
-
-The multicast operation is depicted by thick arrows in the figure. While each multicast is depicted
-by two arrows, this is only to clearly denote all the recipients of the operation;
-the thick arrows of the same color are actually part of the same multicast operation.
+its own CBs for its own computation, and multicasts these tiles to all the other cores in the same column.
+The multicast operations are depicted by thick arrows in the figure.
 
 In the rest of this lab, you will first work through a simple example program demonstrating NOC and
-multicast features, then retrofit the same ideas into your Lab 2 matrix multiplication solution.
+multicast features, then retrofit your Lab 2 matrix multiplication solution to use multicast.
 
 
 Background: Tenstorrent NOC and Multicast
 *****************************************
-
-NOC overview
-============
 
 The Network-on-Chip (NoC) is a 2D mesh interconnect that connects:
 * All Tensix cores
@@ -104,34 +107,88 @@ indicate that it is ready to accept a tile (for example, by reserving a CB slot)
 completes, the tile is simply present in the CB, ready to be consumed by the compute or writer
 kernels just like any other locally produced data.
 
+We will illustrate the multicast operation with a simple example program in the next section.
 
+Example Multicast Program
+=========================
 
-Multicast uses this structure to **replicate a stream of tiles from one core to many**.
-For example, a sender at ``(0,0)`` could multicast a tile to receivers ``(1,0)``, ``(2,0)``, and ``(3,0)`` in one operation.
+The main program for the example multicast program is located in the file ``ttnn/examples/lab_multicast/lab_multicast.cpp``.
 
-Logical vs device coordinates
-=============================
+The program creates a 2D tensor and fills it with random data.
+One **sender core** uses a reader kernel to read tiles of this tensor from DRAM and also multicasts them to three **receiver cores**.
+The flow of data is shown in Figure 3.
 
-In TT-Metalium:
+.. figure:: images/data_flow_multicast.png
+   :alt: Data flow in the multicast example program
+   :width: 700
+   :align: center
 
-* **Logical coordinates** are used on the host side to describe how you want to assign work to cores in a program. For example, you might define:
+   Figure 3: Data flow in the multicast example program
 
-  .. code-block:: c++
+Core ``(0,0)`` is the **sender core** and cores ``(1,0)``, ``(2,0)``, and ``(3,0)`` are **receiver cores**:
+Receiver cores do not read the input tensor from DRAM, but receive tiles via multicast from the sender.
+Each receiver core has three kernels:
 
-     CoreRange all_cores_logical({0, 0}, {3, 0});
+* A reader kernel that manages CB and signals to the sender core when it is ready for the next tile.
+* A compute kernel, which simply copies each tile to the output CB. In a real application, this is where computation would happen.
+* A writer kernel that writes each tile int an appropriate region of the output tensor in DRAM.
 
-  even if the physical layout of cores on the device is more complex.
+The host reads back all receiver outputs and verifies that the output matches expectations,
+which is a tensor that contains three copies of the original tensor, stacked vertically.
 
-* **Device coordinates** (sometimes called NOC or worker coordinates) are the actual coordinates used by the hardware NOC. These are the coordinates that device kernels need when they call NOC APIs such as multicast.
+Logical vs. device coordinates
+==============================
 
-The host code always uses logical coordinates when creating kernels and CBs, but kernels that perform NOC operations must know device coordinates. To map between the two, you use:
+The first new thing in the example program that hasn't been encountered in Labs 1 and 2 is the use of device coordinates.
+So far, we have been using logical coordinates to describe how you want to assign work to cores in a program.
+Logical coordinates make a simplifying assumption that the physical layout of Tensix cores on the device is the same as the logical layout.
+However, a typical Tensix device also contains multiple DRAM controllers, multiple Ethernet cores and a PCIe interface.
+Since NOC interconnects these components, it needs to know the actual coordinates of each component on the device
+to send the data to the correct destination.
+
+Tenstorrent architecture actually defines more than two different coordinate systems, but
+for the purpose of TT-Metalium programming, we only need to consider logical and device coordinates.
+Note that device coordinates are also referred to as *virtual coordinates* in the Tenstorrent architecture documentation.
+
+The host code always uses logical coordinates (e.g. when creating kernels and CBs), and the compiler takes care of converting
+them to device coordinates when needed, making the program easier to write and understand.
+However, to maximize performance, we want to avoid performing such conversions in device kernels as much as possible.
+Therefore, device kernels performing NOC operations must use device coordinates to generate the correct NOC addresses.
+To facilitate this, TT-Metalium provides the ``worker_core_from_logical_core`` function that is called on the host to
+convert logical coordinates to device coordinates before passing them to the device kernels as either compile-time or runtime arguments.
+For example, to convert the logical coordinates of the sender core to device coordinates, you can use the following code:
+to device coordinates, you can use the following code:
 
 .. code-block:: c++
 
    CoreCoord sender_core_device =
        mesh_device->worker_core_from_logical_core(sender_core_logical);
 
-This conversion lets you write host code in a device independent way, while still supplying correct NOC addresses to the kernels at runtime.
+This conversion lets you write host code in a device independent way, while still supplying correct NOC addresses to the kernels,
+which use device coordinates to generate the correct NOC addresses.
+
+
+Semaphores are small shared variables used to coordinate execution between different pieces of code that run concurrently. In TT-Metalium, a semaphore is a 32-bit value stored in L1 memory that multiple cores can read and update. Typical patterns include:
+
+* A producer core **increments or sets** a semaphore to signal that some condition is now true (for example, “a tile is ready” or “all receivers are ready”).
+* A consumer core **waits until the semaphore reaches a target value** before proceeding, ensuring it does not read data or start an action too early.
+
+Because semaphores live in on-chip memory and can be updated via the NoC, they provide a simple, low-level way for Tensix cores to synchronize with one another, whether the semaphore is used as a true counter or as a simple ready/valid flag.
+
+Would you like example code showing counter-style and flag-style semaphore usage in the multicast/CB protocol?
+
+
+
+
+
+
+You may have noticed that the sender core doesn't specify any compute or writer kernels.
+While this is acceptable, it is not the most efficient way to use the sender core.
+In a real application, the sender core would also perform computation and writeback.
+
+Therefore, exercise ...
+
+
 
 Multicast and double buffering
 ==============================
@@ -152,32 +209,7 @@ Double buffering still works with multicast, as long as:
 
 You will see this pattern in the standalone multicast example first, then reuse it in the matmul case.
 
-Standalone multicast example overview
-=====================================
 
-Overview of provided files
---------------------------
-
-The lab includes a standalone multicast example with:
-
-* Host program:
-  * ``lab_multicast.cpp``
-* Dataflow kernels:
-  * ``kernels/dataflow/mcast_sender.cpp``
-  * ``kernels/dataflow/mcast_receiver.cpp``
-  * ``kernels/dataflow/write_tiles.cpp``
-* Compute kernel:
-  * ``kernels/compute/tiles_copy.cpp``
-
-High level behavior:
-
-* The host creates a 2D tensor (in DRAM) and fills it with random data.
-* One **sender core** reads tiles of this tensor from DRAM and multicasts them to several **receiver cores**.
-* Each receiver core:
-  * Receives tiles into its input CB.
-  * Passes tiles through a simple compute pipeline (copy).
-  * Writes its own copy of the full tensor back to DRAM.
-* The host reads back all receiver outputs and verifies that they match the original tensor.
 
 Core roles in the basic multicast example
 -----------------------------------------
@@ -193,13 +225,6 @@ The multicast example uses a single row of logical cores:
      | S |   | R |   | R |   | R |
      +---+   +---+   +---+   +---+
 
-* Core ``(0,0)`` is the **sender core**:
-  * Reads tiles from DRAM into its own CB.
-  * Multicasts these tiles to cores ``(1,0)``, ``(2,0)``, and ``(3,0)``.
-* Cores ``(1,0)``, ``(2,0)``, and ``(3,0)`` are **receiver cores**:
-  * Do not read the input tensor from DRAM.
-  * Receive tiles via multicast from the sender.
-  * Run compute and writeback kernels.
 * Any other cores on the device do **nothing** in this example. This is fine: you only need a subset of cores for this demonstration, and leaving the rest idle simplifies reasoning about NOC behavior.
 
 Note that in this example the sender core only multicasts data; it does not currently run the same compute pipeline as receivers. You will change that in Exercise 1.
@@ -1217,6 +1242,7 @@ When debugging this lab, you may run into two broad classes of issues:
 
 TODO: Consider adding an exercise where different cores are assigned to different NOCs.
 
+TODO: lab_example still uses confusing semaphore names in a few places. Review every use and fix them.
 
 Conclusion
 **********
@@ -1247,6 +1273,7 @@ In this lab, you refined the multi core, slab-based matrix multiplication implem
 This lab shows how higher-level algorithmic structure (blocked matmul with slabs) can be combined with low-level architectural features (NoC multicast and semaphores) to further reduce DRAM traffic and potentially improve performance, without changing the core mathematical computation.
 
 Additional information about Tenstorrent NOC can be found in the following resources:
+
 * NoC (Network on Chip) Readme: https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md
 * Networks and Communication Lesson: https://github.com/tenstorrent/tt-vscode-toolkit/blob/main/content/lessons/cs-fundamentals-04-networks.md
 * Introduction to Data Movement in TT-Metal: https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/general/intro_to_dm.md
