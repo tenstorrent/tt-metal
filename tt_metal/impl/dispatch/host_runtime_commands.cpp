@@ -60,7 +60,6 @@ void ValidateBufferRegion(
 }
 }  // namespace detail
 
-
 bool EventQuery(const std::shared_ptr<Event>& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         // Slow dispatch always returns true to avoid infinite blocking. Unclear if this is safe for all situations.
