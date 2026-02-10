@@ -28,7 +28,6 @@ tt::tt_metal::Program create_socket_forward_program(
     const tt::tt_metal::distributed::MeshSocket& send_socket,
     const tt::tt_metal::distributed::MeshSocket& recv_socket,
     std::size_t num_bytes,
-    const tt::tt_metal::distributed::MeshCoordinate& mesh_coordinate,
     distributed::MeshDevice* mesh_device,
     uint32_t latency_measurement_address,
     uint32_t num_iterations) {
@@ -71,7 +70,7 @@ tt::tt_metal::Program create_socket_forward_program(
     auto fwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, downstream_fabric_node_id);
     TT_FATAL(
         fwd_link_indices.size() > 1, "Single core multi link version of SocketForward only supports multiple links.");
-    TT_FATAL(bwd_link_indices.size(), "No link indices found from downstream to upstream core in SocketForward.");
+    TT_FATAL(!bwd_link_indices.empty(), "No link indices found from downstream to upstream core in SocketForward.");
     uint32_t num_fwd_links = 2;
     uint32_t num_bwd_links = 1;
 
@@ -80,9 +79,16 @@ tt::tt_metal::Program create_socket_forward_program(
     uint32_t socket_block_size = socket_aligned_page_size;
 
     uint32_t num_whole_packets = num_bytes / fabric_max_payload_size;
-    uint32_t num_whole_packets_link_0 =
-        (num_whole_packets / num_fwd_links) + static_cast<uint32_t>(partial_packet_size > 0);
-    uint32_t num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
+    uint32_t num_whole_packets_link_0 = 0;
+    uint32_t num_whole_packets_link_1 = 0;
+    if (num_whole_packets > 0U) {
+        // Distribute whole packets across links, biasing link 0 by one whole packet when a partial packet exists.
+        num_whole_packets_link_0 = (num_whole_packets / num_fwd_links) + static_cast<uint32_t>(partial_packet_size > 0);
+        if (num_whole_packets_link_0 > num_whole_packets) {
+            num_whole_packets_link_0 = num_whole_packets;
+        }
+        num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
+    }
 
     uint32_t packet_header_cb_num_pages = num_fwd_links + num_bwd_links;
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -163,7 +169,7 @@ void socket_forward(
     distributed::MeshWorkload workload;
 
     auto program = create_socket_forward_program(
-        send_socket, recv_socket, num_bytes, device_coord, mesh_device, latency_measurement_address, num_iterations);
+        send_socket, recv_socket, num_bytes, mesh_device, latency_measurement_address, num_iterations);
 
     workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
 

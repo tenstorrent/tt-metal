@@ -16,7 +16,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <chrono>
-#include <iomanip>
 #include <numeric>
 #include <optional>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -24,7 +23,7 @@
 
 namespace tt::tt_metal {
 
-// Fixture for single-galaxy pipeline tests (4 ranks, one per tray).
+// Fixture for single-galaxy pipeline tests (4 ranks; stage 4 loopback co-located with stage 0 on rank 0).
 // Uses MeshDeviceExaboxFixture which auto-detects the system topology.
 // Set TT_FABRIC_MESH_GRAPH_DESC_PATH to bh_galaxy_4x2_mesh_graph_descriptor.textproto when running.
 class MeshDeviceSingleGalaxyPipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {};
@@ -47,7 +46,7 @@ struct LogicalPipelineStageConfig {
 
 // Determine how the Multi Mesh Coordinate system is instantiated on the physical cluster.
 std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_id_to_mesh_coord_map(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device) {
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> asic_id_to_mesh_coord_map;
 
@@ -57,7 +56,7 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
         asic_id_to_mesh_coord_map.emplace(asic_id, coord);
     }
     // Exchange this map across all hosts using distributed context
-    auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     for (auto rank = 0; rank < *(distributed_context->size()); rank++) {
         if (rank == *(distributed_context->rank())) {
             // Loop over all entries of the map and send them to the other hosts
@@ -110,52 +109,50 @@ enum class PipelineType {
     SUPERPOD_4
 };
 
-// Sender device for pipeline start (injector), when separate from stage entry/exit.
-struct SenderPhysicalConfig {
-    uint32_t tray_id;
-    uint32_t asic_location;
-};
-
 // Get physical pipeline stage configs for the specified pipeline type.
+// SINGLE_GALAXY: 5 stages. Stage 0 entry (T1D2) is the sender; stage 4 is the loop-back (T1D4 -> T1D2).
+// Last stage exit and first stage entry are the same ASIC on the same tray (full loopback).
 std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineType type) {
     switch (type) {
         case PipelineType::SINGLE_GALAXY:
             return {
-                {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+                {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
                 {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
                 {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
                 {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+                {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 2},
             };
         default: return {};
     }
 }
 
-// Get sender (injector) device for pipeline start when it is separate from stage nodes. Returns nullopt to use
-// stage 0 entry as the sender.
-std::optional<SenderPhysicalConfig> get_sender_physical_config(PipelineType type) {
-    switch (type) {
-        case PipelineType::SINGLE_GALAXY: return SenderPhysicalConfig{.tray_id = 1, .asic_location = 2};
-        default: return std::nullopt;
-    }
-}
-
 // Overloaded build_pipeline that accepts an external physical pipeline config.
+// Same pattern as ClosetBox: stage_index % num_procs for hostname. For loopback (last stage same tray
+// as first), resolve last stage's ASICs using rank 0 host so they exist in asic_id_to_mesh_coord.
 std::vector<LogicalPipelineStageConfig> build_pipeline(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord,
     const std::vector<PhysicalPipelineStageConfig>& physical_pipeline_stage_configs) {
     const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
+    const std::size_t num_stages = physical_pipeline_stage_configs.size();
+    const bool last_stage_loopback =
+        (num_stages > 1u &&
+         physical_pipeline_stage_configs.back().tray_id == physical_pipeline_stage_configs[0].tray_id);
     std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
-    for (std::size_t stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
-        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
+    for (std::size_t stage_index = 0; stage_index < num_stages; stage_index++) {
+        uint32_t rank_for_host = (last_stage_loopback && stage_index == num_stages - 1u)
+                                     ? 0u
+                                     : static_cast<uint32_t>(stage_index % num_procs);
+        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(rank_for_host);
+        const auto& phys = physical_pipeline_stage_configs[stage_index];
         auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
-            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].tray_id),
-            tt::tt_metal::ASICLocation(physical_pipeline_stage_configs[stage_index].entry_node_asic_location));
+            tt::tt_metal::TrayID(phys.tray_id),
+            tt::tt_metal::ASICLocation(phys.entry_node_asic_location));
         auto exit_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
-            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].tray_id),
-            tt::tt_metal::ASICLocation(physical_pipeline_stage_configs[stage_index].exit_node_asic_location));
+            tt::tt_metal::TrayID(phys.tray_id),
+            tt::tt_metal::ASICLocation(phys.exit_node_asic_location));
         logical_pipeline_stage_configs.emplace_back(LogicalPipelineStageConfig{
             .stage_index = stage_index,
             .entry_node_coord = asic_id_to_mesh_coord.at(entry_node_asic_id),
@@ -175,10 +172,9 @@ std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecti
     if (curr_stage_index > neighbor_stage_index) {
         // Neighbor feeds into my stage
         return std::make_pair(my_stage.entry_node_coord, neighbor_stage.exit_node_coord);
-    } else {
-        // My stage feeds into neighbor
-        return std::make_pair(my_stage.exit_node_coord, neighbor_stage.entry_node_coord);
     }
+    // My stage feeds into neighbor
+    return std::make_pair(my_stage.exit_node_coord, neighbor_stage.entry_node_coord);
 }
 
 // float convert_to_us(uint64_t cycles) {
@@ -196,15 +192,10 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
     return tt::tt_metal::PhysicalSystemDescriptor(driver, distributed_context, &hal, rtoptions, run_discovery);
 }
 
-// Single-galaxy pipeline test helper (multi-process, 4 ranks, one per tray).
-// Uses the SINGLE_GALAXY pipeline config and follows the same setup logic
-// as the ClosetBox SendRecvPipeline test, but with 4 stages across 4 trays
-// and a separate sender device (T1D2).
+// Single-galaxy pipeline test helper (multi-process). 5 stages, 4 ranks: stage 4 (loopback) on rank 0.
+// Uses stage indices for coords and maps to ranks for global_bindings (downstream_rank 0 for loopback).
 //
-// Pipeline path (9 hops):
-//   T1D2(send) -> T1D6(fwd) -> T3D6(fwd) -> T3D4(fwd) -> T4D4(fwd) ->
-//   T4D7(fwd) -> T2D7(fwd) -> T2D4(fwd) -> T1D4(fwd) -> T1D2(recv)
-// This is to benchmark pipeline functionality for Deepseek Decode
+// Pipeline path: T1D2(send) -> T1D6 -> T3D6 -> T3D4 -> T4D4 -> T4D7 -> T2D7 -> T2D4 -> T1D4 -> T1D2(recv)
 void run_single_galaxy_pipeline(
     std::shared_ptr<distributed::MeshDevice>& mesh_device, PipelineType pipeline_type, bool enable_correctness_check) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;  // size of data being moved across pipeline stages for the workload
@@ -223,9 +214,16 @@ void run_single_galaxy_pipeline(
     auto physical_config = get_physical_pipeline_config(pipeline_type);
     auto pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
 
-    const uint32_t num_stages = pipeline_stages.size();
-    const uint32_t upstream_rank = (my_rank + num_stages - 1) % num_stages;
-    const uint32_t downstream_rank = (my_rank + 1) % num_stages;
+    const uint32_t num_stages = static_cast<uint32_t>(pipeline_stages.size());
+    const uint32_t num_ranks = static_cast<uint32_t>(*(distributed_context->size()));
+    // Stage indices 0..num_stages-1; ranks 0..num_ranks-1. Loopback stage (last) is on rank 0.
+    const uint32_t downstream_stage = (my_rank + 1) % num_stages;
+    const uint32_t upstream_stage = (my_rank + num_stages - 1) % num_stages;
+    // Stage 4 (loopback) is on rank 0; stages 0..3 are on ranks 0..3.
+    const uint32_t downstream_rank = (downstream_stage == num_stages - 1u) ? 0u : downstream_stage;
+    const uint32_t upstream_rank = (upstream_stage == num_stages - 1u)
+                                       ? (num_ranks - 1u)
+                                       : upstream_stage;  // stage 4's upstream is stage 3 (rank 3)
 
     const auto& global_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
@@ -260,18 +258,16 @@ void run_single_galaxy_pipeline(
 
     const bool is_pipeline_start = (my_rank == 0);
 
-    // My stage coordinates
+    // My stage coordinates (stage index == my_rank for 4 ranks; stage 4 loopback on rank 0)
     auto my_entry = pipeline_stages[my_rank].entry_node_coord;
     auto my_exit = pipeline_stages[my_rank].exit_node_coord;
-
-    // Neighbor stage coordinates for cross-mesh sockets (with wrap-around)
-    auto upstream_exit = pipeline_stages[upstream_rank].exit_node_coord;
-    auto downstream_entry = pipeline_stages[downstream_rank].entry_node_coord;
+    auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
+    auto downstream_entry = pipeline_stages[downstream_stage].entry_node_coord;
 
     // Create Latency Measurement Buffer
     // Size: 8 bytes per iteration (uint64_t latency) + 32 bytes padding
     // First address is reused for credit/barrier synchronization
-    constexpr auto latency_measurement_buffer_size = 8 * NUM_ITERATIONS + 32;
+    constexpr auto latency_measurement_buffer_size = (8 * NUM_ITERATIONS) + 32;
     CoreRangeSet latency_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     auto shard_params = ShardSpecBuffer(latency_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     distributed::DeviceLocalBufferConfig latency_measurement_buffer_specs = {
@@ -292,38 +288,34 @@ void run_single_galaxy_pipeline(
 
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
 
-    // Sender (injector) coord for pipeline start: from config when present, else stage 0 entry.
-    distributed::MeshCoordinate start_coord = pipeline_stages[0].entry_node_coord;
-    if (is_pipeline_start) {
-        auto sender_config = get_sender_physical_config(pipeline_type);
-        if (sender_config.has_value()) {
-            auto sender_hostname = physical_system_descriptor.get_hostname_for_rank(0);
-            auto sender_asic_id = physical_system_descriptor.get_asic_id(
-                sender_hostname,
-                tt::tt_metal::TrayID(sender_config->tray_id),
-                tt::tt_metal::ASICLocation(sender_config->asic_location));
-            start_coord = asic_id_to_mesh_coord.at(sender_asic_id);
-        } else {
-            start_coord = pipeline_stages[0].entry_node_coord;
-        }
+    // Sender is stage 0 entry; last stage exit is the same ASIC (full loopback).
+    const distributed::MeshCoordinate start_coord = pipeline_stages[0].entry_node_coord;
+    TT_ASSERT(
+        pipeline_stages.back().exit_node_coord == start_coord,
+        "Loopback: last stage exit must equal first stage entry");
 
-        auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_exit);
+    if (is_pipeline_start) {
+        // Send path: start_coord -> my_exit -> downstream (use stage indices)
+        auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_rank, downstream_stage);
+        auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
 
         auto fwd_connection = distributed::SocketConnection(
-            distributed::MeshCoreCoord(my_exit, logical_coord),
-            distributed::MeshCoreCoord(downstream_entry, logical_coord));
+            distributed::MeshCoreCoord(my_sender, logical_coord),
+            distributed::MeshCoreCoord(downstream_recv, logical_coord));
         auto send_socket_config = distributed::SocketConfig(
             {fwd_connection}, socket_mem_config, my_mesh_id, downstream_mesh_id, distributed_context);
         auto send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
 
+        // Recv path: from last stage into pipeline end entry, then local forward to start (ClosetBox pattern)
+        auto [my_recv, upstream_send] = get_connecting_coords(pipeline_stages, num_stages - 1u, num_stages - 2u);
         auto bwd_connection = distributed::SocketConnection(
-            distributed::MeshCoreCoord(upstream_exit, logical_coord),
-            distributed::MeshCoreCoord(my_entry, logical_coord));
+            distributed::MeshCoreCoord(upstream_send, logical_coord),
+            distributed::MeshCoreCoord(my_recv, logical_coord));
         auto recv_socket_config = distributed::SocketConfig(
             {bwd_connection}, socket_mem_config, upstream_mesh_id, my_mesh_id, distributed_context);
         auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
 
-        auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_entry, start_coord);
+        auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_recv, start_coord);
 
         // Create device buffer using metal-level API
         distributed::DeviceLocalBufferConfig buffer_config = {
@@ -423,9 +415,8 @@ void run_single_galaxy_pipeline(
         avg_latency_cycles /= LATENCY_ITERATIONS_FOR_AVG;
         double freq_mhz = static_cast<double>(cluster.get_device_aiclk(start_device_id));
         double avg_latency_us = (avg_latency_cycles / (freq_mhz * 1e6)) * 1e6;
-        std::cout << std::fixed << std::setprecision(2);
-        std::cout << "Average latency in cycles: " << avg_latency_cycles << std::endl;
-        std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
+        log_info(tt::LogTest, "Average latency in cycles: {:.2f}", avg_latency_cycles);
+        log_info(tt::LogTest, "Average latency in microseconds: {:.2f}", avg_latency_us);
     }
 }
 

@@ -14,7 +14,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include <iomanip>
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
@@ -87,7 +87,7 @@ void run_single_host_loopback_pipeline(
     constexpr uint32_t NUM_ITERATIONS = 100;
     // Size: 8 bytes per iteration (uint64_t latency) + 32 bytes padding
     // First address is reused for credit/barrier synchronization
-    constexpr auto latency_measurement_buffer_size = 8 * NUM_ITERATIONS + 32;
+    constexpr auto latency_measurement_buffer_size = (8 * NUM_ITERATIONS) + 32;
     CoreRangeSet latency_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     auto shard_params = ShardSpecBuffer(latency_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     DeviceLocalBufferConfig latency_measurement_buffer_specs = {
@@ -105,7 +105,7 @@ void run_single_host_loopback_pipeline(
     std::vector<uint32_t> latency_init_data(latency_measurement_buffer_size / sizeof(uint32_t), 0);
     EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
-    std::cout << "Latency measurement buffer address: " << latency_measurement_address << std::endl;
+    log_info(tt::LogTest, "Latency measurement buffer address: {}", latency_measurement_address);
 
     const uint32_t i = 0;
     // Create input buffer using metal-level API
@@ -149,19 +149,9 @@ void run_single_host_loopback_pipeline(
         latency_measurement_address,
         NUM_ITERATIONS);
     tt::tt_metal::socket_forward(
-        mesh_device.get(),
-        recv_socket_2,
-        send_socket_2,
-        num_elems * sizeof(uint32_t),
-        latency_measurement_address,
-        NUM_ITERATIONS);
+        mesh_device.get(), recv_socket_2, send_socket_2, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
     tt::tt_metal::socket_forward(
-        mesh_device.get(),
-        recv_socket_3,
-        send_socket_3,
-        num_elems * sizeof(uint32_t),
-        latency_measurement_address,
-        NUM_ITERATIONS);
+        mesh_device.get(), recv_socket_3, send_socket_3, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
     Synchronize(mesh_device.get(), std::nullopt);
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -173,15 +163,17 @@ void run_single_host_loopback_pipeline(
         sizeof(uint64_t) * NUM_ITERATIONS,
         tt_cxy_pair(start_device_id, start_core_coord),
         latency_measurement_address);
+    // Skip first iteration (often an outlier due to cold start), match multi_host_pipeline
+    constexpr uint32_t LATENCY_ITERATIONS_FOR_AVG = NUM_ITERATIONS > 1 ? NUM_ITERATIONS - 1 : 1;
     double avg_latency_cycles = 0.0;
-    for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
+    for (uint32_t i = 1; i < NUM_ITERATIONS; i++) {
         avg_latency_cycles += static_cast<double>(latencies[i]);
     }
-    avg_latency_cycles /= NUM_ITERATIONS;
-    double avg_latency_us = (avg_latency_cycles / (1.35e9)) * 1e6;
-    std::cout << std::fixed << std::setprecision(2);
-    std::cout << "Average latency in cycles: " << avg_latency_cycles << std::endl;
-    std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
+    avg_latency_cycles /= LATENCY_ITERATIONS_FOR_AVG;
+    double freq_mhz = static_cast<double>(cluster.get_device_aiclk(start_device_id));
+    double avg_latency_us = (avg_latency_cycles / (freq_mhz * 1e6)) * 1e6;
+    log_info(tt::LogTest, "Average latency in cycles: {:.2f}", avg_latency_cycles);
+    log_info(tt::LogTest, "Average latency in microseconds: {:.2f}", avg_latency_us);
 }
 
 TEST_F(SingleHostLoopbackPipelineFixture, SingleHostLoopbackPipeline) {

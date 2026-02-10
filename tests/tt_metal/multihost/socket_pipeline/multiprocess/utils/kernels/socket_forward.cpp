@@ -144,7 +144,8 @@ void kernel_main() {
         // Notify Upstream and Downstream that data has been consumed or produced
         socket_push_pages(send_socket, 1);
         socket_pop_pages(recv_socket, 1);
-        if (notify_sender_every_n_iterations != 0 && (i % notify_sender_every_n_iterations) == 0) {
+        // Notify every N iterations: first ack after N pages, then every N pages (not after first page).
+        if (notify_sender_every_n_iterations != 0 && ((i + 1) % notify_sender_every_n_iterations) == 0) {
             fabric_socket_notify_sender_stateful(
                 recv_socket,
                 upstream_fabric_connection,

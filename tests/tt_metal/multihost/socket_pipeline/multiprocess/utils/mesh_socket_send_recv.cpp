@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -32,7 +31,7 @@ namespace {
 // Extract program creation logic from send_async_op_program_factory.cpp
 tt::tt_metal::Program create_send_async_program(
     const tt::tt_metal::distributed::MeshSocket& mesh_socket,
-    const std::optional<tt::tt_metal::distributed::MeshSocket>& recv_socket,
+    const tt::tt_metal::distributed::MeshSocket& recv_socket,
     const Buffer* input_buffer,
     DataFormat input_data_format,
     distributed::MeshDevice* mesh_device,
@@ -54,12 +53,9 @@ tt::tt_metal::Program create_send_async_program(
     tt::tt_fabric::FabricNodeId receiver_fabric_node_id = mesh_socket.get_fabric_node_id(
         tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
 
-    tt::tt_fabric::FabricNodeId upstream_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
-    if (recv_socket.has_value()) {
-        const auto& recv_conn = recv_socket.value().get_config().socket_connection_config[0];
-        upstream_fabric_node_id = recv_socket.value().get_fabric_node_id(
-            tt::tt_metal::distributed::SocketEndpoint::SENDER, recv_conn.sender_core.device_coord);
-    }
+    const auto& recv_conn = recv_socket.get_config().socket_connection_config[0];
+    tt::tt_fabric::FabricNodeId upstream_fabric_node_id = recv_socket.get_fabric_node_id(
+        tt::tt_metal::distributed::SocketEndpoint::SENDER, recv_conn.sender_core.device_coord);
 
     tt::tt_metal::Program program{};
 
@@ -78,9 +74,16 @@ tt::tt_metal::Program create_send_async_program(
 
     uint32_t num_whole_packets = input_page_size / fabric_max_payload_size;
     uint32_t partial_packet_size = input_page_size % fabric_max_payload_size;
-    uint32_t num_whole_packets_link_0 =
-        (num_whole_packets / num_links) + static_cast<uint32_t>(partial_packet_size > 0);
-    uint32_t num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
+    uint32_t num_whole_packets_link_0 = 0;
+    uint32_t num_whole_packets_link_1 = 0;
+    if (num_whole_packets > 0U) {
+        // Distribute whole packets across links, biasing link 0 by one whole packet when a partial packet exists.
+        num_whole_packets_link_0 = (num_whole_packets / num_links) + static_cast<uint32_t>(partial_packet_size > 0);
+        if (num_whole_packets_link_0 > num_whole_packets) {
+            num_whole_packets_link_0 = num_whole_packets;
+        }
+        num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
+    }
 
     uint32_t socket_block_size = socket_aligned_page_size;
     uint32_t socket_fifo_size_in_pages =
@@ -101,7 +104,8 @@ tt::tt_metal::Program create_send_async_program(
 
     CreateCircularBuffer(program, sender_core_coord, cb_src0_config);
 
-    uint32_t packet_header_cb_num_pages = num_links + (recv_socket.has_value() ? 1 : 0);
+    // Writer kernel always assumes an upstream connection + a third packet header (recv_socket is required).
+    uint32_t packet_header_cb_num_pages = num_links + 1;
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto packet_header_cb_index = tt::CBIndex::c_1;
@@ -145,7 +149,7 @@ tt::tt_metal::Program create_send_async_program(
     std::vector<uint32_t> writer_rt_args = {
         input_buffer->address(),
         mesh_socket.get_config_buffer()->address(),
-        recv_socket.has_value() ? recv_socket.value().get_config_buffer()->address() : 0,
+        recv_socket.get_config_buffer()->address(),
         bank_id};
 
     for (uint32_t i = 0; i < num_links; i++) {
@@ -158,17 +162,14 @@ tt::tt_metal::Program create_send_async_program(
             writer_rt_args);
     }
 
-    if (recv_socket.has_value()) {
-        auto bwd_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, upstream_fabric_node_id);
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            sender_fabric_node_id,
-            upstream_fabric_node_id,
-            bwd_link_indices[0],
-            program,
-            sender_core_coord,
-            writer_rt_args);
-    }
+    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, upstream_fabric_node_id);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        sender_fabric_node_id,
+        upstream_fabric_node_id,
+        bwd_link_indices[0],
+        program,
+        sender_core_coord,
+        writer_rt_args);
 
     tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, sender_core_coord, writer_rt_args);
 
@@ -182,7 +183,7 @@ void send_async(
     const Buffer* input_buffer,
     DataFormat input_data_format,
     const distributed::MeshSocket& mesh_socket,
-    const std::optional<distributed::MeshSocket>& recv_socket,
+    const distributed::MeshSocket& recv_socket,
     uint32_t latency_measurement_address,
     uint32_t num_iterations,
     bool enable_correctness_check) {

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <optional>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -13,8 +12,7 @@
 namespace tt::tt_metal {
 
 // Metal-level send_async operation
-// Sends data from input_buffer through mesh_socket
-// Optionally uses recv_socket for backward communication
+// Sends data from input_buffer through mesh_socket; uses recv_socket for backward acks (e.g. loopback).
 // latency_measurement_address: L1 address used for credit synchronization and latency measurements
 // num_iterations: number of send/recv iterations the kernel will execute
 // enable_correctness_check: when true, the sender kernel validates received data matches expected values
@@ -23,7 +21,7 @@ void send_async(
     const Buffer* input_buffer,
     DataFormat input_data_format,
     const distributed::MeshSocket& mesh_socket,
-    const std::optional<distributed::MeshSocket>& recv_socket,
+    const distributed::MeshSocket& recv_socket,
     uint32_t latency_measurement_address,
     uint32_t num_iterations,
     bool enable_correctness_check = false);

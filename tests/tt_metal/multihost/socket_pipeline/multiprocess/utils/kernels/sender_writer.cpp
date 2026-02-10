@@ -184,7 +184,8 @@ void kernel_main() {
             }
         }
         socket_pop_pages(receiver_socket, 1);
-        if (notify_sender_every_n_iterations != 0 && (i % notify_sender_every_n_iterations) == 0) {
+        // Notify every N iterations: first ack after N pages, then every N pages (not after first page).
+        if (notify_sender_every_n_iterations != 0 && ((i + 1) % notify_sender_every_n_iterations) == 0) {
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,

@@ -2,7 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <exception>
 #include <gtest/gtest.h>
 #include "tests/tt_metal/multihost/common/multihost_test_tools.hpp"
 
-int main(int argc, char** argv) { return multihost::common::multihost_main(argc, argv); }
+int main(int argc, char** argv) {
+    try {
+        return multihost::common::multihost_main(argc, argv);
+    } catch (const std::exception& e) {
+        return 1;
+    } catch (...) {
+        return 1;
+    }
+}
