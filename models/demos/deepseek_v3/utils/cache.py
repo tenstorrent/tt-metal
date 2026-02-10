@@ -1,7 +1,8 @@
 import inspect
 import json
+from dataclasses import dataclass
 from hashlib import md5
-from typing import Callable, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 import torch
 
@@ -20,36 +21,76 @@ def compute_func_fingerprint(func: Callable) -> str:
     return md5(fingerprint_input.encode()).hexdigest()
 
 
+def memory_config_to_dict(memory_config: ttnn.MemoryConfig) -> dict:
+    return {
+        "memory_layout": memory_config.memory_layout.__name__,
+        "buffer_type": memory_config.buffer_type.__name__,
+        "shard_spec": str(memory_config.shard_spec),
+        "is_sharded": memory_config.is_sharded(),
+        "interleaved": memory_config.interleaved,
+        "hash": int(memory_config.__hash__()),
+    }
+
+
+@dataclass
+class CacheManifest:
+    """
+    Holds all inputs that define a cache entry for a tensor.
+    Does not use tensor content—only name (HF state dict key), dtype, layout,
+    memory_config, hf_config, and preprocessor/postprocessor fingerprints.
+    If the contents of the tensors in the state dict change, the cache must be busted explicitly.
+    """
+
+    name: str | Sequence[str]
+    dtype: ttnn.DataType
+    layout: ttnn.Layout
+    memory_config: ttnn.MemoryConfig
+    hf_config: dict
+    preprocessor: Callable
+    postprocessor: Callable
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-friendly dict for fingerprinting."""
+        if isinstance(self.name, str):
+            names_key = "name"
+            names_value = self.name
+        else:
+            names_key = "names"
+            names_value = json.dumps(sorted(self.name), sort_keys=True)
+        return {
+            names_key: names_value,
+            "dtype": self.dtype.__name__,
+            "layout": self.layout.__name__,
+            "memory_config": memory_config_to_dict(self.memory_config) if self.memory_config is not None else None,
+            "hf_config": json.dumps(self.hf_config, sort_keys=True),
+            "preprocessor": compute_func_fingerprint(self.preprocessor),
+            "postprocessor": compute_func_fingerprint(self.postprocessor),
+        }
+
+
 def create_manifest(
     name: str | Sequence[str],
     dtype: ttnn.DataType,
     layout: ttnn.Layout,
+    memory_config: ttnn.MemoryConfig,
     hf_config: dict,
     preprocessor: Callable,
     postprocessor: Callable,
-) -> dict[str, str]:
-    """
-    The manifest does not use the content of the tensor and only uses the 'name' (i.e. the one in the HF state dict).
-    If the contents of the tensors in the state dict changes we would need to explicitly bust the cache.
-    For multiple names, uses a deterministic sorted list for cache key stability.
-    """
-    if isinstance(name, str):
-        names_key = "name"
-        names_value = name
-    else:
-        names_key = "names"
-        names_value = json.dumps(sorted(name), sort_keys=True)
-    return {
-        names_key: names_value,
-        "dtype": dtype.__name__,
-        "layout": layout.__name__,
-        "hf_config": json.dumps(hf_config, sort_keys=True),
-        "preprocessor": compute_func_fingerprint(preprocessor),
-        "postprocessor": compute_func_fingerprint(postprocessor),
-    }
+) -> CacheManifest:
+    """Build a CacheManifest for the given tensor request parameters."""
+    return CacheManifest(
+        name=name,
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
+        hf_config=hf_config,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+    )
 
 
-def compute_fingerprint(manifest: dict[str, str]) -> str:
+def compute_fingerprint(manifest: dict[str, Any]) -> str:
+    """Compute a stable fingerprint from a manifest (or its dict representation)."""
     return md5(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
 
 
@@ -76,9 +117,14 @@ class InMemoryCacheStorage:
 CacheStorage = InMemoryCacheStorage
 
 
-def default_converter(tensor: torch.Tensor, dtype: ttnn.DataType, layout: ttnn.Layout) -> ttnn.Tensor:
-    tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout)
-    return tensor
+def default_converter(
+    tensor: torch.Tensor,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout,
+    memory_config: Optional[ttnn.MemoryConfig] = None,
+    device: Optional[ttnn.Device] = None,
+) -> ttnn.Tensor:
+    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, memory_config=memory_config, device=device)
 
 
 class TensorCache:
@@ -100,14 +146,21 @@ class TensorCache:
     def get_tensor(
         self,
         name: str | Sequence[str],
-        dtype: ttnn.DataType,
-        layout: ttnn.Layout,
-        preprocessor: Callable = lambda x: x,
-        postprocessor: Callable = lambda x: x,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
+        preprocessor: Callable[[torch.Tensor], torch.Tensor] = lambda x: x,
+        postprocessor: Callable[[ttnn.Tensor], ttnn.Tensor] = lambda x: x,
+        memory_config: Optional[ttnn.MemoryConfig] = ttnn.DRAM_MEMORY_CONFIG,
+        device: Optional[ttnn.Device] = None,
     ) -> ttnn.Tensor:
+        # Host tensors will have memory_config=ttnn.DRAM_MEMORY_CONFIG so we need to guard against non-DRAM memory configs here
+        # In the future we should probably make host tensors have memory_config = None since it doesn't make sense to have a memory config for a host tensor
+        if memory_config is not ttnn.DRAM_MEMORY_CONFIG and device is None:
+            raise ValueError("Invalid configuration: specified memory config requires a device")
+
         names = [name] if isinstance(name, str) else list(name)
-        manifest = create_manifest(names, dtype, layout, self.hf_config, preprocessor, postprocessor)
-        fingerprint = compute_fingerprint(manifest)
+        manifest = create_manifest(names, dtype, layout, memory_config, self.hf_config, preprocessor, postprocessor)
+        fingerprint = compute_fingerprint(manifest.to_dict())
 
         if not self.cache_entry_exists_for_fingerprint(fingerprint):
             for n in names:
@@ -122,12 +175,12 @@ class TensorCache:
                 preprocessed_hf_tensor = preprocessor(hf_tensors[0])
             else:
                 preprocessed_hf_tensor = preprocessor(hf_tensors)
-            tensor = self.converter(preprocessed_hf_tensor, dtype, layout)
+            tensor = self.converter(preprocessed_hf_tensor, dtype, layout, memory_config, device)
             tensor = postprocessor(tensor)
             self.storage.set(fingerprint, tensor)
             return tensor
         else:
-            # Validate cached tensor matches requested dtype and layout
+            # Validate cached tensor matches requested dtype, layout and memory config
             cached_tensor = self.storage.get(fingerprint)
             assert cached_tensor.dtype == dtype, (
                 f"Cached tensor dtype mismatch: expected {dtype}, got {cached_tensor.dtype}. "
@@ -137,33 +190,8 @@ class TensorCache:
                 f"Cached tensor layout mismatch: expected {layout}, got {cached_tensor.layout}. "
                 f"This should not happen if fingerprinting is correct."
             )
+            assert cached_tensor.memory_config() == memory_config, (
+                f"Cached tensor memory config mismatch: expected {memory_config}, got {cached_tensor.memory_config()}. "
+                f"This should not happen if fingerprinting is correct."
+            )
             return cached_tensor
-
-
-hf_weights = "model.safetensors"
-hf_config = {"factor": 2}
-
-"""
-Initial state_dict is created as a function of the hf_config so we will need to trigger rebuild any persistent caches when the config changes
-"""
-
-"""
-tensors = {
-    "weight1": torch.zeros((hf_config["factor"] * 128, hf_config["factor"] * 128), dtype=torch.bfloat16),
-    "weight2": torch.zeros((hf_config["factor"] * 256, hf_config["factor"] * 256), dtype=torch.bfloat16),
-}
-save_file(tensors, hf_weights)
-
-state_dict = {}
-with safe_open(hf_weights, framework="pt", device="cpu") as f:
-    for key in f.keys():
-        state_dict[key] = f.get_tensor(key)  # TODO: Is this lazy? We should probably make it lazy
-
-cache = TensorCache(state_dict, hf_config, InMemoryCacheStorage())
-cache.get_tensor("weight1", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)  # Should be a cache miss
-cache.get_tensor("weight1", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)  # Should be a cache hit
-cache.get_tensor(
-    "weight1", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, preprocessor=lambda x: x * 2
-)  # Should be a cache miss
-cache.get_tensor("weight1", dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)  # SHould be a cache miss
-"""

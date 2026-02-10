@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.cache import (
+    CacheManifest,
     InMemoryCacheStorage,
     TensorCache,
     compute_fingerprint,
@@ -161,18 +162,21 @@ def test_create_manifest_basic(sample_hf_config):
         name="test_weight",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         hf_config=sample_hf_config,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
     )
 
-    assert isinstance(manifest, dict)
-    assert manifest["name"] == "test_weight"
-    assert manifest["dtype"] == "BFLOAT16"  # dtype.__name__ returns uppercase
-    assert manifest["layout"] == "TILE"  # layout.__name__ returns "TILE" for TILE_LAYOUT
-    assert "hf_config" in manifest
-    assert "preprocessor" in manifest
-    assert "postprocessor" in manifest
+    assert isinstance(manifest, CacheManifest)
+    d = manifest.to_dict()
+    assert d["name"] == "test_weight"
+    assert d["dtype"] == "BFLOAT16"  # dtype.__name__ returns uppercase
+    assert d["layout"] == "TILE"  # layout.__name__ returns "TILE" for TILE_LAYOUT
+    assert "memory_config" in d
+    assert "hf_config" in d
+    assert "preprocessor" in d
+    assert "postprocessor" in d
 
 
 def test_create_manifest_multi_name(sample_hf_config):
@@ -188,14 +192,18 @@ def test_create_manifest_multi_name(sample_hf_config):
         name=["weight_a", "weight_b"],
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         hf_config=sample_hf_config,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
     )
-    assert "names" in manifest
-    assert manifest["names"] == json.dumps(sorted(["weight_a", "weight_b"]))
-    assert "dtype" in manifest
-    assert "layout" in manifest
+    assert isinstance(manifest, CacheManifest)
+    d = manifest.to_dict()
+    assert "names" in d
+    assert d["names"] == json.dumps(sorted(["weight_a", "weight_b"]))
+    assert "dtype" in d
+    assert "layout" in d
+    assert "memory_config" in d
 
 
 def test_compute_fingerprint_stable():
@@ -692,3 +700,41 @@ def test_tensor_cache_multi_source_missing_tensor(tensor_cache):
             layout=ttnn.TILE_LAYOUT,
             preprocessor=stack_preprocessor,
         )
+
+
+def test_tensor_cache_memory_config_validation(tensor_cache, monkeypatch, mesh_device):
+    """Test that cached tensors are validated for memory config compatibility."""
+    call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
+
+    # Create a cache entry
+    cached_tensor = tensor_cache.get_tensor(
+        name="weight1",
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        device=mesh_device,
+    )
+    # First call should be cache miss
+    assert_cache_miss(call_tracker)
+    assert cached_tensor.memory_config() == ttnn.L1_MEMORY_CONFIG
+    assert cached_tensor.storage_type() == ttnn.StorageType.DEVICE
+
+    # Retrieve from cache - should validate memory config match
+    cached_tensor = tensor_cache.get_tensor(
+        name="weight1",
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        device=mesh_device,
+    )
+
+    # Second call should be cache hit
+    assert_cache_hit(call_tracker)
+    assert cached_tensor.memory_config() == ttnn.L1_MEMORY_CONFIG
+    assert cached_tensor.storage_type() == ttnn.StorageType.DEVICE
+
+    # Load the same tensor again with a different memory config should be a cache miss
+    cached_tensor = tensor_cache.get_tensor(
+        name="weight1",
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=mesh_device,
+    )
+    assert_cache_miss(call_tracker)
+    assert cached_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert cached_tensor.storage_type() == ttnn.StorageType.DEVICE

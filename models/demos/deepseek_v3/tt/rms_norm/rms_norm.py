@@ -34,19 +34,19 @@ class RMSNorm(RMSNormBase):
         num_shards = torch_metaweight.shape[0]
         assert num_shards == mesh_device.shape[0], "Number of state dicts does not match the number of rows."
 
-        # Return WeightSpec - conversion will happen at top level
-        # The weight name "weight" must match the op name used in the model config
-        # so that RunConfig can populate it with the actual weight tensors at runtime.
-        # name + preprocessor support cache path; torch_tensor supports disk path.
+        # Save to disk with standard naming - "rmsnorm" must match the op name used in the model config
+        # so that RunConfig can populate it with the actual weight tensors at runtime
         return {
-            "weight": WeightSpec(
-                name="weight",
-                torch_tensor=torch_metaweight,
+            "weight": shard_and_save(
+                output_path / "rmsnorm.weight",
+                torch_metaweight.reshape(
+                    (num_shards, 1, -1, ttnn.TILE_SIZE)
+                ),  # Reshape to tile width sticks for optimal performance
                 shard_dims=(0, None),
+                mesh_device=mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                preprocessor=lambda t: t.reshape((num_shards, 1, -1, ttnn.TILE_SIZE)),
             ),
         }
 

@@ -167,6 +167,9 @@ def _merge_run_config(
                 cached_ttnn_weights[weight_config_item.path] = loaded_weight
 
             return loaded_weight
+        if isinstance(weight_config_item, ttnn.Tensor):
+            # In-memory weight from TensorCache (create_weight_config_from_weight_spec); already on device
+            return weight_config_item
         return None
 
     if weight_config_item is None:

@@ -45,7 +45,11 @@ class WeightSpecContext:
 
 
 def create_weight_config_from_weight_spec(
-    module_weight_spec: ModuleWeightSpec, path: str, cache: TensorCache, delimiter: str = "."
+    module_weight_spec: ModuleWeightSpec,
+    path: str,
+    cache: TensorCache,
+    device: ttnn.Device | None = None,
+    delimiter: str = ".",
 ):
     """
     Materialize a weight config from a weight spec.
@@ -63,6 +67,7 @@ def create_weight_config_from_weight_spec(
                 value.layout,
                 preprocessor=value.preprocessor,
                 postprocessor=value.postprocessor,
+                device=device,
             )
             weight_config[key] = tensor
         else:
