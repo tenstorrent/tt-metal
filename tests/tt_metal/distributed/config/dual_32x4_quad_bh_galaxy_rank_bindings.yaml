@@ -63,4 +63,4 @@ rank_bindings:
     mesh_id: 3
     mesh_host_rank: 3
 
-mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_pod_16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
