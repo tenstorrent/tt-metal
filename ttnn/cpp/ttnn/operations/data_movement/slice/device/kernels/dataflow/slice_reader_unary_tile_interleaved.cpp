@@ -32,10 +32,10 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id, 1);
 
-        for (int32_t j = num_dims - 1; j >= 1; j--) {
+        for (int32_t j = num_dims - 1; j >= 0; j--) {
             tile_coord[j] += coord_inc[j];
             src_tile_id += coord_inc[j] * tile_id_acc[j];
-            if (tile_coord[j] >= shape_tiles[j]) {
+            if (j > 0 && tile_coord[j] >= shape_tiles[j]) {
                 tile_coord[j] -= shape_tiles[j];
                 tile_coord[j - 1] += 1;
                 src_tile_id += tile_id_acc[j - 1] - shape_tiles[j] * tile_id_acc[j];
