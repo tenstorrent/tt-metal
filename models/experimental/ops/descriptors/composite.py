@@ -47,7 +47,7 @@ def launch(op_descriptors: List[OpDescriptor]) -> List[List["ttnn.Tensor"]]:
         merged = descriptors[0]
     else:
         # Merge all descriptors - validates no overlapping core ranges
-        merged = ttnn.merge_descriptors(descriptors)
+        merged = ttnn.merge_program_descriptors(descriptors)
 
     # Build io_tensors list
     io_tensors = [t for op_descriptor in op_descriptors for t in op_descriptor.input_tensors] + [

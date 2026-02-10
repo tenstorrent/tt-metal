@@ -686,8 +686,8 @@ void py_module_types(nb::module_& mod) {
         .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
 
     mod.def(
-        "merge_descriptors",
-        &tt::tt_metal::merge_descriptors,
+        "merge_program_descriptors",
+        &tt::tt_metal::merge_program_descriptors,
         nb::arg("descriptors"),
         R"pbdoc(
             Merge multiple ProgramDescriptors into a single one.
@@ -709,7 +709,7 @@ void py_module_types(nb::module_& mod) {
                 >>> desc1 = ttnn.ProgramDescriptor()  # operates on cores (0,0)-(1,1)
                 >>> desc2 = ttnn.ProgramDescriptor()  # operates on cores (2,2)-(3,3)
                 >>> desc3 = ttnn.ProgramDescriptor()  # operates on cores (4,4)-(5,5)
-                >>> merged = ttnn.merge_descriptors([desc1, desc2, desc3])
+                >>> merged = ttnn.merge_program_descriptors([desc1, desc2, desc3])
         )pbdoc");
 
     nb::class_<tt::tt_metal::experimental::MeshProgramDescriptor>(mod, "MeshProgramDescriptor", R"pbdoc(

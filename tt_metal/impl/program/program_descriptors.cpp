@@ -64,7 +64,7 @@ bool ranges_overlap_between_descriptors(const std::vector<CoreRange>& vec_a, con
 
 }  // namespace
 
-ProgramDescriptor merge_descriptors(const std::vector<ProgramDescriptor>& descriptors) {
+ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>& descriptors) {
     if (descriptors.empty()) {
         return ProgramDescriptor{};
     }

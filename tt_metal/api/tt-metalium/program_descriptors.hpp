@@ -153,7 +153,7 @@ struct ProgramDescriptor {
  * @return A new ProgramDescriptor containing all kernels, CBs, and semaphores.
  * @throws TT_FATAL if any core ranges overlap between any of the descriptors.
  */
-ProgramDescriptor merge_descriptors(const std::vector<ProgramDescriptor>& descriptors);
+ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>& descriptors);
 
 }  // namespace tt::tt_metal
 
