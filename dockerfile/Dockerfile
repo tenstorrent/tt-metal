@@ -9,23 +9,48 @@
 # from pre-built GHCR images to avoid repeated pip install operations.
 # Python venv images are built by Dockerfile.python and pushed to GHCR.
 #
-# To build locally without GHCR (e.g., for testing), you can build tool images first:
+# =============================================================================
+# LOCAL BUILD INSTRUCTIONS (without GHCR)
+# =============================================================================
+#
+# Step 1: Build all tool images
+#
 #   docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
 #   docker build -f dockerfile/Dockerfile.tools --target mold -t tool-mold:local .
+#   docker build -f dockerfile/Dockerfile.tools --target doxygen -t tool-doxygen:local .
+#   docker build -f dockerfile/Dockerfile.tools --target cba -t tool-cba:local .
+#   docker build -f dockerfile/Dockerfile.tools --target gdb -t tool-gdb:local .
 #   docker build -f dockerfile/Dockerfile.tools --target cmake -t tool-cmake:local .
-#   ... etc
+#   docker build -f dockerfile/Dockerfile.tools --target yq -t tool-yq:local .
+#   docker build -f dockerfile/Dockerfile.tools --target sfpi -t tool-sfpi:local .
+#   docker build -f dockerfile/Dockerfile.tools --target openmpi -t tool-openmpi:local .
 #
-# And Python venv images:
+# Step 2: Build Python venv images
+#
 #   docker build -f dockerfile/Dockerfile.python --target ci-build-venv \
-#     --build-arg UBUNTU_VERSION=22.04 -t python-ci-build-venv:2204 .
+#     --build-arg UBUNTU_VERSION=22.04 -t python-ci-build-venv:local .
 #   docker build -f dockerfile/Dockerfile.python --target ci-test-venv \
-#     --build-arg UBUNTU_VERSION=22.04 -t python-ci-test-venv:2204 .
+#     --build-arg UBUNTU_VERSION=22.04 -t python-ci-test-venv:local .
 #
-# Then build with:
-#   docker build --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \
-#                --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local \
-#                --build-arg PYTHON_CI_BUILD_VENV_IMAGE=python-ci-build-venv:2204 \
-#                --build-arg PYTHON_CI_TEST_VENV_IMAGE=python-ci-test-venv:2204 ...
+# Step 3: Build the main image (e.g., dev target)
+#
+#   docker build -f dockerfile/Dockerfile --target dev \
+#     --build-arg UBUNTU_VERSION=22.04 \
+#     --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \
+#     --build-arg TOOL_MOLD_IMAGE=tool-mold:local \
+#     --build-arg TOOL_DOXYGEN_IMAGE=tool-doxygen:local \
+#     --build-arg TOOL_CBA_IMAGE=tool-cba:local \
+#     --build-arg TOOL_GDB_IMAGE=tool-gdb:local \
+#     --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local \
+#     --build-arg TOOL_YQ_IMAGE=tool-yq:local \
+#     --build-arg TOOL_SFPI_IMAGE=tool-sfpi:local \
+#     --build-arg TOOL_OPENMPI_IMAGE=tool-openmpi:local \
+#     --build-arg PYTHON_CI_BUILD_VENV_IMAGE=python-ci-build-venv:local \
+#     --build-arg PYTHON_CI_TEST_VENV_IMAGE=python-ci-test-venv:local \
+#     -t tt-metalium-dev:local .
+#
+# Available targets: ci-build, ci-test, dev, release, release-models
+# =============================================================================
 
 #############################################################
 # Tool image configuration (pre-built images from GHCR)
@@ -119,9 +144,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG OMPI_TAG=v5.0.7
 ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
 ENV PATH=${OMPI_PREFIX}/bin:$PATH
-ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
 ENV CPATH=${OMPI_PREFIX}/include
-ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig
 
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=openmpi-layer /install/ /opt/
