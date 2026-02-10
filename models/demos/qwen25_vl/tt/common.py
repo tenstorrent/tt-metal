@@ -133,10 +133,9 @@ def multimodal_rope_from_hf(
 
     # Round up to nearest multiple of 2048 (chunk size) instead of power of 2 for memory efficiency
     # This matches the rounding strategy in preprocess_inputs_prefill and is compatible with chunked prefill.
-    # When rounded length > 32k, cap RoPE matrices at 32k to prevent OOM. Chunked prefill will slice
-    # the RoPE matrices as needed (via start_pos) to handle the full sequence.
+    # We pad to the full rounded length to ensure get_rope_index works correctly. Chunked prefill will slice
+    # the RoPE matrices as needed (via start_pos) to handle sequences > 32k without allocating full buffers.
     CHUNK_SIZE = 2048
-    SAFE_PREFILL_THRESHOLD = 32768  # 32k tokens - cap RoPE matrices at this to prevent OOM
 
     input_len = inputs.input_ids.shape[-1]
     if input_len <= 128:
@@ -144,11 +143,9 @@ def multimodal_rope_from_hf(
     else:
         # Round up to nearest multiple of CHUNK_SIZE
         rounded_seq_len = math.ceil(input_len / CHUNK_SIZE) * CHUNK_SIZE
-        # Cap at safe threshold (32k) to prevent OOM when max_model_len=128k causes aggressive buffer pre-allocation.
-        # Chunked prefill will handle sequences > 32k by slicing RoPE matrices via start_pos.
-        if rounded_seq_len > SAFE_PREFILL_THRESHOLD:
-            max_seq_len = min(model_args.max_seq_len, SAFE_PREFILL_THRESHOLD)
-        elif hasattr(model_args, "max_prefill_chunk_size"):
+        # Pad to full rounded length - chunked prefill will process in chunks if seq_len > 32k
+        # Cap at max_prefill_chunk_size if it exists and is smaller
+        if hasattr(model_args, "max_prefill_chunk_size"):
             max_seq_len = min(model_args.max_seq_len, rounded_seq_len, model_args.max_prefill_chunk_size)
         else:
             max_seq_len = min(model_args.max_seq_len, rounded_seq_len)
