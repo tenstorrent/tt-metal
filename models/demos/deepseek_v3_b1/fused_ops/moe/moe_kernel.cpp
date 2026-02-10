@@ -29,7 +29,8 @@
 // 11c.  Down Proj Matmul (shared, 112 cores): SRAM matmul [1,K_down] x [K_down,N_per_core]
 // 11d.  Residual Add (shared, 112 cores): matmul_out + shard(residual)
 // 11e.  Output Gather (shared, 112 cores → sender): collect residual add results
-//  12.  Eltwise Add (routed, down_proj + fused_add)
+// 11f.  Output Mcast (shared, sender → 130 cores): DRAM cores receive into add_cb_in1
+//  12.  Eltwise Add (routed, down_proj + shared_expert_output)
 //
 // Optimizations:
 //   - gate_proj and up_proj share same CB (ResetCBIn1 between uses)
@@ -300,6 +301,14 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_og_receiver_data_addr"),
                 get_named_compile_time_arg_val("shared_residual_add_core_idx"),  // reuse matmul core index
             };
+
+            // Output Mcast — receiver (DRAM cores receive into add_cb_in1)
+            using OutputMcastCTArgs = Routed::McastCTArgs;
+            deepseek_b1_ops::Mcast::ReceiverArgs output_mcast_args{
+                get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore"),
+                get_named_compile_time_arg_val("add_cb_in1"),
+                get_named_compile_time_arg_val("shared_output_mcast_dst_num_pages"),
+            };
         } shared;
     } moe;
 
@@ -334,9 +343,7 @@ void kernel_main() {
         constexpr uint32_t add_cb_in0_wait_tiles = get_named_compile_time_arg_val("add_cb_in0_wait_tiles");
         unified_kernels::setup_sharded_buffer(add_cb_in0, add_cb_in0_wait_tiles);
 
-        constexpr uint32_t add_cb_in1 = get_named_compile_time_arg_val("add_cb_in1");
-        constexpr uint32_t add_cb_in1_wait_tiles = get_named_compile_time_arg_val("add_cb_in1_wait_tiles");
-        unified_kernels::setup_sharded_buffer(add_cb_in1, add_cb_in1_wait_tiles);
+        // NOTE: add_cb_in1 is NOT setup here — it is populated by the shared expert's Output Mcast
     }
     if constexpr (Core::Shared::is_compute_core) {
         constexpr uint32_t shared_gu_weights_cb = get_named_compile_time_arg_val("shared_gu_weights_cb");
@@ -544,6 +551,22 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_og_dst_cb"),
                 get_named_compile_time_arg_val("shared_og_dst_num_pages"),
             };
+
+            // Output Mcast — sender (sender core → 130 cores)
+            using OutputMcastCTArgs = Routed::McastCTArgs;
+            deepseek_b1_ops::Mcast::SenderArgs output_mcast_args{
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("shared_output_mcast_data_sender_semaphore"),
+                get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore"),
+                get_named_compile_time_arg_val("shared_output_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_output_mcast_src_cb"),
+                get_named_compile_time_arg_val("shared_output_mcast_src_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("shared_output_mcast_src_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("add_cb_in1")),
+            };
         } shared;
     } moe;
 
@@ -714,6 +737,10 @@ void kernel_main() {
 
             // Output Gather (compute — no-op)
             deepseek_b1_ops::Gather::ComputeArgs og_args{};
+
+            // Output Mcast (compute — no-op)
+            using OutputMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+            deepseek_b1_ops::Mcast::ComputeArgs output_mcast_args{};
         } shared;
     } moe;
 
@@ -939,7 +966,20 @@ void kernel_main() {
         shared_output_gather(moe.shared.og_args);
     }
 
-    // 12. Eltwise Add: down_proj + fused_add
+    // 11f. Shared: Output Mcast — sender core → 130 cores (DRAM cores receive into add_cb_in1)
+    {
+        DeviceZoneScopedN("SHARED_OUTPUT_MCAST");
+        deepseek_b1_ops::Mcast::Op<
+            Moe::Shared::OutputMcastCTArgs,
+            Core::is_sender_core,             // IsSenderCore
+            Core::is_mcast_grid_core,         // IsMcastGridCore (all 130 cores for semaphore ack)
+            Core::Routed::is_gate_proj_core,  // IsReceiverCore (8 DRAM cores receive into add_cb_in1)
+            /*pop_src=*/true>
+            shared_output_mcast;
+        shared_output_mcast(moe.shared.output_mcast_args);
+    }
+
+    // 12. Eltwise Add: down_proj + shared_expert_output
     {
         DeviceZoneScopedN("ELTWISE_ADD");
         deepseek_b1_ops::EltwiseAdd::Op<Moe::Routed::AddCTArgs, Core::Routed::is_gate_proj_core> add_op;

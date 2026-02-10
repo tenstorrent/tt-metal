@@ -19,7 +19,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
-from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp, MoeRoutedExpertOp
+from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 
@@ -262,6 +262,22 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         tile=a_tile,
     )
 
+    # ── Output mcast destination tensor (shared expert output [1, N] → all 130 cores) ──
+    # This will replace fused_add_tensor: mcast writes shared expert output into add_cb_in1
+    num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
+    output_mcast_dst_shard = ttnn.ShardSpec(mcast_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mcast_dst_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_mcast_dst_shard
+    )
+    ttnn_output_mcast_dst = ttnn.from_torch(
+        torch.zeros((M * num_mcast_cores, N), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=output_mcast_dst_mem,
+        tile=out_tile,
+    )
+
     return {
         # TTNN tensors
         "ttnn_activation": ttnn_activation,
@@ -271,6 +287,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         "ttnn_output": ttnn_output,
         "ttnn_residual_mcast_dst": ttnn_residual_mcast_dst,
         "ttnn_down_mcast_dst": ttnn_down_mcast_dst,
+        "ttnn_output_mcast_dst": ttnn_output_mcast_dst,
         # Params
         "k_parallel": k_parallel,
         "n_parallel": n_parallel,
@@ -785,9 +802,7 @@ def extract_routed_expert_output(
 # ============================================================================
 @pytest.mark.parametrize(
     "use_hardcoded_expert_index",
-    [
-        True,
-    ],
+    [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
 )
 def test_moe_fused(device, use_hardcoded_expert_index):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
@@ -807,7 +822,7 @@ def test_moe_fused(device, use_hardcoded_expert_index):
     mcast_grid = r["ttnn_mcast_output"].memory_config().shard_spec.grid
     s = create_shared_expert_tensors(device, M, K, mcast_grid)
 
-    num_iterations = 1
+    num_iterations = 100
     for iteration in range(num_iterations):
         ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
             r["ttnn_input"],
@@ -830,7 +845,7 @@ def test_moe_fused(device, use_hardcoded_expert_index):
             r["down_proj_mcast_output_tensor"],
             r["down_proj_weights"],
             r["down_proj_output"],
-            r["fused_add_tensor"],
+            s["ttnn_output_mcast_dst"],
             r["final_output_tensor"],
             r["gate_proj_in1_buf_tensor"],
             r["up_proj_in1_buf_tensor"],
@@ -862,15 +877,18 @@ def test_moe_fused(device, use_hardcoded_expert_index):
         r["per_core_down_proj_N"],
     )
 
-    # Compute routed expert golden (uses only torch tensors, no device)
-    torch_expected_scores, torch_expected_indices, torch_expected_final = MoeRoutedExpertOp.golden(
+    # Compute fused MoE golden (routed + shared expert + eltwise add)
+    torch_expected_scores, torch_expected_indices, torch_expected_final = MoeOp.golden(
         r["torch_input"],
         r["torch_gate_mm_weights"],
         r["torch_bias"],
+        shared_gate_weights=s["torch_gate_weights"],
+        shared_up_weights=s["torch_up_weights"],
+        shared_down_weights=s["torch_down_weights"],
+        shared_bias=s["torch_bias"],
         gate_proj_weights_dict=r["expert_weights_dict"],
         up_proj_weights_dict=r["up_proj_weights_dict"],
         down_proj_weights_dict=r["down_proj_weights_dict"],
-        fused_add_tensor=r["fused_add_torch"],
         eps=r["gate_eps"],
         scaling_factor=r["gate_scaling_factor"],
         use_hardcoded_expert_index=use_hardcoded_expert_index,
@@ -890,48 +908,8 @@ def test_moe_fused(device, use_hardcoded_expert_index):
         sorted_output_scores, sorted_expected_scores, atol=1e-2, rtol=1e-4
     ), "Routed expert: gate scores mismatch"
 
-    passing, pcc_routed = comp_pcc(torch_expected_final, output_final_valid, 0.97)
-    logger.info(f"Routed expert PCC: {pcc_routed}")
-    assert passing, f"Routed expert PCC check failed: {pcc_routed}"
+    passing, pcc = comp_pcc(torch_expected_final, output_final_valid, 0.97)
+    logger.info(f"Fused MoE PCC: {pcc}")
+    assert passing, f"Fused MoE PCC check failed: {pcc}"
 
-    # ── Phase 2: Shared expert ──
-    logger.info("Phase 2: Running shared expert...")
-
-    for iteration in range(num_iterations):
-        ttnn_shared_result = SharedExpertOp.op(
-            s["ttnn_activation"],
-            s["ttnn_gate_up_weights"],
-            s["ttnn_down_weights"],
-            s["ttnn_bias"],
-            s["ttnn_output"],
-            s["k_parallel"],
-            s["n_parallel"],
-        )
-    ttnn.synchronize_device(device)
-    logger.info(f"Shared expert: {num_iterations} iterations completed")
-
-    # Read back shared expert results and save torch tensors for golden
-    output_shared_torch = ttnn.to_torch(ttnn_shared_result)
-    s_torch_activation = s["torch_activation"]
-    s_torch_gate_weights = s["torch_gate_weights"]
-    s_torch_up_weights = s["torch_up_weights"]
-    s_torch_down_weights = s["torch_down_weights"]
-    s_torch_bias = s["torch_bias"]
-
-    # Deallocate shared expert device tensors
-    del s, ttnn_shared_result
-
-    # Validate shared expert
-    torch_expected_shared = SharedExpertOp.golden(
-        s_torch_activation.float(),
-        s_torch_gate_weights.float(),
-        s_torch_up_weights.float(),
-        s_torch_down_weights.float(),
-        s_torch_bias.float(),
-    ).bfloat16()
-
-    passing, pcc_shared = comp_pcc(torch_expected_shared, output_shared_torch, 0.97)
-    logger.info(f"Shared expert PCC: {pcc_shared}")
-    assert passing, f"Shared expert PCC check failed: {pcc_shared}"
-
-    logger.info(f"Fused MoE test PASSED! (routed={pcc_routed}, shared={pcc_shared})")
+    logger.info(f"Fused MoE test PASSED! (PCC={pcc})")
