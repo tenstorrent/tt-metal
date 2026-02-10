@@ -70,7 +70,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tile
     UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
 
     // Step 3: Initialize reduce operation
-    MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, MATH_FIDELITY>()));
+    MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, math_fidelity>()));
 
     // Step 4: Prepare data for first tile's scalar reduction
     // Move dest[0] (first multiply result) to srcA

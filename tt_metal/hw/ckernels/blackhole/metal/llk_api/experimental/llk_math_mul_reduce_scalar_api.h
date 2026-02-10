@@ -11,7 +11,7 @@
  * LLK MUL REDUCE SCALAR - Fused multiply and scalar reduction
  *************************************************************************/
 
-template <int NUM_FIDELITY_PHASES = 0>
+template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar_init(
     const std::uint32_t operand_A, const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t operand_id = get_operand_id(operand_A);
@@ -20,11 +20,11 @@ inline void llk_math_eltwise_mul_reduce_scalar_init(
     _llk_math_eltwise_binary_init_<
         EltwiseBinaryType::ELWMUL,
         BroadcastType::NONE,
-        NUM_FIDELITY_PHASES,
+        math_fidelity,
         EltwiseBinaryReuseDestType::NONE>(num_faces, acc_to_dest);
 }
 
-template <bool is_fp32_dest_acc_en, int NUM_FIDELITY_PHASES = 0>
+template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar(
     uint dst_index, const std::uint32_t icb0, const bool clear_fp32_dst_acc = true) {
     const std::uint32_t operand_id = get_operand_id(icb0);
@@ -35,25 +35,25 @@ inline void llk_math_eltwise_mul_reduce_scalar(
         BroadcastType::NONE,
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
-        NUM_FIDELITY_PHASES,
+        math_fidelity,
         EltwiseBinaryReuseDestType::NONE>(num_faces, dst_index, clear_fp32_dst_acc);
 }
 
-template <bool is_fp32_dest_acc_en, int num_fidelity_phases = 0, bool enforce_fp32_accumulation = false>
+template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void llk_math_mul_reduce_scalar_reduce_init() {
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>();
 }
 
-template <int num_fidelity_phases = 0>
+template <MathFidelity math_fidelity>
 inline void llk_math_mul_reduce_column(const uint dst_index, const std::uint32_t icb0) {
     const std::uint32_t operand_id = get_operand_id(icb0);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    _llk_math_mul_reduce_column_<num_fidelity_phases>(dst_index, false, num_faces);
+    _llk_math_mul_reduce_column_<math_fidelity>(dst_index, false, num_faces);
 }
 
-template <int num_fidelity_phases = 0>
+template <MathFidelity math_fidelity>
 inline void llk_math_mul_reduce_scalar() {
-    _llk_math_mul_reduce_scalar_<num_fidelity_phases>();
+    _llk_math_mul_reduce_scalar_<math_fidelity>();
 }
 
 inline void llk_math_mul_reduce_scalar_clear_dvalid() { _llk_math_mul_reduce_scalar_clear_dvalid_(); }
