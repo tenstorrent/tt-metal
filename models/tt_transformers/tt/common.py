@@ -18,6 +18,7 @@ import ttnn
 
 
 
+
 class URL(BaseModel):
     uri: str
 
@@ -48,9 +49,11 @@ InterleavedTextMedia = Union[
 ]
 
 
+
 class Mode(Enum):
     DECODE = "decode"
     PREFILL = "prefill"
+
 
 class HostEmbedding(torch.nn.Module):
     def __init__(self, model_args):
