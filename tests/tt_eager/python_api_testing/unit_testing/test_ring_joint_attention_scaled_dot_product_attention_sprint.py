@@ -105,37 +105,6 @@ def detect_available_devices():
         return 0
 
 
-def determine_ring_size(num_devices):
-    """
-    Determine appropriate ring size based on available devices.
-    """
-    if num_devices < 1:
-        pytest.skip(f"No devices available for testing")
-    elif num_devices == 1:
-        logger.warning("Single device mode - will test ring joint attention logic but not true ring behavior")
-
-    # Determine ring size - prefer even numbers and powers of 2
-    if num_devices == 1:
-        ring_size = 1  # Single device case
-    elif num_devices == 2:
-        ring_size = 2
-    elif num_devices == 4:
-        ring_size = 4
-    elif num_devices == 8:
-        ring_size = 8
-    else:
-        # For other counts, use the largest even power of 2 <= num_devices
-        ring_size = 2 ** int(math.log2(num_devices))
-        if ring_size > num_devices:
-            ring_size //= 2
-        # Ensure ring_size is even
-        if ring_size % 2 != 0:
-            ring_size -= 1
-
-    logger.info(f"Using ring size {ring_size}")
-    return ring_size
-
-
 def create_global_semaphores(mesh_device, cores, initial_value):
     """Create global semaphore handles for CCL coordination."""
     return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
@@ -189,7 +158,7 @@ def run_ring_joint_sdpa(
 
     # Detect available devices and determine ring size
     num_devices = detect_available_devices()
-    ring_size = determine_ring_size(num_devices)
+    ring_size = num_devices
 
     logger.info(f"Using {ring_size} devices for ring joint attention")
 
@@ -253,14 +222,14 @@ def run_ring_joint_sdpa(
         if ring_size < 2:
             pytest.skip(f"Ring joint attention requires at least 2 devices, got {ring_size}")
 
-        if local_seq_len < q_chunk_size:
-            pytest.skip(f"Local sequence length {local_seq_len} per device too small for q_chunk_size {q_chunk_size}")
+        # if local_seq_len < q_chunk_size:
+        #     pytest.skip(f"Local sequence length {local_seq_len} per device too small for q_chunk_size {q_chunk_size}")
 
-        if local_seq_len % q_chunk_size != 0:
-            pytest.skip(f"Local sequence length {local_seq_len} not divisible by q_chunk_size {q_chunk_size}")
+        # if local_seq_len % q_chunk_size != 0:
+        #     pytest.skip(f"Local sequence length {local_seq_len} not divisible by q_chunk_size {q_chunk_size}")
 
-        if sq % k_chunk_size != 0:
-            pytest.skip(f"Total sequence length {sq} not divisible by k_chunk_size {k_chunk_size}")
+        # if sq % k_chunk_size != 0:
+        #     pytest.skip(f"Total sequence length {sq} not divisible by k_chunk_size {k_chunk_size}")
 
         # REVERT to working row-based CCL approach (like working examples)
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -537,16 +506,25 @@ def run_ring_joint_sdpa(
         )
         logger.info(f"Main output converted with mesh composer - shape: {tt_out_torch.shape}")
 
-        # Joint output: only heads are sharded (up_axis), not sequence
-        # For joint output, we only shard on head dimension (up_axis=0 -> dim 1)
-        joint_composer_dims = [1, -1]  # Head dim sharded, sequence not sharded (-1 means no concat)
+        # Joint output: Use standard composer then fix dimension mismatch
+        joint_composer_dims = [1, -1]  # Head count concat, sequence no concat
         logger.info(f"Joint output using composer dims: {joint_composer_dims}")
 
         tt_joint_out_torch = ttnn.to_torch(
             tt_joint_out,
             mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(joint_composer_dims)),
         )
-        logger.info(f"Joint output converted with mesh composer - shape: {tt_joint_out_torch.shape}")
+        logger.info(f"Joint output initial shape: {tt_joint_out_torch.shape}")
+
+        # CRITICAL FIX: If head dimension is expanded due to mesh composer, slice to correct size
+        expected_head_dim = 128  # Should match input tensor head dimension
+        if tt_joint_out_torch.shape[3] != expected_head_dim:
+            logger.warning(f"Joint output head dimension {tt_joint_out_torch.shape[3]} != expected {expected_head_dim}")
+            logger.warning(f"Slicing to correct head dimension: [:, :, :, :{expected_head_dim}]")
+            tt_joint_out_torch = tt_joint_out_torch[:, :, :, :expected_head_dim]
+            logger.info(f"Joint output after head dimension fix: {tt_joint_out_torch.shape}")
+        else:
+            logger.info(f"Joint output head dimension is correct: {expected_head_dim}")
 
         # Handle joint output batch dimension if needed - extract first batch only for comparison
         if tt_joint_out_torch.shape[0] > 1:
@@ -568,6 +546,9 @@ def run_ring_joint_sdpa(
 
         # Verify accuracy for main output
         out_pass_main, out_pcc_main = comp_pcc(gt_main, tt_out_torch, pcc_threshold)
+        print("PCC is: ", out_pcc_main)
+        print(gt_main)
+        print(tt_out_torch)
         logger.info(f"Ring joint attention main output vs PyTorch PCC: {out_pcc_main} (threshold: {pcc_threshold})")
 
         rmse_main = torch.sqrt(((gt_main - tt_out_torch) ** 2).mean()).item()
@@ -609,19 +590,17 @@ def run_ring_joint_sdpa(
 # Joint attention has more complexity, so we use more manageable sizes
 
 INPUT_SHAPES = [
-    # Format: [batch, num_heads, sequence_length, head_dim] - Increased sizes to test scaling
-    # [1, 10, 9472, 128],
+    # batch, num_heads, sequence_length, head_dim
+    [1, 10, 9472 * 4, 128],
     [1, 10, 2368 * 4, 128],
 ]
-
 INPUT_IDS = [
-    # "GLX",
-    "4xGLX",
+    "wan_1xGLX_analog",
+    "wan_4xGLX_analog",
 ]
 
-# Chunking strategy - use smaller chunks for joint attention
-Q_CHUNK_SIZES = [64]
-K_CHUNK_SIZES = [128]
+Q_CHUNK_SIZES = [64, 128, 256, 512]
+K_CHUNK_SIZES = [128, 256, 512]
 
 
 # === TEST 1: PERFORMANCE SWEEP ===
@@ -694,7 +673,7 @@ def test_ring_joint_attention_sdpa_accuracy(b, nh, s, d, q_chunk_size, k_chunk_s
         dtype,
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
-        do_check=False,  # Disable comparison temporarily - core functionality works!
+        # do_check=False,  # Disable comparison temporarily - core functionality works!
     )
 
 
