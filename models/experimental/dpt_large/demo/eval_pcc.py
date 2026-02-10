@@ -81,7 +81,9 @@ def main():
     parser.add_argument("--device", type=str, default="cpu", help="cpu|wormhole_n300|wormhole_n150|blackhole")
     parser.add_argument("--tt-run", action="store_true", help="Run TT pipeline and compare to CPU reference.")
     parser.add_argument("--pretrained", action="store_true", help="Use pretrained HF weights (downloads).")
-    parser.add_argument("--no-pretrained", dest="pretrained", action="store_false", help="Use random init (no download).")
+    parser.add_argument(
+        "--no-pretrained", dest="pretrained", action="store_false", help="Use random init (no download)."
+    )
     parser.set_defaults(pretrained=True)
 
     parser.add_argument("--image-size", type=int, default=384)
@@ -172,4 +174,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

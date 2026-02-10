@@ -16,6 +16,7 @@ from typing import Optional
 
 import math
 import torch
+
 try:
     import ttnn  # type: ignore
 except Exception:  # pragma: no cover
@@ -68,7 +69,9 @@ def unpad_tokens_3d(x_3d_padded: torch.Tensor, original_N: int):
     return x_3d_padded[:, :original_N, :]
 
 
-def build_attn_padding_mask_4d(padded_seq_len: int, valid_seq_len: int, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+def build_attn_padding_mask_4d(
+    padded_seq_len: int, valid_seq_len: int, dtype: torch.dtype = torch.float32
+) -> torch.Tensor:
     """Build an additive attention mask that blocks padded key/value tokens.
 
     Returns a tensor shaped [1, 1, S, S] with zeros for valid keys and -inf for

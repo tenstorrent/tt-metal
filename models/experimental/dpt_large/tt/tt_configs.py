@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple, Optional
 
 import math
+
 try:
     import ttnn  # type: ignore
 except Exception:  # pragma: no cover

@@ -11,7 +11,7 @@ import numpy as np
 import PIL.Image
 import torch
 
-from .config import DPTLargeConfig, DEFAULT_CONFIG
+from .config import DPTLargeConfig
 
 try:
     from transformers import DPTConfig, DPTForDepthEstimation, DPTImageProcessor

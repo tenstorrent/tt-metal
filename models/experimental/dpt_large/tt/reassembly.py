@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 
-from .config import DPTLargeConfig, DEFAULT_CONFIG
+from .config import DPTLargeConfig
 from .vit_backbone import ViTBackboneOutputs
 from .tt_configs import TTLayerConfig
 from models.common.utility_functions import torch_to_tt_tensor_rm
@@ -161,8 +161,8 @@ class DPTReassembly(nn.Module):
                 [
                     nn.Sequential(
                         nn.Linear(2 * hidden_size, hidden_size),
-                    nn.GELU() if self.hidden_act == "gelu" else nn.ReLU(),
-                )
+                        nn.GELU() if self.hidden_act == "gelu" else nn.ReLU(),
+                    )
                     for _ in range(len(self.config.neck_hidden_sizes))
                 ]
             )

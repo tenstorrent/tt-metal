@@ -12,7 +12,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from .config import DPTLargeConfig, DEFAULT_CONFIG
+from .config import DPTLargeConfig
 from .fallback import DPTFallbackPipeline
 from .fusion_head import DPTFusionHead
 from .reassembly import DPTReassembly

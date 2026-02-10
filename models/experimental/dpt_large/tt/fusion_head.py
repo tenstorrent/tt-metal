@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .config import DPTLargeConfig, DEFAULT_CONFIG
+from .config import DPTLargeConfig
 from .tt_configs import TTLayerConfig
 from models.common.utility_functions import torch_to_tt_tensor_rm
 

@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 import torch
 
 from .tt_modules import build_attn_padding_mask_4d, pad_tokens_3d, unpad_tokens_3d
-from .config import DPTLargeConfig, DEFAULT_CONFIG
+from .config import DPTLargeConfig
 
 LOG = logging.getLogger(__name__)
 
