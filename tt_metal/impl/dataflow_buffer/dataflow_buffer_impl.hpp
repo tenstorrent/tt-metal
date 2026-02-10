@@ -36,6 +36,7 @@ struct LocalDFBInterfaceHost {
     std::array<uint8_t, ::experimental::NUM_TXN_IDS> txn_ids = {0xFF, 0xFF, 0xFF, 0xFF};
     uint8_t num_entries_per_txn_id = 0;  // entries to post (producer) or ack (consumer) per txn ID
     uint8_t num_entries_per_txn_id_per_tc = 0;
+    bool init_txn_id_descriptor = false;
 };
 
 struct DFBRiscConfig {

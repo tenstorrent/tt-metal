@@ -195,13 +195,15 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         }
         per_risc.num_entries_per_txn_id = rc.config.num_entries_per_txn_id;
         per_risc.num_entries_per_txn_id_per_tc = rc.config.num_entries_per_txn_id_per_tc;
-        per_risc.padding = 0;
+        per_risc.init_txn_id_descriptor = (uint8_t)rc.config.init_txn_id_descriptor;
         log_info(
             tt::LogMetal,
-            "Per-risc txn: num_txn_ids={}, entries_per_txn_id={}, entries_per_txn_id_per_tc={}",
+            "Per-risc txn: num_txn_ids={}, entries_per_txn_id={}, entries_per_txn_id_per_tc={}, "
+            "init_txn_id_descriptor={}",
             rc.config.num_txn_ids,
             rc.config.num_entries_per_txn_id,
-            rc.config.num_entries_per_txn_id_per_tc);
+            rc.config.num_entries_per_txn_id_per_tc,
+            rc.config.init_txn_id_descriptor);
 
         const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
         data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
@@ -447,6 +449,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         risc_config.risc_id = risc_id;
         risc_config.is_producer = true;
         risc_config.config.should_init_tc = true;  // producer is responsible for initializing tile counters
+        risc_config.config.init_txn_id_descriptor = config.enable_implicit_sync && producer_idx == 0;
 
         log_info(tt::LogMetal, "Producer risc {} uses {} TCs", risc_id, num_producer_tcs);
 
@@ -481,6 +484,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         DFBRiscConfig risc_config;
         risc_config.risc_id = risc_id;
         risc_config.is_producer = false;
+        risc_config.config.init_txn_id_descriptor = config.enable_implicit_sync && consumer_idx == 0;
 
         log_info(tt::LogMetal, "Consumer risc {} uses {} TCs", risc_id, num_consumer_tcs);
 

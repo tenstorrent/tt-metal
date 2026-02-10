@@ -75,8 +75,7 @@ struct dfb_initializer_t {  // 20 bytes
     uint8_t num_entries_to_process_threshold_producer;
     uint8_t num_entries_to_process_threshold_consumer;
     uint8_t remapper_consumer_mask;  // used to program remapper, for a L:R mapping, indicates which riscs make up R
-    uint8_t padding;  // first non-zero bit sets up txn isr for producer, and second non-zero bit sets up txn isr for
-                      // consumer. TODO: plug through the host
+    uint8_t padding;
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 50 bytes
@@ -88,6 +87,7 @@ struct dfb_initializer_per_risc_t {  // 50 bytes
         uint8_t remapper_pair_index : 6;  // bits 0-5: 0..63
         uint8_t remapper_en : 1;          // bit 6
         uint8_t should_init_tc : 1;  // bit 7: 1 = this RISC should initialize tile counters and program the remapper
+                                     // (producer)
     } __attribute__((packed)) flags;
     uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side
                             // (R). TC can be value between 0 and 31 (5 bits, max of 4 TCs)
@@ -96,7 +96,7 @@ struct dfb_initializer_per_risc_t {  // 50 bytes
     uint8_t txn_ids[NUM_TXN_IDS];
     uint8_t num_entries_per_txn_id;  // entries to post (producer) or ack (consumer) per txn ID
     uint8_t num_entries_per_txn_id_per_tc;
-    uint8_t padding;
+    uint8_t init_txn_id_descriptor;
 } __attribute__((packed));
 
 // intra tensix dfb
@@ -118,21 +118,21 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
 
 // on WH/BH arrays will be sized to 1
 struct LocalDFBInterface {
-    uint32_t rd_ptr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t wr_ptr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t base_addr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t limit[MAX_NUM_TILE_COUNTERS_TO_RR];
+    uint32_t rd_ptr[MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+    uint32_t wr_ptr[MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+    uint32_t base_addr[MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+    uint32_t limit[MAX_NUM_TILE_COUNTERS_TO_RR] = {};
 
-    uint32_t entry_size;   // shared across riscs, from dfb_initializer_t
-    uint32_t stride_size;  // shared across riscs, from dfb_initializer_t
+    uint32_t entry_size = 0;   // shared across riscs, from dfb_initializer_t
+    uint32_t stride_size = 0;  // shared across riscs, from dfb_initializer_t
 
-    PackedTileCounter packed_tile_counter[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint8_t txn_ids[NUM_TXN_IDS];           // per-risc, from dfb_initializer_per_risc_t
-    uint8_t num_entries_per_txn_id;         // per-risc, entries to post (producer) or ack (consumer) per txn ID
-    uint8_t num_entries_per_txn_id_per_tc;  // per-risc, for round-robin across TCs
-    uint8_t remapper_pair_index;
-    uint8_t num_tcs_to_rr;
-    uint8_t num_txn_ids;  // per-risc, from dfb_initializer_per_risc_t
+    PackedTileCounter packed_tile_counter[MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+    uint8_t txn_ids[NUM_TXN_IDS] = {};          // per-risc, from dfb_initializer_per_risc_t
+    uint8_t num_entries_per_txn_id = 0;         // per-risc, entries to post (producer) or ack (consumer) per txn ID
+    uint8_t num_entries_per_txn_id_per_tc = 0;  // per-risc, for round-robin across TCs
+    uint8_t remapper_pair_index = 0xFF;
+    uint8_t num_tcs_to_rr = 0;
+    uint8_t num_txn_ids = 0;  // per-risc, from dfb_initializer_per_risc_t
 
     uint8_t padding[3];
 
@@ -153,9 +153,12 @@ struct LocalDFBInterface {
 
 // Holds metadata for transction based ISR handling
 struct TxnDFBDescriptor {
-    uint8_t tile_counters[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint8_t tiles_to_post;
     uint8_t num_counters;
+    uint8_t tile_counters[MAX_NUM_TILE_COUNTERS_TO_RR];
+    union {
+        uint8_t tiles_to_post;
+        uint8_t tiles_to_ack;
+    } __attribute__((packed));
 };
 
 static_assert(sizeof(dfb_initializer_t) == 20, "dfb_initializer_t size is incorrect");
