@@ -37,7 +37,6 @@ class TtLlamaImageTransformerBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
             eps=configuration.norm_eps,
-            model_name=configuration.model_name if hasattr(configuration, "model_name") else "unknown",
         )
 
         self.attn = TtLlamaImageAttention(
@@ -58,7 +57,6 @@ class TtLlamaImageTransformerBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
             eps=configuration.norm_eps,
-            model_name=configuration.model_name if hasattr(configuration, "model_name") else "unknown",
         )
 
         self.mlp = TtLlamaImageFeedForward(

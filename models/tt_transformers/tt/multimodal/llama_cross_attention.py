@@ -2,21 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
-import os
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-
-_xattn_collected = set()
-if os.path.exists("llama_cross_attention_1d_performance.csv"):
-    with open("llama_cross_attention_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _xattn_collected.add(",".join(row))
 
 
 class TtLlamaCrossAttention(LightweightModule):
@@ -424,28 +412,6 @@ class TtLlamaCrossAttention(LightweightModule):
         vision_tokens=None,
         cross_page_table=None,
     ):
-        _file_exists = os.path.exists("llama_cross_attention_1d_performance.csv")
-        with open("llama_cross_attention_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "x_dtype,x_shape_0,x_shape_1,x_shape_2,x_shape_3,"
-                    "wq_shape_0,wq_shape_1,wk_shape_0,wk_shape_1,"
-                    "wv_shape_0,wv_shape_1,wo_shape_0,wo_shape_1,"
-                    "dim,head_dim,n_heads,n_kv_heads,device_shape_x,device_shape_y,is_multichip,"
-                    "model_name,mode\n"
-                )
-            _dev_shape = list(self.mesh_device.shape) if hasattr(self.mesh_device, "shape") else [1, 1]
-            _entry = (
-                f"{x_11SH.dtype},{x_11SH.shape[0]},{x_11SH.shape[1]},{x_11SH.shape[2]},{x_11SH.shape[3]},"
-                f"{self.wq.shape[0]},{self.wq.shape[1]},{self.wk.shape[0]},{self.wk.shape[1]},"
-                f"{self.wv.shape[0]},{self.wv.shape[1]},{self.wo.shape[0]},{self.wo.shape[1]},"
-                f"{self.dim},{self.head_dim},{self.n_heads},{self.n_kv_heads},{_dev_shape[0]},{_dev_shape[1]},{self.is_multichip},"
-                f"{self.configuration.model_name},{mode}"
-            )
-            if _entry not in _xattn_collected:
-                _xattn_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         if mode == "prefill":
             return self.forward_prefill(
                 x_11SH,
