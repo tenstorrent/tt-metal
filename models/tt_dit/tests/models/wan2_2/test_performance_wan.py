@@ -68,6 +68,15 @@ def t2v_metrics(mesh_device, height):
             "vae": 10.0,
             "total": 449.3,
         }
+    elif tuple(mesh_device.shape) == (4, 32):
+        assert is_blackhole(), "4x32 is only supported for blackhole"
+        assert height == 720, "4x32 is only supported for 720p"
+        expected_metrics = {
+            "encoder": 115.0,
+            "denoising": 120.0,
+            "vae": 20.0,
+            "total": 255.0,
+        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
     return expected_metrics
