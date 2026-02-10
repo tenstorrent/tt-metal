@@ -540,6 +540,7 @@ typename device_operation_t::tensor_return_value_t launch(
     }
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
