@@ -8,7 +8,6 @@
 
 // clang-format off
 #undef PROFILE_NOC_EVENTS
-#include "api/debug/dprint.h"
 #include "risc_common.h"
 #include "tensix.h"
 #include "tensix_types.h"

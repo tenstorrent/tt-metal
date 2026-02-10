@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <memory>
 #include <numeric>
+#include <set>
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -112,11 +114,22 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     const uint32_t num_tiles = 64;
 
-    // Step 1: Write sharded buffer while FD is enabled
+    // Enable Fast Dispatch and create sharded L1 buffer
     experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
 
+    CoreRangeSet shard_grid(CoreRange({0, 0}, {1, 1}));
+    const uint32_t num_cores = 4;
+    const uint32_t tiles_per_shard = num_tiles / num_cores;
+    std::array<uint32_t, 2> shard_shape = {tiles_per_shard * single_tile_size, 1};
+    std::array<uint32_t, 2> page_shape = {single_tile_size, 1};
+    std::array<uint32_t, 2> tensor2d_shape = {num_tiles, 1};
+    ShardSpecBuffer shard_spec(shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
+
     DeviceLocalBufferConfig fd_buffer_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+        .page_size = single_tile_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = true};
     ReplicatedBufferConfig fd_global_config{.size = num_tiles * single_tile_size};
     auto fd_buf = MeshBuffer::create(fd_global_config, fd_buffer_config, mesh_device_.get());
 
@@ -125,10 +138,25 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
     Finish(mesh_device_->mesh_command_queue());
 
-    // Step 2: Disable FD (dispatch cores reclaimed for compute)
+    // Verify sharded buffer readback in FD mode
+    std::vector<uint32_t> fd_dst_vec = {};
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        ReadShard(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, coord);
+        EXPECT_EQ(fd_dst_vec, fd_src_vec) << "Sharded buffer readback failed in FD mode";
+    }
+
+    // Transition from FD to SD
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
 
-    // Step 3: Write buffer to L1 (which now includes reclaimed dispatch cores)
+    // Verify sharded buffer still works after FD->SD transition
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> fd_buf_readback_in_sd = {};
+        ReadShard(mesh_device_->mesh_command_queue(), fd_buf_readback_in_sd, fd_buf, coord);
+        EXPECT_EQ(fd_buf_readback_in_sd, fd_src_vec)
+            << "Sharded buffer data mismatch after FD->SD transition";
+    }
+
+    // Write and verify interleaved L1 buffer in SD mode
     DeviceLocalBufferConfig sd_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
     ReplicatedBufferConfig sd_global_config{.size = num_tiles * single_tile_size};
@@ -139,15 +167,10 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
     Finish(mesh_device_->mesh_command_queue());
 
-    // Step 4: Verify both buffers (from FD and SD modes)
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        std::vector<uint32_t> fd_dst_vec = {};
-        ReadShard(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, coord);
-        EXPECT_EQ(fd_dst_vec, fd_src_vec) << "FD buffer verification failed";
-
         std::vector<uint32_t> sd_dst_vec = {};
         ReadShard(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, coord);
-        EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD buffer verification failed (reclaimed dispatch cores)";
+        EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed";
     }
 }
 
