@@ -261,10 +261,7 @@ void Cluster::detect_arch_and_target() {
 // TODO: remove this when we deprecate TG
 bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == tt::tt_metal::ClusterType::TG; }
 
-bool Cluster::is_ubb_galaxy() const {
-    return this->cluster_type_ == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY ||
-           this->cluster_type_ == tt::tt_metal::ClusterType::GALAXY;
-}
+bool Cluster::is_ubb_galaxy() const { return Cluster::is_ubb_galaxy(this->cluster_type_); }
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
