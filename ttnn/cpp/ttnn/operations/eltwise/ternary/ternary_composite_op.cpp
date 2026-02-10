@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ternary_composite_op.hpp"
-#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 
 namespace ttnn::operations::ternary {
 
@@ -61,13 +61,43 @@ Tensor _addcdiv(
     return result;
 }
 
-// lerp(input, end, weight) = start   weight * (end - start)
+// lerp(input, end, weight) = start + weight * (end - start)
 Tensor _lerp_overload(
-    const Tensor& input, const Tensor& end, float weight, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& input,
+    const Tensor& end,
+    float weight,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
     TT_FATAL(input.dtype() == end.dtype(), "Expected the same dtype as start (input), for end");
+
+    // Validate output tensor dtype if provided
+    if (output_tensor.has_value()) {
+        auto input_dtype = input.dtype();
+        auto output_dtype = output_tensor->dtype();
+
+        bool valid_dtype = (output_dtype == input_dtype) ||
+                           (output_dtype == DataType::FLOAT32 && input_dtype == DataType::BFLOAT16) ||
+                           (output_dtype == DataType::BFLOAT16 && input_dtype == DataType::FLOAT32);
+
+        TT_FATAL(
+            valid_dtype,
+            "Output tensor dtype must match input dtype, or be FLOAT32 when inputs are BFLOAT16, or be BFLOAT16 when "
+            "inputs are FLOAT32. "
+            "Got input dtype: {}, output dtype: {}",
+            input_dtype,
+            output_dtype);
+    }
+
     Tensor t_diff = ttnn::subtract(end, input, std::nullopt, output_mem_config);
     Tensor t_mul = ttnn::multiply(t_diff, weight, std::nullopt, output_mem_config);
     Tensor result = ttnn::add(input, t_mul, std::nullopt, output_mem_config);
+
+    // Handle optional output tensor
+    if (output_tensor.has_value()) {
+        ttnn::assign(result, output_tensor.value());
+        return output_tensor.value();
+    }
+
     return result;
 }
 
@@ -75,12 +105,39 @@ Tensor _lerp(
     const Tensor& input,
     const Tensor& end,
     const Tensor& weight,
-    const std::optional<MemoryConfig>& output_mem_config) {
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
     TT_FATAL(input.dtype() == end.dtype(), "Expected the same dtype as start (input), for end");
     TT_FATAL(input.dtype() == weight.dtype(), "Expected the same dtype as start (input), for weight");
+
+    // Validate output tensor dtype if provided
+    if (output_tensor.has_value()) {
+        auto input_dtype = input.dtype();
+        auto output_dtype = output_tensor->dtype();
+
+        bool valid_dtype = (output_dtype == input_dtype) ||
+                           (output_dtype == DataType::FLOAT32 && input_dtype == DataType::BFLOAT16) ||
+                           (output_dtype == DataType::BFLOAT16 && input_dtype == DataType::FLOAT32);
+
+        TT_FATAL(
+            valid_dtype,
+            "Output tensor dtype must match input dtype, or be FLOAT32 when inputs are BFLOAT16, or be BFLOAT16 when "
+            "inputs are FLOAT32. "
+            "Got input dtype: {}, output dtype: {}",
+            input_dtype,
+            output_dtype);
+    }
+
     Tensor t_diff = ttnn::multiply(
         ttnn::subtract(end, input, std::nullopt, output_mem_config), weight, std::nullopt, output_mem_config);
     Tensor result = ttnn::add(input, t_diff, std::nullopt, output_mem_config);
+
+    // Handle optional output tensor
+    if (output_tensor.has_value()) {
+        ttnn::assign(result, output_tensor.value());
+        return output_tensor.value();
+    }
+
     return result;
 }
 

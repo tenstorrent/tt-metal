@@ -350,7 +350,7 @@ Tensor LerpOperation::invoke(
 
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTS (scalar weight)");
-        return _lerp_overload(input, end, weight, memory_config);
+        return _lerp_overload(input, end, weight, memory_config, output);
     }
 
     log_debug(tt::LogOp, "Lerp LLK - TTS (scalar weight)");
@@ -384,7 +384,7 @@ Tensor LerpOperation::invoke(
 
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTT (tensor weight)");
-        return _lerp(input, end, weight, memory_config);
+        return _lerp(input, end, weight, memory_config, output);
     }
 
     log_debug(tt::LogOp, "Lerp LLK - TTT (tensor weight)");

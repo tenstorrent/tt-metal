@@ -217,6 +217,8 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
             end, weight tensors should have same dtype as input
+
+            output_tensor dtype must match input dtype, or be FLOAT32 when inputs are BFLOAT16, or be BFLOAT16 when inputs are FLOAT32
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
