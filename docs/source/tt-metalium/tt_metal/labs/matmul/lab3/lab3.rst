@@ -10,8 +10,8 @@ reused them locally across multiple multiply-accumulate steps. However, data was
 each core independently read its own tiles from DRAM, even when neighboring cores needed the exact same data.
 
 Ideally, each piece of data should be fetched from DRAM only once and then reused by all cores that need it.
-On Tenstorrent devices, cores do not have direct access to each other's L1 CBs, but they are connected by a
-2D **Network-on-Chip (NOC)** allowing the cores to pass data to each other.
+On Tenstorrent devices, cores do not have direct access to each other's circular buffers (CBs), but they are
+connected by a2D **Network-on-Chip (NOC)** allowing the cores to pass data to each other.
 While sending data over the NOC is more efficient than reading data from DRAM multiple times,
 it still introduces some overhead. Therefore, we would like to minimize this overhead.
 The NOC supports **unicast** and **multicast** operations.
@@ -26,14 +26,14 @@ In this lab you will:
 * Apply multicast to your Lab 2 multi core matrix multiplication so that tiles of A and B are reused across cores,
   not just within a single core.
 
-High level motivation
+High Level Motivation
 =====================
 
 Consider an example matrix multiplication shown in Figure 1.
 
 .. figure:: images/data_reuse_no_multicast.png
    :alt: Example matrix multiplication on a 3x3 core grid
-   :width: 700
+   :width: 900
    :align: center
 
    Figure 1: Example matrix multiplication on a 3x3 core grid
@@ -50,7 +50,7 @@ Same applies when computing tiles or rectangular blocks of tiles of ``C``.
 This means that all cores in the same row need the same rows of tiles of ``A``,
 and all cores in the same column need the same columns of tiles of ``B``.
 
-Arrows in Figure 1 indicate reads of tiles from DRAM into the core's on-chip memory,
+Arrows in Figure 1 indicate reads of tiles from DRAM into the cores' on-chip SRAM,
 illustrating the fact that all cores in the same row read the same rows of tiles of ``A``,
 and all cores in the same column read the same columns of tiles of ``B``.
 
@@ -60,7 +60,7 @@ A possible way to achive this is shown in Figure 2.
 
 .. figure:: images/data_reuse_with_multicast.png
    :alt: Example matrix multiplication on a 3x3 core grid with multicast
-   :width: 700
+   :width: 900
    :align: center
 
    Figure 2: Example matrix multiplication on a 3x3 core grid with multicast
@@ -87,20 +87,20 @@ The Network-on-Chip (NoC) is a 2D mesh interconnect that connects:
 * Ethernet cores (for multi-device systems)
 
 NOC is used to transfer data between different components of the device, including transferring
-data between DRAM and on-chip memory. As you have seen in the preceding labs, TT-Metalium programmer
+data between DRAM and on-chip SRAM. As you have seen in the preceding labs, TT-Metalium programmer
 doesn't need to understand all the details of the underlying hardware to use the NOC.
 In this lab, we will expand our use of the NOC to include multicast operations to transfer data between cores.
 For more detailed information about the NOC, refer to the resources listed in the Additional Information
 section at the end of this lab.
 
-In TT-Metalium, NoC multicast is a data movement operation where one core writes directly into the L1
-on-chip memory of multiple other cores with a single command. The sender core specifies a group of
-destination cores and a destination L1 address, and the NoC hardware delivers the data to that
+In TT-Metalium, NoC multicast is a data movement operation where one core writes directly into the
+on-chip SRAM of multiple other cores with a single command. The sender core specifies a group of
+destination cores and a destination memory address, and the NoC hardware delivers the data to that
 address on every destination core.
 Unlike a "pull" model where receivers issue read requests, multicast is a "push" model: the sender
-pushes the data into the receivers' L1 on-chip memories.
+pushes the data into the receivers' on-chip memories.
 
-From the receiving core's point of view, a multicast operation writes tiles straight into its L1,
+From the receiving core's point of view, a multicast operation writes tiles straight into its on-chip SRAM,
 typically into a location it has already set aside in a circular buffer (CB). The receiver does not
 need to perform any explicit read or copy for the data itself; it only needs to prepare space and
 indicate that it is ready to accept a tile (for example, by reserving a CB slot). Once multicast
@@ -135,11 +135,12 @@ Each receiver core has three kernels:
 
 The host reads back all receiver outputs and verifies that the output matches expectations,
 which is a tensor that contains three copies of the original tensor, stacked vertically.
+Note that number of tiles in Figure 3 is symbolic and doesn't accurately represent the number of tiles in the actual program.
 
-Logical vs. device coordinates
+Logical vs. Device Coordinates
 ==============================
 
-The first new thing in the example program that hasn't been encountered in Labs 1 and 2 is the use of device coordinates.
+The first new thing in the example program not previously seen in Labs 1 and 2 is the use of **device coordinates**.
 So far, we have been using logical coordinates to describe how you want to assign work to cores in a program.
 Logical coordinates make a simplifying assumption that the physical layout of Tensix cores on the device is the same as the logical layout.
 However, a typical Tensix device also contains multiple DRAM controllers, multiple Ethernet cores and a PCIe interface.
@@ -159,7 +160,7 @@ convert logical coordinates to device coordinates before passing them to the dev
 For example, to convert the logical coordinates of the sender core to device coordinates, you can use the following code:
 to device coordinates, you can use the following code:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    CoreCoord sender_core_device =
        mesh_device->worker_core_from_logical_core(sender_core_logical);
@@ -167,72 +168,125 @@ to device coordinates, you can use the following code:
 This conversion lets you write host code in a device independent way, while still supplying correct NOC addresses to the kernels,
 which use device coordinates to generate the correct NOC addresses.
 
+Synchronization with Semaphores
+===============================
 
-Semaphores are small shared variables used to coordinate execution between different pieces of code that run concurrently. In TT-Metalium, a semaphore is a 32-bit value stored in L1 memory that multiple cores can read and update. Typical patterns include:
+Given that multicast uses a "push" model where the sender writes data directly into receivers' on-chip SRAM,
+it is important to coordinate the execution between the sender and receivers to avoid data corruption and
+race conditions. This coordination is done using semaphores.
+In general, a semaphore is a small shared variable used to coordinate execution between different pieces
+of code that run concurrently. For example, a semaphore can be used to signal
+when the receivers are ready to have data written to their memory (i.e., when it is safe to do so, because
+the receivers have reserved a CB slot for the incoming tile). Another semaphore can be used to signal
+that data has been sent (i.e., written to receivers' memory).
 
-* A producer core **increments or sets** a semaphore to signal that some condition is now true (for example, “a tile is ready” or “all receivers are ready”).
-* A consumer core **waits until the semaphore reaches a target value** before proceeding, ensuring it does not read data or start an action too early.
+In TT-Metalium, a semaphore is an integer value stored in on-chip SRAM that multiple cores can read and update.
+Typical use cases for semaphores include:
 
-Because semaphores live in on-chip memory and can be updated via the NoC, they provide a simple, low-level way for Tensix cores to synchronize with one another, whether the semaphore is used as a true counter or as a simple ready/valid flag.
+* A core **increments or sets** a semaphore to signal that some condition is now true
+  (for example, "a receiver is ready" or "a tile has been sent").
+* A core **waits until the semaphore reaches a target value** before proceeding, ensuring it does not
+  read data or start an action too early (e.g., before the data has been written to memory).
 
-Would you like example code showing counter-style and flag-style semaphore usage in the multicast/CB protocol?
+A semaphore can be created on one or more Tensix cores using the `CreateSemaphore` host-side API,
+which allocates and initializes a semaphore in on-chip SRAM and returns a semaphore ID.
+For example, in ``lab_multicast.cpp``, there are two semaphores created:
 
+.. code-block:: cpp
 
+   uint32_t receivers_ready_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
+   uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, INVALID);
 
+where ``prog_state.program`` is the TT-Metalium ``Program`` these semaphores belong to,
+and ``all_cores_logical`` is the logical core range on which to create the semaphore
+(in this example, all four cores). Finally, the last argument is the initial value of the
+semaphore on each core. In this example, ``0`` is used for the ``receivers_ready_semaphore``
+and ``INVALID`` is used for the ``tile_sent_semaphore``. ``INVALID`` is just a constant integer
+value defined in the TT-Metalium API to make the code more readable.
+``tile_sent_semaphore`` is intialized to ``INVALID`` because initially the sender core has not sent any tiles.
 
+The IDs returned by `CreateSemaphore` are then passed as kernel arguments so that kernels can use
+them to access the semaphore on the core they are running on.
 
+Note that this example program creates both semaphores on all cores, although not all cores will use both semaphores.
+This is because overhead of creating a semaphore is minimal, so it is easier and less error prone to create semaphores
+on all cores rather than creating them on a subset of cores.
+Having said that, number of semaphores on each core is limited in hardware, so in cases where there are many semaphores,
+it may be necessary to create them on a subset of cores to avoid running out of semaphore hardware resources.
 
-You may have noticed that the sender core doesn't specify any compute or writer kernels.
-While this is acceptable, it is not the most efficient way to use the sender core.
-In a real application, the sender core would also perform computation and writeback.
+High Level Multicast Protocol
+=============================
 
-Therefore, exercise ...
+Before looking at code in more detail, it is helpful to describe the multicast protocol at a high level, which is shown in Figure 4.
 
+.. figure:: images/multicast_protocol.png
+   :alt: Multicast Protocol
+   :width: 700
+   :align: center
 
+   Figure 4: Multicast Protocol
 
-Multicast and double buffering
-==============================
+Figure 4(a) shows the multicast protocol near the beginning of kernel code execution,
+with all semaphores at their initial values.
+The sender core has just read a tile from DRAM into its input CB, and is ready to multicast it
+to other cores. However, it must wait until all receivers signal that they are ready for the tile.
+The way this is achieved is by waiting for the ``receivers_ready`` semaphore,
+which resided **in the senders on-chip SRAM**, to reach the number of receivers.
+Waiting on a semaphore is a blocking call and does not involve any NOC traffic since the
+semaphore is in the local on-chip SRAM.
 
-In this lab, multicast is combined with **double buffering** in the CBs:
+Receivers for their part must allocate space in their input CB for the incoming tile and then
+signal that they are ready to receive the next tile. They do so by calling ``noc_semaphore_inc``
+on the ``receivers_ready`` semaphore **in the sender's on-chip SRAM**, to increment it by 1.
+This is shown in Figure 4(b).
+Note that this increment operation requires a NOC transaction, since we wish to update the ``receivers_ready``
+semaphore is in the sender's on-chip SRAM.
+Each receiver core sends an independent increment transaction to the sender core, so order
+of increments is not guaranteed. However, incrementing a semaphore is an atomic operation, so
+the sender will eventually see the correct number of receivers ready for the tile.
+Having indicated its readiness to receive a tile, each receiver core then waits for the sender to multicast
+the tile to it. This is done by waiting on the ``tile_sent`` semaphore **in the receiver's on-chip SRAM**.
+This wait operation also does not involve any NOC traffic since the semaphore is in the local on-chip SRAM.
 
-* On the sender, double buffering allows overlapping:
-  * Reading the next tile from DRAM into L1.
-  * Multicasting the previous tile to receivers.
-* On each receiver, double buffering allows overlapping:
-  * Receiving a tile via multicast into its input CB.
-  * Computing on previously received tiles.
+Once the sender core has seen the correct number of receivers ready for the tile,
+it can multicast the tile to all receiver cores, using the ``noc_async_write_multicast`` function.
+This is illustrated in Figure 4(c).
+The sender core also resets the ``receivers_ready`` semaphore to ``0`` to avoid accidental reuse of
+the same semaphore value, and in preparation for the next tile.
+Since the ``receivers_ready`` semaphore is in the sender's on-chip SRAM, this does not require any NOC traffic.
 
-Double buffering still works with multicast, as long as:
+Having sent the tile to all receiver cores, the sender core must signal to the receivers that the tile has been sent.
+This is done by calling ``noc_semaphore_set_multicast`` on the ``tile_sent`` semaphore **in the receiver's on-chip SRAM**,
+to set it to ``VALID``. This is illustrated in Figure 4(d).
+Since we wish to update the ``tile_sent`` semaphore on **all receiver cores**, this requires a NOC multicast command.
 
-* You do not reuse a CB slot until all NOC operations that write to that memory have completed.
-* You maintain a consistent pattern of ``cb_reserve_back``, ``cb_push_back``, ``cb_wait_front``, and ``cb_pop_front`` across sender and receivers, so that everyone agrees which L1 addresses are used for which tile at each step.
+Finally, once a receiver core observes that its ``tile_sent`` semaphore has been set to ``VALID``,
+it can proceed to consume the tile. Once the tile has been consumed, the receiver core calls ``noc_semaphore_set``
+on the ``tile_sent`` semaphore in its own on-chip SRAM, to set it to ``INVALID`` to prepare for the next tile.
+This is illustrated in Figure 4(e).
+As can be seen, the state of all the semaphores is now the same as at the beginning of the protocol,
+ready for the next tile to be multicast.
 
-You will see this pattern in the standalone multicast example first, then reuse it in the matmul case.
+While this high-level protocol description is helpful to understand the overall flow of the multicast operation,
+there are some API details worth exploring in more depth, which is described in the following sections.
 
+* The source address of the tile in the sender's on-chip SRAM.
+* The destination address of the tile in the receiver's on-chip SRAM.
+* The size of the tile in bytes.
+* The number of receivers to multicast to.
 
+This is shown in Figure 4(c).
+Note that this multicast operation requires a NOC transaction to be sent to all receiver cores.
 
-Core roles in the basic multicast example
------------------------------------------
+ then waits until all receivers signal that they are ready for the tile.
+Note that the protocol is the same for all tiles, so the same code is executed for each tile.
 
-The multicast example uses a single row of logical cores:
-
-.. code-block:: text
-
-   Logical coordinates:
-
-     (0,0)   (1,0)   (2,0)   (3,0)
-     +---+   +---+   +---+   +---+
-     | S |   | R |   | R |   | R |
-     +---+   +---+   +---+   +---+
-
-* Any other cores on the device do **nothing** in this example. This is fine: you only need a subset of cores for this demonstration, and leaving the rest idle simplifies reasoning about NOC behavior.
-
-Note that in this example the sender core only multicasts data; it does not currently run the same compute pipeline as receivers. You will change that in Exercise 1.
-
-High level pseudocode for multicast pattern
--------------------------------------------
-
-Before looking at code, it is helpful to describe the multicast protocol at a high level.
+The sender core reads a tile from DRAM into its input CB, then waits until all receivers signal that they are ready for the tile.
+Once all receivers are ready, the sender core multicasts the tile to all receiver cores.
+The sender core then flushes the NOC writes to ensure the multicast command has been sent.
+The sender core then multicasts a semaphore update to tell receivers that the tile has been sent.
+The sender core then waits for the multicast to complete before freeing the CB slot.
+The sender core then pops the tile from the CB (free the slot for a future tile).
 
 Sender core (per tile):
 
@@ -281,19 +335,78 @@ Writer kernel (per tile):
        2. Write the tile to DRAM at this receiver's region of the output tensor.
        3. Pop the CB slot.
 
-This protocol uses semaphores to coordinate when each tile is safe to multicast and when it is safe to consume, while CB operations manage local double buffering.
+This protocol uses semaphores to coordinate when each tile is safe to multicast and when it is safe to consume,
+while CB operations manage local double buffering.
 
-New concepts and APIs in the multicast example
+
+
+
+uint32_t receivers_ready_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(4));
+uint32_t tile_sent_semaphore_addr       = get_semaphore(get_arg_val<uint32_t>(5));
+```
+
+`get_semaphore` maps the index back to the L1 address of the semaphore on that core.
+The sender kernel then uses that local address with `noc_semaphore_wait` and `noc_semaphore_set`.
+Receiver kernels use `get_noc_addr(sender_x, sender_y, receivers_ready_semaphore_addr)` to build
+a remote NOC address that points to the sender's copy of the same semaphore,
+so they can increment it when they are ready.
+
+
+
+
+
+You may have noticed that the sender core doesn't specify any compute or writer kernels.
+While this is acceptable, it is not the most efficient way to use the sender core.
+In a real application, the sender core would also perform computation and writeback.
+
+Therefore, exercise ...
+
+
+Note that in this example the sender core only multicasts data; it does not currently run the same compute pipeline as receivers.
+You will change that in Exercise 1.
+
+
+
+Multicast and Double Buffering
+==============================
+
+In this lab, multicast is combined with **double buffering** in the CBs:
+
+* On the sender, double buffering allows overlapping:
+  * Reading the next tile from DRAM into on-chip SRAM.
+  * Multicasting the previous tile to receivers.
+* On each receiver, double buffering allows overlapping:
+  * Receiving a tile via multicast into its input CB.
+  * Computing on previously received tiles.
+
+Double buffering still works with multicast, as long as:
+
+* You do not reuse a CB slot until all NOC operations that write to that memory have completed.
+* You maintain a consistent pattern of ``cb_reserve_back``, ``cb_push_back``, ``cb_wait_front``,
+  and ``cb_pop_front`` across sender and receivers, so that everyone agrees which memory addresses
+  are used for which tile at each step.
+
+You will see this pattern in the standalone multicast example first, then reuse it in the matmul case.
+
+
+
+Core Roles in the Basic Multicast Example
+-----------------------------------------
+
+
+
+
+New Concepts and APIs in the Multicast Example
 ==============================================
 
 This section focuses on **new constructs** that were not needed in Labs 1 and 2. You should refer to the example code as you read.
 
-Device coordinates and ``worker_core_from_logical_core``
+Device Coordinates and ``worker_core_from_logical_core``
 --------------------------------------------------------
 
 Host code uses logical coordinates to create kernels and CBs:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    CoreRange all_cores_logical({0, 0}, {3, 0});
    CoreCoord sender_core_logical = {0, 0};
@@ -301,7 +414,7 @@ Host code uses logical coordinates to create kernels and CBs:
 
 To perform NOC operations in device kernels, you need **device coordinates**. The host converts logical coordinates to device coordinates:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    CoreCoord sender_core_device =
        mesh_device->worker_core_from_logical_core(sender_core_logical);
@@ -312,7 +425,7 @@ To perform NOC operations in device kernels, you need **device coordinates**. Th
 
 The sender's runtime arguments then include the device coordinates of the receiver range:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    SetRuntimeArgs(
        program,
@@ -338,26 +451,24 @@ Key points:
   * You must use **device coordinates** when calling NOC APIs that address other cores (e.g., multicast).
   * Device coordinates are passed into kernels through runtime arguments that the host constructs using ``worker_core_from_logical_core``.
 
-``tt_l1_ptr`` macro
+``tt_l1_ptr`` Macro
 -------------------
 
 In the sender and receiver kernels, semaphore pointers are declared using the ``tt_l1_ptr`` macro:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    volatile tt_l1_ptr uint32_t* sender_sem_ptr =
        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receivers_ready_semaphore_addr);
 
-``tt_l1_ptr`` expands to a compiler attribute indicating that the pointer refers to **L1 memory**. This helps the compiler:
+``tt_l1_ptr`` expands to a compiler attribute indicating that the pointer refers to **on-chip (L1) memory**. This helps the compiler:
 
 * Optimize address calculations.
 * Avoid unnecessary loads/stores.
 * Potentially use specialized addressing modes.
 
-You should use ``tt_l1_ptr`` for pointers to L1 memory that are accessed from kernels. The macro does not change program semantics, but it enables better compiler optimizations.
+You should use ``tt_l1_ptr`` for pointers to on-chip (L1) memory that are accessed from kernels. The macro does not change program semantics, but it enables better compiler optimizations.
 
-NOC semaphores and ``noc_semaphore_wait``
------------------------------------------
 
 TODO: Explain that semaphores don't need to be created on all cores, but it is common to do so because overhead is minimal.
 Having said that, number of sempahores on each core is lmited, so may need to create it on a subset of cores if there are many semaphores.
@@ -365,15 +476,15 @@ Having said that, number of sempahores on each core is lmited, so may need to cr
 Semaphores are used for coordination between cores. The sender and receivers share two semaphores:
 
 * ``receivers_ready_semaphore``:
-  * Stored in the sender's L1 (but accessible over NOC).
+  * Stored in the sender's on-chip SRAM (but accessible over NOC).
   * Receivers increment it to indicate they are ready for the next tile.
 * ``tile_sent_semaphore``:
-  * Also stored in the sender's L1.
+  * Also stored in the sender's on-chip SRAM.
   * The sender multicasts its value to receivers to indicate that a tile has been sent.
 
 In the sender kernel:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    volatile tt_l1_ptr uint32_t* sender_sem_ptr =
        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receivers_ready_semaphore_addr);
@@ -389,7 +500,7 @@ In the sender kernel:
 
 On the receiver side, for the "tile sent" semaphore:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    volatile tt_l1_ptr uint32_t* tile_sent_sem_ptr =
        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_sent_semaphore_addr);
@@ -409,7 +520,7 @@ Here ``noc_semaphore_wait(tile_sent_sem_ptr, VALID)`` waits until the sender mul
 
 The sender multicasts tiles using:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    uint64_t tile_mcast_addr =
        get_noc_multicast_addr(receiver_start_x, receiver_start_y,
@@ -440,10 +551,11 @@ They **cannot** be an arbitrary set of cores.
 For ``noc_async_write_multicast`` the documented and implemented constraints are:
 
 1. **Rectangular grid only (base API)**
-   The targets must be all Tensix worker cores in a **contiguous rectangle** ``[x_start..x_end] x [y_start..y_end]`` on the NoC, all at the same L1 address.
+   The targets must be all Tensix worker cores in a **contiguous rectangle** ``[x_start..x_end] x [y_start..y_end]``
+   on the NoC, all at the same memory address.
    The docs say explicitly:
 
-   - "The destination nodes can only be a set of Tensix cores + L1 memory address."
+   - "The destination nodes can only be a set of Tensix cores + a memory address."
    - "The destination nodes must form a **rectangular grid**."
 
    So: not "same row" or "same column" only; but **any axis-aligned rectangle** is fine.
@@ -451,8 +563,8 @@ For ``noc_async_write_multicast`` the documented and implemented constraints are
 2. **L-shaped variant = rectangle minus rectangle**
    There is a separate API (multicast with exclude region) where you specify a rectangle and then subtract a rectangular "exclusion zone" to get an **L-shaped** pattern, but even that is *"rect grid minus sub-rect grid"*, not an arbitrary subset.
 
-3. **Same L1 address on all destinations**
-   All destination cores must use the **same L1 address**; the multicast NOC address encodes one local address plus the rectangular coord range, not per-core offsets.
+3. **Same memory address on all destinations**
+   All destination cores must use the **same memory address**; the multicast NOC address encodes one local address plus the rectangular coord range, not per-core offsets.
 
 4. **Sender cannot be in the destination set (for this API)**
    The base ``noc_async_write_multicast`` excludes the sender core; if you want the sender included you must use the ``*_loopback_src`` variant.
@@ -478,7 +590,7 @@ Because ``noc_async_write_multicast`` is non blocking, you must ensure that:
 
 This is handled using:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    noc_async_writes_flushed();
 
@@ -499,7 +611,7 @@ Why is it safe to send the semaphore update before the transfers complete?
   * The NOC ensures that the data transfer and the semaphore update are observed in the correct order.
 * Additionally, the sender calls:
 
-  .. code-block:: c++
+  .. code-block:: cpp
 
      noc_async_write_barrier();
 
@@ -509,12 +621,13 @@ TODO: Explain that this is a simplified view of the reality and that for optimal
 Also, NOC is customizable and may behave differently if customizations are made.
 
 
-``get_noc_multicast_addr`` and CB address synchronization
+``get_noc_multicast_addr`` and CB Address Synchronization
 ---------------------------------------------------------
 
-To multicast data, the sender needs to know **where** in each receiver's L1 to write the tile. This is the job of ``get_noc_multicast_addr``:
+To multicast data, the sender needs to know **where** in each receiver's on-chip SRAM to write the tile.
+This is the job of ``get_noc_multicast_addr``:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    uint64_t tile_mcast_addr =
        get_noc_multicast_addr(receiver_start_x, receiver_start_y,
@@ -532,9 +645,10 @@ The last argument passed to ``get_noc_multicast_addr`` is a **memory address at 
 You can think of the return value of ``get_noc_multicast_addr`` as a packed 64 bit encoding of:
 
 * The destination core rectangle: ``(x_start, y_start, x_end, y_end)``.
-* The destination L1 address.
+* The destination on-chip SRAM address.
 
-In general, there is no direct way for receivers to "tell" the sender which exact L1 address they are using for a CB slot. Instead, the design ensures that **all cores run the same CB protocol**:
+In general, there is no direct way for receivers to "tell" the sender which exact memory address they are using for a CB slot.
+Instead, the design ensures that **all cores run the same CB protocol**:
 
 * Each core executes the same sequence of:
   * ``cb_reserve_back``
@@ -549,7 +663,7 @@ In general, there is no direct way for receivers to "tell" the sender which exac
 TODO: Example code still has variables like sender_sem_ptr, receiver_sem_ptr, and receiver_sem_mcast_addr, rather than referenceing receivers_ready and tile_sent semaphore names.
 
 
-Exercise 1: Extending the standalone multicast example
+Exercise 1: Extending the Standalone Multicast Example
 ******************************************************
 
 In the provided example, the sender core only forwards data, while receivers perform the copy and writeback. In this exercise you will:
@@ -695,7 +809,7 @@ At the end of Exercise 1, you should have:
 Remind students to use ``tt-smi -r`` to reset the device after encountering hangs/issues.
 
 
-Applying multicast to multi core matmul
+Applying Multicast to Multi Core Matmul
 ***************************************
 
 In Lab 2, you reduced DRAM traffic in multi core matrix multiplication by:
@@ -736,7 +850,7 @@ In this lab, we keep the same blocked and slab-based algorithm, but change how s
 
 Compute kernels and writer kernels remain unchanged; only the **slab loading stage** (how ``A_slab(b)`` and ``B_slab(b)`` end up in CBs) is modified.
 
-Core roles and slabs on a 5x5 grid
+Core Roles and Slabs on a 5x5 Grid
 ==================================
 
 Assume a rectangular grid of logical cores of size ``core_grid.x`` by ``core_grid.y``. As in Lab 2, we divide the tiled output matrix ``C`` into blocks:
@@ -821,7 +935,7 @@ For each column ``x`` and K-block ``b``:
 * The **B-source core** at ``(x, 0)`` reads **one copy** of ``B_slab(b)`` from DRAM and multicasts its tiles to all cores in column ``x``.
 * Every core in column ``x``, including the source, ends up with the same ``B_slab(b)`` in its B CB (CB1).
 
-Slab storage in CBs with multicast
+Slab Storage in CBs with Multicast
 ==================================
 
 From Lab 2, recall that:
@@ -859,7 +973,7 @@ The order of tiles inside each slab within the CBs stays **exactly the same** as
 
 This guarantees that the compute kernel can continue to index ``A_slab(b)`` and ``B_slab(b)`` tiles using its existing logic (conceptually ``A_slab_tile(i, k_local)`` and ``B_slab_tile(k_local, j)``), without any awareness of multicast.
 
-Pseudocode with slabs and multicast
+Pseudocode with Slabs and Multicast
 ===================================
 
 At slab level, the Lab 2 compute pseudocode remains:
@@ -982,7 +1096,7 @@ For A slabs (row multicast), you can describe the protocols as follows:
 
 For B slabs (column multicast), the structure is analogous, but along columns and using a B-specific set of CBs (e.g., CB1), address generators, and semaphores.
 
-Interaction with double buffering
+Interaction with Double Buffering
 =================================
 
 In Lab 2 you were instructed to size CBs so that:
@@ -1017,7 +1131,7 @@ To maintain correctness:
 
 As long as these two conditions are enforced, double buffering and multicast coexist correctly with slab-based processing.
 
-Exercise 2: Multi core matrix multiplication with multicast and slabs
+Exercise 2: Multi Core Matrix Multiplication with Multicast and Slabs
 *********************************************************************
 
 In this exercise, you will start from your **Exercise 2 solution from Lab 2** (multi core matrix multiplication with blocked data reuse using slabs) and extend it to:

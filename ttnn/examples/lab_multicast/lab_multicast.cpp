@@ -276,7 +276,7 @@ void multicast_tensor_tensix(
     // For simplicity, we create semaphores on all cores, although not all cores
     // will use all the semaphores.
     uint32_t receivers_ready_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
-    uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
+    uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, INVALID);
 
     ////////// CIRCULAR BUFFER SETUP //////////
     // Create circular buffers with 2 tiles for double-buffering.
