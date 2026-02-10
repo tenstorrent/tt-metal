@@ -179,8 +179,6 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
     return output;
 }
 
-// Workaround implementation due to issue with tilize for float32
-// it is expected that tilize will be fixed in the after next tt-metal main update
 template <>
 tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
     const std::vector<float>& buffer,
@@ -188,8 +186,30 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
     ttnn::distributed::MeshDevice* device,
     ttnn::Layout layout,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    auto tensor = from_vector<float, ttnn::DataType::BFLOAT16>(buffer, shape, device, layout, mesh_mapper);
-    return ttnn::typecast(tensor, ttnn::DataType::FLOAT32);
+    size_t volume = shape.volume();
+    if (buffer.size() != volume) {
+        throw std::logic_error(
+            fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
+    }
+
+    ttnn::MemoryConfig output_mem_config{};
+    ttnn::Tensor output;
+
+    const auto tensor_layout = ttnn::TensorLayout(
+        ttnn::DataType::FLOAT32, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
+
+    if (mesh_mapper != nullptr) {
+        output = ttnn::distributed::create_distributed_tensor(
+            ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper);
+    } else {
+        output = ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
+    }
+
+    if (layout == ttnn::Layout::TILE) {
+        output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
+    }
+    output = ttnn::to_device(output, device, output_mem_config);
+    return output;
 }
 
 /*
