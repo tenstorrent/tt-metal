@@ -781,32 +781,29 @@ class Glm4MoeLiteDenseOnlyTT:
                 )
             return next_ids_flat
 
-        # On multi-device meshes, logits_tt is often distributed. Converting to torch
-        # requires composing shards/replicas; otherwise ttnn will error when trying
-        # to convert a multi-buffer host tensor into a single row-major buffer.
-        if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
-            cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
-            logits_tt_full = ttnn.all_gather(
-                logits_tt,
-                dim=3,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-                cluster_axis=cluster_axis,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(logits_tt, force=False)
-            logits_tt = logits_tt_full
-        logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
-
-        # Some distributed topologies may compose replicas by concatenation; slice
-        # down to vocab_size to match vLLM expectations.
-        logits_torch = logits_torch[..., : int(self.hparams.vocab_size)]
         vocab = int(self.hparams.vocab_size)
-        logits_flat = logits_torch.reshape(-1, vocab)
+        if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+            # Avoid device all_gather to compose logits.
+            #
+            # We've observed device-side all_gather to hang during bring-up for
+            # some mesh configurations. For correctness-first operation (and for
+            # prefill decode-loop fallbacks), it is acceptable to read each vocab
+            # shard to the host and concatenate.
+            shards = ttnn.get_device_tensors(logits_tt)
+            if not shards:
+                raise RuntimeError("ttnn.get_device_tensors returned an empty list for a mesh tensor")
+            logits_shards = [ttnn.to_torch(t)[..., : int(t.shape[-1])] for t in shards]
+            logits_full = torch.cat(logits_shards, dim=-1)[..., :vocab]
+            logits_flat = logits_full.reshape(-1, vocab)
+        else:
+            logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
+            logits_torch = logits_torch[..., :vocab]
+            logits_flat = logits_torch.reshape(-1, vocab)
+
         if logits_flat.shape[0] != active:
             raise RuntimeError(
                 f"decode logits shape mismatch: expected {active} rows, got {int(logits_flat.shape[0])} "
-                f"(logits_torch.shape={tuple(logits_torch.shape)})"
+                f"(logits_flat.shape={tuple(logits_flat.shape)})"
             )
         logits = logits_flat.reshape(active, 1, vocab).to(dtype=torch.float32).cpu()
 
