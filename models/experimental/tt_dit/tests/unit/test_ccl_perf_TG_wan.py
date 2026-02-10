@@ -55,14 +55,14 @@ def extract_hyperparam_string(test_name: str) -> str:
     """
     Extract hyperparam string from test name.
 
-    Example input: test_all_gather_wan[wormhole_b0-mesh_device0-75-10-2buffers-1workers-10chunks-1links-fabric_ring-spatial_activation]
-    Example output: 2buffers-1workers-10chunks-1links
+    Example input: test_all_gather_wan[wormhole_b0-mesh_device0-75-10-2buffers-1workers-10chunks-1links-fabric_ring_1024B-spatial_activation]
+    Example output: 2buffers-1workers-10chunks-1links-fabric_ring_1024B
 
     Args:
         test_name: Full test name with parameters
 
     Returns:
-        Hyperparam string portion (e.g., "2buffers-1workers-10chunks-1links")
+        Hyperparam string portion (e.g., "2buffers-1workers-10chunks-1links-fabric_ring_1024B")
     """
     # Extract the part inside brackets
     match = re.search(r"\[(.+)\]", test_name)
@@ -79,12 +79,23 @@ def extract_hyperparam_string(test_name: str) -> str:
             hyperparam_parts.append(part)
         elif re.match(r"^\d+workers$", part):
             hyperparam_parts.append(part)
-        elif re.match(r"^\d+chunks$", part) or part == "MAXchunks":
+        elif part.endswith("chunks"):
             hyperparam_parts.append(part)
         elif re.match(r"^\d+links$", part):
             hyperparam_parts.append(part)
+        elif re.match(r"^fabric_ring_\d+B$", part):
+            hyperparam_parts.append(part)
 
     return "-".join(hyperparam_parts) if hyperparam_parts else params
+
+
+def extract_num_workers(hyperparam_string: str) -> int | None:
+    """
+    Extract num_workers from a hyperparam string (e.g. "2buffers-1workers-10chunks-1links" -> 1).
+    Returns None if no Nworkers pattern is found.
+    """
+    match = re.search(r"(\d+)workers", hyperparam_string)
+    return int(match.group(1)) if match else None
 
 
 def extract_short_op_name(full_op_name: str) -> str:
@@ -488,11 +499,24 @@ def generate_perf_chart(
     csv_df.to_csv(csv_path, index=False)
     logger.info(f"Saved results CSV to: {csv_path}")
 
-    # Save summary TXT with top/bottom 3
+    # Save summary TXT with top/bottom 3 and best per num_workers
     txt_path = os.path.join(output_dir, f"{test_filter}_summary.txt")
     sorted_configs = sorted(results_by_config.items(), key=lambda x: x[1]["AVG"])
     top_3 = sorted_configs[:3]
     bottom_3 = sorted_configs[-3:]
+
+    # Best config per num_workers (configs with parseable Nworkers only)
+    configs_by_workers: dict[int, list[tuple[str, dict]]] = {}
+    for cfg, stats in results_by_config.items():
+        nw = extract_num_workers(cfg)
+        if nw is not None:
+            configs_by_workers.setdefault(nw, []).append((cfg, stats))
+    best_per_workers: list[tuple[int, tuple[str, dict]]] = []
+    for nw in configs_by_workers.keys():
+        cands = configs_by_workers[nw]
+        best = min(cands, key=lambda x: x[1]["AVG"])
+        best_per_workers.append((nw, best))
+    best_per_workers.sort(key=lambda x: x[1][1]["AVG"])  # sort by perf (best first)
 
     with open(txt_path, "w") as f:
         f.write(f"Test filter: {test_filter}\n")
@@ -500,6 +524,19 @@ def generate_perf_chart(
         f.write(f"Op sequence: {op_seq_str}\n")
         f.write("\n")
 
+        f.write("=" * 40 + "\n")
+        f.write("BEST PER NUM_WORKERS\n")
+        f.write("=" * 40 + "\n")
+        for nw, (cfg, stats) in best_per_workers:
+            f.write(f"\n{nw} worker(s) — best config: {cfg}\n")
+            f.write(f"  AVG: {stats['AVG']/divisor:.2f} {unit}\n")
+            f.write(f"  MIN: {stats['MIN']/divisor:.2f} {unit}\n")
+            f.write(f"  MAX: {stats['MAX']/divisor:.2f} {unit}\n")
+            f.write(f"  STD: {stats['STD']/divisor:.2f} {unit}\n")
+        if not best_per_workers:
+            f.write("  (no configs with parseable Nworkers in hyperparam string)\n")
+
+        f.write("\n")
         f.write("=" * 40 + "\n")
         f.write("TOP 3 BEST CONFIGS (lowest AVG)\n")
         f.write("=" * 40 + "\n")
@@ -566,7 +603,7 @@ def run_perf_test(base_command: str, test_filter: str, test_name: str, num_iters
     #    num_iters,
     # )
     results_by_config = post_process_cpp_log_by_config(
-        f"generated/profiler/{subdir}/.logs/cpp_device_perf_report.csv",
+        os.path.join("generated", "profiler", subdir, ".logs", "cpp_device_perf_report.csv"),
         test_configs,
         num_iters,
     )
