@@ -237,6 +237,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
+            device_configs[(4, 32)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "num_links": 2,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Ring,
+                "is_fsdp": False,
+            }
             config = device_configs[tuple(mesh_device.shape)]
         else:
             device_configs[(2, 4)] = {
