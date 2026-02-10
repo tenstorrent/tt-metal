@@ -227,11 +227,14 @@ public:
     // TODO: parity with DistributedHostBuffer
     HostBuffer get_host_buffer() const {
         // TODO: figure out if we're doing DistributedHostBuffer, hardcoding (0,0) is horrifying.
-        const auto& storage = std::get<HostStorage>(impl->get_storage());
         // Get shard at (0,0) for single-device tensor - always exists for HostTensor
-        auto buffer = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
+        auto buffer = get_distributed_host_buffer().get_shard(distributed::MeshCoordinate(0, 0));
         TT_ASSERT(buffer.has_value(), "HostTensor must have a buffer at coordinate (0, 0)");
         return *buffer;
+    }
+
+    const DistributedHostBuffer& get_distributed_host_buffer() const {
+        return std::get<HostStorage>(impl->get_storage()).buffer();
     }
 
     bool is_sharded() const {
