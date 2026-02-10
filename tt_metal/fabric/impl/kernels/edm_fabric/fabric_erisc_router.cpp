@@ -1649,6 +1649,11 @@ FORCE_INLINE
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
+        // Safety clamp: if a duplicate completion arrives (from two-phase retry race),
+        // prevent num_free_slots from exceeding the actual buffer count.
+        if (outbound_to_receiver_channel_pointers.num_free_slots > ReceiverPointersT::MAX_FREE_SLOTS) {
+            outbound_to_receiver_channel_pointers.num_free_slots = ReceiverPointersT::MAX_FREE_SLOTS;
+        }
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
         // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
@@ -1793,6 +1798,25 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                     receiver_channel_response_credit_sender, src_ch_id);
                 ack_counter.increment();
+                // Normal credit processed: reset completion retry counter
+                receiver_channel_pointers.completion_retry_count = 0;
+            } else {
+                // Stale credit (sentinel slot): sender is retrying because it's stalled.
+                // Use two-phase protocol: only resend completion on the SECOND consecutive
+                // stale credit to avoid race with in-flight completions.
+                receiver_channel_pointers.completion_retry_count++;
+                if (receiver_channel_pointers.completion_retry_count >= 2) {
+                    if (!internal_::eth_txq_is_busy(receiver_txq_id)) {
+                        uint8_t src_ch_id;
+                        if constexpr (skip_src_ch_id_update) {
+                            src_ch_id = receiver_channel_pointers.get_src_chan_id();
+                        } else {
+                            src_ch_id = receiver_channel_pointers.get_src_chan_id(ack_buf_idx);
+                        }
+                        receiver_send_completion_ack<false>(receiver_channel_response_credit_sender, src_ch_id);
+                        receiver_channel_pointers.completion_retry_count = 0;
+                    }
+                }
             }
         }
         unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
@@ -1887,6 +1911,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (!enable_first_level_ack) {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+                // Normal credit processed: reset completion retry counter
+                receiver_channel_pointers.completion_retry_count = 0;
             }
         } else {
             // Credit retry safety: consume false credits for consumed/stale slots
@@ -1894,6 +1920,20 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 constexpr uint16_t CONSUMED_SLOT_SENTINEL = 0xFFFF;
                 if (packet_header->payload_size_bytes == CONSUMED_SLOT_SENTINEL) {
                     increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+                    // Two-phase completion retry: resend completion on second consecutive stale credit
+                    receiver_channel_pointers.completion_retry_count++;
+                    if (receiver_channel_pointers.completion_retry_count >= 2) {
+                        if (!internal_::eth_txq_is_busy(receiver_txq_id)) {
+                            uint8_t src_ch_id;
+                            if constexpr (skip_src_ch_id_update) {
+                                src_ch_id = receiver_channel_pointers.get_src_chan_id();
+                            } else {
+                                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+                            }
+                            receiver_send_completion_ack<false>(receiver_channel_response_credit_sender, src_ch_id);
+                            receiver_channel_pointers.completion_retry_count = 0;
+                        }
+                    }
                 }
             }
         }
@@ -2206,10 +2246,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
     auto execute_main_loop = [&]() {
         // Credit retry: stall detection counters for sender->receiver credit resend.
-        // If the sender has outstanding packets but receives no completions for
-        // CREDIT_RESEND_STALL_THRESHOLD outer loop iterations, resend one credit
-        // notification in case the original was lost at the ethernet PHY level.
-        constexpr uint32_t CREDIT_RESEND_STALL_THRESHOLD = 128;
+        // If the sender is completely blocked (num_free_slots == 0) and receives no
+        // completions for CREDIT_RESEND_STALL_THRESHOLD outer loop iterations,
+        // resend one credit notification in case the original was lost at the
+        // ethernet PHY level. The threshold must be conservative enough to avoid
+        // false retries during normal downstream congestion (which can legitimately
+        // stall completions). 1024 outer loops * 32 inner = ~32K iterations ≈ 1.6ms.
+        constexpr uint32_t CREDIT_RESEND_STALL_THRESHOLD = 1024;
         uint32_t ch0_stall_counter = 0;
         uint32_t ch0_prev_free_slots = outbound_to_receiver_channel_pointer_ch0.num_free_slots;
 
@@ -2397,11 +2440,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 }
             }
 
-            // Credit retry: detect sender->receiver credit stall and resend
+            // Credit retry: detect sender->receiver credit stall and resend.
+            // Only trigger when sender is completely blocked (num_free_slots == 0)
+            // to avoid false retries during normal downstream congestion where the
+            // receiver is legitimately slow to send completions.
             {
                 auto ch0_cur_free_slots = outbound_to_receiver_channel_pointer_ch0.num_free_slots;
-                if (ch0_cur_free_slots == ch0_prev_free_slots &&
-                    ch0_cur_free_slots < REMOTE_RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]) {
+                if (ch0_cur_free_slots == 0 && ch0_prev_free_slots == 0) {
                     ch0_stall_counter++;
                     if (ch0_stall_counter >= CREDIT_RESEND_STALL_THRESHOLD) {
                         if (!internal_::eth_txq_is_busy(sender_txq_id)) {

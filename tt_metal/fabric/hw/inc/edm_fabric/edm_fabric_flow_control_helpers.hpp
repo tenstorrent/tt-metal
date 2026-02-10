@@ -197,6 +197,7 @@ struct ChannelCounter {
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct OutboundReceiverChannelPointers {
+    static constexpr uint8_t MAX_FREE_SLOTS = RECEIVER_NUM_BUFFERS;
     uint32_t slot_size_bytes;
     uint32_t remote_receiver_channel_address_base;
     uint32_t remote_receiver_channel_address_ptr;
@@ -240,6 +241,10 @@ struct ReceiverChannelPointers {
     ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
     std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+    // Completion retry: counts consecutive stale credits detected. When >= 2,
+    // the receiver resends a completion to recover from a lost completion ACK.
+    // Reset to 0 whenever a normal (non-stale) credit is processed.
+    uint8_t completion_retry_count = 0;
 
     FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
         src_chan_ids[buffer_index.get()] = src_chan_id;
@@ -256,6 +261,7 @@ struct ReceiverChannelPointers {
         wr_flush_counter.reset();
         ack_counter.reset();
         completion_counter.reset();
+        completion_retry_count = 0;
     }
 };
 
