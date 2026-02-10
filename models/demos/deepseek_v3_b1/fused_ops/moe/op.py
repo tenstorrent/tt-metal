@@ -362,6 +362,21 @@ class _MoeSharedExpertContext:
     residual_mcast_dst_cb_descriptor: Any
     residual_mcast_dst_dummy_tensor: Any  # keep-alive for dst tensor backing the CB
 
+    # Down Mcast (gated reduce output → all 130 cores)
+    down_mcast_dst_cb: int
+    down_mcast_sender_semaphore_id: int
+    down_mcast_receiver_semaphore_id: int
+    down_mcast_dest_noc_start_x: int
+    down_mcast_dest_noc_start_y: int
+    down_mcast_dest_noc_end_x: int
+    down_mcast_dest_noc_end_y: int
+    down_mcast_num_cores: int
+    down_mcast_is_sender_part_of_receiver_grid: bool
+    down_mcast_data_size_bytes: int
+    down_mcast_src_num_pages: int
+    down_mcast_dst_cb_descriptor: Any
+    down_mcast_dst_dummy_tensor: Any  # keep-alive for dst tensor backing the CB
+
 
 class MoeRoutedExpertOp:
     """
@@ -1261,6 +1276,7 @@ class MoeSharedExpertOp:
         shared_gate_up_weights_tensor,
         shared_bias_tensor,
         shared_residual_mcast_dst_tensor,
+        shared_down_mcast_dst_tensor,
         num_tiles_k,
         tile_1x32_size,
         data_format,
@@ -1307,6 +1323,7 @@ class MoeSharedExpertOp:
         shared_mcast_src_cb = 31  # gated reduce output on sender
         shared_residual_mcast_src_cb = 32  # residual mcast source on sender
         shared_residual_mcast_dst_cb = 33  # residual mcast destination on 112 matmul cores
+        shared_down_mcast_dst_cb = 34  # down mcast destination (gated reduce output → all 130 cores)
 
         # ==================================================================
         # Dimensions
@@ -1354,6 +1371,8 @@ class MoeSharedExpertOp:
         bg_noc1_receiver_semaphore_id = 9
         residual_mcast_sender_semaphore_id = 10
         residual_mcast_receiver_semaphore_id = 11
+        down_mcast_sender_semaphore_id = 12
+        down_mcast_receiver_semaphore_id = 13
 
         # ==================================================================
         # Core grids
@@ -1484,6 +1503,26 @@ class MoeSharedExpertOp:
         residual_mcast_dst_cb_descriptor = residual_mcast_params["dst_cb_descriptor"]
 
         # ==================================================================
+        # Down Mcast (gated reduce output → all 130 cores for down proj)
+        # ==================================================================
+        down_mcast_data_size_bytes = mcast_src_num_pages * reduce_tile_size
+        down_mcast_grid = shared_down_mcast_dst_tensor.memory_config().shard_spec.grid
+        down_mcast_grid_ranges = list(down_mcast_grid.ranges())
+        down_mcast_grid_range = down_mcast_grid_ranges[0]
+        down_mcast_grid_start = down_mcast_grid_range.start
+        down_mcast_grid_end = down_mcast_grid_range.end
+        down_mcast_dest_noc_start = device.worker_core_from_logical_core(down_mcast_grid_start)
+        down_mcast_dest_noc_end = device.worker_core_from_logical_core(down_mcast_grid_end)
+        down_mcast_num_cores = (down_mcast_grid_end.x - down_mcast_grid_start.x + 1) * (
+            down_mcast_grid_end.y - down_mcast_grid_start.y + 1
+        )
+        down_mcast_is_sender_part_of_receiver_grid = down_mcast_grid.contains(sender_core_grid)
+        down_mcast_src_num_pages = mcast_src_num_pages
+        down_mcast_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            shared_down_mcast_dst_cb, shared_down_mcast_dst_tensor
+        )
+
+        # ==================================================================
         # Per-core values
         # ==================================================================
         # K-offset for matmul
@@ -1566,6 +1605,20 @@ class MoeSharedExpertOp:
             residual_mcast_src_cb_descriptor=residual_mcast_src_cb_descriptor,
             residual_mcast_dst_cb_descriptor=residual_mcast_dst_cb_descriptor,
             residual_mcast_dst_dummy_tensor=shared_residual_mcast_dst_tensor,
+            # Down Mcast
+            down_mcast_dst_cb=shared_down_mcast_dst_cb,
+            down_mcast_sender_semaphore_id=down_mcast_sender_semaphore_id,
+            down_mcast_receiver_semaphore_id=down_mcast_receiver_semaphore_id,
+            down_mcast_dest_noc_start_x=down_mcast_dest_noc_start.x,
+            down_mcast_dest_noc_start_y=down_mcast_dest_noc_start.y,
+            down_mcast_dest_noc_end_x=down_mcast_dest_noc_end.x,
+            down_mcast_dest_noc_end_y=down_mcast_dest_noc_end.y,
+            down_mcast_num_cores=down_mcast_num_cores,
+            down_mcast_is_sender_part_of_receiver_grid=down_mcast_is_sender_part_of_receiver_grid,
+            down_mcast_data_size_bytes=down_mcast_data_size_bytes,
+            down_mcast_src_num_pages=down_mcast_src_num_pages,
+            down_mcast_dst_cb_descriptor=down_mcast_dst_cb_descriptor,
+            down_mcast_dst_dummy_tensor=shared_down_mcast_dst_tensor,
         )
 
     @staticmethod
@@ -1609,6 +1662,10 @@ class MoeSharedExpertOp:
             # Residual mcast src (needed for setup_sharded_buffer on sender)
             ("shared_residual_mcast_src_cb", ctx.residual_mcast_src_cb),
             ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
+            # Down mcast receiver
+            ("shared_down_mcast_data_receiver_semaphore", ctx.down_mcast_receiver_semaphore_id),
+            ("shared_down_mcast_dst_cb", ctx.down_mcast_dst_cb),
+            ("shared_down_mcast_dst_num_pages", ctx.down_mcast_src_num_pages),
         ]
         brisc_args = [
             # Gate gather (A) receiver
@@ -1639,6 +1696,19 @@ class MoeSharedExpertOp:
             ("shared_residual_mcast_src_cb", ctx.residual_mcast_src_cb),
             ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
             ("shared_residual_mcast_dst_cb", ctx.residual_mcast_dst_cb),
+            # Down mcast sender
+            ("shared_down_mcast_dest_noc_start_x", ctx.down_mcast_dest_noc_start_x),
+            ("shared_down_mcast_dest_noc_start_y", ctx.down_mcast_dest_noc_start_y),
+            ("shared_down_mcast_dest_noc_end_x", ctx.down_mcast_dest_noc_end_x),
+            ("shared_down_mcast_dest_noc_end_y", ctx.down_mcast_dest_noc_end_y),
+            ("shared_down_mcast_num_cores", ctx.down_mcast_num_cores),
+            ("shared_down_mcast_is_part_of_receiver_grid", ctx.down_mcast_is_sender_part_of_receiver_grid),
+            ("shared_down_mcast_data_sender_semaphore", ctx.down_mcast_sender_semaphore_id),
+            ("shared_down_mcast_data_receiver_semaphore", ctx.down_mcast_receiver_semaphore_id),
+            ("shared_down_mcast_data_size_bytes", ctx.down_mcast_data_size_bytes),
+            ("shared_down_mcast_src_cb", ctx.mcast_src_cb),  # gated reduce output (CB 31)
+            ("shared_down_mcast_src_num_pages", ctx.down_mcast_src_num_pages),
+            ("shared_down_mcast_dst_cb", ctx.down_mcast_dst_cb),
         ]
         trisc_args = [
             # Gate/Up matmul
@@ -1669,6 +1739,7 @@ class MoeSharedExpertOp:
             shared_ctx.mcast_src_cb_descriptor,
             shared_ctx.residual_mcast_src_cb_descriptor,
             shared_ctx.residual_mcast_dst_cb_descriptor,
+            shared_ctx.down_mcast_dst_cb_descriptor,
         ]
 
     @staticmethod
@@ -1778,6 +1849,7 @@ class MoeOp:
         shared_gate_up_weights_tensor,
         shared_bias_tensor,
         shared_residual_mcast_dst_tensor,
+        shared_down_mcast_dst_tensor,
         shared_k_parallel,
         shared_n_parallel,
         use_hardcoded_expert_index=False,
@@ -1834,6 +1906,7 @@ class MoeOp:
             shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
             shared_bias_tensor=shared_bias_tensor,
             shared_residual_mcast_dst_tensor=shared_residual_mcast_dst_tensor,
+            shared_down_mcast_dst_tensor=shared_down_mcast_dst_tensor,
             num_tiles_k=routed_ctx.num_tiles_k,
             tile_1x32_size=routed_ctx.tile_1x32_size,
             data_format=routed_ctx.data_format,
@@ -1930,6 +2003,17 @@ class MoeOp:
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
+            # Shared expert down mcast semaphores
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.down_mcast_sender_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=1,  # Sender starts as VALID
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.down_mcast_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
         ]
 
         # ==================================================================
@@ -1969,6 +2053,7 @@ class MoeOp:
             shared_ctx.bg_dummy_tensor,
             shared_bias_tensor,
             shared_residual_mcast_dst_tensor,
+            shared_down_mcast_dst_tensor,
         ]
 
         # ==================================================================
