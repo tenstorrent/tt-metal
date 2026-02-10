@@ -33,6 +33,20 @@ build_and_push() {
 
     if docker manifest inspect $image_name:$DOCKER_TAG > /dev/null; then
         echo "Image $image_name:$DOCKER_TAG already exists"
+
+        # If we're on main, update the latest tag even if the image exists
+        if [ "$on_main" = "true" ]; then
+            # Check if latest already points to this tag (compare manifest digests)
+            latest_digest=$(docker buildx imagetools inspect "$image_name:latest" 2>/dev/null | awk '/^Digest: / {print $2; exit}' || echo "")
+            current_digest=$(docker buildx imagetools inspect "$image_name:$DOCKER_TAG" 2>/dev/null | awk '/^Digest: / {print $2; exit}')
+
+            if [ "$latest_digest" != "$current_digest" ]; then
+                echo "Updating latest tag for $image_name"
+                docker buildx imagetools create -t $image_name:latest $image_name:$DOCKER_TAG
+            else
+                echo "Latest tag already points to $DOCKER_TAG"
+            fi
+        fi
         return
     fi
 
