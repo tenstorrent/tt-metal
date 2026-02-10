@@ -89,21 +89,6 @@ struct DebugPrintMemLayout {
 
 } ATTR_PACK;
 
-struct NewDebugPrintMemLayout {
-    struct Aux {
-        // current writer offset in buffer
-        uint32_t wpos;
-        uint32_t rpos;
-    } aux ATTR_PACK;
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-    static constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
-#else
-    static constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
-#endif
-    uint8_t data[DPRINT_BUFFER_SIZE * PROCESSOR_COUNT - sizeof(Aux)];
-
-} ATTR_PACK;
-
 struct SliceRange {
     // A slice object encoding semantics of np.slice(h0:h1:hs, w0:w1:ws)
     // This is only used with DPRINT for TileSlice object

@@ -10,7 +10,7 @@
 #include <type_traits>
 
 #include "new_dprint_structures.h"
-#include "hostdevcommon/dprint_common.h"
+#include "hostdevcommon/new_dprint_common.h"
 #include "stream_io_map.h"
 
 #define NEW_DPRINT_STRINGS_SECTION_NAME ".dprint_strings"
