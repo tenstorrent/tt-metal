@@ -12,6 +12,7 @@ from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
 
@@ -82,7 +83,7 @@ def test_rms_norm_inference(
         memory_config=(ttnn.DRAM_MEMORY_CONFIG),
     )
 
-    tt_output = tt_model(tt_input, mode="prefill")
+    tt_output = tt_model(tt_input, mode=Mode.PREFILL)
 
     # DistributedNorm outputs are replicated across devices
     tt_output_torch = ttnn.to_torch(
