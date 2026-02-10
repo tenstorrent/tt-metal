@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -114,6 +115,7 @@ const core_descriptor_t& get_core_descriptor_config(
                     tt_fabric::FabricTensixConfig,
                     std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>>>>>
         config_by_arch;
+    static std::mutex cache_mutex;
 
     ARCH arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
     uint32_t harvesting_mask = tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
@@ -141,11 +143,36 @@ const core_descriptor_t& get_core_descriptor_config(
     tt_fabric::FabricTensixConfig fabric_tensix_config =
         tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     bool fast_dispatch = tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+
+    // Lock the cache to prevent concurrent modification races
+    std::lock_guard<std::mutex> lock(cache_mutex);
+
+    // Try to find cached entry - use find() to avoid inserting empty entries during lookup
+    {
+        auto arch_it = config_by_arch.find(arch);
+        if (arch_it != config_by_arch.end()) {
+            auto product_it = arch_it->second.find(product_name);
+            if (product_it != arch_it->second.end()) {
+                auto dispatch_it = product_it->second.find(dispatch_core_config);
+                if (dispatch_it != product_it->second.end()) {
+                    auto fabric_it = dispatch_it->second.find(fabric_tensix_config);
+                    if (fabric_it != dispatch_it->second.end()) {
+                        auto num_cqs_it = fabric_it->second.find(num_hw_cqs);
+                        if (num_cqs_it != fabric_it->second.end()) {
+                            auto fd_it = num_cqs_it->second.find(fast_dispatch);
+                            if (fd_it != num_cqs_it->second.end()) {
+                                return fd_it->second;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Cache miss - create new entry (operator[] is safe here as we hold the lock)
     std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>& config_by_num_cqs =
         config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
-    if (config_by_num_cqs[num_hw_cqs].contains(fast_dispatch)) {
-        return config_by_num_cqs[num_hw_cqs].at(fast_dispatch);
-    }
 
     YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(arch, dispatch_core_config));
     YAML::Node desc_yaml =
