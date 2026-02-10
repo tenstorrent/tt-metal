@@ -87,13 +87,13 @@ tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/
 tt_metal/impl/sub_device/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/tensor/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
-tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
-tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/api/compute/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/api/compute/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
 tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT @tenstorrent/codeowner-bypass
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/kernels/ @abhullar-tt @tenstorrent/codeowner-bypass # these should go away or get moved to tests
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
-tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
+tt_metal/programming_examples/ @tt-asaigal @afuller-TT @ebanerjeeTT @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/programming_examples/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
 tt_metal/programming_examples/profiler/test_noc_event_profiler/ @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
 tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema @tenstorrent/codeowner-bypass
@@ -292,6 +292,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions
 /**/functional_*/ @uaydonat @esmalTT @tenstorrent/codeowner-bypass
 models/common @yieldthought @mtairum @uaydonat @gwangTT @tenstorrent/codeowner-bypass
+models/common/sampling/ @sraizada-tt @djordje-tt @rdraskicTT @tchedaTT @tenstorrent/codeowner-bypass
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/codeowner-bypass

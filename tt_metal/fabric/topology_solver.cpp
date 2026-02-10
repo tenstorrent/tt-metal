@@ -7,7 +7,6 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
@@ -45,6 +44,7 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const
 }
 
 std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physical(
+    tt::tt_metal::ClusterType /*cluster_type*/,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> adjacency_map;

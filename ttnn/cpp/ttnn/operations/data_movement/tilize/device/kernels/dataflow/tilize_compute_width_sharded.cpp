@@ -4,10 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/tilize.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t responsibility = get_arg_val<uint32_t>(0);
 
     uint32_t src0_cb_index = get_compile_time_arg_val(0);
@@ -29,4 +28,3 @@ void MAIN {
 
     tilize_uninit(src0_cb_index, src1_cb_index);
 }
-}  // namespace NAMESPACE

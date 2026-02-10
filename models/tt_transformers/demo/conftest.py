@@ -73,3 +73,10 @@ def pytest_addoption(parser):
         type=str,
         help="Mode to use for full model demo tests (values can be 'prefill','decode','full')",
     )
+    parser.addoption(
+        "--use_prefetcher",
+        action="store",
+        default=False,
+        type=bool,
+        help="Whether to use DRAM prefetcher for prefetching weights into L1 during decode (only available on BH)",
+    )

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/tilize.h"
 
 // #include "api/debug/dprint.h"
 
