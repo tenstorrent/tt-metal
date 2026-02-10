@@ -129,6 +129,9 @@ void kernel_main() {
             get_named_compile_time_arg_val("has_residual"),
             get_named_compile_time_arg_val("num_tiles")>;
 
+        // Full init, CBs don't matter
+        compute_kernel_hw_startup(compute_args.cb_in0, compute_args.cb_in1, compute_args.cb_out0);
+
         Receiver::RTArgs args{};
         size_t fabric_arg_idx = 0;
 

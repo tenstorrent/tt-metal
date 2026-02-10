@@ -173,6 +173,9 @@ void kernel_main() {
 
     // Gather compute args (no-op for TRISC)
     deepseek_b1_ops::Gather::ComputeArgs gather_args{};
+
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(matmul_args.in0, matmul_args.in1, matmul_args.out);
 #endif
 
     // ========================================================================

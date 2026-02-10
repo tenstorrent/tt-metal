@@ -68,6 +68,8 @@ void kernel_main() {
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
     };
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(in0_cb, in1_cb, out_cb);
 #endif
 
     // ========================================================================

@@ -36,6 +36,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
         get_named_compile_time_arg_val("add_sender_index"),
         get_named_compile_time_arg_val("add_slice_size_bytes")>;
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 #endif
 
     // Execute

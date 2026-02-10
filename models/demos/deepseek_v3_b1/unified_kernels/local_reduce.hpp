@@ -67,7 +67,8 @@ struct LocalReduce {
             constexpr bool apply_silu = CTArgs::apply_silu;
 
             // Initialize operations before waiting for data
-            binary_op_init_common(args.in_cb, args.in_cb, args.out_cb);
+            reconfig_data_format<false, true>(args.in_cb, args.in_cb);
+            pack_reconfig_data_format<true>(args.out_cb);
             add_tiles_init(args.in_cb, args.in_cb, true /* acc_to_dest */);
             if constexpr (apply_silu) {
                 silu_tile_init();

@@ -193,16 +193,16 @@ class DRAMStreamingMatmul:
         # Determine subblock_w based on fp32_dest_acc_en and per_core_N
         # FP32 dest: 8 dest regs (full sync) or 4 (half sync)
         # BF16/FP16 dest: 16 dest regs (full sync) or 8 (half sync)
-        if fp32_dest_acc_en:
-            if per_core_N <= 8:
-                max_subblock_w = 8
-            else:
-                max_subblock_w = 4
-        else:
-            if per_core_N <= 16:
-                max_subblock_w = 16
-            else:
-                max_subblock_w = 8
+        dst_full_sync_en = False
+        if dst_full_sync_en and fp32_dest_acc_en:
+            max_dest = 8
+        elif dst_full_sync_en and not fp32_dest_acc_en:
+            max_dest = 16
+        elif not dst_full_sync_en and fp32_dest_acc_en:
+            max_dest = 4
+        elif not dst_full_sync_en and not fp32_dest_acc_en:
+            max_dest = 8
+        max_subblock_w = per_core_N if per_core_N <= max_dest else max_dest // 2
 
         # Find largest subblock_w that evenly divides per_core_N
         subblock_w = max_subblock_w

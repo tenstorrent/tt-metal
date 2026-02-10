@@ -118,6 +118,9 @@ struct Matmul {
             constexpr bool finalize = split_acc && true;
             constexpr bool read_transposed = transpose && true;
 
+            reconfig_data_format<false, true>(args.in1, args.in0);
+            pack_reconfig_data_format<true>(args.out);
+
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
             cb_wait_front(args.in0, args.k_num_tiles);
@@ -126,7 +129,7 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            custom_mm_block_init<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
+            custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
 
             if constexpr (CTArgs::fuse_sigmoid || CTArgs::fuse_silu) {
                 // Initialize activation on PACK thread

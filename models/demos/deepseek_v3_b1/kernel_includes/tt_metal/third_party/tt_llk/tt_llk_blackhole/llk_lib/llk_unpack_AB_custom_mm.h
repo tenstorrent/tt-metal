@@ -201,4 +201,6 @@ inline void _llk_unpack_AB_custom_mm_(
     // Wait for all contexts to be free
     wait_for_next_context(1);
     reset_config_context();
+    // TODO: Why is this needed for only some tests?
+    unpacker_addr_counter_init();
 }

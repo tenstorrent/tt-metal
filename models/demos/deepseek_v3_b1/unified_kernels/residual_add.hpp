@@ -60,7 +60,9 @@ struct ResidualAdd {
 #if defined(COMPILE_FOR_TRISC)
             constexpr uint32_t out_w = CTArgs::out_w;
 
-            binary_op_init_common(args.in0_cb, args.in1_cb, args.out_cb);
+            reconfig_data_format<false, true>(args.in0_cb, args.in1_cb);
+            pack_reconfig_data_format<true>(args.out_cb);
+
             add_tiles_init(args.in0_cb, args.in1_cb);
 
             cb_wait_front(args.in0_cb, out_w);

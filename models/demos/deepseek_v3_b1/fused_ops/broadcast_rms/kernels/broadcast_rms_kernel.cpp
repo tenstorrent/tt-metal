@@ -121,6 +121,9 @@ void kernel_main() {
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
 #endif
 
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(rms_args.input_cb, rms_args.gamma_cb, rms_args.output_cb);
+
 #endif
 
     // CCL Broadcast

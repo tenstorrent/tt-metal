@@ -83,6 +83,8 @@ void kernel_main() {
         .sin_interm_cb = sin_interm_cb,
         .out_cb = out_cb,
     };
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(in_cb, in_cb, out_cb);  // Full init, CBs don't matter
 #endif
 
     // ========================================================================

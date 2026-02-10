@@ -184,7 +184,8 @@ struct AllReduceReceiver {
             // ================================================================
             // TRISC (Compute) - performs reduction: local + remote → output
             // ================================================================
-            binary_op_init_common(ComputeCT::cb_in0, ComputeCT::cb_in1, ComputeCT::cb_out0);
+            reconfig_data_format<false, true>(ComputeCT::cb_in0, ComputeCT::cb_in1);
+            pack_reconfig_data_format<true>(ComputeCT::cb_out0);
             add_tiles_init(ComputeCT::cb_in0, ComputeCT::cb_in1);
 
             constexpr uint32_t max_dst_tiles = 4;

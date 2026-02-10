@@ -83,10 +83,9 @@ struct Rope {
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
 
     // ========================================================================
-    // Op - the actual operation, templated on CTArgs, IsActiveCore, and SkipFullInit
-    // SkipFullInit: When true, skip full mm_init/binary_op_init_common
+    // Op - the actual operation, templated on CTArgs, and IsActiveCore
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool SkipFullInit = false>
+    template <typename CTArgs, bool IsActiveCore>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -100,6 +99,8 @@ struct Rope {
 #if defined(COMPILE_FOR_TRISC)
             constexpr uint32_t Wt = CTArgs::Wt;
             constexpr uint32_t Ht = CTArgs::Ht;
+            reconfig_data_format_srcb<false, true>(args.in_cb);
+            pack_reconfig_data_format<true>(args.out_cb);
 
             // ================================================================
             // Wait for sharded CBs (signaled by NCRISC)
@@ -107,20 +108,13 @@ struct Rope {
             cb_wait_front(args.trans_mat_cb, 1);  // Trans_mat: 1 tile, reused for all heads
             cb_wait_front(args.sin_cb, Wt);       // Sin: Wt tiles (reused for all heads)
             cb_wait_front(args.cos_cb, Wt);       // Cos: Wt tiles (reused for all heads)
-            // ================================================================
-            // Initialize matmul and binary ops
-            // In fused kernels (SkipFullInit=true), skip full init because multiple full
-            // inits are unsafe (can interfere with other matmul operations on the same core).
-            // Use mm_init_short in the loop to reconfigure CB pointers as needed.
-            // ================================================================
-            if constexpr (!SkipFullInit) {
-                mm_init(args.in_cb, args.trans_mat_cb, args.rotated_in_interm_cb);
-                binary_op_init_common(args.rotated_in_interm_cb, args.sin_cb, args.sin_interm_cb);
-            }
+
             // ================================================================
             // Main loop: process Ht heads, each head consumes Wt tiles
             // ================================================================
             for (uint32_t ht = 0; ht < Ht; ht++) {
+                reconfig_data_format_srca<false, true>(args.trans_mat_cb);
+
                 // Reserve intermediate and output buffers
                 cb_reserve_back(args.rotated_in_interm_cb, Wt);
                 cb_reserve_back(args.sin_interm_cb, Wt);
@@ -149,6 +143,7 @@ struct Rope {
                 // ============================================================
                 // Step 2: sin_interm = rotated * sin (broadcast multiply)
                 // ============================================================
+                reconfig_data_format_srca<false, true>(args.rotated_in_interm_cb);
                 mul_bcast_rows_init_short(args.rotated_in_interm_cb, args.sin_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {

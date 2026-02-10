@@ -255,6 +255,8 @@ void kernel_main() {
 
     // Output gather compute args (no-op)
     deepseek_b1_ops::Gather::ComputeArgs og_args{};
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(matmul_args.in0, matmul_args.in1, matmul_args.out);
 #endif
 
     // ========================================================================

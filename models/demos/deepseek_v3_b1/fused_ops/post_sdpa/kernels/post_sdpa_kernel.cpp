@@ -242,6 +242,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_cb_temp"),
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_num_tiles")>;
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(matmul1_args.in0, matmul1_args.in1, matmul1_args.out);
 #endif
 
     // ========================================================================

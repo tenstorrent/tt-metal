@@ -102,20 +102,23 @@ struct DeepseekMoeGate {
             // TRISC: Compute gate logic
             // ================================================================
             // Init portion
-            binary_op_init_common(CTArgs::input_cb, CTArgs::bias_cb, CTArgs::output_cb);
             cb_wait_front(CTArgs::input_indices_cb, 1);
             cb_wait_front(CTArgs::bias_cb, 1);
 
+            // Input indices CB should have the same tile shape as the input CB
+            reconfig_data_format<false, true>(CTArgs::input_indices_cb, CTArgs::bias_cb);
+            // Output indices CB should have the same tile shape as the output CB
+            pack_reconfig_data_format<true>(CTArgs::output_cb);
+
             // Compute portion
             copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
-            reconfig_data_format_srca(CTArgs::input_indices_cb);
 
             tile_regs_acquire();
 
             // Copy indices (already transposed to cols)
             copy_tile(CTArgs::input_indices_cb, 0, 1);
 
-            reconfig_data_format_srca(CTArgs::input_cb);
+            reconfig_data_format_srca(CTArgs::input_cb);  // Assumes same tile shape as input indices CB
             deepseek_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
             cb_wait_front(CTArgs::input_cb, 1);
             deepseek_moe_gate<CTArgs::enable_sigmoid>(
@@ -125,7 +128,6 @@ struct DeepseekMoeGate {
 
             tile_regs_commit();
 
-            pack_reconfig_data_format(CTArgs::output_cb);
             cb_reserve_back(CTArgs::output_cb, 1);
             cb_reserve_back(CTArgs::output_indices_cb, 1);
 
@@ -134,7 +136,7 @@ struct DeepseekMoeGate {
             pack_tile(0, CTArgs::output_cb);
             cb_push_back(CTArgs::output_cb, 1);
 
-            pack_reconfig_data_format(CTArgs::output_indices_cb);
+            pack_reconfig_data_format(CTArgs::output_indices_cb);  // Assumes same tile shape as output CB
             pack_tile(1, CTArgs::output_indices_cb);
             cb_push_back(CTArgs::output_indices_cb, 1);
 

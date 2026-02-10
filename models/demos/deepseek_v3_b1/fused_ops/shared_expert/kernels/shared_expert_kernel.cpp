@@ -322,6 +322,8 @@ void kernel_main() {
 
     // Output gather compute args (no-op)
     deepseek_b1_ops::Gather::ComputeArgs og_args{};
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(gated_reduce_args.group1_cb, gated_reduce_args.group2_cb, gated_reduce_args.out_cb);
 #endif
 
     // ========================================================================

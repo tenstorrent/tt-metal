@@ -313,6 +313,9 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
     mean_diff = torch.mean(torch.abs(torch_expected - compare_kv_cache)).item()
     logger.info(f"Max absolute difference: {max_diff}")
     logger.info(f"Mean absolute difference: {mean_diff}")
+    torch.set_printoptions(sci_mode=False)
+    print(torch_expected)
+    print(compare_kv_cache)
 
     from models.common.utility_functions import comp_pcc
 

@@ -161,6 +161,8 @@ void kernel_main() {
         .sin_interm_cb = sin_interm_cb,
         .out_cb = k_rope_output_cb,
     };
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(dkv_matmul_args.in0, dkv_matmul_args.in1, dkv_matmul_args.out);
 #endif
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers

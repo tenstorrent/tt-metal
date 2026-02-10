@@ -12,7 +12,6 @@
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../../unified_kernels/eltwise_mul.hpp"
-#include "api/debug/dprint.h"
 
 // Compile-time role flag for dead code elimination via if constexpr
 struct Core {
@@ -110,6 +109,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_per_core_n"),
         get_named_compile_time_arg_val("dram_mm_cb_scalar"),
         get_named_compile_time_arg_val("dram_mm_mul_fp32_dest_acc_en")>;
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(DRAMMMCTArgs::cb_in0, DRAMMMCTArgs::cb_in1, DRAMMMCTArgs::cb_out);
 #endif
 
     // ========================================================================
