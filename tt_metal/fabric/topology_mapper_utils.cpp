@@ -63,7 +63,7 @@ TopologyMappingResult map_mesh_to_physical(
             }
 
             // Validate that the fabric node exists in logical adjacency
-            bool found = logical_adjacency.find(fabric_node) != logical_adjacency.end();
+            bool found = logical_adjacency.contains(fabric_node);
             if (!found) {
                 result.success = false;
                 result.error_message =
@@ -96,7 +96,7 @@ TopologyMappingResult map_mesh_to_physical(
         }
         for (const auto& [asic_id, pos] : config.asic_positions) {
             // Only include ASICs that are in the physical adjacency graph
-            if (physical_node_set.find(asic_id) != physical_node_set.end()) {
+            if (physical_node_set.contains(asic_id)) {
                 asic_to_position[asic_id] = pos;
             }
         }
@@ -275,7 +275,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
             MeshId src_mesh_id(src_mesh_id_val);
 
             // Initialize exit node adjacency map for this mesh if needed
-            if (exit_node_adjacency_maps.find(src_mesh_id) == exit_node_adjacency_maps.end()) {
+            if (!exit_node_adjacency_maps.contains(src_mesh_id)) {
                 exit_node_adjacency_maps[src_mesh_id] = AdjacencyGraph<LogicalExitNode>::AdjacencyMap();
             }
 
@@ -284,7 +284,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
                 // Skip self-connections
                 if (dst_mesh_id != src_mesh_id) {
                     // Initialize exit node adjacency map for destination mesh if needed
-                    if (exit_node_adjacency_maps.find(dst_mesh_id) == exit_node_adjacency_maps.end()) {
+                    if (!exit_node_adjacency_maps.contains(dst_mesh_id)) {
                         exit_node_adjacency_maps[dst_mesh_id] = AdjacencyGraph<LogicalExitNode>::AdjacencyMap();
                     }
 
@@ -325,7 +325,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
             MeshId src_mesh_id(src_mesh_id_val);
 
             // Initialize exit node adjacency map for this mesh if needed
-            if (exit_node_adjacency_maps.find(src_mesh_id) == exit_node_adjacency_maps.end()) {
+            if (!exit_node_adjacency_maps.contains(src_mesh_id)) {
                 exit_node_adjacency_maps[src_mesh_id] = AdjacencyGraph<LogicalExitNode>::AdjacencyMap();
             }
 
@@ -334,7 +334,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
                 // Skip self-connections
                 if (dst_mesh_id != src_mesh_id) {
                     // Initialize exit node adjacency map for destination mesh if needed
-                    if (exit_node_adjacency_maps.find(dst_mesh_id) == exit_node_adjacency_maps.end()) {
+                    if (!exit_node_adjacency_maps.contains(dst_mesh_id)) {
                         exit_node_adjacency_maps[dst_mesh_id] = AdjacencyGraph<LogicalExitNode>::AdjacencyMap();
                     }
 
@@ -358,7 +358,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     // Ensure all meshes are represented as nodes in the mesh-level graph, even if they have no connections
     // This is important for single-mesh scenarios where there are no inter-mesh connections
     for (const auto& [mesh_id, _] : mesh_adjacency_graphs) {
-        if (mesh_level_adjacency_map.find(mesh_id) == mesh_level_adjacency_map.end()) {
+        if (!mesh_level_adjacency_map.contains(mesh_id)) {
             mesh_level_adjacency_map[mesh_id] = std::vector<MeshId>();
         }
     }
@@ -532,7 +532,7 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
 
     // Ensure all meshes are represented in mesh-level graph, even if they have no connections
     for (const auto& [mesh_id, _] : asic_id_to_mesh_rank) {
-        if (mesh_level_adjacency_map.find(mesh_id) == mesh_level_adjacency_map.end()) {
+        if (!mesh_level_adjacency_map.contains(mesh_id)) {
             mesh_level_adjacency_map[mesh_id] = std::vector<MeshId>();
         }
     }
@@ -564,7 +564,8 @@ namespace {
 ::tt::tt_fabric::ConnectionValidationMode determine_inter_mesh_validation_mode(const TopologyMappingConfig& config) {
     if (config.inter_mesh_validation_mode.has_value()) {
         return config.inter_mesh_validation_mode.value();
-    } else if (config.strict_mode) {
+    }
+    if (config.strict_mode) {
         // Fallback for backward compatibility
         return ::tt::tt_fabric::ConnectionValidationMode::STRICT;
     }
@@ -577,7 +578,8 @@ namespace {
     auto config_mode_it = config.mesh_validation_modes.find(logical_mesh_id);
     if (config_mode_it != config.mesh_validation_modes.end()) {
         return config_mode_it->second;
-    } else if (config.strict_mode) {
+    }
+    if (config.strict_mode) {
         // Fallback for backward compatibility
         return ::tt::tt_fabric::ConnectionValidationMode::STRICT;
     }
@@ -610,8 +612,7 @@ void add_rank_binding_constraints(
     // Build Rank bindings constraints (only if rank bindings are enabled)
     if (!config.disable_rank_bindings) {
         // Check that rank mappings are provided
-        if (fabric_node_id_to_mesh_rank.find(logical_mesh_id) != fabric_node_id_to_mesh_rank.end() &&
-            asic_id_to_mesh_rank.find(logical_mesh_id) != asic_id_to_mesh_rank.end()) {
+        if (fabric_node_id_to_mesh_rank.contains(logical_mesh_id) && asic_id_to_mesh_rank.contains(logical_mesh_id)) {
             if (!intra_mesh_constraints.add_required_trait_constraint(
                     fabric_node_id_to_mesh_rank.at(logical_mesh_id), asic_id_to_mesh_rank.at(logical_mesh_id))) {
                 TT_THROW("Failed to add required trait constraint for rank bindings in mesh {}", logical_mesh_id.get());
@@ -890,10 +891,9 @@ bool handle_forbidden_constraint(
             solver_error_message,
             failed_mesh_pairs);
         return false;  // Indicate that mapping should return early
-    } else {
-        current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
-        return true;  // Indicate that mapping should continue
     }
+    current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+    return true;  // Indicate that mapping should continue
 }
 
 }  // anonymous namespace
@@ -907,8 +907,8 @@ TopologyMappingResult map_multi_mesh_to_physical(
     using namespace ::tt::tt_fabric;
 
     // Step 1: Run Mesh to Mesh mapping algorithm
-    auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
-    auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
+    const auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
+    const auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
 
     // Build inter-mesh constraints and determine validation mode
     auto inter_mesh_constraints = build_inter_mesh_constraints(mesh_physical_graph, config);
@@ -954,7 +954,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
     // Maximum retry attempts to prevent infinite loops
     // This should be sufficient for most cases: if we have N logical meshes and M physical meshes,
     // worst case is N*M attempts (trying each logical mesh with each physical mesh)
-    const unsigned int max_retry_attempts = logical_meshes.size() * physical_meshes.size() + 1;
+    const unsigned int max_retry_attempts = (logical_meshes.size() * physical_meshes.size()) + 1;
     log_debug(tt::LogFabric, "Maximum retry attempts: {}", max_retry_attempts);
 
     while (!success) {

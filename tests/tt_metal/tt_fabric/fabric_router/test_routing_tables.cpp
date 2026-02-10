@@ -14,7 +14,6 @@
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
-using tt::tt_fabric::fabric_router_tests::compare_asic_mapping_files;
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"

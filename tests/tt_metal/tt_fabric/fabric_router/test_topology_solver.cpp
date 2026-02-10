@@ -3281,8 +3281,8 @@ TEST_F(TopologySolverTest, CardinalityConstraint_WithManyToManyConstraints) {
     EXPECT_TRUE(result.success) << "Mapping with cardinality + many-to-many constraints should succeed";
 
     // Verify many-to-many constraint is satisfied
-    EXPECT_TRUE(global_nodes.count(result.target_to_global.at(1)) > 0) << "Node 1 should map to {10,11,12}";
-    EXPECT_TRUE(global_nodes.count(result.target_to_global.at(2)) > 0) << "Node 2 should map to {10,11,12}";
+    EXPECT_TRUE(global_nodes.contains(result.target_to_global.at(1))) << "Node 1 should map to {10,11,12}";
+    EXPECT_TRUE(global_nodes.contains(result.target_to_global.at(2))) << "Node 2 should map to {10,11,12}";
 
     // Verify cardinality constraint is satisfied
     bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
