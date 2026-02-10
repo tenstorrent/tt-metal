@@ -184,7 +184,7 @@ class TestSequentialChainInfrastructure:
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
         rms_desc = rms_norm.rms_norm(
-            test_tensors["tt_input"],  # Placeholder - will be replaced by chain
+            ln1_desc.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
@@ -192,7 +192,7 @@ class TestSequentialChainInfrastructure:
         )
 
         ln2_desc = layer_norm.layer_norm(
-            test_tensors["tt_input"],  # Placeholder - will be replaced by chain
+            rms_desc.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight3"],
             bias=test_tensors["tt_bias2"],
@@ -231,7 +231,7 @@ class TestSequentialChainInfrastructure:
             epsilon=1e-5,
         )
         ln2_desc = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            ln1_desc.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
@@ -442,7 +442,7 @@ class TestSequentialChainExecution:
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
         rms_desc = rms_norm.rms_norm(
-            test_tensors["tt_input"],
+            ln1_desc.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
@@ -450,7 +450,7 @@ class TestSequentialChainExecution:
         )
 
         ln2_desc = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            rms_desc.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight3"],
             bias=test_tensors["tt_bias2"],
@@ -505,14 +505,14 @@ class TestSequentialChainExecution:
             compute_kernel_config=ln_compute_config,
         )
         rms2 = rms_norm.rms_norm(
-            test_tensors["tt_input"],
+            rms1.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
         rms3 = rms_norm.rms_norm(
-            test_tensors["tt_input"],
+            rms2.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight3"],
             epsilon=1e-5,
@@ -528,7 +528,7 @@ class TestSequentialChainExecution:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         rms4 = rms_norm.rms_norm(
-            test_tensors["tt_input"],
+            rms3.output_tensors[0],
             core_range_set=core_range,
             weight=tt_weight4,
             epsilon=1e-5,
@@ -567,7 +567,7 @@ class TestSequentialChainExecution:
             epsilon=1e-5,
         )
         ln2_desc = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            ln1_desc.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             bias=test_tensors["tt_bias2"],
@@ -638,13 +638,13 @@ class TestSequentialChainExecution:
             epsilon=1e-5,
         )
         rms_desc = rms_norm.rms_norm(
-            test_tensors["tt_input"],
+            ln1_desc.output_tensors[0],
             core_range_set=chain_cores,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
         )
         ln2_desc = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            rms_desc.output_tensors[0],
             core_range_set=chain_cores,
             weight=test_tensors["tt_weight3"],
             epsilon=1e-5,
@@ -826,7 +826,7 @@ class TestFusedKernelSource:
             epsilon=1e-5,
         )
         ln2 = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            ln1.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
@@ -856,7 +856,7 @@ class TestFusedKernelSource:
             epsilon=1e-5,
         )
         ln2 = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            ln1.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
@@ -910,7 +910,7 @@ class TestParallelChains:
             epsilon=1e-5,
         )
         rms1 = rms_norm.rms_norm(
-            test_tensors["tt_input"],
+            ln1.output_tensors[0],
             core_range_set=cores1,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
@@ -927,7 +927,7 @@ class TestParallelChains:
             compute_kernel_config=ln_compute_config,
         )
         ln2 = layer_norm.layer_norm(
-            tt_input2,
+            rms2.output_tensors[0],
             core_range_set=cores2,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
@@ -962,14 +962,14 @@ class TestParallelChains:
             epsilon=1e-5,
         )
         rms1 = rms_norm.rms_norm(
-            test_tensors["tt_input"],
+            ln1.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
         ln2 = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            rms1.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight3"],
             epsilon=1e-5,
@@ -1026,14 +1026,14 @@ class TestParallelChains:
             epsilon=1e-5,
         )
         rms1 = rms_norm.rms_norm(
-            test_tensors["tt_input"],
+            ln1.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
         ln2 = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            rms1.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight3"],
             bias=test_tensors["tt_bias2"],
@@ -1098,6 +1098,7 @@ class TestParallelChains:
 
         # Add many phases - enough to potentially overflow
         # (The actual overflow depends on CB remapping strategy)
+        prev_desc = None
         for i in range(10):  # 10 phases should be enough to trigger overflow warning
             if i == 0:
                 desc = layer_norm.layer_norm(
@@ -1110,13 +1111,14 @@ class TestParallelChains:
                 builder.add_phase(desc)
             else:
                 desc = rms_norm.rms_norm(
-                    test_tensors["tt_input"],
+                    prev_desc.output_tensors[0],
                     core_range_set=core_range,
                     weight=test_tensors["tt_weight1"],
                     epsilon=1e-5,
                     compute_kernel_config=ln_compute_config,
                 )
                 builder.add_phase(desc)
+            prev_desc = desc
 
         # This should either succeed (if CB merging is efficient) or raise a clear error
         try:
@@ -1147,7 +1149,7 @@ class TestParallelChains:
             epsilon=1e-5,
         )
         ln2 = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            ln1.output_tensors[0],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
@@ -1200,20 +1202,20 @@ class TestParallelChainsExecution:
         )
 
         # Chain A: LayerNorm -> RMSNorm
-        chain_a = [
-            layer_norm.layer_norm(
-                test_tensors["tt_input"], core_range_set=cores1, weight=test_tensors["tt_weight1"], epsilon=1e-5
-            ),
-            rms_norm.rms_norm(
-                test_tensors["tt_input"], core_range_set=cores1, weight=test_tensors["tt_weight2"], epsilon=1e-5
-            ),
-        ]
+        ln_a = layer_norm.layer_norm(
+            test_tensors["tt_input"], core_range_set=cores1, weight=test_tensors["tt_weight1"], epsilon=1e-5
+        )
+        rms_a = rms_norm.rms_norm(
+            ln_a.output_tensors[0], core_range_set=cores1, weight=test_tensors["tt_weight2"], epsilon=1e-5
+        )
+        chain_a = [ln_a, rms_a]
 
         # Chain B: RMSNorm -> LayerNorm
-        chain_b = [
-            rms_norm.rms_norm(tt_input2, core_range_set=cores2, weight=test_tensors["tt_weight1"], epsilon=1e-5),
-            layer_norm.layer_norm(tt_input2, core_range_set=cores2, weight=test_tensors["tt_weight2"], epsilon=1e-5),
-        ]
+        rms_b = rms_norm.rms_norm(tt_input2, core_range_set=cores2, weight=test_tensors["tt_weight1"], epsilon=1e-5)
+        ln_b = layer_norm.layer_norm(
+            rms_b.output_tensors[0], core_range_set=cores2, weight=test_tensors["tt_weight2"], epsilon=1e-5
+        )
+        chain_b = [rms_b, ln_b]
 
         # Fuse chains
         fused = create_parallel_chain_descriptors([chain_a, chain_b])
@@ -1267,15 +1269,13 @@ class TestParallelChainsExecution:
         # Create 4 chains
         chains = []
         for i in range(4):
-            chain = [
-                layer_norm.layer_norm(
-                    tt_inputs[i], core_range_set=core_ranges[i], weight=test_tensors["tt_weight1"], epsilon=1e-5
-                ),
-                rms_norm.rms_norm(
-                    tt_inputs[i], core_range_set=core_ranges[i], weight=test_tensors["tt_weight2"], epsilon=1e-5
-                ),
-            ]
-            chains.append(chain)
+            ln_i = layer_norm.layer_norm(
+                tt_inputs[i], core_range_set=core_ranges[i], weight=test_tensors["tt_weight1"], epsilon=1e-5
+            )
+            rms_i = rms_norm.rms_norm(
+                ln_i.output_tensors[0], core_range_set=core_ranges[i], weight=test_tensors["tt_weight2"], epsilon=1e-5
+            )
+            chains.append([ln_i, rms_i])
 
         # Fuse and execute
         fused = create_parallel_chain_descriptors(chains)
@@ -1297,9 +1297,6 @@ class TestParallelChainsExecution:
 class TestParallelExecutionProfiling:
     """Profiling tests to measure performance benefits of parallel execution."""
 
-    @pytest.mark.skip(
-        reason="Fused chain + matmul via composite.launch needs investigation (standalone fused chain works)"
-    )
     def test_profile_parallel_matmul_vs_norm_chain(self, device, test_tensors):
         """
         Profile parallel execution: matmul vs 4-phase normalization chain.
@@ -1416,14 +1413,14 @@ class TestParallelExecutionProfiling:
             epsilon=1e-5,
         )
         rms1_desc = rms_norm.rms_norm(
-            test_tensors["tt_input"],
+            ln1_desc.output_tensors[0],
             core_range_set=cores_norm,
             weight=tt_weights[1],
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
         ln2_desc = layer_norm.layer_norm(
-            test_tensors["tt_input"],
+            rms1_desc.output_tensors[0],
             core_range_set=cores_norm,
             weight=tt_weights[2],
             bias=tt_biases[1],
