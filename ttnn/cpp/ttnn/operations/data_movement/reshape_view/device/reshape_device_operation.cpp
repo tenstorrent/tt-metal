@@ -35,31 +35,12 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_hit(
 
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input;
-    auto mem_config = operation_attributes.output_mem_config;
-
-    if (operation_attributes.output_mem_config.is_sharded() &&
-        (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-         mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
-        auto shard_spec = operation_attributes.output_mem_config.shard_spec().value();
-        if (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            shard_spec.shape[-2] = operation_attributes.logical_output_shape[-2];
-        }
-        mem_config = mem_config.with_shard_spec(shard_spec);
-    } else if (!operation_attributes.output_mem_config.is_sharded()) {
-        if (input_tensor_a.memory_config().is_sharded()) {
-            auto shard_spec = input_tensor_a.shard_spec().value();
-            shard_spec.shape[0] = operation_attributes.logical_output_shape[0];
-            mem_config = mem_config.with_shard_spec(shard_spec);
-        }
-    }
-
     return TensorSpec(
         operation_attributes.logical_output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
-            input_tensor_a.dtype(),
-            tt::tt_metal::PageConfig(input_tensor_a.layout()),
-            mem_config,
+            tensor_args.input.dtype(),
+            tt::tt_metal::PageConfig(tensor_args.input.layout()),
+            operation_attributes.output_mem_config,
             operation_attributes.logical_output_shape,
             operation_attributes.padded_output_shape));
 }
