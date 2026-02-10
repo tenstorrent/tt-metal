@@ -18,7 +18,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
-#include "tt_metal/experimental/dataflow_buffer/dataflow_buffer.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
