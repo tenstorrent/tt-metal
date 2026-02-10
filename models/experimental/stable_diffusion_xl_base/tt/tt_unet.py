@@ -275,7 +275,7 @@ class TtUNet2DConditionModel(LightweightModule):
         temb_add = ttnn.to_layout(temb_add, ttnn.TILE_LAYOUT)
         temb_add = self.add_embedding.forward(temb_add)
 
-        temb = ttnn.add_(temb, temb_add, use_legacy=False, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)])
+        temb = ttnn.add_(temb, temb_add, use_legacy=None, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)])
         ttnn.deallocate(temb_add)
 
         [sample, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(

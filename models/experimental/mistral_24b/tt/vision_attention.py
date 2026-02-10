@@ -20,7 +20,7 @@ def rotate_half(x):
     x1 = ttnn.slice(x, (0, 0, 0, 0), (x.shape[0], x.shape[1], x.shape[2], half))
     x2 = ttnn.slice(x, (0, 0, 0, half), (x.shape[0], x.shape[1], x.shape[2], last_dim))
 
-    neg_x2 = ttnn.mul(x2, -1, use_legacy=False)
+    neg_x2 = ttnn.mul(x2, -1, use_legacy=None)
     return ttnn.concat([neg_x2, x1], dim=-1)
 
 

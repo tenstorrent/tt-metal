@@ -131,8 +131,8 @@ def test_binary_mul_div_bf16(device):
 
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_mul = ttnn.mul(x_tt, y_tt, use_legacy=False)
-    z_tt_div = ttnn.div(x_tt, y_tt, use_legacy=False)
+    z_tt_mul = ttnn.mul(x_tt, y_tt, use_legacy=None)
+    z_tt_div = ttnn.div(x_tt, y_tt, use_legacy=None)
 
     tt_out_mul = ttnn.to_torch(z_tt_mul)
     tt_out_div = ttnn.to_torch(z_tt_div)
@@ -154,8 +154,8 @@ def test_binary_mul_div_bf16_scalar(device, a, b):
 
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = y_torch
-    z_tt_mul = ttnn.mul(x_tt, y_tt, use_legacy=False)
-    z_tt_div = ttnn.div(x_tt, y_tt, use_legacy=False)
+    z_tt_mul = ttnn.mul(x_tt, y_tt, use_legacy=None)
+    z_tt_div = ttnn.div(x_tt, y_tt, use_legacy=None)
 
     tt_out_mul = ttnn.to_torch(z_tt_mul)
     tt_out_div = ttnn.to_torch(z_tt_div)

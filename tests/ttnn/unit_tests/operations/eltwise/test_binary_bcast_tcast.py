@@ -42,7 +42,7 @@ def test_binary_scalar_ops(input_shapes, dtype, device):
         b_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    out_tt = ttnn.add(a_tt, b_tt, queue_id=cq_id, use_legacy=False)
+    out_tt = ttnn.add(a_tt, b_tt, queue_id=cq_id, use_legacy=None)
     out_pt = a_pt + b_pt
 
     comp_pass = compare_pcc([out_tt], [out_pt])

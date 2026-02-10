@@ -30,7 +30,6 @@ def test_my_custom_config(mesh_device):
         var=1,                  # Input distribution variance
         outlier_pct=0,          # Percentage of outliers (0-1)
         outlier_var=0,          # Variance of outliers
-        use_legacy=False,       # Use legacy reduction/rsqrt
         use_high_precision=True,# Use high precision compute
         verbose=False,          # Minimal output
     )
@@ -172,7 +171,7 @@ def test_smoke(mesh_device, batch_size, seq_len, hidden_dim, eps, norm_type, use
         var=1,
         outlier_pct=0,
         outlier_var=0,
-        use_legacy=False,
+        use_legacy=None,
         use_high_precision=True,
         verbose=False,
         use_welford=use_welford,
@@ -231,7 +230,7 @@ def test_distributed_layernorm_memory_layouts(mesh_device, norm_type, weight_lay
         var=1,
         outlier_pct=0,
         outlier_var=0,
-        use_legacy=False,
+        use_legacy=None,
         use_high_precision=True,
         verbose=False,
         weight_layout=weight_layout,
@@ -291,7 +290,7 @@ def test_distributed_rmsnorm_memory_layouts(mesh_device, norm_type, weight_layou
         var=1,
         outlier_pct=0,
         outlier_var=0,
-        use_legacy=False,
+        use_legacy=None,
         use_high_precision=True,
         verbose=False,
         weight_layout=weight_layout,
@@ -344,7 +343,7 @@ def test_distributed_norm_large_batch(mesh_device, norm_type, use_welford):
         var=1,
         outlier_pct=0,
         outlier_var=0,
-        use_legacy=False,
+        use_legacy=None,
         use_high_precision=True,
         verbose=False,
         use_welford=use_welford,
@@ -382,7 +381,7 @@ def test_distributed_layernorm_sweep_hidden_dim(mesh_device, hidden_dim):
         var=1,
         outlier_pct=0,
         outlier_var=0,
-        use_legacy=False,
+        use_legacy=None,
         use_high_precision=True,
         verbose=False,
     )
@@ -447,7 +446,7 @@ def test_distributed_rmsnorm_2d_core_grid(mesh_device, batch_size, seq_len, hidd
         var=1,
         outlier_pct=0,
         outlier_var=0,
-        use_legacy=False,
+        use_legacy=None,
         use_high_precision=True,
         verbose=False,
         use_welford=False,  # RMS norm does not support Welford

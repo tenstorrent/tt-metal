@@ -921,7 +921,7 @@ def test_binary_sharded_decoder_program_cache(dtype_pt, dtype_tt, device):
                 )
 
                 out_pt = torch.add(a_pt, b_pt)
-                ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=a_tt, use_legacy=False)
+                ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=a_tt, use_legacy=None)
                 out_tt_interleaved = ttnn.to_torch(a_tt)
 
                 pcc = ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt)

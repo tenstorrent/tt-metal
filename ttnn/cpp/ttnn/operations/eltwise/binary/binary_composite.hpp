@@ -48,7 +48,7 @@ struct ExecutePower {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        [[maybe_unused]] std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -59,7 +59,7 @@ struct ExecutePower {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        [[maybe_unused]] std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt);
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
@@ -112,7 +112,7 @@ struct ExecuteDiv {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        [[maybe_unused]] const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<bool>& use_legacy = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
@@ -126,7 +126,7 @@ struct ExecuteDiv {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        [[maybe_unused]] const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<bool>& use_legacy = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
@@ -141,7 +141,7 @@ struct ExecuteBiasGelu {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        [[maybe_unused]] std::optional<bool> use_legacy = std::nullopt,
+        std::optional<bool> use_legacy = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
         return BinaryOperation<binary_op_type>::invoke(
             input_tensor_a_arg,
@@ -326,7 +326,7 @@ struct ExecuteMinimum {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        [[maybe_unused]] std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt);
 };
 
 struct ExecutePrelu {
@@ -421,7 +421,7 @@ struct ExecuteBitwiseXor {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        [[maybe_unused]] std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -453,7 +453,7 @@ struct ExecuteBitwiseLeftShift {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        [[maybe_unused]] std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt);
 };
 
 struct ExecuteBitwiseRightShift {
@@ -475,7 +475,7 @@ struct ExecuteBitwiseRightShift {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        [[maybe_unused]] std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt);
 };
 
 struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
