@@ -352,6 +352,16 @@ class _MoeSharedExpertContext:
     ag_sender_idx_core_values: list
     bg_sender_idx_core_values: list
 
+    # Residual Mcast
+    residual_mcast_src_cb: int
+    residual_mcast_dst_cb: int
+    residual_mcast_sender_semaphore_id: int
+    residual_mcast_receiver_semaphore_id: int
+    residual_mcast_params: dict
+    residual_mcast_src_cb_descriptor: Any
+    residual_mcast_dst_cb_descriptor: Any
+    residual_mcast_dst_dummy_tensor: Any  # keep-alive for dst tensor backing the CB
+
 
 class MoeRoutedExpertOp:
     """
@@ -1249,6 +1259,8 @@ class MoeSharedExpertOp:
     def _setup_dimensions(
         device,
         shared_gate_up_weights_tensor,
+        shared_bias_tensor,
+        shared_residual_mcast_dst_tensor,
         num_tiles_k,
         tile_1x32_size,
         data_format,
@@ -1256,6 +1268,7 @@ class MoeSharedExpertOp:
         input_tile_size,
         sender_core,
         sender_core_grid,
+        mcast_grid,
         k_parallel=8,
         n_parallel=8,
     ):
@@ -1265,6 +1278,8 @@ class MoeSharedExpertOp:
         Args:
             device: TT device (single chip)
             shared_gate_up_weights_tensor: Gate/Up weights tensor for shared expert
+            shared_bias_tensor: Bias/residual tensor [1, N] on sender core
+            shared_residual_mcast_dst_tensor: Destination tensor for residual mcast (on mcast grid)
             num_tiles_k: Number of K tiles (from routed expert context)
             tile_1x32_size: Size of a 1x32 tile in bytes
             data_format: Data format (dtype)
@@ -1272,6 +1287,7 @@ class MoeSharedExpertOp:
             input_tile_size: Size of input tile in bytes
             sender_core: The mcast/gather core (e.g., CoreCoord(12, 9))
             sender_core_grid: CoreRangeSet for sender core
+            mcast_grid: CoreRangeSet for mcast destination grid (same as routed input mcast)
             k_parallel: K parallelism factor
             n_parallel: N parallelism factor
 
@@ -1289,6 +1305,8 @@ class MoeSharedExpertOp:
         shared_group2_cb = 29  # up gather dst on sender
         shared_intermed_cb = 30  # gated reduce intermediate on sender
         shared_mcast_src_cb = 31  # gated reduce output on sender
+        shared_residual_mcast_src_cb = 32  # residual mcast source on sender
+        shared_residual_mcast_dst_cb = 33  # residual mcast destination on 112 matmul cores
 
         # ==================================================================
         # Dimensions
@@ -1334,6 +1352,8 @@ class MoeSharedExpertOp:
         bg_receiver_semaphore_id = 7
         ag_noc1_receiver_semaphore_id = 8
         bg_noc1_receiver_semaphore_id = 9
+        residual_mcast_sender_semaphore_id = 10
+        residual_mcast_receiver_semaphore_id = 11
 
         # ==================================================================
         # Core grids
@@ -1436,6 +1456,34 @@ class MoeSharedExpertOp:
         )
 
         # ==================================================================
+        # Residual Mcast
+        # ==================================================================
+        bias_shard_spec = shared_bias_tensor.memory_config().shard_spec
+        bias_shard_shape = bias_shard_spec.shape
+        bias_tile = shared_bias_tensor.get_tile()
+        residual_mcast_dst_num_pages = (bias_shard_shape[0] * bias_shard_shape[1]) // (
+            bias_tile.tile_shape[0] * bias_tile.tile_shape[1]
+        )
+        residual_mcast_data_size_bytes = residual_mcast_dst_num_pages * bias_tile.get_tile_size(data_format)
+
+        residual_mcast_params = setup_mcast(
+            device=device,
+            sender_core=sender_core,
+            mcast_grid=shared_residual_mcast_dst_tensor.memory_config().shard_spec.grid,
+            src_cb=shared_residual_mcast_src_cb,
+            src_tensor=shared_bias_tensor,
+            dst_cb=shared_residual_mcast_dst_cb,
+            dst_tensor=shared_residual_mcast_dst_tensor,
+            sender_semaphore_id=residual_mcast_sender_semaphore_id,
+            receiver_semaphore_id=residual_mcast_receiver_semaphore_id,
+            data_size_bytes=residual_mcast_data_size_bytes,
+        )
+        residual_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            shared_residual_mcast_src_cb, shared_bias_tensor
+        )
+        residual_mcast_dst_cb_descriptor = residual_mcast_params["dst_cb_descriptor"]
+
+        # ==================================================================
         # Per-core values
         # ==================================================================
         # K-offset for matmul
@@ -1509,16 +1557,26 @@ class MoeSharedExpertOp:
             mcast_src_cb_descriptor=mcast_src_cb_descriptor,
             ag_sender_idx_core_values=ag_sender_idx_core_values,
             bg_sender_idx_core_values=bg_sender_idx_core_values,
+            # Residual Mcast
+            residual_mcast_src_cb=shared_residual_mcast_src_cb,
+            residual_mcast_dst_cb=shared_residual_mcast_dst_cb,
+            residual_mcast_sender_semaphore_id=residual_mcast_sender_semaphore_id,
+            residual_mcast_receiver_semaphore_id=residual_mcast_receiver_semaphore_id,
+            residual_mcast_params=residual_mcast_params,
+            residual_mcast_src_cb_descriptor=residual_mcast_src_cb_descriptor,
+            residual_mcast_dst_cb_descriptor=residual_mcast_dst_cb_descriptor,
+            residual_mcast_dst_dummy_tensor=shared_residual_mcast_dst_tensor,
         )
 
     @staticmethod
-    def _build_compile_time_args(shared_ctx, input_mcast_dst_cb):
+    def _build_compile_time_args(shared_ctx, input_mcast_dst_cb, input_mcast_params):
         """
         Build shared expert compile-time args to append to routed expert args.
 
         Args:
             shared_ctx: _MoeSharedExpertContext
             input_mcast_dst_cb: The CB index for the mcast destination (shared with routed)
+            input_mcast_params: Input mcast params (reuse NOC coords for residual mcast)
 
         Returns:
             (ncrisc_args, brisc_args, trisc_args) - lists of named compile-time arg tuples
@@ -1544,6 +1602,13 @@ class MoeSharedExpertOp:
             ("shared_bg_src_cb", ctx.gu_out_cb),
             ("shared_bg_src_num_pages", 1),
             ("shared_bg_receiver_data_addr", ctx.bg_receiver_data_addr),
+            # Residual mcast receiver
+            ("shared_residual_mcast_data_receiver_semaphore", ctx.residual_mcast_receiver_semaphore_id),
+            ("shared_residual_mcast_dst_cb", ctx.residual_mcast_dst_cb),
+            ("shared_residual_mcast_dst_num_pages", ctx.residual_mcast_params["dst_num_pages"]),
+            # Residual mcast src (needed for setup_sharded_buffer on sender)
+            ("shared_residual_mcast_src_cb", ctx.residual_mcast_src_cb),
+            ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
         ]
         brisc_args = [
             # Gate gather (A) receiver
@@ -1558,6 +1623,22 @@ class MoeSharedExpertOp:
             ("shared_bg_noc1_receiver_semaphore_id", ctx.bg_noc1_receiver_semaphore_id),
             ("shared_bg_dst_cb", ctx.group2_cb),
             ("shared_bg_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
+            # Residual mcast sender
+            ("shared_residual_mcast_dest_noc_start_x", ctx.residual_mcast_params["dest_noc_start_x"]),
+            ("shared_residual_mcast_dest_noc_start_y", ctx.residual_mcast_params["dest_noc_start_y"]),
+            ("shared_residual_mcast_dest_noc_end_x", ctx.residual_mcast_params["dest_noc_end_x"]),
+            ("shared_residual_mcast_dest_noc_end_y", ctx.residual_mcast_params["dest_noc_end_y"]),
+            ("shared_residual_mcast_num_cores", ctx.residual_mcast_params["num_cores"]),
+            (
+                "shared_residual_mcast_is_part_of_receiver_grid",
+                ctx.residual_mcast_params["is_sender_part_of_receiver_grid"],
+            ),
+            ("shared_residual_mcast_data_sender_semaphore", ctx.residual_mcast_sender_semaphore_id),
+            ("shared_residual_mcast_data_receiver_semaphore", ctx.residual_mcast_receiver_semaphore_id),
+            ("shared_residual_mcast_data_size_bytes", ctx.residual_mcast_params["data_size_bytes"]),
+            ("shared_residual_mcast_src_cb", ctx.residual_mcast_src_cb),
+            ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
+            ("shared_residual_mcast_dst_cb", ctx.residual_mcast_dst_cb),
         ]
         trisc_args = [
             # Gate/Up matmul
@@ -1586,6 +1667,8 @@ class MoeSharedExpertOp:
             shared_ctx.group2_cb_descriptor,
             shared_ctx.intermed_cb_descriptor,
             shared_ctx.mcast_src_cb_descriptor,
+            shared_ctx.residual_mcast_src_cb_descriptor,
+            shared_ctx.residual_mcast_dst_cb_descriptor,
         ]
 
     @staticmethod
@@ -1600,6 +1683,8 @@ class MoeSharedExpertOp:
         Returns:
             (unified_descs, per_core_descs) - lists to append to routed expert descriptors
         """
+        from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
+
         unified = [
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_shared_compute_core",
@@ -1622,6 +1707,12 @@ class MoeSharedExpertOp:
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_shared_gated_reduce_core",
                 core_range=sender_core_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_shared_mcast_receiver_core",
+                core_range=DownProj.build_matmul_core_grid(),
                 value=1,
                 other_value=0,
             ),
@@ -1685,6 +1776,8 @@ class MoeOp:
         mul_scalar_buf_tensor,
         # Shared expert tensors
         shared_gate_up_weights_tensor,
+        shared_bias_tensor,
+        shared_residual_mcast_dst_tensor,
         shared_k_parallel,
         shared_n_parallel,
         use_hardcoded_expert_index=False,
@@ -1739,6 +1832,8 @@ class MoeOp:
         shared_ctx = MoeSharedExpertOp._setup_dimensions(
             device=routed_ctx.device,
             shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
+            shared_bias_tensor=shared_bias_tensor,
+            shared_residual_mcast_dst_tensor=shared_residual_mcast_dst_tensor,
             num_tiles_k=routed_ctx.num_tiles_k,
             tile_1x32_size=routed_ctx.tile_1x32_size,
             data_format=routed_ctx.data_format,
@@ -1746,6 +1841,7 @@ class MoeOp:
             input_tile_size=input_tile_size,
             sender_core=routed_ctx.sender_core,
             sender_core_grid=routed_ctx.input_core_grid,
+            mcast_grid=routed_ctx.mcast_grid,
             k_parallel=shared_k_parallel,
             n_parallel=shared_n_parallel,
         )
@@ -1823,6 +1919,17 @@ class MoeOp:
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
+            # Shared expert residual mcast semaphores
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.residual_mcast_sender_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=1,  # Sender starts as VALID
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.residual_mcast_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
         ]
 
         # ==================================================================
@@ -1860,6 +1967,8 @@ class MoeOp:
             shared_gate_up_weights_tensor,
             shared_ctx.ag_dummy_tensor,
             shared_ctx.bg_dummy_tensor,
+            shared_bias_tensor,
+            shared_residual_mcast_dst_tensor,
         ]
 
         # ==================================================================
@@ -1876,7 +1985,7 @@ class MoeOp:
                 # Build compile-time args: routed + shared
                 ncrisc_args, brisc_args, trisc_args = MoeRoutedExpertOp._build_compile_time_args(routed_ctx, chip_id)
                 shared_ncrisc, shared_brisc, shared_trisc = MoeSharedExpertOp._build_compile_time_args(
-                    shared_ctx, input_mcast_dst_cb
+                    shared_ctx, input_mcast_dst_cb, routed_ctx.input_mcast_params
                 )
                 ncrisc_args += shared_ncrisc
                 brisc_args += shared_brisc

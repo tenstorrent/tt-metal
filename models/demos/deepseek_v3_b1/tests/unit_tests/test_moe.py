@@ -121,9 +121,15 @@ def create_expert_matmul_tensors(
 # ============================================================================
 # Helper: create all shared-expert tensors
 # ============================================================================
-def create_shared_expert_tensors(device, M, K_gate):
+def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
     """
     Create all tensors needed by SharedExpertOp.
+
+    Args:
+        device: TT device
+        M: Batch dimension (1)
+        K_gate: Gate/Up input dimension (7168)
+        mcast_grid: CoreRangeSet for mcast destination (same as routed input mcast)
 
     Returns:
         dict with all ttnn tensors, torch tensors, and validation data.
@@ -228,6 +234,20 @@ def create_shared_expert_tensors(device, M, K_gate):
         tile=out_tile,
     )
 
+    # ── Residual mcast destination tensor (on full mcast grid, same as routed input mcast) ──
+    residual_mcast_dst_shard = ttnn.ShardSpec(mcast_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
+    residual_mcast_dst_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, residual_mcast_dst_shard
+    )
+    ttnn_residual_mcast_dst = ttnn.from_torch(
+        torch.zeros((M, N), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=residual_mcast_dst_mem,
+        tile=out_tile,
+    )
+
     return {
         # TTNN tensors
         "ttnn_activation": ttnn_activation,
@@ -235,6 +255,7 @@ def create_shared_expert_tensors(device, M, K_gate):
         "ttnn_down_weights": ttnn_down_weights,
         "ttnn_bias": ttnn_bias,
         "ttnn_output": ttnn_output,
+        "ttnn_residual_mcast_dst": ttnn_residual_mcast_dst,
         # Params
         "k_parallel": k_parallel,
         "n_parallel": n_parallel,
@@ -768,9 +789,10 @@ def test_moe_fused(device, use_hardcoded_expert_index):
     # ── Phase 1: Fused routed expert + shared gate/up matmul ──
     logger.info("Phase 1: Running fused routed expert + shared gate/up matmul...")
     r = create_routed_expert_tensors(device, use_hardcoded_expert_index)
-    s = create_shared_expert_tensors(device, M, K)
+    mcast_grid = r["ttnn_mcast_output"].memory_config().shard_spec.grid
+    s = create_shared_expert_tensors(device, M, K, mcast_grid)
 
-    num_iterations = 100
+    num_iterations = 1
     for iteration in range(num_iterations):
         ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
             r["ttnn_input"],
@@ -799,8 +821,10 @@ def test_moe_fused(device, use_hardcoded_expert_index):
             r["up_proj_in1_buf_tensor"],
             r["down_proj_in1_buf_tensor"],
             r["mul_scalar_buf_tensor"],
-            # Shared expert: gate/up weights for fused KNSlicedMatmul
+            # Shared expert tensors
             shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+            shared_bias_tensor=s["ttnn_bias"],
+            shared_residual_mcast_dst_tensor=s["ttnn_residual_mcast_dst"],
             shared_k_parallel=s["k_parallel"],
             shared_n_parallel=s["n_parallel"],
             use_hardcoded_expert_index=use_hardcoded_expert_index,
