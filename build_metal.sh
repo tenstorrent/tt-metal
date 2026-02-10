@@ -246,6 +246,12 @@ if [[ "$build_type" == "CodeCoverage" || "$build_type" == "ASanCoverage" ]]; the
     unity_builds="OFF"
 fi
 
+# Kernel IDE indexing relies on compile_commands + fake kernel targets.
+# If the user asks for compile commands, enable fake kernels target by default.
+if [ "$export_compile_commands" = "ON" ] && [ "$enable_fake_kernels_target" = "OFF" ]; then
+    enable_fake_kernels_target="ON"
+fi
+
 # If build-dir is not specified
 # Use build_type to choose a default path
 if [ "$build_dir" = "" ]; then
