@@ -100,7 +100,15 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
         case SfpuType::fill:
             if (math_format == ckernel::to_underlying(DataFormat::Int32))
             {
-                _calculate_fill_int_<APPROX_MODE, ITERATIONS>(fill_const_value);
+                _calculate_fill_int_<APPROX_MODE, ckernel::InstrModLoadStore::INT32, ITERATIONS>(static_cast<std::uint32_t>(fill_const_value));
+            }
+            else if (math_format == ckernel::to_underlying(DataFormat::UInt16))
+            {
+                _calculate_fill_int_<APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS>(static_cast<std::uint32_t>(fill_const_value));
+            }
+            else if (math_format == ckernel::to_underlying(DataFormat::UInt32))
+            {
+                _calculate_fill_int_<APPROX_MODE, ckernel::InstrModLoadStore::INT32, ITERATIONS>(static_cast<std::uint32_t>(fill_const_value));
             }
             else
             {
