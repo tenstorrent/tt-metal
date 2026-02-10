@@ -30,7 +30,7 @@
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    _llk_pack_init_<p_pacr::PACK0>(output_id, 1 /*num_tiles_per_pack*/);
+    _llk_pack_init_<p_pacr::PACK0>(output_id);
 }
 
 /**

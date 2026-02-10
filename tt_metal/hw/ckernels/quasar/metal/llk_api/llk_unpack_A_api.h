@@ -25,8 +25,7 @@ template <bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
 inline void llk_unpack_A_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
-    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(
-        operand_id, 1 /*num_tiles_per_unpack*/);
+    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(operand_id);
 }
 
 /**
