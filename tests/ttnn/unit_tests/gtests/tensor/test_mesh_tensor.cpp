@@ -36,7 +36,7 @@ TEST(MeshTensorHostTest, ToHostAlreadyOnHost) {
     Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
     EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
 
-    EXPECT_ANY_THROW(tensor_impl::to_host(input_host_tensor));
+    EXPECT_ANY_THROW((void)input_host_tensor.cpu());
 }
 
 TEST(MeshTensorHostTest, FromHostShardsDifferentSpecs) {
@@ -192,7 +192,7 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
     EXPECT_THAT(device_storage.coords, SizeIs(mesh_device_->num_devices()));
 
     // Read the tensor back, and compare it with input data.
-    Tensor output_host_tensor = tensor_impl::to_host(device_tensor);
+    Tensor output_host_tensor = device_tensor.cpu();
     EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::HOST);
     EXPECT_EQ(output_host_tensor.tensor_spec().logical_shape(), shape);
 
@@ -353,7 +353,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             tensor_impl::copy_to_host(device_tensor, host_tensor, /*blocking=*/true);
             return host_tensor;
         }
-        return tensor_impl::to_host(device_tensor);
+        return device_tensor.cpu();
     }();
 
     EXPECT_EQ(output_host_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
