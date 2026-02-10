@@ -333,20 +333,11 @@ void kernel_main() {
         Core::is_mcast_receiver_core,
         /*pop_src=*/true>
         mcast;
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_mcast_sender_core) {
-        mcast.init(mcast_args);
-    }
-#endif
+    mcast.init(mcast_args);
     {
         DeviceZoneScopedN("MCAST1");
         mcast(mcast_args);
     }
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_mcast_sender_core) {
-        mcast.teardown();
-    }
-#endif
 
     // ========================================================================
     // Mcast2: sender (12,9) -> 129 receivers in 13x10 grid
@@ -359,20 +350,11 @@ void kernel_main() {
         Core::is_mcast_receiver_core,
         /*pop_src=*/true>
         mcast2;
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_mcast_sender_core) {
-        mcast2.init(mcast2_args);
-    }
-#endif
     {
         DeviceZoneScopedN("MCAST2");
         mcast2(mcast2_args);
     }
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_mcast_sender_core) {
-        mcast2.teardown();
-    }
-#endif
+    mcast.teardown();
 
     // ========================================================================
     // Matmul: [1, K] x [K, N_per_core] -> [1, N_per_core] on 112 cores

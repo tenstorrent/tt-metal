@@ -136,7 +136,7 @@ def create_expert_matmul_tensors(
     return weights_tensor, output_tensor, expert_weights_for_validation, expert_tensors
 
 
-@pytest.mark.parametrize("use_hardcoded_expert_index", [True, False])
+@pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
 def test_moe_routed_expert(device, use_hardcoded_expert_index):
     """Test MoE routed expert fused operation"""
 

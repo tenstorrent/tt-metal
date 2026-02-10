@@ -293,24 +293,15 @@ void kernel_main() {
     // Source: gather1_dst_cb (CB 3), Destination: mcast_dst_cb = matmul2_in0 (CB 4)
     // Note: is_mcast_receiver_core (130 cores) includes 18 inactive cores that receive but skip matmul
     // ========================================================================
-    // Gather core sends but doesn't receive (loopback=false), so exclude from receiver roles
     constexpr bool is_mcast_receiver = Core::is_mcast_receiver_core && !Core::is_gather_receiver_core;
     deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_gather_receiver_core, is_mcast_receiver, is_mcast_receiver, true>
         mcast;
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_gather_receiver_core) {
-        mcast.init(mcast_args);
-    }
-#endif
+    mcast.init(mcast_args);
     {
         DeviceZoneScopedN("MCAST");
         mcast(mcast_args);
     }
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_gather_receiver_core) {
-        mcast.teardown();
-    }
-#endif
+    mcast.teardown();
 
     // ========================================================================
     // Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)

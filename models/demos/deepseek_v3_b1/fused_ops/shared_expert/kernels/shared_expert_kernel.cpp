@@ -358,7 +358,6 @@ void kernel_main() {
         DeviceZoneScopedN("ACT_MCAST");
         act_mcast(act_mcast_args);
     }
-    act_mcast.teardown();
 
     // ========================================================================
     // Phase 2: Gate/Up Matmul on 128 compute cores
@@ -417,7 +416,6 @@ void kernel_main() {
         Core::is_mcast_receiver_core,
         /*pop_src=*/true>
         mcast;
-    mcast.init(mcast_args);
     {
         DeviceZoneScopedN("MCAST1");
         mcast(mcast_args);
@@ -445,7 +443,7 @@ void kernel_main() {
         DeviceZoneScopedN("MCAST2");
         mcast(mcast2_args);
     }
-    mcast.teardown();
+    act_mcast.teardown();
 
     // ========================================================================
     // Phase 7: Down Proj Matmul — [1, K_down] x [K_down, N_per_core] on 112 cores
