@@ -54,7 +54,7 @@ public:
         ItemType type;
         uint32_t asic_location = 0;  // Only valid if type == ASIC_LOCATION
         std::string grouping_name;   // Only valid if type == GROUPING_REF
-        uint32_t count = 0;          // Only valid if type == GROUPING_REF
+        // Note: Counts are represented by having multiple items. Use items.size() to get the count.
     };
 
     // Grouping information
@@ -70,21 +70,8 @@ public:
     // Get all groupings
     std::vector<GroupingInfo> get_all_groupings() const;
 
-    // Validation result
-    struct ValidationResult {
-        std::vector<std::string> errors;
-        std::vector<std::string> warnings;
-
-        bool is_valid() const { return errors.empty(); }
-        std::string get_report() const;
-    };
-
-    // Get validation result (already performed during construction)
-    const ValidationResult& get_validation_result() const { return validation_result_; }
-
 private:
     std::shared_ptr<const proto::PhysicalGroupings> proto_;
-    ValidationResult validation_result_;
 
     // Internal helper to convert proto grouping to GroupingInfo
     GroupingInfo convert_grouping_to_info(const proto::Grouping& grouping) const;
@@ -92,15 +79,27 @@ private:
     // Helper for reading files
     static std::string read_file_to_string(const std::filesystem::path& file_path);
 
-    // Validation methods
-    static ValidationResult validate(const proto::PhysicalGroupings& proto);
-    static void validate_required_groupings(const proto::PhysicalGroupings& proto, ValidationResult& result);
-    static void validate_grouping_references(const proto::PhysicalGroupings& proto, ValidationResult& result);
-    static void validate_counts(const proto::PhysicalGroupings& proto, ValidationResult& result);
-    static void validate_grouping_structure(const proto::PhysicalGroupings& proto, ValidationResult& result);
+    // Static validation - returns vector of error strings (similar to MeshGraphDescriptor)
+    static std::vector<std::string> static_validate(const proto::PhysicalGroupings& proto);
 
-    // Helper to get validation report
-    static std::string get_validation_report(const ValidationResult& result);
+    // Collect warnings (non-fatal recommendations)
+    static std::vector<std::string> collect_warnings(const proto::PhysicalGroupings& proto);
+
+    // Helper to get validation report from error vector
+    static std::string get_validation_report(const std::vector<std::string>& errors);
+
+    // Helper to get validation report from error and warning vectors
+    static std::string get_validation_report(
+        const std::vector<std::string>& errors, const std::vector<std::string>& warnings);
+
+    // Population method (called after validation passes)
+    void populate();
+
+    // Internal validation helpers (used by static_validate)
+    static void validate_required_groupings(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
+    static void validate_grouping_references(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
+    static void validate_counts(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
+    static void validate_grouping_structure(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
 };
 
 }  // namespace tt::tt_fabric
