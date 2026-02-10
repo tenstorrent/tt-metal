@@ -682,6 +682,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
 
     uint32_t pool_cb_usage = calculate_L1_usage(
         dtype,
+        sliding_window_config.input_hw.first,
+        sliding_window_config.input_hw.second,
         sliding_window_config.channels,
         slice_padding[0],  // pad_h (top)
         slice_padding[2],  // pad_w (left)
