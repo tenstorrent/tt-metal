@@ -312,6 +312,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
+    # Gram Matmul
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_matmul/gram_matmul.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_matmul/gram_matmul.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_matmul/device/gram_matmul_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_matmul/device/gram_matmul_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_matmul/device/gram_matmul_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_matmul/device/gram_matmul_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gram_matmul/device/gram_matmul_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
