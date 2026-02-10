@@ -558,10 +558,12 @@ jobs:
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          # basic-dev uses tool images (cmake, sfpi, openmpi, ccache), so include tool-related files in hash
+          BASIC_DEV_EXTRA_FILES="$EXTRA_FILES"
+          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
           echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
           # Manylinux image copies OpenMPI from the tool image; include install-openmpi.sh
@@ -723,6 +725,8 @@ jobs:
             UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
+            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -739,6 +743,8 @@ jobs:
             UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
+            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
           cache-to: type=inline
           pull: true
           outputs: |

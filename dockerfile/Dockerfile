@@ -119,9 +119,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG OMPI_TAG=v5.0.7
 ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
 ENV PATH=${OMPI_PREFIX}/bin:$PATH
-ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
 ENV CPATH=${OMPI_PREFIX}/include
-ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}
 
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=openmpi-layer /install/ /opt/

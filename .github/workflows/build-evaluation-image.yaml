@@ -98,8 +98,39 @@ env:
   BUILDKIT_PORT: 1234
 
 jobs:
+  # Compute tool image tags for pre-built dependencies
+  # These are the same tags computed in build-docker-artifact.yaml
+  check-tool-images:
+    runs-on: ubuntu-latest
+    outputs:
+      ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
+      sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Compute tool image tags
+        id: tags
+        run: |
+          # Extract versions from Dockerfile.tools
+          CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          # SFPI version comes from tt_metal/sfpi-version (single source of truth)
+          SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
+
+          # Compute hashes for each tool (install script content)
+          CCACHE_HASH=$(cat dockerfile/scripts/install-ccache.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 8)
+
+          # Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
+          BASE="ghcr.io/${{ github.repository }}/tt-metalium/tools"
+          echo "ccache-tag=${BASE}/ccache:${CCACHE_VERSION}-${CCACHE_HASH}" >> $GITHUB_OUTPUT
+          echo "sfpi-tag=${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" >> $GITHUB_OUTPUT
+
   build-evaluation-image:
     name: "Build and push"
+    needs: check-tool-images
     runs-on: ${{ inputs.runner-label }}
     timeout-minutes: 30
     outputs:
@@ -186,7 +217,10 @@ jobs:
           file: dockerfile/Dockerfile.evaluation
           tags: ${{ steps.docker-metadata.outputs.tags }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
-          build-args: ${{ inputs.build-args }}
+          build-args: |
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
+            ${{ inputs.build-args }}
           secrets: |
             CCACHE_REMOTE_STORAGE=redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}
           cache-from: ${{ inputs.cache-from }}
