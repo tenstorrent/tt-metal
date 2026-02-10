@@ -139,18 +139,18 @@ Proceed with analysis, or suggest different references?"
 
 ### Step 5: Enable Logging (If Requested)
 
-If the user requests breadcrumbs or logging, create the signal file **before launching any agents**:
+If the user requests breadcrumbs or logging, check that the signal file exists:
 
 ```bash
-mkdir -p .claude && echo '{"operation_path": "{operation_path}"}' > .claude/active_logging.json
+ls .claude/active_logging 2>/dev/null && echo "Logging ON" || echo "Logging OFF"
+```
+
+If logging is requested but the file doesn't exist, create it:
+```bash
+touch .claude/active_logging
 ```
 
 A `SubagentStart` hook automatically injects breadcrumb instructions into every agent's context. No need to mention logging in agent prompts. See `.claude/references/logging-mechanism.md` for details.
-
-After the pipeline completes, clean up:
-```bash
-rm -f .claude/active_logging.json
-```
 
 ### Step 6: Execute Workflow
 

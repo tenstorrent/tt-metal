@@ -2,36 +2,41 @@
 
 ## Overview
 
-Agent breadcrumb logging uses a **SubagentStart hook** to inject logging instructions into every subagent's context automatically. The orchestrator controls whether logging is enabled by creating or omitting a signal file.
+Agent breadcrumb logging uses a **SubagentStart hook** to inject logging instructions into every subagent's context automatically. Logging is controlled by the presence of a single signal file.
+
+## Quick Start
+
+```bash
+# Enable logging (persists across runs):
+touch .claude/active_logging
+
+# Disable logging:
+rm -f .claude/active_logging
+```
+
+That's it. When the file exists, every subagent gets breadcrumb instructions injected into its context. When it doesn't, logging is silent.
 
 ## How It Works
 
 ```
-Orchestrator                    SubagentStart Hook              Subagent
-─────────────                   ──────────────────              ────────
-1. Creates signal file ──────►
-2. Launches agent      ──────► 3. Hook fires
-                                4. Reads signal file
-                                5. Injects additionalContext ──► 6. Agent sees
-                                   with breadcrumb path            "BREADCRUMBS ENABLED"
-                                                                   in its context
-                                                                7. Agent writes
-                                                                   breadcrumbs
+.claude/active_logging exists?
+        │
+        ├── NO  → SubagentStart hook exits silently → agent runs without logging
+        │
+        └── YES → SubagentStart hook injects additionalContext:
+                   "BREADCRUMBS ENABLED — write to {op_path}/agent_logs/{agent}_breadcrumbs.jsonl"
+                   → agent sees this in its context and writes breadcrumbs
 ```
 
 ## Components
 
 ### Signal File
 
-**Path**: `.claude/active_logging.json`
+**Path**: `.claude/active_logging`
 
-**Format**:
-```json
-{"operation_path": "ttnn/ttnn/operations/{op_name}"}
-```
+**Format**: Empty file — just needs to exist. No JSON, no content.
 
-**Created by**: The orchestrator, before launching any agents.
-**Deleted by**: The orchestrator, after the pipeline completes.
+**Created by**: The user (manually) or the orchestrator.
 
 ### SubagentStart Hook
 
@@ -41,12 +46,9 @@ Orchestrator                    SubagentStart Hook              Subagent
 
 **Behavior**:
 1. Fires whenever any subagent starts
-2. Reads `.claude/active_logging.json` from the repo root
-3. If the file exists, outputs JSON with `additionalContext` containing:
-   - The breadcrumb file path for this specific agent
-   - Instructions to use `append_breadcrumb.sh`
-   - What events to log
-4. If the file does not exist, exits silently (logging disabled)
+2. Checks if `.claude/active_logging` exists in the repo root
+3. If it exists, outputs JSON with `additionalContext` containing breadcrumb instructions
+4. If it doesn't exist, exits silently (logging disabled)
 
 The `additionalContext` is injected directly into the agent's context by Claude Code — it is not prompt text that the agent might ignore.
 
@@ -59,46 +61,22 @@ The `additionalContext` is injected directly into the agent's context by Claude 
 .claude/scripts/logging/append_breadcrumb.sh "{operation_path}" "{agent_name}" '{"event":"...", "details":"..."}'
 ```
 
-## Orchestrator Instructions
-
-### Enabling Logging
-
-Before launching the first agent in a pipeline, create the signal file:
-
-```bash
-mkdir -p .claude && echo '{"operation_path": "ttnn/ttnn/operations/my_op"}' > .claude/active_logging.json
-```
-
-All subsequent subagents will automatically receive breadcrumb instructions.
-
-### Disabling Logging
-
-Simply do not create the signal file. Or, if it was created earlier, delete it:
-
-```bash
-rm -f .claude/active_logging.json
-```
-
-### Cleanup After Pipeline
-
-After all agents complete:
-
-```bash
-rm -f .claude/active_logging.json
-```
-
 ## What Agents Receive
 
-When logging is enabled, each agent's context includes text like:
+When logging is enabled, each agent's context includes:
 
 ```
-BREADCRUMBS ENABLED — You MUST write breadcrumbs to: ttnn/ttnn/operations/my_op/agent_logs/{agent_name}_breadcrumbs.jsonl
+BREADCRUMBS ENABLED — You MUST write breadcrumbs to {operation_path}/agent_logs/{agent_name}_breadcrumbs.jsonl
+where {operation_path} is the operation directory from your prompt.
 
 Use the append_breadcrumb.sh helper:
-  .claude/scripts/logging/append_breadcrumb.sh "ttnn/ttnn/operations/my_op" "{agent_name}" '{"event":"...", "details":"..."}'
+  .claude/scripts/logging/append_breadcrumb.sh "{operation_path}" "{agent_name}" '{"event":"...", "details":"..."}'
 
-Log after each significant action: file reads, design decisions, test runs (pass/fail/hang), debugging hypotheses, and fixes applied.
+Log after each significant action: file reads, design decisions, test runs (pass/fail/hang),
+debugging hypotheses, and fixes applied.
 ```
+
+The agent derives `{operation_path}` from its own prompt (which always contains the operation path).
 
 ## Why This Approach
 
