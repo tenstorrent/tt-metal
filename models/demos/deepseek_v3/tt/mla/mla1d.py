@@ -1306,6 +1306,7 @@ class MLA1D(AbstractModule):
     ) -> ttnn.Tensor:
         # 1,4,128,128 L1 interleaved
         # Reshape
+        mesh_shape = cfg["mesh_shape"]
         v_out = ttnn.to_memory_config(
             v_out,
             memory_config=ttnn.MemoryConfig(
@@ -1319,7 +1320,7 @@ class MLA1D(AbstractModule):
             ),
         )
         v_out = ttnn.untilize(v_out)
-        v_out = ttnn.experimental.view(v_out, (1, 1, bsz // 8, num_heads * v_head_dim))
+        v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         v_out = ttnn.all_broadcast(v_out, **cfg["wo_ag_decode"])

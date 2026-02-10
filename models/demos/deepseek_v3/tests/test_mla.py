@@ -654,7 +654,7 @@ def run_test_forward_pass_mla2d(
 
 # Base test cases - ranges will be expanded into individual test cases
 # see documentation for expand_test_cases_with_position_ids_ranges for more details
-flash_mla_start_pos = 128
+flash_mla_start_pos = 127
 BASE_TEST_CASES = [
     # mode, seq_len, batch_size_per_row, decode_position_ids
     # ("decode", 1, USERS_PER_ROW, None),
