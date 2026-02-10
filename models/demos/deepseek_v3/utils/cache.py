@@ -148,7 +148,7 @@ class TensorCache:
         name: str | Sequence[str],
         dtype: ttnn.DataType = ttnn.bfloat16,
         layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
-        preprocessor: Callable[[torch.Tensor], torch.Tensor] = lambda x: x,
+        preprocessor: Callable[[Sequence[torch.Tensor]], torch.Tensor] = lambda x: x,
         postprocessor: Callable[[ttnn.Tensor], ttnn.Tensor] = lambda x: x,
         memory_config: Optional[ttnn.MemoryConfig] = ttnn.DRAM_MEMORY_CONFIG,
         device: Optional[ttnn.Device] = None,
@@ -170,12 +170,9 @@ class TensorCache:
                     )
             # Use sorted order for deterministic cache key and consistent preprocessor input
             ordered_names = sorted(names)
-            hf_tensors = [self.state_dict[n] for n in ordered_names]
-            if len(hf_tensors) == 1:
-                preprocessed_hf_tensor = preprocessor(hf_tensors[0])
-            else:
-                preprocessed_hf_tensor = preprocessor(hf_tensors)
-            tensor = self.converter(preprocessed_hf_tensor, dtype, layout, memory_config, device)
+            source_tensors = [self.state_dict[n] for n in ordered_names]
+            preprocess_source_tensor = preprocessor(*source_tensors)
+            tensor = self.converter(preprocess_source_tensor, dtype, layout, memory_config, device)
             tensor = postprocessor(tensor)
             self.storage.set(fingerprint, tensor)
             return tensor
