@@ -291,9 +291,11 @@ def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
     return "\n".join(result)
 
 
-def _eval_ifdef_expression(directive: str, active_defines: set) -> bool:
-    """Evaluate a #if defined expression."""
-    clauses = re.findall(r"(not\s+)?defined\s+(\w+)", directive)
+def _eval_ifdef_branch(branch: str, active_defines: set) -> bool:
+    """Evaluate a single AND-branch of a #if defined expression."""
+    clauses = re.findall(r"(not\s+)?defined\s+(\w+)", branch)
+    if not clauses:
+        return True
     result = True
     for negation, name in clauses:
         is_defined = name in active_defines
@@ -302,6 +304,20 @@ def _eval_ifdef_expression(directive: str, active_defines: set) -> bool:
         else:
             result = result and is_defined
     return result
+
+
+def _eval_ifdef_expression(directive: str, active_defines: set) -> bool:
+    """Evaluate a #if defined expression with || and && support.
+
+    Splits on || first (lower precedence), then evaluates each branch
+    with AND semantics. E.g. ``#if defined FUSE_GAMMA || defined FUSE_BETA``
+    returns True if either is defined.
+    """
+    or_branches = re.split(r"\|\|", directive)
+    for branch in or_branches:
+        if _eval_ifdef_branch(branch.strip(), active_defines):
+            return True
+    return False
 
 
 def _extract_kernel_body_for_fusion(source: str) -> str:
@@ -1586,6 +1602,7 @@ class SequentialChainBuilder:
             descriptor=merged_descriptor,
             input_tensors=all_input_tensors,
             output_tensors=[output_tensor] if output_tensor else [],
+            keepalive=tuple(self._barrier_config._sem_refs),
         )
 
 
