@@ -178,7 +178,7 @@ INPUT_IDS = [
     "wan_4xGLX_analog",
 ]
 
-Q_CHUNK_SIZES = [64, 128, 256, 512]
+Q_CHUNK_SIZES = [224, 256, 288]
 K_CHUNK_SIZES = [128, 256, 512]
 
 
