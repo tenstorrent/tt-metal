@@ -19,6 +19,8 @@ namespace ttnn::prim {
 
 ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    TT_FATAL(false, "ConcatDeviceOperation: I have got here");
+
     if (tensor_args.input_tensors.empty()) {
         TT_FATAL(false, "ConcatDeviceOperation: input_tensors cannot be empty");
     }
@@ -34,19 +36,24 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool output_is_sharded = args.output_mem_config.is_sharded();
 
     if (output_is_sharded) {
-        // Sharded-to-sharded (s2s) cases
-        if (input_tensors.size() == 2) {
-            // Optimized 2-tensor case
-            TT_FATAL(
-                input_tensors[0].layout() == input_tensors[1].layout(),
-                "Expected all input tensors to have the same layout for 2-tensor sharded concat");
+        if (const auto& first_nd_shard_spec = input_tensors[0].nd_shard_spec(); first_nd_shard_spec.has_value()) {
+            std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+            TT_FATAL(!first_nd_shard_spec.has_value(), "expected string");
+            return ConcatS2IProgramFactory{};
+        } else
+            // Sharded-to-sharded (s2s) cases
+            if (input_tensors.size() == 2) {
+                // Optimized 2-tensor case
+                TT_FATAL(
+                    input_tensors[0].layout() == input_tensors[1].layout(),
+                    "Expected all input tensors to have the same layout for 2-tensor sharded concat");
 
-            if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
-                return ConcatS2SRMProgramFactory{};
-            }
-            return ConcatS2STiledProgramFactory{};
+                if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
+                    return ConcatS2SRMProgramFactory{};
+                }
+                return ConcatS2STiledProgramFactory{};
 
-        }  // Multi-tensor s2s case
+            }  // Multi-tensor s2s case
         return ConcatS2SMultiProgramFactory{};
     }
     // Sharded-to-interleaved (s2i) case
@@ -71,8 +78,10 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     shape_first[args.dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;
+    const auto& first_nd_shard_spec = first_input.nd_shard_spec();  // can be nullopt
+    const bool nd_sharded = first_nd_shard_spec.has_value();
 
-    for (int i = 0; i < input_tensors.size(); i++) {
+    for (int i = 0; i < input_tensors.size(); ++i) {
         const Tensor& in_ref = input_tensors[i];
         TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device(), "Operand to concat needs to be on device.");
@@ -93,10 +102,53 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
         if (shard_first) {
-            TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
-            TT_FATAL(
-                in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
-                "Sharded tensors must have the same grid.");
+            if (nd_sharded) {
+                TT_FATAL(in_ref.nd_shard_spec().has_value(), "ND Sharded tensors must have a shard spec.");
+                TT_FATAL(
+                    in_ref.nd_shard_spec().value().grid == first_nd_shard_spec.value().grid,
+                    "ND Sharded tensors must have the same grid.");
+                TT_FATAL(
+                    in_ref.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+                    "Block sharded inputs necessary for ND sharded tensors");
+
+                // Verify that shard shapes differ only in the concat dimension
+                const auto& first_shard_shape = first_nd_shard_spec.value().shard_shape;
+                const auto& curr_shard_shape = in_ref.nd_shard_spec().value().shard_shape;
+                TT_FATAL(
+                    first_shard_shape.rank() == curr_shard_shape.rank(),
+                    "ND Sharded tensors must have shard shapes with the same rank. "
+                    "First tensor shard rank: {}, Current tensor shard rank: {}",
+                    first_shard_shape.rank(),
+                    curr_shard_shape.rank());
+
+                // verify dimensions
+                for (uint32_t dim_idx = 0; dim_idx < first_shard_shape.rank(); ++dim_idx) {
+                    if (dim_idx == args.dim) {
+                        // Concat dimension is allowed to differ
+                        continue;
+                    }
+                    TT_FATAL(
+                        first_shard_shape[dim_idx] == curr_shard_shape[dim_idx],
+                        "ND Sharded tensors must have the same shard shape in all dimensions except the concat "
+                        "dimension (dim={}). "
+                        "Dimension {} differs: first tensor shard shape[{}]={}, current tensor shard shape[{}]={}",
+                        args.dim,
+                        dim_idx,
+                        dim_idx,
+                        first_shard_shape[dim_idx],
+                        dim_idx,
+                        curr_shard_shape[dim_idx]);
+                }  // for dim_idx
+            } else {
+                TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
+                TT_FATAL(
+                    in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
+                    "Sharded tensors must have the same grid.");
+                TT_FATAL(
+                    in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
+                    "Block sharded inputs are not supported");
+            }
+
             TT_FATAL(
                 in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
@@ -104,9 +156,6 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                 "Width sharded inputs are not supported for two tensors concat yet");
-            TT_FATAL(
-                in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
-                "Block sharded inputs are not supported");
         }
     }
     if (warn_about_alignment) {
@@ -155,6 +204,26 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         shape_out[args.dim] += curr_shape[args.dim];
     }
 
+    // When ref input has ND sharding, build output TensorSpec with derived NdShardSpec:
+    // same grid/orientation/strategy, shard_shape with concat dim = sum of input shard shapes along that dim.
+    if (const auto& ref_nd_spec = ref_in_tensor.nd_shard_spec(); ref_nd_spec.has_value()) {
+        const auto& first_spec = ref_nd_spec.value();
+        ttnn::Shape output_shard_shape = first_spec.shard_shape;
+        output_shard_shape[args.dim] = 0;
+        for (const Tensor& in_ref : tensor_args.input_tensors) {
+            const auto& in_nd = in_ref.nd_shard_spec().value();
+            output_shard_shape[args.dim] += in_nd.shard_shape[args.dim];
+        }
+        NdShardSpec output_nd_spec(
+            std::move(output_shard_shape),
+            first_spec.grid,
+            first_spec.orientation,
+            first_spec.shard_distribution_strategy);
+        const MemoryConfig output_mem_config(ref_in_tensor.memory_config().buffer_type(), std::move(output_nd_spec));
+        return TensorSpec(
+            shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), output_mem_config));
+    }
+
     return TensorSpec(
         shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
 }
@@ -162,6 +231,7 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
 Tensor ConcatDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    std::cout << "create_output_tensors: I have got here3\n";
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
 }
 

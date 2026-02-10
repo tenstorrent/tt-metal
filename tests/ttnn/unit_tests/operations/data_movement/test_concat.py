@@ -367,3 +367,137 @@ def test_concat_1d(device, layout, dim, input_shapes):
     output = ttnn.to_torch(output)
 
     assert_equal(torch_output_tensor, output)
+
+
+##################
+# DN sharded
+
+
+@pytest.mark.parametrize(
+    "num_tensors, tensor_shape, shard_shape, concat_dim, layout",
+    [
+        # 2 tensors - basic ND sharding concat
+        (2, [3, 128, 160], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat on batch dim
+        #        (2, [3, 128, 160], [3, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat on height dim
+        #        (2, [3, 128, 160], [3, 128, 32], 2, ttnn.TILE_LAYOUT),  # concat on width dim
+        #        (2, [3, 4, 5], [1, 1, 5], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on batch
+        #        (2, [3, 4, 5], [3, 1, 5], 1, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on height
+        # 3 tensors - ND sharding concat
+        #        (3, [2, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 3 tensors on batch
+        #        (3, [2, 64, 64], [2, 32, 32], 1, ttnn.TILE_LAYOUT),    # concat 3 tensors on height
+        #        (3, [2, 64, 64], [2, 64, 32], 2, ttnn.TILE_LAYOUT),    # concat 3 tensors on width
+        #        (3, [2, 4, 8], [1, 4, 8], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat 3 tensors
+        # 4 tensors - ND sharding concat
+        #        (4, [1, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 4 tensors on height
+        #        (4, [1, 64, 64], [1, 64, 32], 2, ttnn.TILE_LAYOUT),    # concat 4 tensors on width
+        #        (4, [2, 32, 32], [1, 32, 32], 0, ttnn.TILE_LAYOUT),    # concat 4 tensors on batch
+        #        (4, [2, 4, 8], [2, 4, 8], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat 4 tensors on batch
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, concat_dim, layout, dtype):
+    """
+    Test concat operation with ND sharded tensors.
+
+    This test verifies that concat works correctly with N-dimensional sharding
+    for 2, 3, and 4 input tensors across different concat dimensions.
+    """
+    torch.manual_seed(0)
+
+    # Skip incompatible configurations
+    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bfloat8_b is only valid for TILE_LAYOUT")
+
+    # Setup grid
+    grid_size = device.compute_with_storage_grid_size()
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
+    grid = ttnn.CoreRangeSet([core_range])  # TODOZ: to discuss/test partial core range set
+
+    # Create ND shard spec for input tensors
+    input_nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid)
+    input_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_shard_spec)
+
+    # Generate input tensors
+    torch_tensors = [torch.rand(tensor_shape, dtype=torch.bfloat16) for _ in range(num_tensors)]
+
+    # Expected output from PyTorch
+    torch_output = torch.concat(torch_tensors, dim=concat_dim)
+
+    # Create TTNN tensors with ND sharding
+    ttnn_tensors = [
+        ttnn.from_torch(t, dtype=dtype, device=device, layout=layout, memory_config=input_memory_config)
+        for t in torch_tensors
+    ]
+    print("\n\ntensors have been created\n\n")
+
+    # Verify tensors have ND sharding - sanity check
+    for tt_tensor in ttnn_tensors:
+        mem_config = tt_tensor.memory_config()
+        assert mem_config.is_sharded(), "Input tensor should be sharded"
+        # Check specifically for ND sharding
+        assert mem_config.nd_shard_spec is not None, "Input tensor should use ND sharding"
+        assert mem_config.shard_spec is None, "Input tensor should NOT use legacy sharding"
+        # verify the shard shape matches initial setup
+        assert mem_config.nd_shard_spec.shard_shape == ttnn.Shape(
+            shard_shape
+        ), f"Shard shape mismatch: expected {shard_shape}, got {mem_config.nd_shard_spec.shard_shape}"
+
+    # Compute output shard shape (adjust for concat dimension)
+    output_shape = list(tensor_shape)
+    output_shape[concat_dim] *= num_tensors
+    # For concat dim, the output shard shape might need adjustment based on memory layout
+    # For simplicity, keep same shard shape and let output be interleaved
+
+    # usage of ND sharded tensors supposes only L1_BLOCK_SHARDED_MEMORY_CONFIG memory config
+    output_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+
+    print("\n\nright before concat\n\n")
+    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim, memory_config=output_memory_config)
+
+    # Convert back to torch and compare
+    actual_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, actual_output, 0.999)
+
+
+# @pytest.mark.parametrize(
+#     "tensor_shapes, shard_shapes, concat_dim",
+#     [
+#         # Different sized tensors (same shard shape where applicable)
+#         ([(2, 64, 64), (3, 64, 64)], [(1, 32, 32), (1, 32, 32)], 0),  # Different batch sizes
+#         ([(2, 64, 64), (2, 96, 64)], [(2, 32, 32), (2, 32, 32)], 1),  # Different heights
+#         ([(2, 64, 64), (2, 64, 96)], [(2, 64, 32), (2, 64, 32)], 2),  # Different widths
+#     ],
+# )
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+# def test_nd_sharded_concat_different_sizes(device, tensor_shapes, shard_shapes, concat_dim, dtype):
+#     """
+#     Test concat with ND sharded tensors of different sizes along concat dimension.
+#     """
+#     torch.manual_seed(0)
+
+#     # Setup grid
+#     grid_size = device.compute_with_storage_grid_size()
+#     core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
+#     grid = ttnn.CoreRangeSet([core_range])
+
+#     # Generate input tensors with different shapes
+#     torch_tensors = [torch.rand(shape, dtype=torch.bfloat16) for shape in tensor_shapes]
+#     torch_output = torch.concat(torch_tensors, dim=concat_dim)
+
+#     # Create TTNN tensors with ND sharding
+#     ttnn_tensors = []
+#     for torch_tensor, shard_shape in zip(torch_tensors, shard_shapes):
+#         nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid)
+#         memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+#         tt_tensor = ttnn.from_torch(
+#             torch_tensor, dtype=dtype, device=device,
+#             layout=ttnn.TILE_LAYOUT, memory_config=memory_config
+#         )
+#         ttnn_tensors.append(tt_tensor)
+
+#     # Concat with interleaved output
+#     ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+#     actual_output = ttnn.to_torch(ttnn_output)
+
+#     assert_with_pcc(torch_output, actual_output, 0.999)
