@@ -2248,7 +2248,7 @@ void py_module(nb::module_& mod) {
         "fill_value",
         "The value to be filled in the output tensor",
         "This will create a tensor of same shape and dtype as input reference tensor with fill_value.",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc",
         R"doc(Host memory is not supported.)doc");
 
     // Unary ops with dim parameter
