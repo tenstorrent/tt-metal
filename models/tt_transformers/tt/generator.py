@@ -20,6 +20,7 @@ from models.common.llama_models import (
     sample_top_p,
 )
 from models.common.sampling.generator import format_sampling_params
+from models.common.sampling.sampling_params import SamplingParams
 from models.common.warmup import DecodeWarmupMixin
 from models.tt_transformers.tt.common import (
     Mode,

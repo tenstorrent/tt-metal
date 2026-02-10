@@ -12,6 +12,7 @@ from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
+from models.common.sampling.sampling_params import SamplingParams
 from models.common.warmup import DecodeWarmupMixin
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
@@ -23,7 +24,6 @@ from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import SamplingParams
 
 
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:

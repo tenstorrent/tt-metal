@@ -5,7 +5,6 @@
 import math
 import os
 import re
-from dataclasses import dataclass
 from enum import Enum
 from types import SimpleNamespace
 from typing import List, Optional, Union
@@ -52,8 +51,6 @@ InterleavedTextMedia = Union[
 class Mode(Enum):
     DECODE = "decode"
     PREFILL = "prefill"
-
-
 
 class HostEmbedding(torch.nn.Module):
     def __init__(self, model_args):
