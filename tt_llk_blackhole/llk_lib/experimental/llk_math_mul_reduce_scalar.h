@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
@@ -81,13 +83,13 @@ inline void execute_high_fidelity_gapool()
  * @param idst Destination tile index (0-7)
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(uint32_t idst = 0)
+inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(std::uint32_t idst = 0)
 {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
     {
         if (idst == 0)
         {
-            TTI_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, 0);
+            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         }
 
