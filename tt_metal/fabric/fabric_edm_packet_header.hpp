@@ -905,13 +905,12 @@ public:
     // Helper to calculate routing fields for sparse multicast
     static LowLatencyRoutingFieldsT<ExtensionWords> calculate_chip_sparse_multicast_routing_fields(
         const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) {
-        // Delegate to canonical encoder
-        // We currently only support a base packet header, not extension words.
-        static_assert(
-            is_sparse_multicast_supported<ExtensionWords>::value,
-            "Sparse multicast is currently only supported for ExtensionWords = 0");
-
+        // Sparse multicast currently only supports a base packet header, not extension words.
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(is_sparse_multicast_supported<ExtensionWords>::value);
+#endif
         uint32_t buffer;
+        // Delegate to canonical encoder
         routing_encoding::encode_1d_sparse_multicast(chip_sparse_multicast_command_header.hop_mask, buffer);
         // Unpack using helper
         return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(&buffer);
