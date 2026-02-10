@@ -2,11 +2,7 @@ name: "Validate installation step from instructions"
 
 on:
   workflow_dispatch:
-    inputs:
-      runner-label:
-        description: Runner label (e.g., N150)
-        required: false
-        default: N150
+
   schedule:
     - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
 jobs:
