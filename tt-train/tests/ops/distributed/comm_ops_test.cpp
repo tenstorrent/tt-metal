@@ -14,7 +14,6 @@
 #include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "test_utils/env_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
