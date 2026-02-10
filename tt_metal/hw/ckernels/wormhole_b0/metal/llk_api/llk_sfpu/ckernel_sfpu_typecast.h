@@ -219,6 +219,15 @@ inline void calculate_typecast_uint8_to_fp16b() {
     }
 }
 
+// UINT32 -> UINT32: Identity (no-op) used for UINT8 -> UINT32/INT32.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_uint32_to_uint32() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        dst_reg++;
+    }
+}
+
 // Init functions for UINT8 typecast operations
 // FP32 -> UINT8: Uses INT32 store format. The packer for UInt8 output
 // will take the low 8 bits from the dest register.
@@ -235,6 +244,11 @@ inline void init_typecast_uint8_to_fp32() {
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint8_to_fp16b() {
     // No specific SFPLOADMACRO pipeline needed; uses dst_reg directly.
+}
+
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_uint32_to_uint32() {
+    // Identity copy.
 }
 
 }  // namespace sfpu
