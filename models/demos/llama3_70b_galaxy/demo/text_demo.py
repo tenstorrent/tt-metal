@@ -194,6 +194,7 @@ def create_tt_model(
 
 
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded",
     [
