@@ -235,7 +235,7 @@ public:
 
     // Returns underlying HostTensor.
     // Throws if the tensor is not on host.
-    const tt::tt_metal::HostTensor& host_tensor() const&;
+    const HostTensor& host_tensor() const&;
     const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns underlying DeviceTensor.
