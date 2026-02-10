@@ -79,3 +79,17 @@ def test_fill_uint32(device, fill_value):
 
     result = ttnn.eq(output, torch_output)
     assert torch.all(ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("fill_value", [2, 43.5, 65535])
+def test_fill_uint16(device, fill_value):
+    torch_input_tensor = torch.ones((1, 2), dtype=torch.uint16)
+    golden_function = ttnn.get_golden_function(ttnn.fill)
+    torch_output_tensor = golden_function(torch_input_tensor, fill_value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.fill(input_tensor, fill_value)
+    torch_output = ttnn.from_torch(torch_output_tensor, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.eq(output, torch_output)
+    assert torch.all(ttnn.to_torch(result))

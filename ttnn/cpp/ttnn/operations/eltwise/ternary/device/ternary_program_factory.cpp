@@ -1237,7 +1237,10 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     // Add common fill defines
     kernel_defines["FILL_LLK"] = "fill_tile";
     if (predicate_tensor.dtype() == DataType::INT32) {
-        kernel_defines["FILL_LLK"] = "fill_tile_int";
+        kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
+        kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+    } else if (predicate_tensor.dtype() == DataType::UINT32) {
+        kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
         kernel_defines["FILL_WITH_VALUE_INT"] = "1";
     } else {
         kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
