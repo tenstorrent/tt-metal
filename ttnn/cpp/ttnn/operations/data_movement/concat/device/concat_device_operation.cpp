@@ -19,7 +19,7 @@ namespace ttnn::prim {
 
 ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_FATAL(false, "ConcatDeviceOperation: I have got here");
+    std::cout << "select_program_factory: I have got here\n";
 
     if (tensor_args.input_tensors.empty()) {
         TT_FATAL(false, "ConcatDeviceOperation: input_tensors cannot be empty");
@@ -68,7 +68,7 @@ void ConcatDeviceOperation::validate_on_program_cache_hit(
 void ConcatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
-
+    std::cout << "validate_on_program_cache_miss inside\n";
     const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
 
@@ -167,30 +167,43 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             args.dim);
     }
     if (shard_first) {
+        std::cout << "validate_on_program_cache_miss: I have got here 008\n";
         const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
             args.output_mem_config.memory_layout() == memory_layout,
             "Sharded output and inputs must have the same memory layout.");
         TT_FATAL(args.output_mem_config.is_sharded(), "Output must be sharded if input is sharded.");
-        TT_FATAL(
-            args.output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
-            "Sharded output and inputs must have the same grid.");
-        if (args.dim == shape_first.rank() - 1) {
+
+        if (nd_sharded) {
             TT_FATAL(
-                memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Only support width concat on height-sharded tensors.");
-        } else if (args.dim == shape_first.rank() - 2) {
+                args.output_mem_config.nd_shard_spec().value().grid == first_input.nd_shard_spec().value().grid,
+                "ND Sharded output and inputs must have the same grid.");
             TT_FATAL(
-                memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-                "Only support height concat on width-sharded tensors.");
+                memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+                "ND Sharded input must have BLOCK_SHARDED memory layout.");
         } else {
-            TT_FATAL(false, "Only width or height concat on sharded tensors");
+            TT_FATAL(
+                args.output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
+                "Sharded output and inputs must have the same grid.");
+            if (args.dim == shape_first.rank() - 1) {
+                TT_FATAL(
+                    memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+                    "Only support width concat on height-sharded tensors.");
+            } else if (args.dim == shape_first.rank() - 2) {
+                TT_FATAL(
+                    memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+                    "Only support height concat on width-sharded tensors.");
+            } else {
+                TT_FATAL(false, "Only width or height concat on sharded tensors");
+            }
         }
+
         TT_FATAL(
             args.groups == 1 || memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
             "Groups > 1 is only supported on height-sharded tensors (groups={} and memory_layout={} was provided)",
             args.groups,
             memory_layout);
+        std::cout << "validate_on_program_cache_miss: leaving\n";
     }
 }
 
@@ -203,6 +216,7 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         ttnn::Shape curr_shape = in_ref.logical_shape();
         shape_out[args.dim] += curr_shape[args.dim];
     }
+    std::cout << "compute_output_specs: shape_out=" << shape_out << "\n";
 
     // When ref input has ND sharding, build output TensorSpec with derived NdShardSpec:
     // same grid/orientation/strategy, shard_shape with concat dim = sum of input shard shapes along that dim.
@@ -214,6 +228,7 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
             const auto& in_nd = in_ref.nd_shard_spec().value();
             output_shard_shape[args.dim] += in_nd.shard_shape[args.dim];
         }
+        std::cout << "compute_output_specs: output_shard_shape=" << output_shard_shape << "\n";
         NdShardSpec output_nd_spec(
             std::move(output_shard_shape),
             first_spec.grid,
@@ -421,6 +436,7 @@ Tensor concat_impl(
     uint32_t ref_rank = input_tensors[0].padded_shape().rank();
     uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
 
+    std::cout << "concat_impl: I have got here 1\n";
     if (input_tensors[0].is_sharded()) {
         return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
     }

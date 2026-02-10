@@ -283,9 +283,12 @@ void create_and_cache_mesh_workload(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
+    std::cout << "create_and_cache_mesh_workload 01\n";
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    std::cout << "create_and_cache_mesh_workload 02\n";
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
+    std::cout << "create_and_cache_mesh_workload 03\n";
     auto program_factory_index = program_factory.index();
     auto log_msg_func = [] {
         log_warning(
@@ -364,9 +367,11 @@ void launch_operation_with_adapter(
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
 
     if (program_cache_hit) {
+        std::cout << "launch_operation_with_adapter 05\n";
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     } else {
+        std::cout << "launch_operation_with_adapter 06\n";
         create_and_cache_mesh_workload<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     }
@@ -527,7 +532,6 @@ typename device_operation_t::tensor_return_value_t launch(
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
-
     tt::tt_metal::GraphTracker::instance().track_function_start(
         detail::get_operation_name<device_operation_t>(operation_attributes), operation_attributes, input_tensors);
 
@@ -586,10 +590,12 @@ typename device_operation_t::tensor_return_value_t launch(
         }
     }
 
+    std::cout << "lavanch 08\n";
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
 
     tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+    std::cout << "lavanch 09\n";
     return tensor_return_value;
 }
 

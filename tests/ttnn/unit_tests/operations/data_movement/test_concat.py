@@ -413,7 +413,7 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
         ttnn.from_torch(t, dtype=dtype, device=device, layout=layout, memory_config=input_memory_config)
         for t in torch_tensors
     ]
-    print("\n\ntensors have been created\n\n")
+    print("\ntensors have been created\n")
 
     # Verify tensors have ND sharding - sanity check
     for tt_tensor in ttnn_tensors:
@@ -427,16 +427,24 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
             shard_shape
         ), f"Shard shape mismatch: expected {shard_shape}, got {mem_config.nd_shard_spec.shard_shape}"
 
-    # Compute output shard shape (adjust for concat dimension)
-    output_shape = list(tensor_shape)
-    output_shape[concat_dim] *= num_tensors
-    # For concat dim, the output shard shape might need adjustment based on memory layout
-    # For simplicity, keep same shard shape and let output be interleaved
+    # Compute output shard shape (adjust for concat dimension): same grid and layout as inputs,
+    # output shard shape = sum of input shard shapes along concat_dim (mirrors device op logic).
+    # TODO:Z ? should we calculate output_shard_shape in the python - or should force it in C++ code?
+    input_mem_config = ttnn_tensors[0].memory_config()
+    input_nd_spec = input_mem_config.nd_shard_spec
+    output_shard_shape = list(input_nd_spec.shard_shape)
+    output_shard_shape[concat_dim] = 0
+    for tt_t in ttnn_tensors:
+        output_shard_shape[concat_dim] += tt_t.memory_config().nd_shard_spec.shard_shape[concat_dim]
+    output_nd_shard_spec = ttnn.NdShardSpec(
+        output_shard_shape,
+        input_nd_spec.grid,
+        orientation=input_nd_spec.orientation,
+        shard_distribution_strategy=input_nd_spec.shard_distribution_strategy,
+    )
+    output_memory_config = ttnn.MemoryConfig(input_mem_config.buffer_type, output_nd_shard_spec)
 
-    # usage of ND sharded tensors supposes only L1_BLOCK_SHARDED_MEMORY_CONFIG memory config
-    output_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
-
-    print("\n\nright before concat\n\n")
+    print("\nright before concat\n")
     ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim, memory_config=output_memory_config)
 
     # Convert back to torch and compare
