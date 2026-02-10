@@ -1986,34 +1986,29 @@ uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstrea
     // Writes are fast, reads are slow
     uint32_t scratch_write_start_addr = scratch_db_top[0];
     uint32_t scratch_read_start_addr = scratch_db_top[1];
-    uint32_t remaining_length = total_length - amt_read;
+    uint32_t read_length = total_length - amt_read;
     // Add back start_offset to amt_read to ensure all bytes from scratch_db are transferred
     amt_read += start_offset;
 
-    constexpr uint32_t max_batch_size = ~(scratch_db_half_size - 1);
-    while (remaining_length != 0) {
-        uint32_t read_length = (remaining_length > max_batch_size) ? max_batch_size : remaining_length;
-        remaining_length -= read_length;
-        while (read_length != 0) {
-            // This ensures that writes from prior iteration are done
-            noc_async_writes_flushed();
+    while (read_length != 0) {
+        // This ensures that writes from prior iteration are done
+        noc_async_writes_flushed();
 
-            scratch_read_addr = scratch_read_start_addr;
-            uint32_t scratch_write_addr = scratch_write_start_addr;
-            std::swap(scratch_read_start_addr, scratch_write_start_addr);
+        scratch_read_addr = scratch_read_start_addr;
+        uint32_t scratch_write_addr = scratch_write_start_addr;
+        std::swap(scratch_read_start_addr, scratch_write_start_addr);
 
-            uint32_t amt_to_write = amt_read;
-            amt_to_read_to_scratch_db = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
-            amt_read = amt_to_read_to_scratch_db;
-            fill_scratch_db();
+        uint32_t amt_to_write = amt_read;
+        amt_to_read_to_scratch_db = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+        amt_read = amt_to_read_to_scratch_db;
+        fill_scratch_db();
 
-            // Third step - write from DB. amt_to_write is greater than a page, so we don't need to test for nonzero.
-            relay_linear_to_downstream<false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-            read_length -= amt_read;
+        // Third step - write from DB. amt_to_write is greater than a page, so we don't need to test for nonzero.
+        relay_linear_to_downstream<false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+        read_length -= amt_read;
 
-            // TODO(pgk); we can do better on WH w/ tagging
-            noc_async_read_barrier();
-        }
+        // TODO(pgk); we can do better on WH w/ tagging
+        noc_async_read_barrier();
     }
 
     // Third step - write from DB
