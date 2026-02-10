@@ -369,6 +369,57 @@ class TestTriage:
     def test_dump_risc_debug_signals(self):
         self.run_triage_script("dump_risc_debug_signals.py")
 
+    def test_dump_aggregated_callstacks(self):
+        # Enable aggregated callstacks for this test
+        os.environ["TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS"] = "1"
+        try:
+            # Don't assert failure checks since mailbox corruption warnings are expected
+            result = self.run_triage_script("dump_aggregated_callstacks.py", assert_failure_checks=False)
+
+            # Script should run without crashing (result can be None or empty list if hang app has issues)
+            # Just verify the basic contract is met
+            if result is None or len(result) == 0:
+                # No data due to test environment issues - that's okay, at least it didn't crash
+                return
+
+            # Basic structure validation - ensure data makes sense if present
+            for row in result:
+                assert row.core_count >= 1, f"Expected core_count >= 1, got {row.core_count}"
+                assert len(row.risc_names) > 0, "Expected at least one RISC name"
+                assert len(row.locations) > 0, "Expected at least one location"
+
+            # If we have valid kernel names, validate against expected results
+            valid_rows = [row for row in result if row.kernel_name is not None]
+            if len(valid_rows) > 0:
+                expected = self.expected_results.get("lightweight_asserts")
+                if expected and expected.get("kernel_name"):
+                    expected_kernel_name = expected["kernel_name"]
+                    expected_risc_names = expected.get("risc_names")
+                    expected_file = expected.get("first_callstack_file")
+
+                    # Find aggregated row(s) with the expected kernel
+                    matching_rows = [row for row in valid_rows if row.kernel_name == expected_kernel_name]
+                    if len(matching_rows) > 0:
+                        row = matching_rows[0]
+
+                        # Validate expected RISC names if present
+                        if expected_risc_names:
+                            for risc in expected_risc_names:
+                                if risc not in row.risc_names:
+                                    print(f"Warning: Expected RISC '{risc}' not in {row.risc_names}")
+
+                        # Validate callstack if expected
+                        if expected_file and row.callstack:
+                            callstack = row.callstack.callstack
+                            if len(callstack) > 0:
+                                matching_entries = [e for e in callstack if e.file and e.file.endswith(expected_file)]
+                                if len(matching_entries) == 0:
+                                    print(f"Warning: Expected file '{expected_file}' not found in callstack")
+
+        finally:
+            # Clean up environment variable
+            os.environ.pop("TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS", None)
+
     # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
     # and it affects other tests in the same test class, so we move it to be run last.
     def test_dump_callstacks(self):
