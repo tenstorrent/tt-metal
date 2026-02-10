@@ -19,7 +19,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
-DEFAULT_LD_LIBRARY_PATH = os.getenv("TT_RUN_DEFAULT_LD_LIBRARY_PATH", "{home}/build/lib")
+DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
@@ -58,15 +58,19 @@ class TTRunConfig(BaseModel):
         return bindings
 
     @field_validator("mesh_graph_desc_path")
-    def validate_mesh_graph_exists(cls, path: str) -> str:
+    def validate_mesh_graph_exists(cls, path: str, info) -> str:
         """Ensure mesh graph descriptor file exists"""
+        # Check if validation should be skipped
+        if hasattr(info, 'context') and info.context and info.context.get('skip_mgd_check', False):
+            return path
+
         mesh_path = Path(path).expanduser().resolve()
         if not mesh_path.is_file():
             raise ValueError(f"Mesh graph descriptor not found: {mesh_path}")
         return str(mesh_path)
 
 
-def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
+def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None, skip_mgd_check: bool = False) -> TTRunConfig:
     """Parse YAML configuration file with schema validation."""
     if not yaml_path.exists():
         raise ValueError(f"Configuration file not found: {yaml_path}")
@@ -75,7 +79,8 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
         data = yaml.safe_load(f)
 
     try:
-        config = TTRunConfig(**data)
+        # Pass skip_mgd_check through validation context
+        config = TTRunConfig.model_validate(data, context={'skip_mgd_check': skip_mgd_check})
     except ValidationError as e:
         raise ValueError(f"Invalid configuration: {e}")
 
@@ -92,7 +97,6 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
         config.mock_cluster_rank_binding = mock_data["rank_to_cluster_mock_cluster_desc"]
 
     return config
-
 
 def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
@@ -276,6 +280,9 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 @click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
 )
+@click.option(
+    "--skip-mgd-check", is_flag=True, help="Skip the check if MGD executable exists on the local host"
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -286,6 +293,7 @@ def main(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     skip_executable_check: bool,
+    skip_mgd_check: bool
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -403,7 +411,7 @@ def main(
     """
     program = ctx.args
     try:
-        config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
+        config = parse_binding_config(rank_binding, mock_cluster_rank_binding, skip_mgd_check)
     except (ValueError, ValidationError) as e:
         raise click.ClickException(f"Configuration error: {e}")
 
@@ -447,3 +455,4 @@ def main(
 
 if __name__ == "__main__":
     main()
+
