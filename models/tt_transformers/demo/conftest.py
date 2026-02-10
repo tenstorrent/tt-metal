@@ -80,3 +80,9 @@ def pytest_addoption(parser):
         type=bool,
         help="Whether to use DRAM prefetcher for prefetching weights into L1 during decode (only available on BH)",
     )
+    parser.addoption(
+        "--use_hf_rope",
+        action="store_true",
+        default=False,
+        help="Whether to use HF-style rope, if not passed, the default mllama will be used",
+    )
