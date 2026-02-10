@@ -589,9 +589,8 @@ void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
 }
 
-void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_kernel_include(
-        BuildEnvManager::get_instance().get_build_env(device->build_id()), *this, this->kernel_src_);
+void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& build_options) const {
+    jit_build_genfiles_kernel_include(build_options, *this, this->kernel_src_);
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -602,9 +601,8 @@ void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*b
         this);
 }
 
-void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_kernel_include(
-        BuildEnvManager::get_instance().get_build_env(device->build_id()), *this, this->kernel_src_);
+void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& build_options) const {
+    jit_build_genfiles_kernel_include(build_options, *this, this->kernel_src_);
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -615,9 +613,8 @@ void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build
         this);
 }
 
-void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_triscs_src(
-        BuildEnvManager::get_instance().get_build_env(device->build_id()), *this, this->kernel_src_);
+void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& build_options) const {
+    jit_build_genfiles_triscs_src(build_options, *this, this->kernel_src_);
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
@@ -794,9 +791,8 @@ uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
     return enchantum::to_underlying(this->dm_cores_[index]);
 }
 
-void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions&) const {
-    jit_build_genfiles_kernel_include(
-        BuildEnvManager::get_instance().get_build_env(device->build_id()), *this, this->kernel_src_);
+void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& build_options) const {
+    jit_build_genfiles_kernel_include(build_options, *this, this->kernel_src_);
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);

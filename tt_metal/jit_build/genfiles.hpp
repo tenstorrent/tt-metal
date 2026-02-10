@@ -14,15 +14,14 @@ struct KernelSource;
 
 namespace tt::tt_metal {
 
-class JitBuildEnv;
 class JitBuildOptions;
 class JitBuildSettings;
 
 void jit_build_genfiles_kernel_include(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);
+    const JitBuildOptions& options, const JitBuildSettings& settings, const KernelSource& kernel_src);
 void jit_build_genfiles_triscs_src(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);
+    const JitBuildOptions& options, const JitBuildSettings& settings, const KernelSource& kernel_src);
 
-void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options);
+void jit_build_genfiles_descriptors(JitBuildOptions& options);
 
 }  // namespace tt::tt_metal

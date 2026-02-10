@@ -148,8 +148,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     // const std::string tracyPrefix = "GenerateBinaries_";
     // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
     try {
-        jit_build_genfiles_descriptors(
-            BuildEnvManager::get_instance().get_build_env(device->build_id()), build_options);
+        jit_build_genfiles_descriptors(build_options);
         kernel->generate_binaries(device, build_options);
     } catch (std::runtime_error& ex) {
         TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());

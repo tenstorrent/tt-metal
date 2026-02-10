@@ -153,11 +153,11 @@ void write_file(const string& path, const string& content) {
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
+    const JitBuildOptions& options, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
-    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
+    string out_dir = options.build_env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     string kernel_header = out_dir + "kernel_includes.hpp";
 
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
@@ -165,11 +165,11 @@ void jit_build_genfiles_kernel_include(
 }
 
 void jit_build_genfiles_triscs_src(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
+    const JitBuildOptions& options, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
-    const string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
+    const string out_dir = options.build_env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
     const string math_cpp = out_dir + "chlkc_math.cpp";
     const string pack_cpp = out_dir + "chlkc_pack.cpp";
@@ -540,10 +540,11 @@ void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
 }  // namespace
 
 // clang-format off
-void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options) {
+void jit_build_genfiles_descriptors(JitBuildOptions& options) {
     //ZoneScoped;
     //const std::string tracyPrefix = "generate_descriptors_";
     //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
+    const JitBuildEnv& env = options.build_env;
     fs::create_directories(options.path);
     try {
         std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch(), env.get_max_cbs()); } );
