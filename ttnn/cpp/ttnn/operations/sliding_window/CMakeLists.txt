@@ -18,7 +18,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES sliding_window.hpp op_slicing/op_slicing.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -47,4 +47,4 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/sliding_window
         COMPONENT ttnn-runtime
 )
-install(TARGETS ttnn_op_sliding_window LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_sliding_window FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

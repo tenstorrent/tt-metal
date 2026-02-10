@@ -19,6 +19,11 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+            conv2d/conv2d.hpp
+            conv2d/device/conv2d_device_operation_types.hpp
+            conv2d/device/conv2d_device_operation.hpp
+            conv2d/device/conv2d_op_sharded_program_factory.hpp
+            conv2d/device/conv2d_op_width_sharded_program_factory.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -52,4 +57,4 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/conv
         COMPONENT ttnn-runtime
 )
-install(TARGETS ttnn_op_conv LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_conv FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
