@@ -1581,12 +1581,16 @@ class SequentialChainBuilder:
                     all_semaphores.append(sem)
                     seen_sem_ids.add(sem.id)
 
-        # Collect input/output tensors
+        # Collect input/output tensors (use id() for dedup because ttnn Tensor's
+        # __eq__ returns an element-wise Tensor, making `in` unreliable)
         all_input_tensors = []
+        seen_tensor_ids: Set[int] = set()
         for phase in self.phases:
             for tensor in phase.op_descriptor.input_tensors:
-                if tensor not in all_input_tensors:
+                tid = id(tensor)
+                if tid not in seen_tensor_ids:
                     all_input_tensors.append(tensor)
+                    seen_tensor_ids.add(tid)
 
         output_tensor = None
         if self.phases[-1].op_descriptor.output_tensors:
