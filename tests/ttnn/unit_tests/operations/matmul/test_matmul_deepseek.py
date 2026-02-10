@@ -756,3 +756,375 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
         )
 
     assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        # qkv_a: K=896, N=2112
+        {
+            "batch": 1,
+            "k": 896,
+            "n": 2112,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+        # wq_b: K=1536, N=3072
+        {
+            "batch": 1,
+            "k": 1536,
+            "n": 3072,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+        # wo: K=16384, N=896
+        {
+            "batch": 1,
+            "k": 16384,
+            "n": 896,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+        # wkv_b1: batch=16, K=128, N=512
+        {
+            "batch": 16,
+            "k": 128,
+            "n": 512,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.9997,
+        },
+        # wkv_b2: batch=128, K=512, N=128
+        {
+            "batch": 128,
+            "k": 512,
+            "n": 128,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.9997,
+        },
+    ],
+    ids=["qkv_a", "wq_b", "wo", "wkv_b1", "wkv_b2"],
+)
+@pytest.mark.parametrize("seq_len", [128, 1024, 4096, 8192])  # 32768, 131072])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
+def test_matmul_seq_len_sweep_dram_interleaved(device, test_case, seq_len):
+    """
+    Test matmul with both in0 and in1 as DRAM interleaved.
+    Sweeps seq_len (M dimension) for deepseek matmul shapes.
+    No program config provided - auto-decide.
+
+    Unbatched: [1, 1, seq_len, K] x [1, 1, K, N]
+    Batched:   [1, B, seq_len, K] x [1, B, K, N]
+    """
+    torch.manual_seed(0)
+
+    batch = test_case["batch"]
+    k = test_case["k"]
+    n = test_case["n"]
+    in1_dtype = test_case["in1_dtype"]
+    expected_pcc = test_case["expected_pcc"]
+
+    # Create torch tensors
+    in0_shape = [1, batch, seq_len, k]
+    in1_shape = [1, batch, k, n]
+
+    in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
+    in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
+
+    # Both inputs: DRAM interleaved
+    in0_t = ttnn.from_torch(
+        in0,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    in1_t = ttnn.from_torch(
+        in1,
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Run matmul with no program config (auto-decide)
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        dtype=ttnn.bfloat16,
+    )
+
+    # Validate
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = torch.matmul(in0, in1)
+
+    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
+    logger.info(pcc_message)
+    assert pcc_passed, f"PCC check failed: {pcc_message}"
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        # Unbatched matmuls - in0 DRAM interleaved, in1 DRAM WIDTH sharded across 12 banks
+        # Uses MatmulMultiCoreReuseMultiCastProgramConfig (2D multicast)
+        # qkv_a: K=896, N=2112
+        {
+            "batch": 1,
+            "k": 896,
+            "n": 2112,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+        # wq_b: K=1536, N=3072
+        {
+            "batch": 1,
+            "k": 1536,
+            "n": 3072,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+        # wo: K=16384, N=896
+        {
+            "batch": 1,
+            "k": 16384,
+            "n": 896,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.999,
+        },
+        # Batched matmuls - in0 DRAM interleaved, in1 DRAM WIDTH sharded
+        # wkv_b1 (12 banks): batch=16, pad to 24
+        {
+            "batch": 16,
+            "k": 128,
+            "n": 512,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.9997,
+            "num_dram_banks": 12,
+        },
+        # wkv_b1 (8 banks): batch=16, 2 per bank, no padding
+        {
+            "batch": 16,
+            "k": 128,
+            "n": 512,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.9997,
+            "num_dram_banks": 8,
+        },
+        # wkv_b2 (12 banks): batch=128, pad to 132
+        {
+            "batch": 128,
+            "k": 512,
+            "n": 128,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.9997,
+            "num_dram_banks": 12,
+        },
+        # wkv_b2 (8 banks): batch=128, no padding
+        {
+            "batch": 128,
+            "k": 512,
+            "n": 128,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.9997,
+            "num_dram_banks": 8,
+        },
+    ],
+    ids=[
+        "qkv_a",
+        "wq_b",
+        "wo",
+        "wkv_b1_12banks",
+        "wkv_b1_8banks",
+        "wkv_b2_12banks",
+        "wkv_b2_8banks",
+    ],
+)
+@pytest.mark.parametrize("seq_len", [128])  # 1024, 4096, 8192])# 32768, 131072])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
+def test_matmul_seq_len_sweep_dram_sharded(device, test_case, seq_len):
+    """
+    Test matmul with in0 DRAM interleaved and in1 DRAM sharded.
+    Sweeps seq_len (M dimension) for deepseek matmul shapes.
+    Uses MatmulMultiCoreReuseMultiCastProgramConfig (2D multicast).
+
+    in0 is always DRAM interleaved BF16.
+
+    Unbatched (batch=1):
+        in1: DRAM WIDTH sharded (matching test_matmul_l1_dram_sharded)
+        fuse_batch=True
+    Batched (batch>1):
+        in1: DRAM HEIGHT sharded by batch (matching test_matmul_batched_dram_sharded)
+        fuse_batch=False
+    """
+    torch.manual_seed(0)
+
+    batch = test_case["batch"]
+    k = test_case["k"]
+    n = test_case["n"]
+    in1_dtype = test_case["in1_dtype"]
+    expected_pcc = test_case["expected_pcc"]
+    tile_w = 32
+    tile_h = 32
+    num_dram_banks = test_case.get("num_dram_banks", 12)
+
+    if batch == 1:
+        # --- Unbatched: in1 DRAM WIDTH sharded ---
+        n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_dram_banks)
+
+        in0_shape = [1, 1, seq_len, k]
+        in1_shape = [1, 1, k, n]
+
+        in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
+        in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
+
+        in0_t = ttnn.from_torch(
+            in0,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        in1_shard_shape = [k, n_padded // num_dram_banks]
+        in1_shard_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+        )
+        in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        in1_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec
+        )
+        in1_t = ttnn.from_torch(
+            in1,
+            dtype=in1_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in1_memory_config,
+        )
+    else:
+        # --- Batched: in1 DRAM HEIGHT sharded by batch (matching test_matmul_batched_dram_sharded) ---
+        batch_padded = pad_batch_to_dram_banks(batch, num_dram_banks)
+        batches_per_bank = batch_padded // num_dram_banks
+        k_padded = pad_to_tile(k, tile_w)
+        n_padded = pad_to_tile(n, tile_w)
+
+        in0_orig = torch.randn([1, batch, seq_len, k], dtype=torch.bfloat16)
+        in1_orig = torch.randn([1, batch, k, n], dtype=torch.bfloat16)
+
+        in0 = torch.zeros([1, batch_padded, seq_len, k_padded], dtype=torch.bfloat16)
+        in0[:, :batch, :seq_len, :k] = in0_orig
+        in1 = torch.zeros([1, batch_padded, k_padded, n_padded], dtype=torch.bfloat16)
+        in1[:, :batch, :k, :n] = in1_orig
+
+        in0_t = ttnn.from_torch(
+            in0,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        dram_shard_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+        )
+        in1_shard_shape = [batches_per_bank * k_padded, n_padded]
+        in1_shard_spec = ttnn.ShardSpec(dram_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        in1_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec
+        )
+        in1_t = ttnn.from_torch(
+            in1,
+            dtype=in1_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in1_memory_config,
+        )
+
+    # Compute 2D grid size (following test_matmul_2d_in1_dram_sharded)
+    M_tiles = seq_len // tile_h
+    K_tiles = k // tile_w
+    N_tiles = n // tile_w
+
+    grid_x = 1
+    for x in range(min(8, K_tiles, N_tiles), 0, -1):
+        if K_tiles % x == 0 and N_tiles % x == 0:
+            grid_x = x
+            break
+
+    grid_y = 1
+    for y in range(min(8, M_tiles), 0, -1):
+        if M_tiles % y == 0:
+            grid_y = y
+            break
+
+    grid_size = (grid_x, grid_y)
+
+    in0_block_h = M_tiles // grid_y
+    in0_block_w = K_tiles // grid_x
+    out_block_h = in0_block_h
+    out_block_w = N_tiles // grid_x
+
+    if in0_block_h * in0_block_w >= 48 or in0_block_w * out_block_w >= 48:
+        in0_block_w = in0_block_w // 2
+    in0_block_w = max(in0_block_w // 4, 1)
+
+    # Subblock calculation (h * w <= 4, hardware limit)
+    out_subblock_w = 1
+    for sw in range(min(out_block_w, 4), 0, -1):
+        if out_block_w % sw == 0:
+            out_subblock_w = sw
+            break
+    max_sh = 4 // out_subblock_w
+    out_subblock_h = 1
+    for sh in range(min(out_block_h, max_sh), 0, -1):
+        if out_block_h % sh == 0:
+            out_subblock_h = sh
+            break
+
+    logger.info(
+        f"batch={batch}, seq_len={seq_len}, K={k}, N={n}, "
+        f"grid_size={grid_size}, in0_block_w={in0_block_w}, "
+        f"per_core_M={out_block_h}, per_core_N={out_block_w}, "
+        f"out_subblock_h={out_subblock_h}, out_subblock_w={out_subblock_w}"
+    )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=(batch == 1),
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        program_config=program_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    # Validate
+    output_tensor = ttnn.to_torch(output_t)
+    if batch == 1:
+        pt_out = torch.matmul(in0, in1)
+    else:
+        output_tensor = output_tensor[:, :batch, :seq_len, :n]
+        pt_out = torch.matmul(in0_orig, in1_orig)
+
+    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
+    logger.info(pcc_message)
+    assert pcc_passed, f"PCC check failed: {pcc_message}"
