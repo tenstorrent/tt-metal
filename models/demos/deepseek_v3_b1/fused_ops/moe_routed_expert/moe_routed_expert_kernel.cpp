@@ -581,19 +581,15 @@ void kernel_main() {
 
     // ========================================================================
     // 5b. Mcast Expert Scale: Broadcast expert scale from sender core to compute cores
-    //     Uses UpdateSemaphoreAddr=true to update semaphore address on the fly
-    //     (avoids race condition with back-to-back mcasts without needing reinit)
     // ========================================================================
     {
         DeviceZoneScopedN("MCAST_EXPERT_SCALE");
-        // Use separate Op with UpdateSemaphoreAddr=true to update semaphore address
         deepseek_b1_ops::Mcast::Op<
             McastCTArgs,
             Core::is_sender_core,
             Core::is_mcast_grid_core,
             Core::is_gate_proj_core,  // Only gate_proj cores receive expert scale
-            true,                     // pop_src
-            true>                     // UpdateSemaphoreAddr = true
+            true>                     // pop_src
             expert_scale_mcast;
         expert_scale_mcast(expert_scale_mcast_args);
     }
@@ -644,8 +640,6 @@ void kernel_main() {
     // ========================================================================
     // 10. down_proj_mcast: Broadcast gathered fused output to compute cores
     //     Same mcast grid as input mcast
-    //     Uses UpdateSemaphoreAddr=true to restore semaphore addresses back to 0, 1
-    //     (after expert_scale_mcast changed them to 4, 5)
     // ========================================================================
     {
         DeviceZoneScopedN("DOWN_PROJ_MCAST");
@@ -654,8 +648,7 @@ void kernel_main() {
             Core::is_sender_core,
             Core::is_mcast_grid_core,
             Core::is_gate_proj_core,  // Same receivers as input mcast for down_proj
-            true,                     // pop_src
-            true>                     // UpdateSemaphoreAddr = true
+            true>                     // pop_src
             down_proj_mcast;
         down_proj_mcast(down_proj_mcast_args);
     }

@@ -124,12 +124,6 @@ struct GatherHeads {
                 unified_kernels::setup_sharded_buffer(src_cb, args.src_num_pages);
             }
 
-            // Wait for source CB data to be ready
-            cb_wait_front(src_cb, args.src_num_pages);
-
-            // Get source address from CB
-            uint32_t src_addr = get_read_ptr(src_cb);
-
             // Get target NOC coordinates based on row (unpacked from uint32)
             uint32_t packed_coords = args.target_noc_coords[my_row];
             uint32_t target_noc_x = packed_coords & 0xFFFF;          // Lower 16 bits
@@ -139,6 +133,12 @@ struct GatherHeads {
             uint32_t receiver_semaphore_addr = get_semaphore(args.receiver_semaphore_id);
             const uint64_t dst_noc_coord = get_noc_addr(target_noc_x, target_noc_y, 0);
             uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)receiver_semaphore_addr;
+
+            // Wait for source CB data to be ready
+            cb_wait_front(src_cb, args.src_num_pages);
+
+            // Get source address from CB
+            uint32_t src_addr = get_read_ptr(src_cb);
 
             if (is_qnope_core) {
                 // Qnope core: sends 512 elements to offset = col * head_stride
@@ -152,30 +152,35 @@ struct GatherHeads {
                 uint64_t dst_data_noc_addr0 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset0);
                 uint32_t dst_offset1 = args.qnope_data_size_bytes + (2 * qrope_col + 1) * args.head_stride_bytes;
                 uint64_t dst_data_noc_addr1 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset1);
-                noc_async_write(src_addr, dst_data_noc_addr0, args.qrope_head_size_bytes);
-                noc_async_write(src_addr + args.qrope_head_size_bytes, dst_data_noc_addr1, args.qrope_head_size_bytes);
+                // We should use one packet APIs here if we assert/know ahead of time the txn size
+                // Or if txn size is a compile time arg to pass it here to automatically select to use one packet
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
+                    src_addr, dst_data_noc_addr0, args.qrope_head_size_bytes);
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
+                    src_addr + args.qrope_head_size_bytes, dst_data_noc_addr1, args.qrope_head_size_bytes);
             }
 
             noc_semaphore_inc(dst_semaphore_noc_addr, 1);
 
-            // TODO #36982: Review if we can switch this to a noc_async_writes_flushed()
-            noc_async_write_barrier();
+            noc_async_posted_writes_flushed();
 
             // Pop source CB after sending
             if constexpr (pop_src) {
                 cb_pop_front(src_cb, args.src_num_pages);
             }
+            // This also guarantees the previous posted writes have landed since we're on the same VC
+            noc_async_atomic_barrier();
         }
 
         FORCE_INLINE void receiver_impl(const ReceiverArgs& args) {
+            // Wait for all senders
+            uint32_t semaphore_addr = get_semaphore(args.receiver_semaphore_id);
+            volatile tt_l1_ptr uint32_t* semaphore_ptr = (volatile tt_l1_ptr uint32_t*)semaphore_addr;
+
             // Reserve space in output CB if using CB output
             if constexpr (use_cb_output) {
                 cb_reserve_back(args.out_cb, args.dst_num_pages);
             }
-
-            // Wait for all senders
-            uint32_t semaphore_addr = get_semaphore(args.receiver_semaphore_id);
-            volatile tt_l1_ptr uint32_t* semaphore_ptr = (volatile tt_l1_ptr uint32_t*)semaphore_addr;
 
             if (args.num_senders > 0) {
                 noc_semaphore_wait(semaphore_ptr, args.num_senders);
