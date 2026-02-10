@@ -435,20 +435,20 @@ void kernel_main() {
                                 DPRINT << "tiles_read" << ENDL();
                             }
 
-                            // Signal reader after all tiles for this chunk_piece_idx are written
-                            if (i < (ring_size - 1)) {
-                                uint64_t out_ready_sem_noc_addr_in_pkt =
-                                    safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                                    &mux_connection_handle,
-                                    pkt_hdr_seminc,
-                                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
-                                noc_async_writes_flushed();
-                            } else {
-                                // probably not needed
-                                noc_async_write_barrier();
-                            }
                             DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " done" << ENDL();
+                        }
+
+                        // Signal reader after all chunk_piece_idx tiles for this ring iteration are written
+                        if (i < (ring_size - 1)) {
+                            uint64_t out_ready_sem_noc_addr_in_pkt =
+                                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+                            fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                                &mux_connection_handle,
+                                pkt_hdr_seminc,
+                                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                            noc_async_writes_flushed();
+                        } else {
+                            noc_async_write_barrier();
                         }
 
                         if (direction) {
