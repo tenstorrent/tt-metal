@@ -379,6 +379,10 @@ inline void configure_unpack_AB(
 template <std::uint32_t UNP_SEL = p_setadc::UNP_AB>
 inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
 {
+    static_assert(UNP_SEL == p_setadc::UNP_A || UNP_SEL == p_setadc::UNP_B || UNP_SEL == p_setadc::UNP_AB, "UNP_SEL must be UNP_A, UNP_B, or UNP_AB");
+    LLK_ASSERT(
+        face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == FACE_R_DIM, "face_r_dim must be 1, 2, 4, 8, or FACE_R_DIM");
+
     switch (face_r_dim)
     {
         case 1:
