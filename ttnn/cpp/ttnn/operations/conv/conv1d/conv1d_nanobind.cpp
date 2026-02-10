@@ -59,32 +59,29 @@ void bind_conv1d(nb::module_& mod) {
             - tuple[ttnn.Tensor, int, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, its length, and its weights and biases, if return_output_dim = True and return_weights_and_bias = True
         )doc";
 
-    ttnn::bind_function(
+    ttnn::bind_function<"conv1d">(
         mod,
-        "conv1d",
-        "ttnn.conv1d",
         doc,
-        ttnn::overload_t(
-            &ttnn::conv1d,
-            nb::kw_only(),
-            nb::arg("input_tensor"),
-            nb::arg("weight_tensor"),
-            nb::arg("device"),
-            nb::arg("in_channels"),
-            nb::arg("out_channels"),
-            nb::arg("batch_size"),
-            nb::arg("input_length"),
-            nb::arg("kernel_size"),
-            nb::arg("stride") = 1,
-            nb::arg("padding") = 0,
-            nb::arg("dilation") = 1,
-            nb::arg("groups") = 1,
-            nb::arg("dtype") = nb::none(),
-            nb::arg("bias_tensor") = nb::none(),
-            nb::arg("conv_config") = nb::none(),
-            nb::arg("compute_config") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("return_output_dim") = false,
-            nb::arg("return_weights_and_bias") = false));
+        &ttnn::conv1d,
+        nb::kw_only(),
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::arg("device"),
+        nb::arg("in_channels"),
+        nb::arg("out_channels"),
+        nb::arg("batch_size"),
+        nb::arg("input_length"),
+        nb::arg("kernel_size"),
+        nb::arg("stride") = 1,
+        nb::arg("padding") = 0,
+        nb::arg("dilation") = 1,
+        nb::arg("groups") = 1,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("bias_tensor") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("return_output_dim") = false,
+        nb::arg("return_weights_and_bias") = false);
 }
 }  // namespace ttnn::operations::conv::conv1d
