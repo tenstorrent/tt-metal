@@ -127,7 +127,7 @@ def test_model_inference(
         dtype=dtype,
         num_layers=num_layers,
         use_prefetcher=use_prefetcher,
-        use_hf_rope=True,
+        use_hf_rope=False,
     )
 
     if (

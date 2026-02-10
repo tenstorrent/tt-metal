@@ -123,7 +123,7 @@ def test_model_inference(
         max_batch_size=batch_size,
         cache_hf=True,
         prefetcher=prefetcher,
-        use_hf_rope=True,
+        use_hf_rope=False,
     )
 
     # Define minimum PCC for each iteration
