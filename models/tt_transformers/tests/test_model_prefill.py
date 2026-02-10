@@ -104,6 +104,7 @@ def test_model_inference(
         if ("Llama" in hf_model_env) and ("Vision" in hf_model_env) and (num_layers is None):
             pytest.skip("Skipping Llama Vision full model test: no CrossAttention functionality in this test.")
 
+    use_hf_rope = request.config.getoption("--use_hf_rope")
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
