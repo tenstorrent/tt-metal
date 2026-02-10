@@ -350,12 +350,12 @@ void device_module(nb::module_& m_device) {
         )doc");
 
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
-        Clear the in-memory JIT build cache.
+        Clear the in-memory kernel compilation hash lookup cache.
 
         Note:
-            This only clears the in-memory build cache.
+            This only clears the in-memory HashLookup cache.
             The compiler rebuilds binaries when:
-            1. Build target hash is NOT in the cache (cleared by this function), AND
+            1. Kernel hash is NOT in HashLookup (cleared by this function), AND
             2. Binaries do not exist on disk (or persistent cache is disabled)
 
             To also clear disk-cached
