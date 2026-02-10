@@ -21,6 +21,7 @@ from models.common.llama_models import (
 )
 from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.common import (
+    Mode,
     copy_host_to_device,
     get_block_size,
     get_max_prefill_chunk_size,
@@ -318,7 +319,7 @@ class Generator:
         warmup_prefill=True,
         **kwargs,
     ):
-        self.mode = "prefill"
+        self.mode = Mode.PREFILL
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -369,6 +370,7 @@ class Generator:
                 seq_len - num_cached_tokens
             )  # Without the cached tokens, then padded
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
+            local_kwargs["global_user_id"] = user_id
             sampling_enabled = (
                 sampling_on_device_requested
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
@@ -689,9 +691,14 @@ class Generator:
         output_tokens: torch.Tensor | None = None,
     ):
         mode_switched = False
-        if self.mode != "decode":
-            self.mode = "decode"
+        if self.mode != Mode.DECODE:
+            self.mode = Mode.DECODE
             mode_switched = True
+
+        # Switch to decode mode for prefetcher to reintialize sub devices
+        for i in range(len(self.model)):
+            self.model[i].switch_mode(Mode.DECODE)
+
         sampling_on_device = sampling_params is not None
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
