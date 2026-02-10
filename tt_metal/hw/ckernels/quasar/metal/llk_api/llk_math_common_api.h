@@ -52,9 +52,6 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     const std::uint32_t srca_operand_id = get_operand_id(srca_operand);
     const std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
 
-    // TODO: Expand programmability in order to support the dest dvalid scheme with different clients
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-
     const DataFormat srca_format = static_cast<DataFormat>(unpack_dst_format[srca_operand_id]);
     const DataFormat srcb_format = static_cast<DataFormat>(unpack_dst_format[srcb_operand_id]);
 
@@ -89,3 +86,34 @@ template <std::uint8_t SET_DEST_DVALID>
 inline void llk_math_set_dvalid() {
     _llk_math_set_dvalid_<SET_DEST_DVALID>();
 }
+
+/**
+ * All the following functions are added to enable Math <-> Pack synchronization
+ * on destination register using semaphores.
+ *
+ * The following functions should be phased out once the dest dvalid scheme is introduced
+ */
+
+/**
+ * @brief Waits until destination register space is available.
+ * Blocks on the MATH_PACK semaphore until the packer gets the semaphore.
+ */
+inline void llk_math_wait_for_dest_available() {
+    WAYPOINT("MWDW");
+    _llk_math_wait_for_dest_available_();
+    WAYPOINT("MWDD");
+}
+
+/**
+ * @brief Signals that the current destination section is done.
+ * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
+ */
+inline void llk_math_dest_section_done() {
+    _llk_math_dest_section_done_<DST_SYNC_MODE>();
+}
+
+/**
+ * @brief Initializes math–pack synchronization for the destination register.
+ * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
+ */
+inline void llk_math_pack_sync_init() { _llk_math_pack_sync_init_<DST_SYNC_MODE>(); }

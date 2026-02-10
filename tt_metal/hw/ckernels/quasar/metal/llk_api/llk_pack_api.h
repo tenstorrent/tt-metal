@@ -121,8 +121,6 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     tdma_descriptor_t td_val;
     td_val.reg_data_format = static_cast<std::uint8_t>(pack_src_format[output_id]);
 
-    // TODO: Expand programmability in order to support the dest dvalid scheme with different clients
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     _llk_pack_hw_configure_<p_pacr::PACK0>(td_val);
 }
 
@@ -136,4 +134,28 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
 template <DstSync DST, bool IS_FP32_MATH_DEST_EN>
 inline void llk_pack_dest_dvalid_section_done() {
     _llk_pack_dest_dvalid_section_done_<DST, IS_FP32_MATH_DEST_EN>();
+}
+
+/**
+ * All the following functions are added to enable Math <-> Pack synchronization
+ * on destination register using semaphores.
+ *
+ * The following functions should be phased out once the dest dvalid scheme is introduced
+ */
+
+/**
+ * @brief Waits until math has finished producing data for the current Destination Register section.
+ * Blocks on the math–pack semaphore so the packer does not read dest before math has written it.
+ */
+inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_(); }
+
+/**
+ * @brief Signals that the packer has finished consuming the current Destination Register section.
+ * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
+ *
+ * @tparam is_fp32_dest_acc_en True if math destination is in 32-bit mode, false for 16-bit mode.
+ */
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_dest_section_done() {
+    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
