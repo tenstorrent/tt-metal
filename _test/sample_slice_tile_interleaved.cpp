@@ -932,11 +932,13 @@ static void simulate_slice_tile_interleaved_create(
 
 int main(int argc, char* argv[]) {
     // Default test case: 3D tensor
-    Shape input_padded_shape = {768, 768, 160};
-    Shape output_padded_shape = {686, 686, 128};
+    Shape input_padded_shape = {33, 1, 7, 32, 64};
+    Shape output_padded_shape = {33, 1, 7, 32, 64};
     Shape slice_start = {0, 0, 0};
-    Shape step = {1, 1, 1};
+    Shape step = {1, 1, 1, 1, 1};
     bool verbose_kernels = false;
+
+    int rank = input_padded_shape.size();
 
     // Parse command line arguments if provided
     // Usage: prog [input0 input1 input2 output0 output1 output2 start0 start1 start2] [--verbose]
@@ -978,10 +980,10 @@ int main(int argc, char* argv[]) {
         return (v % tile_size) ? (v + (tile_size - v % tile_size)) : v;
     };
 
-    input_padded_shape[1] = pad_to_tile(input_padded_shape[1], TILE_HEIGHT);
-    input_padded_shape[2] = pad_to_tile(input_padded_shape[2], TILE_WIDTH);
-    output_padded_shape[1] = pad_to_tile(output_padded_shape[1], TILE_HEIGHT);
-    output_padded_shape[2] = pad_to_tile(output_padded_shape[2], TILE_WIDTH);
+    input_padded_shape[rank - 2] = pad_to_tile(input_padded_shape[rank - 2], TILE_HEIGHT);
+    input_padded_shape[rank - 1] = pad_to_tile(input_padded_shape[rank - 1], TILE_WIDTH);
+    output_padded_shape[rank - 2] = pad_to_tile(output_padded_shape[rank - 2], TILE_HEIGHT);
+    output_padded_shape[rank - 1] = pad_to_tile(output_padded_shape[rank - 1], TILE_WIDTH);
 
     try {
         simulate_slice_tile_interleaved_create(
