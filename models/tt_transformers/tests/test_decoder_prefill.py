@@ -84,7 +84,7 @@ def test_decoder_inference(
         max_seq_len=max_seq_len,
         cache_hf=True,
         prefetcher=prefetcher,
-        use_hf_rope=True,
+        use_hf_rope=False,
     )
     model_args.n_layers = 1
 
