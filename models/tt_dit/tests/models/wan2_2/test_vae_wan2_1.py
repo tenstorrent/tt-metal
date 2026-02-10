@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import time
 from collections import defaultdict
 
@@ -317,6 +318,112 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, re
     assert_quality(torch_output, tt_output_torch, pcc=0.999_980, relative_rmse=0.007)
 
 
+def _print_conv3d_error_analysis(ref, tt, label=""):
+    """Print detailed error analysis for conv3d outputs (BCTHW format)."""
+    diff = ref.float() - tt.float()
+    abs_err = diff.abs()
+    pcc_val = torch.corrcoef(torch.stack([ref.float().flatten(), tt.float().flatten()]))[0, 1].item()
+    rmse = diff.pow(2).mean().sqrt().item()
+    max_err = abs_err.max().item()
+    ref_std = ref.float().std().item()
+    print(
+        f"  {label}: PCC={pcc_val:.6f}  RMSE={rmse:.4e}  maxerr={max_err:.4e}  ref_std={ref_std:.4e}  shape={list(ref.shape)}"
+    )
+
+    # Top-10 worst elements
+    flat_abs = abs_err.flatten()
+    top_vals, top_flat_idx = flat_abs.topk(min(10, flat_abs.numel()))
+    if top_vals[0] > 0.01:
+        print(f"         worst elements (>{0.01:.2f}):")
+        for k in range(len(top_vals)):
+            if top_vals[k] < 0.01:
+                break
+            coords = torch.unravel_index(top_flat_idx[k], abs_err.shape)
+            idx = tuple(c.item() for c in coords)
+            rv = ref[idx].float().item()
+            tv = tt[idx].float().item()
+            print(f"           {list(idx)} ref={rv:+.4f} tt={tv:+.4f} err={top_vals[k]:.4f}")
+
+
+def _analyze_conv3d_per_block(ref_output, tt_output, weight, bias, input_BCTHW, C_in_block):
+    """
+    Compute per-C_in_block partial sums manually in bf16 and compare to TT output.
+    This identifies which block's contribution disagrees with the manual calculation.
+    """
+    C_in = weight.shape[1]
+    num_blocks = C_in // C_in_block
+    kernel_size = weight.shape[2:]  # (kT, kH, kW)
+
+    # Apply causal padding (replicate front 2 frames) to match WanCausalConv3d behavior
+    input_bf16 = input_BCTHW.to(torch.bfloat16)
+    front_pad = input_bf16[:, :, 0:1, :, :].repeat(1, 1, kernel_size[0] - 1, 1, 1)
+    padded_input = torch.cat([front_pad, input_bf16], dim=2)
+
+    weight_bf16 = weight.to(torch.bfloat16)
+    spatial_padding = (0, kernel_size[1] // 2, kernel_size[2] // 2)
+
+    # Compute each block's partial conv output
+    partial_sums = []
+    for block_idx in range(num_blocks):
+        c_start = block_idx * C_in_block
+        c_end = c_start + C_in_block
+        with torch.no_grad():
+            partial = torch.nn.functional.conv3d(
+                padded_input[:, c_start:c_end, :, :, :],
+                weight_bf16[:, c_start:c_end, :, :, :],
+                bias=None,
+                padding=spatial_padding,
+            ).float()
+        partial_sums.append(partial)
+
+    # Sum all partials + bias (mimics reducer accumulation)
+    total = partial_sums[0].clone()
+    for i in range(1, num_blocks):
+        total = (total.to(torch.bfloat16) + partial_sums[i].to(torch.bfloat16)).float()
+    if bias is not None:
+        total = (
+            total.to(torch.bfloat16) + bias.to(torch.bfloat16).float().reshape(1, -1, 1, 1, 1).to(torch.bfloat16)
+        ).float()
+
+    print(f"\n  Per-block analysis (C_in_block={C_in_block}, num_blocks={num_blocks}):")
+    sum_vs_ref = (total - ref_output).abs().max().item()
+    sum_vs_tt = (total - tt_output).abs().max().item()
+    print(f"    sum_of_partials vs ref: maxdiff={sum_vs_ref:.4e}")
+    print(f"    sum_of_partials vs tt:  maxdiff={sum_vs_tt:.4e}")
+
+    # Find worst error positions between ref and tt
+    diff = (ref_output - tt_output).abs()
+    flat_diff = diff.flatten()
+    top_vals, top_idx = flat_diff.topk(min(10, flat_diff.numel()))
+
+    for k in range(len(top_vals)):
+        if top_vals[k] < 0.01:
+            break
+        coords = torch.unravel_index(top_idx[k], diff.shape)
+        b, c, t, h, w = [coords[d].item() for d in range(5)]
+
+        ref_val = ref_output[b, c, t, h, w].item()
+        tt_val = tt_output[b, c, t, h, w].item()
+        bias_val = bias[c].to(torch.bfloat16).float().item() if bias is not None else 0.0
+        manual_sum = sum(ps[b, c, t, h, w].item() for ps in partial_sums) + bias_val
+
+        block_strs = [f"b{bi}={partial_sums[bi][b, c, t, h, w].item():+.6f}" for bi in range(num_blocks)]
+        print(
+            f"    [{b},{c},{t},{h},{w}] ref={ref_val:+.6f} tt={tt_val:+.6f} err={top_vals[k]:.4f} manual_sum={manual_sum:+.6f}"
+        )
+        print(f"      partials: {' '.join(block_strs)}  bias={bias_val:+.6f}")
+
+        # Test hypotheses: was a block dropped or doubled?
+        error = tt_val - ref_val
+        for bi in range(num_blocks):
+            pv = partial_sums[bi][b, c, t, h, w].item()
+            if abs(pv) > 0.001:
+                if abs(error + pv) < abs(error) * 0.1:
+                    print(f"      ** block {bi} may have been DROPPED (error + partial ≈ 0)")
+                if abs(error - pv) < abs(error) * 0.1:
+                    print(f"      ** block {bi} may have been DOUBLED (error - partial ≈ 0)")
+
+
 @pytest.mark.parametrize(
     ("B, C_in, C_out, T, H, W, kernel_size, stride, padding"),
     [
@@ -442,7 +549,95 @@ def test_wan_conv3d(
         tt_output_torch = tt_output_torch[:, :C_out]
         logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
 
+    _print_conv3d_error_analysis(
+        torch_output, tt_output_torch, label=f"conv3d C_in={C_in} C_out={C_out} T={T} H={H} W={W} k={kernel_size}"
+    )
     assert_quality(torch_output, tt_output_torch, pcc=0.999_980, relative_rmse=0.007)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, w_axis",
+    [((1, 1), 0, 1)],
+    ids=["1x1_h0_w1"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_wan_conv3d_real_weights(mesh_device, h_axis, w_axis):
+    """Test conv3d with real model weights saved from mid_block run."""
+    from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d as TorchWanCausalConv3d
+
+    weights_path = "/tmp/resblock_weights/conv2_state_dict.pt"
+    input_path = "/tmp/resblock_debug/tt_r5_after_silu2.pt"  # BCTHW format
+    assert os.path.exists(weights_path), f"Run mid_block test first to save weights: {weights_path}"
+    assert os.path.exists(input_path), f"Run mid_block test first to save input: {input_path}"
+
+    conv2_sd = torch.load(weights_path, weights_only=True)
+    input_BCTHW = torch.load(input_path, weights_only=True)  # BCTHW float
+    B, C_in, T, H, W = input_BCTHW.shape
+    C_out = conv2_sd["weight"].shape[0]
+
+    torch_model = TorchWanCausalConv3d(in_channels=C_in, out_channels=C_out, kernel_size=3, stride=1, padding=1)
+    torch_model.load_state_dict(conv2_sd)
+    torch_model.eval()
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
+    )
+    tt_model = WanCausalConv3d(
+        in_channels=C_in,
+        out_channels=C_out,
+        kernel_size=3,
+        mesh_device=mesh_device,
+        stride=1,
+        padding=1,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+    )
+    tt_model.load_state_dict(conv2_sd)
+
+    # input_BCTHW *= 0
+    # input_BCTHW += 0.1
+
+    tt_input_tensor = input_BCTHW.permute(0, 2, 3, 4, 1)  # BCTHW -> BTHWC
+    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
+    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
+    tt_input_tensor = bf16_tensor_2dshard(
+        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+    )
+
+    torch_model_bf16 = torch_model.to(torch.bfloat16)
+    with torch.no_grad():
+        torch_output = torch_model_bf16(input_BCTHW.to(torch.bfloat16)).float()
+    tt_output = tt_model(tt_input_tensor, logical_h=logical_h)
+
+    concat_dims = [None, None]
+    concat_dims[h_axis] = 2
+    concat_dims[w_axis] = 3
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+    )
+    tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
+    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
+    if tt_output_torch.shape != torch_output.shape:
+        tt_output_torch = tt_output_torch[:, :C_out]
+
+    _print_conv3d_error_analysis(torch_output, tt_output_torch, label="conv3d_real_weights")
+
+    # Per-block partial sum analysis: identify which C_in block disagrees
+    C_in_block = tt_model.conv_config.C_in_block
+    _analyze_conv3d_per_block(
+        torch_output,
+        tt_output_torch,
+        conv2_sd["weight"],
+        conv2_sd.get("bias", None),
+        input_BCTHW,
+        C_in_block,
+    )
+
+    # assert_quality(torch_output, tt_output_torch, pcc=0.999_980, relative_rmse=0.007)
 
 
 @pytest.mark.parametrize(
@@ -598,6 +793,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     "mesh_device, h_axis, w_axis",
     [
         ((1, 1), 0, 1),
+        ((2, 1), 0, 1),
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
         ((1, 8), 0, 1),
@@ -606,6 +802,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     ],
     ids=[
         "1x1_h0_w1",
+        "2x1_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
         "1x8_h0_w1",
@@ -617,6 +814,8 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanMidBlock as TorchWanMidBlock
+
+    torch.manual_seed(0)
 
     torch_dtype = torch.float32
     torch_model = TorchWanMidBlock(
@@ -902,6 +1101,8 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
 def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanUpBlock as TorchWanUpBlock
 
+    torch.manual_seed(0)
+
     torch_dtype = torch.float32
     torch_model = TorchWanUpBlock(
         in_dim=in_dim,
@@ -1052,6 +1253,8 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
 
+    torch.manual_seed(0)
+
     # mesh_device.disable_and_clear_program_cache()
     torch_dtype = torch.float32
     base_dim = 96
@@ -1065,6 +1268,7 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     out_channels = 3
     is_residual = False
 
+    # FIXME:
     MIN_PCC = 0.99 if tuple(mesh_device.shape)[h_axis] == 4 else 0.997
     MAX_RMSE = 0.12 if tuple(mesh_device.shape)[h_axis] == 4 else 0.08
 
@@ -1109,6 +1313,8 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
 
     # Run 4 times to get models to create their own caches
     for i in range(3):
+        torch.manual_seed(0)
+
         torch_feat_idx = [0]
         tt_feat_idx = [0]
         logger.info(f"running test iteration {i}")
@@ -1258,6 +1464,8 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
 def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
+    torch.manual_seed(0)
+
     torch_dtype = torch.float32
     base_dim = 96
     z_dim = 16
@@ -1321,7 +1529,6 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         tt_input_tensor,
         logical_h,
     )
-    return
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1691,401 +1898,3 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
     else:
         logger.warning("Skipping check")
-
-
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 8)],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
-    """
-    Sweep over blocking configurations for conv3d to find optimal settings.
-    Uses configurations from utils/conv3d.py and settings from WanDecoder.
-    """
-    from models.tt_dit.utils.conv3d import aligned_channels, prepare_conv3d_weights
-
-    # Configurations from utils/conv3d.py::get_conv3d_config
-    # (C_in, C_out, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
-    baseline_blockings = {
-        (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
-        (192, 96, (1, 3, 3)): (192, 96, 1, 4, 4),
-        (96, 96, (3, 3, 3)): (96, 96, 1, 32, 2),
-        (384, 192, (1, 3, 3)): (192, 96, 1, 16, 1),
-        (192, 192, (3, 3, 3)): (96, 96, 1, 64, 1),
-        (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
-        (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
-        (384, 384, (3, 3, 3)): (128, 128, 1, 16, 2),
-        (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
-    }
-
-    # Test configurations with actual unsharded input shapes from VAE decoder
-    # Input shapes provided as (T, H, W, C_in), converted to (C_in, C_out, kernel_size, T, H, W)
-    conv_configs = [
-        # (T=3, H=25, W=22, C_in=32) -> conv_in
-        (32, 384, (3, 3, 3), 3, 25, 22),
-        # (T=3, H=25, W=22, C_in=384) -> mid_block resnets
-        (384, 384, (3, 3, 3), 3, 25, 22),
-        # (T=1, H=48, W=42, C_in=384) -> time upsample (1x3x3 kernel)
-        (384, 192, (1, 3, 3), 1, 48, 42),
-        # (T=3, H=48, W=42, C_in=192) -> up_block.1 resnet
-        (192, 384, (3, 3, 3), 3, 48, 42),
-        # (T=3, H=48, W=42, C_in=384) -> up_block.1 resnet
-        (384, 384, (3, 3, 3), 3, 48, 42),
-        # (T=1, H=94, W=82, C_in=384) -> time upsample (1x3x3 kernel)
-        (384, 192, (1, 3, 3), 1, 94, 82),
-        # (T=3, H=94, W=82, C_in=192) -> up_block.2 resnet
-        (192, 192, (3, 3, 3), 3, 94, 82),
-        # (T=1, H=186, W=162, C_in=192) -> time upsample (1x3x3 kernel)
-        (192, 96, (1, 3, 3), 1, 186, 162),
-        # (T=3, H=186, W=162, C_in=96) -> up_block.3 resnet
-        (96, 96, (3, 3, 3), 3, 186, 162),
-        # (T=3, H=186, W=162, C_in=96) -> conv_out
-        (96, 32, (3, 3, 3), 3, 186, 162),
-    ]
-
-    grid_size = mesh_device.compute_with_storage_grid_size()
-
-    # Use same compute kernel config as WanCausalConv3d (HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False)
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
-
-    # Generate H_out_block and W_out_block variations (expanded)
-    hw_variations = [
-        # Full grid for small values
-        (1, 1),
-        (1, 2),
-        (1, 4),
-        (1, 8),
-        (1, 16),
-        (1, 32),
-        (2, 1),
-        (2, 2),
-        (2, 4),
-        (2, 8),
-        (2, 16),
-        (2, 32),
-        (4, 1),
-        (4, 2),
-        (4, 4),
-        (4, 8),
-        (4, 16),
-        (4, 32),
-        (8, 1),
-        (8, 2),
-        (8, 4),
-        (8, 8),
-        (8, 16),
-        (8, 32),
-        (16, 1),
-        (16, 2),
-        (16, 4),
-        (16, 8),
-        (16, 16),
-        (32, 1),
-        (32, 2),
-        (32, 4),
-        (32, 8),
-        (64, 1),
-        (64, 2),
-        (64, 4),
-        (128, 1),
-        (128, 2),
-    ]
-
-    # Subset of promising H/W values to test with non-baseline C_in/C_out
-    hw_promising = [
-        (1, 1),
-        (2, 2),
-        (4, 4),
-        (8, 8),
-        (16, 4),
-        (4, 16),
-        (8, 4),
-        (4, 8),
-        (1, 8),
-        (8, 1),
-        (2, 16),
-        (16, 2),
-        (32, 2),
-        (2, 32),
-    ]
-
-    def get_cin_cout_variations(C_in, C_out, C_in_block_base, C_out_block_base):
-        """Generate C_in_block/C_out_block variations centered on baseline."""
-        padded_C_in = aligned_channels(C_in)
-        variations = set()
-
-        # Baseline always first
-        variations.add((C_in_block_base, C_out_block_base))
-
-        # C_in_block variations: try several multipliers
-        for mult in [0.25, 0.5, 2, 4]:
-            c_in_try = int(C_in_block_base * mult)
-            if c_in_try >= 32 and c_in_try <= padded_C_in and padded_C_in % c_in_try == 0:
-                variations.add((c_in_try, C_out_block_base))
-
-        # C_out_block variations: try several multipliers
-        for mult in [0.25, 0.5, 2, 4]:
-            c_out_try = int(C_out_block_base * mult)
-            if c_out_try >= 32 and c_out_try <= C_out and C_out % c_out_try == 0:
-                variations.add((C_in_block_base, c_out_try))
-
-        # Also try some combined C_in/C_out variations
-        for c_in_mult in [0.5, 2]:
-            for c_out_mult in [0.5, 2]:
-                c_in_try = int(C_in_block_base * c_in_mult)
-                c_out_try = int(C_out_block_base * c_out_mult)
-                if (
-                    c_in_try >= 32
-                    and c_in_try <= padded_C_in
-                    and padded_C_in % c_in_try == 0
-                    and c_out_try >= 32
-                    and c_out_try <= C_out
-                    and C_out % c_out_try == 0
-                ):
-                    variations.add((c_in_try, c_out_try))
-
-        # Sort with baseline first
-        result = [(C_in_block_base, C_out_block_base)]
-        for v in sorted(variations):
-            if v != (C_in_block_base, C_out_block_base):
-                result.append(v)
-        return result
-
-    results = []
-
-    print("\n" + "=" * 100, flush=True)
-    print("CONV3D BLOCKING SWEEP - Blackhole 4x8", flush=True)
-    print("=" * 100, flush=True)
-
-    for C_in, C_out, kernel_size, T, H, W in conv_configs:
-        config_key = (C_in, C_out, kernel_size)
-        baseline = baseline_blockings.get(config_key)
-        if baseline is None:
-            print(f"SKIP: No baseline for {config_key}", flush=True)
-            continue
-
-        C_in_block_base, C_out_block_base, T_base, H_base, W_base = baseline
-
-        # Get C_in/C_out variations (~1-5 options)
-        cin_cout_variations = get_cin_cout_variations(C_in, C_out, C_in_block_base, C_out_block_base)
-
-        print(f"\n{'='*80}", flush=True)
-        print(f"Config: C_in={C_in}, C_out={C_out}, kernel={kernel_size}, shape=({T},{H},{W})", flush=True)
-        print(
-            f"Baseline: Cin_blk={C_in_block_base}, Cout_blk={C_out_block_base}, T={T_base}, H={H_base}, W={W_base}",
-            flush=True,
-        )
-        print(f"Cin/Cout variations: {cin_cout_variations}", flush=True)
-        print(f"{'='*80}", flush=True)
-
-        # Calculate padding (same as WanCausalConv3d: causal temporal, symmetric spatial)
-        padding = (0, (kernel_size[1] - 1) // 2, (kernel_size[2] - 1) // 2)
-
-        # Create weights and input ONCE per config (outside C_in/C_out loop)
-        torch_weight = torch.randn(C_out, C_in, *kernel_size, dtype=torch.float32)
-        torch_bias = torch.randn(C_out, dtype=torch.float32)
-
-        padded_C_in = aligned_channels(C_in)
-
-        # Input shape: (N, T, H, W, C) - no causal padding added here
-        torch_input = torch.randn(1, T, H, W, padded_C_in, dtype=torch.float32)
-
-        # Track best result for this config
-        best_time = float("inf")
-        best_blocking = None
-        baseline_time = None
-
-        # Build list of all blockings to test
-        blockings_to_test = []
-
-        for C_in_block, C_out_block in cin_cout_variations:
-            is_baseline_cin_cout = C_in_block == C_in_block_base and C_out_block == C_out_block_base
-
-            if is_baseline_cin_cout:
-                # For baseline Cin/Cout: test ALL H/W variations
-                blockings_to_test.append((C_in_block, C_out_block, H_base, W_base, True))
-                for h, w in hw_variations:
-                    if (h, w) != (H_base, W_base):
-                        blockings_to_test.append((C_in_block, C_out_block, h, w, False))
-            else:
-                # For non-baseline Cin/Cout: test promising H/W subset
-                for h, w in hw_promising:
-                    blockings_to_test.append((C_in_block, C_out_block, h, w, False))
-
-        print(f"Testing {len(blockings_to_test)} blocking configurations...", flush=True)
-
-        for C_in_block, C_out_block, H_out_block, W_out_block, is_baseline in blockings_to_test:
-            blocking = (C_in_block, C_out_block, T_base, H_out_block, W_out_block)
-
-            try:
-                # Create conv config
-                conv_config = ttnn.Conv3dConfig(
-                    weights_dtype=ttnn.bfloat16,
-                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
-                    T_out_block=T_base,
-                    W_out_block=W_out_block,
-                    H_out_block=H_out_block,
-                    C_out_block=C_out_block,
-                    C_in_block=C_in_block,
-                    compute_with_storage_grid_size=grid_size,
-                )
-
-                # Prepare weights (depends on C_in_block)
-                tt_weight, tt_bias = prepare_conv3d_weights(mesh_device, torch_weight, torch_bias, conv_config)
-
-                # Create input tensor
-                tt_input = ttnn.from_torch(
-                    torch_input,
-                    device=mesh_device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-
-                # Warmup runs (2 iterations to ensure kernel compilation is complete)
-                for _ in range(2):
-                    out = ttnn.experimental.conv3d(
-                        input_tensor=tt_input,
-                        weight_tensor=tt_weight,
-                        bias_tensor=tt_bias,
-                        config=conv_config,
-                        output_channels=C_out,
-                        kernel_size=kernel_size,
-                        stride=(1, 1, 1),
-                        padding=padding,
-                        padding_mode="zeros",
-                        dtype=ttnn.bfloat16,
-                        compute_kernel_config=compute_kernel_config,
-                    )
-                    ttnn.synchronize_device(mesh_device)
-                    ttnn.deallocate(out)
-
-                # Timed runs (5 iterations for more accurate timing)
-                times = []
-                for _ in range(5):
-                    start = time.perf_counter()
-                    out = ttnn.experimental.conv3d(
-                        input_tensor=tt_input,
-                        weight_tensor=tt_weight,
-                        bias_tensor=tt_bias,
-                        config=conv_config,
-                        output_channels=C_out,
-                        kernel_size=kernel_size,
-                        stride=(1, 1, 1),
-                        padding=padding,
-                        padding_mode="zeros",
-                        dtype=ttnn.bfloat16,
-                        compute_kernel_config=compute_kernel_config,
-                    )
-                    ttnn.synchronize_device(mesh_device)
-                    elapsed = time.perf_counter() - start
-                    times.append(elapsed)
-                    ttnn.deallocate(out)
-
-                avg_ms = sum(times) / len(times) * 1000
-                min_ms = min(times) * 1000
-
-                # Track best
-                if avg_ms < best_time:
-                    best_time = avg_ms
-                    best_blocking = blocking
-
-                if is_baseline:
-                    baseline_time = avg_ms
-                    marker = " [BASELINE]"
-                else:
-                    marker = ""
-
-                # Print result immediately
-                cin_cout_info = (
-                    ""
-                    if (C_in_block == C_in_block_base and C_out_block == C_out_block_base)
-                    else f" [Cin={C_in_block}, Cout={C_out_block}]"
-                )
-                print(
-                    f"  H={H_out_block:2d}, W={W_out_block:2d}: avg={avg_ms:7.2f}ms, min={min_ms:7.2f}ms{marker}{cin_cout_info}",
-                    flush=True,
-                )
-
-                results.append(
-                    {
-                        "config": config_key,
-                        "shape": (T, H, W),
-                        "blocking": blocking,
-                        "avg_ms": avg_ms,
-                        "min_ms": min_ms,
-                        "is_baseline": is_baseline,
-                        "status": "OK",
-                    }
-                )
-
-                # Cleanup
-                ttnn.deallocate(tt_input)
-                ttnn.deallocate(tt_weight)
-                if tt_bias is not None:
-                    ttnn.deallocate(tt_bias)
-
-            except Exception as e:
-                cin_cout_info = (
-                    ""
-                    if (C_in_block == C_in_block_base and C_out_block == C_out_block_base)
-                    else f" [Cin={C_in_block}, Cout={C_out_block}]"
-                )
-                print(f"  H={H_out_block:2d}, W={W_out_block:2d}: FAILED - {str(e)[:50]}{cin_cout_info}", flush=True)
-                results.append(
-                    {
-                        "config": config_key,
-                        "shape": (T, H, W),
-                        "blocking": blocking,
-                        "avg_ms": None,
-                        "min_ms": None,
-                        "is_baseline": is_baseline,
-                        "status": f"FAILED",
-                    }
-                )
-
-        # Print summary for this config
-        if baseline_time and best_blocking:
-            print(f"\n  Summary: baseline={baseline_time:.2f}ms, best={best_time:.2f}ms @ {best_blocking}", flush=True)
-            if best_time < baseline_time:
-                print(f"  Speedup: {baseline_time/best_time:.2f}x", flush=True)
-
-    # Final summary
-    print("\n" + "=" * 100, flush=True)
-    print("FINAL SUMMARY", flush=True)
-    print("=" * 100, flush=True)
-
-    successful = [r for r in results if r["status"] == "OK"]
-    print(f"Total: {len(successful)}/{len(results)} configurations succeeded", flush=True)
-
-    # Group by config and find best for each
-    from collections import defaultdict
-
-    by_config = defaultdict(list)
-    for r in successful:
-        by_config[r["config"]].append(r)
-
-    for config_key, config_results in by_config.items():
-        baseline_r = next((r for r in config_results if r["is_baseline"]), None)
-        best_r = min(config_results, key=lambda x: x["avg_ms"])
-        print(f"\n{config_key}:", flush=True)
-        if baseline_r:
-            b = baseline_r["blocking"]
-            print(
-                f"  Baseline: Cin={b[0]}, Cout={b[1]}, H={b[3]}, W={b[4]} -> {baseline_r['avg_ms']:.2f}ms", flush=True
-            )
-        b = best_r["blocking"]
-        print(f"  Best:     Cin={b[0]}, Cout={b[1]}, H={b[3]}, W={b[4]} -> {best_r['avg_ms']:.2f}ms", flush=True)
-        if baseline_r and best_r["avg_ms"] < baseline_r["avg_ms"]:
-            print(f"  Speedup:  {baseline_r['avg_ms']/best_r['avg_ms']:.2f}x", flush=True)
-
-    assert len(successful) > 0, "All blocking configurations failed!"

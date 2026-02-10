@@ -52,6 +52,7 @@ class WanAttentionBlock:
         self.norm = RMSNorm(
             embedding_dim=dim,
             norm_eps=1e-6,
+            # norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
@@ -70,6 +71,7 @@ class WanAttentionBlock:
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
+            # math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -81,16 +83,17 @@ class WanAttentionBlock:
         )
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
+            # fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
         device_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -267,7 +270,7 @@ class WanCausalConv3d:
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,  # Do not use HiFi4.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -423,6 +426,7 @@ class WanResidualBlock:
         self.norm1 = RMSNorm(
             embedding_dim=in_dim,
             norm_eps=1e-6,
+            # norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
@@ -439,6 +443,7 @@ class WanResidualBlock:
         self.norm2 = RMSNorm(
             embedding_dim=out_dim,
             norm_eps=1e-6,
+            # norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
@@ -464,7 +469,7 @@ class WanResidualBlock:
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,  # Do not use HiFi4.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -473,6 +478,10 @@ class WanResidualBlock:
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
     def load_state_dict(self, state_dict):
+        # import os
+        # os.makedirs("/tmp/resblock_weights", exist_ok=True)
+        # torch.save(substate(state_dict, "conv2"), "/tmp/resblock_weights/conv2_state_dict.pt")
+        # print(f"  [resblock] saved conv2 weights to /tmp/resblock_weights/conv2_state_dict.pt", flush=True)
         self.norm1.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm1")))
         self.norm2.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm2")))
         self.conv1.load_state_dict(substate(state_dict, "conv1"))
@@ -492,15 +501,46 @@ class WanResidualBlock:
                 }
             )
 
+    def _dump_resblock(self, tensor, name, logical_h):
+        import os
+
+        import torch
+
+        from ...utils.conv3d import conv_unpad_height
+
+        os.makedirs("/tmp/resblock_debug", exist_ok=True)
+        t = ttnn.to_torch(
+            tensor,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device,
+                mesh_shape=tuple(self.mesh_device.shape),
+                dims=(2, 3),
+            ),
+        )
+        t = conv_unpad_height(t, logical_h)
+        t = t.permute(0, 4, 1, 2, 3)  # BTHWC -> BCTHW
+        torch.save(t, f"/tmp/resblock_debug/tt_{name}.pt")
+        print(f"  [resblock] {name}: shape={list(t.shape)} std={t.float().std():.4e}", flush=True)
+
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
+        # self._dump_resblock(x_BTHWC, "r0_input", logical_h)
         x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
         h_tile_BTHWC = (
             self.conv_shortcut(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
             if self.conv_shortcut is not None
             else x_tile_BTHWC
         )
-        x_norm_tile_BTHWC = self.norm1(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)  # NOTE: potential correctness issue
+        x_norm_tile_BTHWC = self.norm1(
+            ttnn.typecast(x_tile_BTHWC, ttnn.float32), compute_kernel_config=self.hifi4_compute_kernel_config
+        )
+        x_silu_tile_BTHWC = ttnn.typecast(
+            ttnn.silu(x_norm_tile_BTHWC), ttnn.bfloat16
+        )  # NOTE: potential correctness issue
+        # x_norm_tile_BTHWC = self.norm1(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        # self._dump_resblock(ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r1_after_norm1", logical_h)
+        # x_silu_tile_BTHWC = ttnn.typecast(ttnn.silu(ttnn.typecast(x_norm_tile_BTHWC, ttnn.float32)), ttnn.bfloat16)  # NOTE: potential correctness issue
+        # x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)  # NOTE: potential correctness issue
+        # self._dump_resblock(ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r2_after_silu1", logical_h)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
@@ -519,10 +559,20 @@ class WanResidualBlock:
             feat_idx[0] += 1
         else:
             x_conv_BTHWC = self.conv1(x_BTHWC, logical_h)
+        # self._dump_resblock(x_conv_BTHWC, "r3_after_conv1", logical_h)
 
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
-        x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)  # NOTE: potential correctness issue
+        x_norm_tile_BTHWC = self.norm2(
+            ttnn.typecast(x_tile_BTHWC, ttnn.float32), compute_kernel_config=self.hifi4_compute_kernel_config
+        )
+        x_silu_tile_BTHWC = ttnn.typecast(
+            ttnn.silu(x_norm_tile_BTHWC), ttnn.bfloat16
+        )  # NOTE: potential correctness issue
+        # x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        # self._dump_resblock(ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r4_after_norm2", logical_h)
+        # x_silu_tile_BTHWC = ttnn.typecast(ttnn.silu(ttnn.typecast(x_norm_tile_BTHWC, ttnn.float32)), ttnn.bfloat16)  # NOTE: potential correctness issue
+        # x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)  # NOTE: potential correctness issue
+        # self._dump_resblock(ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r5_after_silu2", logical_h)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
@@ -541,11 +591,15 @@ class WanResidualBlock:
             feat_idx[0] += 1
         else:
             x_conv_BTHWC = self.conv2(x_BTHWC, logical_h)
+        # self._dump_resblock(x_conv_BTHWC, "r6_after_conv2", logical_h)
 
         # Add residual
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
+        # self._dump_resblock(ttnn.to_layout(h_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r7_shortcut", logical_h)
         x_tile_BTHWC = ttnn.add(h_tile_BTHWC, x_tile_BTHWC)
+        # x_tile_BTHWC = ttnn.typecast(ttnn.add(ttnn.typecast(h_tile_BTHWC, ttnn.float32), ttnn.typecast(x_tile_BTHWC, ttnn.float32)), ttnn.bfloat16)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        # self._dump_resblock(x_BTHWC, "r8_after_add", logical_h)
         return x_BTHWC
 
 
@@ -601,12 +655,45 @@ class WanMidBlock:
         for i in range(len(self.attentions)):
             self.attentions[i].load_state_dict(substate(state_dict, f"attentions.{i}"))
 
+    def dump_tensor(self, tt_tensor, name, logical_h):
+        import os
+
+        import torch
+
+        from ...utils.conv3d import conv_unpad_height
+
+        concat_dims = [None, None]
+        concat_dims[0] = 2
+        concat_dims[1] = 3
+
+        os.makedirs("/tmp/midblock_debug", exist_ok=True)
+        t = ttnn.to_torch(
+            tt_tensor,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device,
+                mesh_shape=tuple(self.mesh_device.shape),
+                dims=concat_dims,
+            ),
+        )
+        t = conv_unpad_height(t, logical_h)
+        t = t.permute(0, 4, 1, 2, 3)  # BTHWC -> BCTHW to match reference
+        torch.save(t, f"/tmp/midblock_debug/tt_{name}.pt")
+        print(f"  [TT] {name}: shape={list(t.shape)} std={t.float().std():.4e}", flush=True)
+
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
+        # self.dump_tensor(x_BTHWC, "0_input", logical_h)
         x_res_BTHWC = self.resnets[0](x_BTHWC, logical_h, feat_cache, feat_idx)
+        print(f"RESNET1")
+        # self.dump_tensor(x_res_BTHWC, "1_after_resnet0", logical_h)
         x_BTHWC = x_res_BTHWC
         for i in range(len(self.attentions)):
             x_attn_BTHWC = self.attentions[i](x_BTHWC, logical_h)
+            print("ATTN_OUT")
+            # self.dump_tensor(x_attn_BTHWC, f"2_after_attn{i}", logical_h)
+            # x_attn_BTHWC = ttnn.clone(x_attn_BTHWC)  # DEBUG: force clean tensor
             x_BTHWC = self.resnets[i + 1](x_attn_BTHWC, logical_h, feat_cache, feat_idx)
+            print("RESNET2_OUT")
+            # self.dump_tensor(x_BTHWC, f"3_after_resnet{i+1}", logical_h)
         return x_BTHWC
 
 
@@ -665,7 +752,7 @@ class WanConv2d:
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -1042,7 +1129,12 @@ class WanDecoder3d:
 
         # output blocks
         self.norm_out = RMSNorm(
-            embedding_dim=out_dim, norm_eps=1e-6, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
+            embedding_dim=out_dim,
+            norm_eps=1e-6,
+            norm_elementwise_affine=True,
+            bias=False,
+            mesh_device=mesh_device
+            # embedding_dim=out_dim, norm_eps=1e-12, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
         )
         self.conv_out = WanCausalConv3d(
             out_dim,
@@ -1213,12 +1305,6 @@ class WanDecoder:
 
         output_BCTHW = None
         for i in range(T):
-
-            if i == 0:
-                from tracy import Profiler
-                profiler = Profiler()
-                profiler.enable()
-
             # Process one frame at a time
             self._conv_idx = [0]
             out_BTHWC, new_logical_h = self.decoder(
@@ -1232,10 +1318,6 @@ class WanDecoder:
                 output_BCTHW = out_BCTHW
             else:
                 output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
-
-            if i == 0:
-                profiler.disable()
-            return (None, None)
 
         output_tile_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
@@ -1330,7 +1412,12 @@ class WanEncoder3D:
 
         # output blocks
         self.norm_out = RMSNorm(
-            embedding_dim=out_dim, norm_eps=1e-6, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
+            embedding_dim=out_dim,
+            norm_eps=1e-6,
+            norm_elementwise_affine=True,
+            bias=False,
+            mesh_device=mesh_device
+            # embedding_dim=out_dim, norm_eps=1e-12, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
         )
         self.conv_out = WanCausalConv3d(
             out_dim,

@@ -79,6 +79,20 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t C_out_num_blocks = tt::div_up(C_out, C_out_block);
     TT_FATAL(C_out_num_blocks * C_out_block == C_out, "C_out_num_blocks * C_out_block must equal C_out");
 
+    // Both the reader (vol2col row layout) and writer (weight tile offsets) assume patch_size
+    // is tile-aligned. The reader writes patches contiguously but tilize_block expects rows at
+    // page_size stride; the writer indexes weight tiles at c_in_block * matmul_K_t assuming
+    // blocks don't share tile rows. Both break when patch_size % TILE_WIDTH != 0.
+    TT_FATAL(
+        patch_size % tt::constants::TILE_WIDTH == 0,
+        "patch_size (kD*kH*kW*C_in_block = {}*{}*{}*{} = {}) must be a multiple of TILE_WIDTH ({})",
+        operation_attributes.kernel_size[0],
+        operation_attributes.kernel_size[1],
+        operation_attributes.kernel_size[2],
+        C_in_block,
+        patch_size,
+        tt::constants::TILE_WIDTH);
+
     uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
     uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
@@ -399,6 +413,20 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     // Calculate blocks per core using ceiling division
     const uint32_t c_in_per_core = tt::div_up(C_in_num_blocks, c_in_parallel_factor);
+
+    // When c_in_per_core > 1, a single core processes multiple C_in blocks sequentially.
+    // The writer overwrites (not accumulates) each block's output at the same DRAM address,
+    // and the bias is re-added on each iteration. Until the kernel supports accumulation
+    // across C_in blocks on a single core, restrict to 1 block per core.
+    TT_FATAL(
+        c_in_per_core == 1,
+        "Each core must handle exactly 1 C_in block, but got c_in_per_core={}. "
+        "C_in_num_blocks={}, c_in_parallel_factor={}, num_cores={}",
+        c_in_per_core,
+        C_in_num_blocks,
+        c_in_parallel_factor,
+        num_cores);
+
     const uint32_t c_out_per_core = tt::div_up(C_out_num_blocks, c_out_parallel_factor);
     const uint32_t t_out_per_core = tt::div_up(T_out_blocks, t_out_parallel_factor);
     const uint32_t h_out_per_core = tt::div_up(H_out_blocks, h_out_parallel_factor);

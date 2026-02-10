@@ -33,6 +33,7 @@ def get_conv3d_config(in_channels, grid_size):
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
     return ttnn.Conv3dConfig(
         weights_dtype=ttnn.bfloat16,
+        # weights_dtype=ttnn.float32,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
         W_out_block=W_out_block,
@@ -149,6 +150,7 @@ class ContextParallelConv3d:
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
+            # math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
