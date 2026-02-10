@@ -20,16 +20,12 @@ void kernel_main() {
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-
-    // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_out = tt::CBIndex::c_2;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w);
-    constexpr uint32_t out_tile_size = get_tile_size(cb_c2s_out);
+    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out);
 
     //-------------------------------------------------------------------------
     // Collector core
@@ -39,9 +35,9 @@ void kernel_main() {
     uint32_t semaphore_value = 12;
 
     for (uint32_t iter_id = 0; iter_id < 4; ++iter_id) {
-        cb_reserve_back(cb_c2w_rdy, 1);
+        cb_reserve_back(cb_c2w_out, 1);
         noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value);
-        cb_push_back(cb_c2w_rdy, 1);
+        cb_push_back(cb_c2w_out, 1);
         semaphore_value += 12;
     }
 }

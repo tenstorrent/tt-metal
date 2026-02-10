@@ -24,11 +24,7 @@ void kernel_main() {
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-
-    // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_out = tt::CBIndex::c_2;
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -51,7 +47,7 @@ void kernel_main() {
     // Compute
     //-------------------------------------------------------------------------
     // Pack is always configured to Float16_b
-    pack_reconfig_data_format(cb_c2s_out);
+    pack_reconfig_data_format(cb_c2w_out);
 
     // Unpacker B is for input/activation and eltiwse inputs, so Float16_b
     reconfig_data_format_srcb(cb_s2c_in);
@@ -60,7 +56,7 @@ void kernel_main() {
     reconfig_data_format_srca(cb_r2c_w);
 
     // Initialize matmul
-    mm_block_init(cb_s2c_in, cb_r2c_w, cb_c2s_out, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
+    mm_block_init(cb_s2c_in, cb_r2c_w, cb_c2w_out, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
 
     //---------------------------------------------------------------------
     // Compute in @ W
@@ -90,14 +86,10 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
-        for (uint32_t tile_id = 0; tile_id < num_n_tiles_per_iter; ++tile_id) {
-            pack_tile(tile_id, cb_c2s_out);
-        }
+        cb_reserve_back(cb_c2w_out, num_n_tiles_per_iter);
+        pack_tile_block(0, cb_c2w_out, num_n_tiles_per_iter);
+        cb_push_back(cb_c2w_out, num_n_tiles_per_iter);
         tile_regs_release();
-
-        // Signal to DM1 that 7 output tiles from this core are ready
-        cb_reserve_back(cb_c2w_rdy, 1);
-        cb_push_back(cb_c2w_rdy, 1);
     }
 
     // Drain the pipeline - the last dummy push

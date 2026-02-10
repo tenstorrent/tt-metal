@@ -29,31 +29,26 @@ void kernel_main() {
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-
-    // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_out = tt::CBIndex::c_2;
 
     //-------------------------------------------------------------------------
     // Collector core
     //-------------------------------------------------------------------------
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_s2c_in, cb_s2c_in, cb_c2s_out);
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_s2c_in, cb_s2c_in, cb_c2w_out);
 
     for (uint32_t iter_id = 0; iter_id < 4; ++iter_id) {
-        cb_wait_front(cb_c2w_rdy, 1);
-
-        tile_regs_acquire();
-        // Reduce 12 partial sums into 1 tile
-        // for (uint32_t k = 0; k < 12; ++k) {
-        //     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_c2w_rdy, cb_c2w_rdy, 0, 0, 0);
-        // }
-
-        cb_pop_front(cb_c2w_rdy, 1);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_c2s_out);
-        tile_regs_release();
+        cb_wait_front(cb_c2w_out, 1);
+        cb_pop_front(cb_c2w_out, 1);
     }
+
+    tile_regs_acquire();
+    // Reduce 12 partial sums into 1 tile
+    for (uint32_t k = 0; k < 12; ++k) {
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_c2w_out, cb_c2w_out, 0, 0, 0);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    // pack_tile(0, cb_c2w_out);
+    tile_regs_release();
     reduce_uninit();
 }

@@ -45,15 +45,12 @@ void kernel_main() {
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-
-    // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_out = tt::CBIndex::c_2;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w);
+    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
