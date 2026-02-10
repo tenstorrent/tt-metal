@@ -84,9 +84,7 @@ tt::tt_metal::Program create_socket_forward_program(
     if (num_whole_packets > 0U) {
         // Distribute whole packets across links, biasing link 0 by one whole packet when a partial packet exists.
         num_whole_packets_link_0 = (num_whole_packets / num_fwd_links) + static_cast<uint32_t>(partial_packet_size > 0);
-        if (num_whole_packets_link_0 > num_whole_packets) {
-            num_whole_packets_link_0 = num_whole_packets;
-        }
+        num_whole_packets_link_0 = std::min(num_whole_packets_link_0, num_whole_packets);
         num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
     }
 
