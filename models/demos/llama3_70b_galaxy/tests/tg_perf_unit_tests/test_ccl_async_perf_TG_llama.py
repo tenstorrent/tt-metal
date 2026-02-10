@@ -10,6 +10,22 @@ from models.perf.device_perf_utils import run_device_perf_detailed
 THRESHOLD = 0.4
 
 
+@pytest.fixture(autouse=True)
+def ensure_devices():
+    """Skip device initialization since this test spawns child pytest processes."""
+
+
+# Override galaxy_type fixture to avoid calling ttnn.cluster.get_cluster_type()
+# which might acquire device locks
+@pytest.fixture(scope="function")
+def galaxy_type():
+    """Return galaxy type without initializing devices."""
+    import os
+
+    # Use environment variable if set, otherwise default to "4U"
+    return os.environ.get("GALAXY_TYPE", "6U")
+
+
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
@@ -28,10 +44,9 @@ def test_ag_tg_llama_perf(
     step_name = f"all_gather_{ag_type}"
 
     subdir = "llama_ccl_perf"
-    if galaxy_type == "6U":
-        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_6u_llama -k {ag_type}"
-    else:
-        command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_tg_llama -k {ag_type}"
+    command = (
+        f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_6u_llama -k {ag_type}"
+    )
     cols = ["DEVICE KERNEL"]
     op_name = "AllGatherAsync"
     warmup_iters = warmup_iters * 32  # 5 iterations per device

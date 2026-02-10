@@ -66,14 +66,19 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "kernels/kernel.hpp"
-#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
+
 #include <impl/dispatch/dispatch_mem_map.hpp>
-#include "hostdevcommon/common_values.hpp"
+#include "hostdev/rta_constants.h"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
 }  // namespace tt::tt_metal
+
+#define LOG_TRACE_LAZY(logger_type, ...)                                                     \
+    if (tt::LoggerRegistry::instance().get(logger_type)->should_log(spdlog::level::trace)) { \
+        log_trace(logger_type, __VA_ARGS__);                                                 \
+    }
 
 namespace tt::tt_metal {
 using detail::ProgramImpl;
@@ -751,9 +756,18 @@ BatchedTransfers assemble_runtime_args_commands(
                 const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
                 for (auto& transfer_info :
                      extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
-                    auto noc_xy_addr = device->get_noc_multicast_encoding(
-                        constants.noc_index, std::get<CoreRange>(transfer_info.cores));
+                    const auto& core_range = std::get<CoreRange>(transfer_info.cores);
+                    auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
                     size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
+                    LOG_TRACE_LAZY(
+                        tt::LogDispatch,
+                        "Common RTA (MCAST via kernel_group): core_range={}, noc_xy=0x{:x}, "
+                        "num_dests={}, L1_addr=0x{:x}, crta_size={} bytes",
+                        core_range,
+                        noc_xy_addr,
+                        transfer_info.num_dests,
+                        crta_offset,
+                        size);
                     RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
                     transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
                         std::vector<Transfer>{Transfer{
@@ -806,6 +820,14 @@ BatchedTransfers assemble_runtime_args_commands(
                                 }
                             }
                             CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);
+                            LOG_TRACE_LAZY(
+                                tt::LogDispatch,
+                                "Unique RTA (UNICAST): logical_core={}, virtual_core={}, noc_xy=0x{:x}, "
+                                "rta_size={} bytes",
+                                core_coord,
+                                virtual_core,
+                                device->get_noc_unicast_encoding(constants.noc_index, virtual_core),
+                                kg->total_rta_size);
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                                 .noc_xy_addr = device->get_noc_unicast_encoding(constants.noc_index, virtual_core)});
                         }
@@ -886,10 +908,22 @@ BatchedTransfers assemble_runtime_args_commands(
                         auto& unicast_sub_cmd =
                             std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
                         unicast_sub_cmd.reserve(kernel->logical_cores().size());
+                        LOG_TRACE_LAZY(
+                            tt::LogDispatch,
+                            "Common RTA (UNICAST per-kernel): num_cores={}, L1_addr=0x{:x}, crta_size={} bytes",
+                            kernel->logical_cores().size(),
+                            crta_offset,
+                            common_size);
                         for (const auto& core_coord : kernel->logical_cores()) {
                             // can make a vector of unicast encodings here
                             CoreCoord virtual_core_coords =
                                 device->virtual_core_from_logical_core(core_coord, core_type);
+                            LOG_TRACE_LAZY(
+                                tt::LogDispatch,
+                                "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
+                                core_coord,
+                                virtual_core_coords,
+                                device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords));
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                                 .noc_xy_addr =
                                     device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords)});
@@ -902,11 +936,23 @@ BatchedTransfers assemble_runtime_args_commands(
                         auto& multicast_sub_cmd =
                             std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds);
                         multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
+                        LOG_TRACE_LAZY(
+                            tt::LogDispatch,
+                            "Common RTA (MCAST per-kernel): num_ranges={}, L1_addr=0x{:x}, crta_size={} bytes",
+                            dst_noc_multicast_info.size(),
+                            crta_offset,
+                            common_size);
                         for (const auto& mcast_dests : dst_noc_multicast_info) {
+                            const auto& core_range = std::get<CoreRange>(mcast_dests.cores);
+                            auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, core_range);
+                            LOG_TRACE_LAZY(
+                                tt::LogDispatch,
+                                "  core_range={}, noc_xy=0x{:x}, num_dests={}",
+                                core_range,
+                                noc_xy,
+                                mcast_dests.num_dests);
                             multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                                .noc_xy_addr = device->get_noc_multicast_encoding(
-                                    constants.noc_index, std::get<CoreRange>(mcast_dests.cores)),
-                                .num_mcast_dests = mcast_dests.num_dests});
+                                .noc_xy_addr = noc_xy, .num_mcast_dests = mcast_dests.num_dests});
                         }
                     }
 
@@ -989,9 +1035,18 @@ public:
                 std::vector<multicast_transfer_info> dst_noc_multicast_info =
                     extract_dst_noc_multicast_info(device, semaphore.core_range_set().ranges(), CoreType::WORKER);
                 for (const auto& dst_noc_info : dst_noc_multicast_info) {
-                    auto noc_xy_addr = device->get_noc_multicast_encoding(
-                        constants.noc_index, std::get<CoreRange>(dst_noc_info.cores));
+                    const auto& core_range = std::get<CoreRange>(dst_noc_info.cores);
+                    auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
                     uint32_t start_addr = semaphore.offset() + program.get_program_config(index).sem_offset;
+                    LOG_TRACE_LAZY(
+                        tt::LogDispatch,
+                        "Semaphore (MCAST/WORKER): core_range={}, noc_xy=0x{:x}, num_dests={}, "
+                        "L1_addr=0x{:x}, initial_value={}",
+                        core_range,
+                        noc_xy_addr,
+                        dst_noc_info.num_dests,
+                        start_addr,
+                        semaphore_data.back());
                     RecordDispatchData(program.get_id(), DISPATCH_DATA_SEMAPHORE, sizeof(uint32_t));
                     batched_transfers[std::make_pair(noc_xy_addr, dst_noc_info.num_dests)][start_addr] =
                         std::vector<Transfer>{
@@ -1005,10 +1060,17 @@ public:
                 // TODO: we only fast dispatch to active eth...
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
+                LOG_TRACE_LAZY(
+                    tt::LogDispatch,
+                    "Semaphore (UNICAST/ETH): num_cores={}, L1_offset=0x{:x}, initial_value={}",
+                    dst_noc_unicast_info.size(),
+                    semaphore.offset(),
+                    semaphore_data.back());
                 for (const auto& dst_noc_info : dst_noc_unicast_info) {
-                    unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                        .noc_xy_addr = device->get_noc_unicast_encoding(
-                            constants.noc_index, std::get<CoreCoord>(dst_noc_info.first))});
+                    const auto& virtual_core = std::get<CoreCoord>(dst_noc_info.first);
+                    auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_core);
+                    LOG_TRACE_LAZY(tt::LogDispatch, "  virtual_core={}, noc_xy=0x{:x}", virtual_core, noc_xy);
+                    unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
                     unicast_cmds.data.emplace_back(&semaphore_data.back(), sizeof(uint32_t));
                 }
                 calculator.insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
@@ -1030,10 +1092,11 @@ public:
         for (const auto& cmds : unicast_semaphore_cmds) {
             uint32_t curr_sub_cmd_idx = 0;
             for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : cmds.payload) {
+                uint32_t sem_addr = cmds.dst + program.get_program_config(index).sem_offset;
                 device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
                     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS,
                     num_sub_cmds_in_cmd,
-                    cmds.dst + program.get_program_config(index).sem_offset,
+                    sem_addr,
                     cmds.size,
                     unicast_sem_payload_sizeB,
                     cmds.sub_cmds,
@@ -1115,9 +1178,19 @@ public:
                         max_index = std::max(max_index, base_index + UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                     }
                 }
-                auto noc_xy_addr =
-                    device->get_noc_multicast_encoding(constants.noc_index, CoreRange(virtual_start, virtual_end));
+                CoreRange virtual_range(virtual_start, virtual_end);
+                auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
                 uint32_t start_addr = program.get_program_config(index).cb_offset;
+                LOG_TRACE_LAZY(
+                    tt::LogDispatch,
+                    "Circular Buffers (MCAST): logical_range={}, virtual_range={}, "
+                    "noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, config_size={} bytes",
+                    core_range,
+                    virtual_range,
+                    noc_xy_addr,
+                    core_range.size(),
+                    start_addr,
+                    max_index * sizeof(uint32_t));
                 RecordDispatchData(program.get_id(), DISPATCH_DATA_CB_CONFIG, max_index * sizeof(uint32_t));
 
                 batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
@@ -1176,6 +1249,33 @@ public:
                 cores);
             for (uint32_t kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
                 if (write_linear) {
+                    // Unicast kernel binary
+                    if (tt::LoggerRegistry::instance().get(tt::LogDispatch)->should_log(spdlog::level::trace)) {
+                        std::visit(
+                            ttsl::overloaded{
+                                [&](const CoreRange& core_range) {
+                                    log_trace(
+                                        tt::LogDispatch,
+                                        "Kernel Binary (UNICAST): core_range={}, noc_xy=0x{:x}, "
+                                        "L1_addr=0x{:x}, size={} bytes",
+                                        core_range,
+                                        noc_encoding,
+                                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                                        kg_transfer_info.lengths[kernel_idx]);
+                                },
+                                [&](const CoreCoord& core_coord) {
+                                    log_trace(
+                                        tt::LogDispatch,
+                                        "Kernel Binary (UNICAST): core={}, noc_xy=0x{:x}, L1_addr=0x{:x}, size={} "
+                                        "bytes",
+                                        core_coord,
+                                        noc_encoding,
+                                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                                        kg_transfer_info.lengths[kernel_idx]);
+                                },
+                            },
+                            cores);
+                    }
                     kernel_bins_unicast_cmds.emplace_back(unicast_cmd_sequence_sizeB);
                     calculator.update_write_offset_bytes(unicast_cmd_sequence_sizeB);
                     constexpr bool flush_prefetch = false;
@@ -1237,6 +1337,36 @@ public:
                                      .length = kg_transfer_info.lengths[kernel_idx]})));
                     }
                 } else {
+                    // Multicast kernel binary
+                    if (tt::LoggerRegistry::instance().get(tt::LogDispatch)->should_log(spdlog::level::trace)) {
+                        std::visit(
+                            ttsl::overloaded{
+                                [&](const CoreRange& core_range) {
+                                    log_trace(
+                                        tt::LogDispatch,
+                                        "Kernel Binary (MCAST): core_range={}, noc_xy=0x{:x}, "
+                                        "num_dests={}, L1_addr=0x{:x}, size={} bytes",
+                                        core_range,
+                                        noc_encoding,
+                                        num_mcast_dests,
+                                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                                        kg_transfer_info.lengths[kernel_idx]);
+                                },
+                                [&](const CoreCoord& core_coord) {
+                                    log_trace(
+                                        tt::LogDispatch,
+                                        "Kernel Binary (MCAST): core={}, noc_xy=0x{:x}, num_dests={}, "
+                                        "L1_addr=0x{:x}, size={} bytes",
+                                        core_coord,
+                                        noc_encoding,
+                                        num_mcast_dests,
+                                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                                        kg_transfer_info.lengths[kernel_idx]);
+                                },
+                            },
+                            cores);
+                    }
+
                     uint32_t base_address = kernels_buffer->address();
                     uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
 
@@ -1472,6 +1602,28 @@ public:
                 last_end = transfer.end();
             }
             std::vector<uint8_t*> data_collection_location;
+            if (tt::LoggerRegistry::instance().get(tt::LogDispatch)->should_log(spdlog::level::trace)) {
+                log_trace(
+                    tt::LogDispatch,
+                    "Assembling Batched Transfer Command: num_sub_cmds={}",
+                    batched_dispatch_subcmds[i].size());
+                for (size_t subcmd_idx = 0; subcmd_idx < batched_dispatch_subcmds[i].size(); ++subcmd_idx) {
+                    const auto& subcmd = batched_dispatch_subcmds[i][subcmd_idx];
+                    bool is_unlinked = (subcmd.flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK) != 0;
+                    log_trace(
+                        tt::LogDispatch,
+                        "  SubCmd[{}]: noc_xy_addr=0x{:x}, addr=0x{:x}, size={} bytes, num_mcast_dests={}, "
+                        "flags=0x{:x} {}",
+                        subcmd_idx,
+                        subcmd.noc_xy_addr,
+                        subcmd.addr,
+                        subcmd.length_minus1 + 1,
+                        subcmd.num_mcast_dests,
+                        subcmd.flags,
+                        is_unlinked ? "(UNLINK)" : "");
+                }
+            }
+
             device_command_sequence.add_dispatch_write_packed_large(
                 CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
                 l1_alignment,
@@ -1578,23 +1730,45 @@ public:
                         CoreCoord virtual_end =
                             device->virtual_core_from_logical_core(core_range.end_coord, kernel_group->get_core_type());
 
+                        CoreRange virtual_range(virtual_start, virtual_end);
+                        auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                        LOG_TRACE_LAZY(
+                            tt::LogDispatch,
+                            "Launch Message (MCAST): logical_range={}, "
+                            "virtual_range={}, noc_xy=0x{:x}, num_dests={}, msg_size={} bytes",
+                            core_range,
+                            virtual_range,
+                            noc_xy,
+                            core_range.size(),
+                            kernel_group->launch_msg.size());
+
                         multicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                            .noc_xy_addr = device->get_noc_multicast_encoding(
-                                constants.noc_index, CoreRange(virtual_start, virtual_end)),
-                            .num_mcast_dests = (uint32_t)core_range.size()});
+                            .noc_xy_addr = noc_xy, .num_mcast_dests = (uint32_t)core_range.size()});
                         multicast_cmds.data.emplace_back(
                             kernel_group->launch_msg.data(), kernel_group->launch_msg.size());
                     }
                 } else {
                     // Need to unicast to each core in the kernel group
+                    LOG_TRACE_LAZY(
+                        tt::LogDispatch,
+                        "Launch Message (UNICAST): num_cores={}, msg_size={} bytes",
+                        kernel_group->core_ranges.num_cores(),
+                        kernel_group->launch_msg.size());
                     for (const CoreRange& core_range : kernel_group->core_ranges.ranges()) {
                         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                                CoreCoord logical_coord({x, y});
                                 CoreCoord virtual_coord = device->virtual_core_from_logical_core(
-                                    CoreCoord({x, y}), kernel_group->get_core_type());
-                                unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                    .noc_xy_addr =
-                                        device->get_noc_unicast_encoding(constants.noc_index, virtual_coord)});
+                                    logical_coord, kernel_group->get_core_type());
+                                auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_coord);
+                                LOG_TRACE_LAZY(
+                                    tt::LogDispatch,
+                                    "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
+                                    logical_coord,
+                                    virtual_coord,
+                                    noc_xy);
+                                unicast_cmds.sub_cmds.emplace_back(
+                                    CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
                                 unicast_cmds.data.emplace_back(
                                     kernel_group->launch_msg.data(), kernel_group->launch_msg.size());
                             }
@@ -1657,8 +1831,9 @@ public:
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 program_command_sequence.launch_msg_write_packed_cmd_ptrs.push_back(
-                    &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                                       ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
+                    &(reinterpret_cast<CQDispatchCmd*>(
+                          reinterpret_cast<uint32_t*>(device_command_sequence.data()) +
+                          ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
                          ->write_packed);
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
@@ -1690,8 +1865,9 @@ public:
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.push_back(
-                    &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                                       ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
+                    &(reinterpret_cast<CQDispatchCmd*>(
+                          reinterpret_cast<uint32_t*>(device_command_sequence.data()) +
+                          ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
                          ->write_packed);
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
@@ -1794,9 +1970,23 @@ public:
             num_noc_unicast_txns,
             noc_data_start_idx,
             dispatcher_for_go_signal);
+
+        LOG_TRACE_LAZY(
+            tt::LogDispatch,
+            "Go Signal (MCAST): dispatcher={}, sub_device_idx={}, num_unicast_txns={}, noc_data_start_idx={}, "
+            "stream_idx={}",
+            dispatcher_for_go_signal == DispatcherSelect::DISPATCH_MASTER ? "MASTER" : "SUBORDINATE",
+            sub_device_index,
+            num_noc_unicast_txns,
+            noc_data_start_idx,
+            MetalContext::instance()
+                .dispatch_mem_map(constants.dispatch_core_type)
+                .get_dispatch_stream_index(sub_device_index));
+
         program_command_sequence.mcast_go_signal_cmd_ptr =
-            &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                               ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
+            &(reinterpret_cast<CQDispatchCmd*>(
+                  reinterpret_cast<uint32_t*>(device_command_sequence.data()) +
+                  ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
                  ->mcast;
     }
 };
@@ -1807,6 +1997,16 @@ void assemble_device_commands(
     IDevice* device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache) {
+    LOG_TRACE_LAZY(tt::LogDispatch, "");
+    LOG_TRACE_LAZY(
+        tt::LogDispatch, "========== Assembling Device Commands for Program ID {} ==========", program.get_id());
+    LOG_TRACE_LAZY(
+        tt::LogDispatch,
+        "Device: {}, SubDevice: {}, Prefetcher Cache: {}",
+        device->id(),
+        *sub_device_id,
+        use_prefetcher_cache ? "enabled" : "disabled");
+
     CommandConstants constants{};
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     constants.dispatch_core_type = get_core_type_from_config(dispatch_core_config);
@@ -1897,6 +2097,47 @@ void assemble_device_commands(
     TT_ASSERT(
         program_command_sequence.go_msg_command_sequence.size_bytes() ==
         program_command_sequence.go_msg_command_sequence.write_offset_bytes());
+
+    if (tt::LoggerRegistry::instance().get(tt::LogDispatch)->should_log(spdlog::level::trace)) {
+        log_trace(tt::LogDispatch, "---------- Command Sequence Summary ----------");
+        log_trace(
+            tt::LogDispatch,
+            "Preamble:                 {} bytes",
+            program_command_sequence.preamble_command_sequence.size_bytes());
+        log_trace(
+            tt::LogDispatch,
+            "Runtime Args Commands:    {} commands",
+            program_command_sequence.runtime_args_command_sequences.size());
+        uint32_t total_rta_size = 0;
+        for (const auto& cmd : program_command_sequence.runtime_args_command_sequences) {
+            total_rta_size += cmd.size_bytes();
+        }
+        log_trace(tt::LogDispatch, "Runtime Args Total Size:  {} bytes", total_rta_size);
+        log_trace(
+            tt::LogDispatch,
+            "Program Config Buffer:    {} bytes",
+            program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+        log_trace(
+            tt::LogDispatch,
+            "Program Binary:           {} bytes",
+            program_command_sequence.program_binary_command_sequence.size_bytes());
+        log_trace(
+            tt::LogDispatch,
+            "Launch Message:           {} bytes",
+            program_command_sequence.launch_msg_command_sequence.size_bytes());
+        log_trace(
+            tt::LogDispatch,
+            "Go Signal:                {} bytes",
+            program_command_sequence.go_msg_command_sequence.size_bytes());
+        uint32_t total_size = program_command_sequence.preamble_command_sequence.size_bytes() + total_rta_size +
+                              program_command_sequence.program_config_buffer_command_sequence.size_bytes() +
+                              program_command_sequence.program_binary_command_sequence.size_bytes() +
+                              program_command_sequence.launch_msg_command_sequence.size_bytes() +
+                              program_command_sequence.go_msg_command_sequence.size_bytes();
+        log_trace(tt::LogDispatch, "TOTAL SIZE:               {} bytes", total_size);
+        log_trace(tt::LogDispatch, "========== End Device Commands Assembly ==========");
+        log_trace(tt::LogDispatch, "");
+    }
 }
 
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
@@ -2349,11 +2590,23 @@ void write_program_command_sequence(
     bool stall_first,
     bool stall_before_program,
     bool send_binary) {
+    LOG_TRACE_LAZY(tt::LogDispatch, "");
+    LOG_TRACE_LAZY(
+        tt::LogDispatch, "========== Writing Program Command Sequence to CQ {} ==========", command_queue_id);
+    LOG_TRACE_LAZY(
+        tt::LogDispatch,
+        "Stall First: {}, Stall Before Program: {}, Send Binary: {}",
+        stall_first,
+        stall_before_program,
+        send_binary);
+
     // Check if it's possible to write all commands in a single fetch queue entry
     uint32_t one_shot_fetch_size =
         program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
     bool one_shot = one_shot_fetch_size <=
                     MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
+
+    LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
     if (one_shot) {
         manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
     }
@@ -2435,6 +2688,9 @@ void write_program_command_sequence(
         manager.fetch_queue_reserve_back(command_queue_id);
         manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
     }
+
+    LOG_TRACE_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
+    LOG_TRACE_LAZY(tt::LogDispatch, "");
 }
 
 TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_prefetcher_cache) {
@@ -2502,16 +2758,30 @@ KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
     return kernel_handle & 0xffff;
 }
 
-template <typename WorkloadType, typename DeviceType>
+// ProgramImpl version - does not support CQs
 uint32_t program_base_addr_on_core(
-    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type) {
-    const auto& sub_device_ids = workload.determine_sub_device_ids(generic_device);
+    ProgramImpl& program, IDevice* device, HalProgrammableCoreType programmable_core_type) {
+    const auto& sub_device_ids = program.determine_sub_device_ids(device);
+    // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
+    // Addresses are not the same across sub-devices
+    TT_FATAL(
+        sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
+    // ProgramImpl always uses the HAL address and does not support CQs
+    return MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+}
+
+// MeshWorkloadImpl version - supports both CQs and not having CQs
+uint32_t program_base_addr_on_core(
+    distributed::MeshWorkloadImpl& mesh_workload,
+    distributed::MeshDevice* mesh_device,
+    HalProgrammableCoreType programmable_core_type) {
+    const auto& sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device);
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
     // Addresses are not the same across sub-devices
     TT_FATAL(
         sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = **sub_device_ids.begin();
-    auto cq = workload.get_last_used_command_queue();
+    auto* cq = mesh_workload.get_last_used_command_queue();
     return cq ? (cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type))
               : MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
@@ -2811,9 +3081,6 @@ void set_core_go_message_mapping_on_device(
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
-template uint32_t program_base_addr_on_core<ProgramImpl, IDevice*>(ProgramImpl&, IDevice*, HalProgrammableCoreType);
-template uint32_t program_base_addr_on_core<distributed::MeshWorkloadImpl, distributed::MeshDevice*>(
-    distributed::MeshWorkloadImpl&, distributed::MeshDevice*, HalProgrammableCoreType);
 }  // namespace program_dispatch
 
 }  // namespace tt::tt_metal

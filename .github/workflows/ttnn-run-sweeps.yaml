@@ -670,7 +670,7 @@ jobs:
   display-workflow-options:
     name: 📋 Display workflow options
     runs-on: ubuntu-22.04
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
       - name: Display selected workflow options
         run: |
@@ -678,18 +678,20 @@ jobs:
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                    TTNN Run Sweeps Configuration            │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Sweep Name:           ${{ github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)' }}"
-          echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Not specified' }}"
-          echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
-          echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
-          echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
-          echo "│ Measure E2E Perf:     ${{ github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
-          echo "│ Measure Memory:       ${{ github.event.inputs.measure_memory == 'true' && 'true' || 'false' }}"
+          echo "│ Trigger:              ${{ github.event_name }}"
+          echo "│ Sweep Name:           ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)') || (github.event_name == 'schedule' && (github.event.schedule == '30 4 * * 0,1,2,4,5' && 'ALL SWEEPS (Nightly)' || github.event.schedule == '0 4 * * 3,6' && 'ALL SWEEPS (Comprehensive)' || github.event.schedule == '0 3 * * *' && 'ALL SWEEPS (Model Traced)' || github.event.schedule == '0 2 * * *' && 'ALL SWEEPS (Lead Models)' || format('scheduled ({0})', github.event.schedule))) || 'ALL SWEEPS (Nightly)' }}"
+          echo "│ Suite Name:           ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.suite_name || 'Not specified') || 'Not specified' }}"
+          echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') || 'false') }}"
+          echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.upload_results == 'true' && 'true' || 'false') || 'false') }}"
+          echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') || 'false') }}"
+          echo "│ Measure E2E Perf:     ${{ github.event_name == 'schedule' && 'false' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false') || 'false') }}"
+          echo "│ Measure Memory:       ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_memory == 'true' && 'true' || 'false') || 'false') }}"
           echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
           echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
           echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
-          echo "│ Use Database:         ${{ github.event.inputs.use_database == 'true' && 'true' || 'false' }}"
+          echo "│ Use Database:         ${{ github.event_name == 'schedule' && ((github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.use_database == 'true' && 'true' || 'false') || 'false') }}"
           echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
+          echo "│ Cron (if scheduled): ${{ github.event.schedule || 'N/A' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
@@ -734,7 +736,7 @@ jobs:
 
       - name: Generate JSON from database
         env:
-          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_DATABASE_URL }}
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           # Use the centralized reconstruction script
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
@@ -747,6 +749,8 @@ jobs:
           retention-days: 1
 
   ttnn-generate-sweeps:
+    # Generates sweep vectors for: single sweeps, model traced, lead models, and non-CCL modules for nightly/comprehensive
+    # CCL module generation is handled by ttnn-generate-sweeps-ccl job (only for Nightly/Comprehensive)
     name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
     needs: [build-artifact, generate-master-json-from-db]
     if: always() && needs.build-artifact.result == 'success' && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
@@ -754,18 +758,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Entry 1: Manual dispatch with single sweep only
+          # Entry 1: Manual dispatch with single sweep, model traced, or lead models
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
             generate_mode: all
-          # Entry 2: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - N150 for non-CCL modules
+          # Entry 2: Nightly/Comprehensive - N150 for non-CCL modules
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: N150
             generate_mode: non_ccl
-          # Entry 3: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - n300-llmbox for CCL modules only
-          - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
-            runner_label: n300-llmbox
-            generate_mode: ccl_only
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -836,32 +836,15 @@ jobs:
           matrix.generate_mode == 'all'
         run: |
           python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main
-      - name: Run ttnn sweeps generation (all sweeps)
+      - name: Run ttnn sweeps generation (nightly/comprehensive - non-CCL)
         if: |
-          ((github.event_name == 'schedule' && github.event.schedule != '0 4 * * *' && github.event.schedule != '0 3 * * *') ||
+          ((github.event_name == 'schedule' && github.event.schedule != '0 2 * * *' && github.event.schedule != '0 3 * * *') ||
            (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)') ||
            (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')) &&
-          (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
+          matrix.generate_mode == 'non_ccl'
         run: |
-          # Determine which modules to skip based on generate_mode
-          SKIP_MODULES_FLAG=""
-          if [[ "${{ matrix.generate_mode }}" == "non_ccl" ]]; then
-            # Skip all CCL modules when generating on N150
-            SKIP_MODULES_FLAG="--skip-modules ccl.generality.all_broadcast,ccl.generality.all_gather,ccl.generality.all_reduce,ccl.generality.all_to_all_combine,ccl.generality.all_to_all_dispatch,ccl.generality.all_to_all,ccl.generality.point_to_point,ccl.generality.reduce_scatter"
-          elif [[ "${{ matrix.generate_mode }}" == "ccl_only" ]]; then
-            # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
-            # Use single-line Python command to avoid YAML parsing issues with multiline strings
-            NON_CCL_MODULES=$(python3 -c "import pathlib; sweeps_dir = pathlib.Path('tests/sweep_framework/sweeps'); all_modules = [str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') for py_file in sorted(sweeps_dir.glob('**/*.py')) if '__init__' not in str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') and not str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.').startswith('ccl.')]; print(','.join(all_modules))") || {
-              echo "Error: Failed to compute non-CCL modules"
-              exit 1
-            }
-            if [[ -z "$NON_CCL_MODULES" ]]; then
-              echo "Error: No non-CCL modules found - this would skip all modules"
-              exit 1
-            fi
-            SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
-          fi
-
+          # Skip all CCL modules when generating on N150 - CCL handled by ttnn-generate-sweeps-ccl job
+          SKIP_MODULES_FLAG="--skip-modules ccl.generality.all_broadcast,ccl.generality.all_gather,ccl.generality.all_reduce,ccl.generality.all_to_all_combine,ccl.generality.all_to_all_dispatch,ccl.generality.all_to_all,ccl.generality.point_to_point,ccl.generality.reduce_scatter"
           python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
@@ -869,17 +852,87 @@ jobs:
           name: sweeps-vectors-${{ matrix.generate_mode }}
           path: /work/tests/sweep_framework/vectors_export/
           retention-days: 1
+
+  ttnn-generate-sweeps-ccl:
+    # Generates CCL sweep vectors on n300-llmbox - ONLY for Nightly/Comprehensive runs
+    # This job is skipped for Lead Models, Model Traced, and single sweep runs (they don't use CCL)
+    name: Generate CCL Sweep Vectors (n300-llmbox)
+    needs: [build-artifact]
+    if: |
+      always() &&
+      needs.build-artifact.result == 'success' &&
+      (
+        (github.event_name == 'schedule' && github.event.schedule != '0 2 * * *' && github.event.schedule != '0 3 * * *') ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)') ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')
+      )
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 30
+    runs-on: tt-ubuntu-2204-n300-llmbox-viommu-stable
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Run ttnn sweeps generation (CCL modules only)
+        run: |
+          # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
+          # Use single-line Python command to avoid YAML parsing issues with multiline strings
+          NON_CCL_MODULES=$(python3 -c "import pathlib; sweeps_dir = pathlib.Path('tests/sweep_framework/sweeps'); all_modules = [str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') for py_file in sorted(sweeps_dir.glob('**/*.py')) if '__init__' not in str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') and not str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.').startswith('ccl.')]; print(','.join(all_modules))") || {
+            echo "Error: Failed to compute non-CCL modules"
+            exit 1
+          }
+          if [[ -z "$NON_CCL_MODULES" ]]; then
+            echo "Error: No non-CCL modules found - this would skip all modules"
+            exit 1
+          fi
+          SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
+      - name: Upload sweep vectors
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-vectors-ccl_only
+          path: /work/tests/sweep_framework/vectors_export/
+          retention-days: 1
   ttnn-compute-module-matrix:
     name: Compute module matrix
     # This job creates the execution plan for parallel sweep runs by:
-    # 1. Downloading all generated vector JSON files from ttnn-generate-sweeps
+    # 1. Downloading all generated vector JSON files from ttnn-generate-sweeps and ttnn-generate-sweeps-ccl
     # 2. Chunking them into batches based on run type (nightly=10, comprehensive/perf=3)
     # 3. Separating CCL modules for dedicated multi-chip runners (n300-llmbox)
     # 4. Determining test suite to execute (nightly, model_traced, comprehensive)
     # 5. Generating a matrix of runner configurations ie (wh/bh, runs_on, module_selector, suite_name)
     # The output matrix is consumed by ttnn-run-sweeps-batch to spawn parallel jobs
-    needs: ttnn-generate-sweeps
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' }}
+    needs: [ttnn-generate-sweeps, ttnn-generate-sweeps-ccl]
+    if: |
+      always() &&
+      needs.ttnn-generate-sweeps.result == 'success' &&
+      (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
+      (github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -943,7 +996,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ github.event.inputs.use_database == 'true' && secrets.TTNN_OPS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ github.event.inputs.use_database == 'true' && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -1063,9 +1116,15 @@ jobs:
     name: Run sweeps in parallel (${{ matrix.test_group_name }}, ${{ matrix.batch_display }})
     needs:
       - ttnn-generate-sweeps
+      - ttnn-generate-sweeps-ccl
       - build-artifact
       - ttnn-compute-module-matrix
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' }}
+    if: |
+      always() &&
+      needs.ttnn-generate-sweeps.result == 'success' &&
+      (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      (github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -1085,7 +1144,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && secrets.TTNN_OPS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -1241,7 +1300,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
@@ -1271,6 +1330,7 @@ jobs:
           elif [[ "${{ github.event.schedule }}" == "0 2 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Lead Models)" ]]; then
             RUN_TYPE="lead_models"
           fi
+          echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
       - name: Upload runs
         uses: actions/upload-artifact@v4
@@ -1278,6 +1338,19 @@ jobs:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/oprun_*.json
           retention-days: 7
+      - name: Push results to database (lead models only)
+        if: env.RUN_TYPE == 'lead_models'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ARCH_NAME: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          pip install psycopg2-binary
+          python /work/.github/actions/sweep-run-analysis/scripts/push_sweep_results.py \
+            /work/tests/sweep_framework/results_export/ \
+            "lead models"
   ttnn-upload-results:
     name: Upload sweep results to SFTP server
     needs:

@@ -277,7 +277,9 @@ public:
     //       CloseDevice(0)
     //       CloseDevice(1)
     void set_internal_routing_info_for_ethernet_cores(
-        bool enable_internal_routing, const std::vector<ChipId>& target_mmio_devices = {}) const;
+        const tt::tt_fabric::ControlPlane& control_plane,
+        bool enable_internal_routing,
+        const std::vector<ChipId>& target_mmio_devices = {}) const;
 
     const std::unordered_map<ChipId, std::unordered_map<EthernetChannel, std::tuple<ChipId, EthernetChannel>>>&
     get_ethernet_connections() const {
@@ -316,14 +318,16 @@ public:
     void configure_ethernet_cores_for_fabric_routers(
         tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
-    void initialize_fabric_config(
-        tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
-
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
 
-    // Returns whether we are running on UBB Galaxy.
+    // Returns whether the Cluster instance is running on UBB Galaxy.
     bool is_ubb_galaxy() const;
+
+    static bool is_ubb_galaxy(tt::tt_metal::ClusterType cluster_type) {
+        return cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY ||
+               cluster_type == tt::tt_metal::ClusterType::GALAXY;
+    }
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(ChipId chip_id) const;
@@ -340,7 +344,8 @@ public:
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores
-    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(ChipId chip_id) const;
+    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(
+        const tt::tt_fabric::ControlPlane& control_plane, ChipId chip_id) const;
 
     // Get fabric ethernet cores connecting src to dst
     std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(ChipId src_id, ChipId dst_id) const;

@@ -200,6 +200,7 @@ init_packages() {
                 "python3-dev"
                 "python3-pip"
                 "python3-venv"
+                "python3-pkg-resources" # needed for setuptools
                 "libhwloc-dev"
                 "libnuma-dev"
                 "libatomic1"

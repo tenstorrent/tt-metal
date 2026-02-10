@@ -12,7 +12,6 @@
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/program.hpp>
-#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "llrt.hpp"

@@ -299,19 +299,48 @@ PYTORCH_INDEX="https://download.pytorch.org/whl/cpu"
 
 if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
-    uv pip install --extra-index-url "$PYTORCH_INDEX" setuptools wheel==0.45.1
+    uv pip install --extra-index-url "$PYTORCH_INDEX" \
+        --index-strategy unsafe-best-match \
+        setuptools==80 wheel==0.45.1
 else
     echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
-    uv pip install --upgrade wheel setuptools
+    uv pip install --upgrade wheel setuptools==80
 fi
 
 echo "Installing dev dependencies"
 # Use --extra-index-url for PyTorch CPU wheels and index-strategy for transitive deps
-uv pip install --extra-index-url "$PYTORCH_INDEX" --index-strategy unsafe-best-match -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
+# no-build-isolation as a workaround for setuptools/mmcv
+uv pip install --extra-index-url "$PYTORCH_INDEX" \
+    --index-strategy unsafe-best-match \
+    --no-build-isolation \
+    -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
 
 echo "Installing tt-metal"
 uv pip install -e .
 
+# Create .pth files for ttml
+# This allows using pre-built ttml from build_metal.sh --build-tt-train
+SITE_PACKAGES="$PYTHON_ENV_DIR/lib/python${VENV_PYTHON_VERSION}/site-packages"
+
+TTML_SRC_DIR="$SCRIPT_DIR/tt-train/sources/ttml"
+TTML_BUILD_DIR="$SCRIPT_DIR/build/tt-train/sources/ttml"
+
+# Add ttml Python source code, if available
+if [ -d "$TTML_SRC_DIR" ]; then
+    echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
+    echo "  Created: $SITE_PACKAGES/ttml.pth"
+else
+    echo "  Skipping ttml.pth creation (directory not found: $TTML_SRC_DIR)"
+fi
+
+# Add the built _ttml C++ extension (.so file), if available
+# Uses the 'build' symlink which points to the active build directory (e.g., build_Release)
+if [ -d "$TTML_BUILD_DIR" ]; then
+    echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+    echo "  Created: $SITE_PACKAGES/_ttml.pth"
+else
+    echo "  Skipping _ttml.pth creation (directory not found: $TTML_BUILD_DIR)"
+fi
 # Do not install hooks when this is a worktree
 if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
     echo "Generating git hooks"

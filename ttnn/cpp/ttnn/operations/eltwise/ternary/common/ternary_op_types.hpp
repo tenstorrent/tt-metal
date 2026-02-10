@@ -18,6 +18,7 @@ enum class TernaryOpType {
     WHERE,    // conditional selection: out = predicate ? value_true : value_false
     LERP,     // linear interpolation: out = input + weight * (end - input)
     ADDCMUL,  // fused multiply-add: out = input_a + value * input_b * input_c
+    ADDCDIV,  // fused divide-add: out = input_a + value * input_b / input_c
 };
 
 // Variant types for ternary operations

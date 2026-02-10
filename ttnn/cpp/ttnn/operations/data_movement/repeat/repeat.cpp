@@ -26,10 +26,6 @@ struct UpperRepeatDims {
     static constexpr uint32_t collapsed_lower = 2;
     static constexpr uint32_t page_size = 3;
 };
-struct LastRepeatDims {
-    static constexpr uint32_t collapsed_upper = 0;
-    static constexpr uint32_t repeat = 1;
-};
 
 ttnn::Tensor repeat_upper_dims_rm(
     const ttnn::Tensor& tensor, const uint32_t dim, const uint32_t repetitions, const MemoryConfig& output_mem_config) {

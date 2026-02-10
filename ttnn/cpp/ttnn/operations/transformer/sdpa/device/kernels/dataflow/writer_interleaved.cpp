@@ -40,13 +40,14 @@ void kernel_main() {
     const uint32_t local_q_start = get_arg_val<uint32_t>(6);
     const uint32_t local_q_end = get_arg_val<uint32_t>(7);
     const uint32_t num_phases = get_arg_val<uint32_t>(8);
-    const uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(9);
-    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(10);
+    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(9);
+    uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(10);
+    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(11);
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(11);
-        write_offset_phase_2 = get_arg_val<uint32_t>(12);
+        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(12);
+        write_offset_phase_2 = get_arg_val<uint32_t>(13);
     }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
@@ -56,6 +57,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_chunk_start_idx = tt::CBIndex::c_9;
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
@@ -70,6 +72,20 @@ void kernel_main() {
 
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+
+    if constexpr (is_chunked) {
+        if (use_chunk_start_idx_tensor != 0) {
+            cb_wait_front(cb_chunk_start_idx, 1);
+            auto chunk_start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_chunk_start_idx));
+            uint32_t chunk_start_idx = chunk_start_ptr[0];
+            cb_pop_front(cb_chunk_start_idx, 1);
+            const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
+            chunk_start_t_in_q_chunks_phase_1 = chunk_start_idx / q_chunk_size;
+            if (num_phases == 2) {
+                chunk_start_t_in_q_chunks_phase_2 = chunk_start_t_in_q_chunks_phase_1;
+            }
+        }
+    }
 
     uint32_t chunk_start_t_in_q_chunks = 0;
     uint32_t write_offset = 0;

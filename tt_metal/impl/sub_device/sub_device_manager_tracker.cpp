@@ -4,7 +4,6 @@
 
 #include <allocator.hpp>
 #include <buffer_types.hpp>
-#include "dispatch/command_queue.hpp"
 #include <device.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -64,7 +63,7 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
-    // when MeshCommandQueue + CommandQueue are unified under the same API
+    // when MeshCommandQueue + HWCommandQueue are unified under the same API
     if (dynamic_cast<distributed::MeshDevice*>(device_)) {
         // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);

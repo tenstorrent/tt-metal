@@ -8,11 +8,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.common.utility_functions import is_grayskull, run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize(
     "dtype",
     [

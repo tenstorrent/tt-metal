@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/add_int_sfpu.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/add_int_sfpu.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
 
 #define APPROX false
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "../accumulation_common.hpp"
 
 void kernel_main() {
@@ -46,7 +46,7 @@ void kernel_main() {
             } else if (accumulation_op == AccumulationOp::CUMSUM) {
 #ifdef CUMSUM_USE_INT32
                 add_int_tile_init();
-                add_int32_tile(INT32_TILE_DEST, INT32_TILE_ACC, INT32_TILE_DEST);
+                add_int_tile<DataFormat::Int32>(INT32_TILE_DEST, INT32_TILE_ACC, INT32_TILE_DEST);
 #else
                 add_tiles_init(cb_in, cb_op);
                 add_tiles(cb_in, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);

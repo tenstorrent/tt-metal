@@ -48,9 +48,11 @@ def dump_risc_debug_signals(
     If it throws an exception, collect and return debug bus signals.
     """
     noc_block = location._device.get_block(location)
+    risc_debug = noc_block.get_risc_debug(risc_name)
+    if risc_debug.is_in_reset():
+        return None
 
     try:
-        risc_debug = noc_block.get_risc_debug(risc_name)
         # Try to halt the core
         with risc_debug.ensure_halted():
             pass

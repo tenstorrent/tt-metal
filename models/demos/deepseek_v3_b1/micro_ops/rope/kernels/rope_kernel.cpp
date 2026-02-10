@@ -26,13 +26,16 @@ void kernel_main() {
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type alias (required for Op template)
-    using RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt")>;
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    using RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<Wt, Ht>;
 
     constexpr uint32_t in_cb = get_named_compile_time_arg_val("in_cb");
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
     constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    // Setup sharded buffers: input CB contains Ht * Wt tiles total (consumed in Ht iterations),
+    // sin/cos CBs contain Wt tiles each (reused for all Ht heads)
     unified_kernels::setup_sharded_buffer(in_cb, Wt);
     unified_kernels::setup_sharded_buffer(cos_cb, Wt);
     unified_kernels::setup_sharded_buffer(sin_cb, Wt);
@@ -54,8 +57,10 @@ void kernel_main() {
     deepseek_b1_ops::Rope::WriterArgs rope_args{};
 
 #elif defined(COMPILE_FOR_TRISC)
-    // CTArgs type alias with Wt as template parameter (Ht=1 hardcoded)
-    using RopeCTArgs = deepseek_b1_ops::Rope::ComputeCTArgs<get_named_compile_time_arg_val("Wt")>;
+    // CTArgs type alias
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    using RopeCTArgs = deepseek_b1_ops::Rope::ComputeCTArgs<Wt, Ht>;
 
     // CB indices (passed as runtime args to ComputeArgs)
     constexpr uint32_t in_cb = get_named_compile_time_arg_val("in_cb");

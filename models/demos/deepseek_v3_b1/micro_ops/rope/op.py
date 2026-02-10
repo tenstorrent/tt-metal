@@ -111,7 +111,7 @@ class RopeSingleCore:
 
         # Calculate dimensions in tiles
         # With tiny tiles: shard_shape[0] = n_heads, shard_shape[1] = head_dim
-        head_dim_per_core_t = shard_shape[1] // ttnn.TILE_SIZE  # head_dim in tiles (Wt)
+        head_dim_per_core_t = shard_shape[1] // ttnn.TILE_SIZE  # head_dim in tiles (Wt) (64 // 32 = 2)
 
         # Calculate tile sizes
         # For tiny tiles, the tile height matches the shard height (num_q_heads_per_core)
@@ -205,6 +205,7 @@ class RopeSingleCore:
             ("sin_cb", sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("Wt", head_dim_per_core_t),
+            ("Ht", 1),
         ]
 
         # Named compile-time args for BRISC (empty - no-op)
@@ -221,6 +222,7 @@ class RopeSingleCore:
             ("sin_interm_cb", sin_interm_cb),
             ("out_cb", output_cb),
             ("Wt", head_dim_per_core_t),
+            ("Ht", 1),
         ]
 
         # Unified kernel descriptor
@@ -231,7 +233,7 @@ class RopeSingleCore:
             brisc_named_compile_time_args=brisc_named_compile_time_args,
             trisc_named_compile_time_args=trisc_named_compile_time_args,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 dst_full_sync_en=fp32_dest_acc_en,
@@ -250,7 +252,7 @@ class RopeSingleCore:
         # Program Descriptor
         # ========================================================================
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 input_cb_descriptor,
                 cos_cb_descriptor,

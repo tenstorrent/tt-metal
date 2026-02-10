@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_padded_slice ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::PaddedSlice ALIAS ttnn_op_experimental_padded_slice)
 
-target_precompile_headers(ttnn_op_experimental_padded_slice REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_padded_slice REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_padded_slice)
 set_target_properties(
     ttnn_op_experimental_padded_slice

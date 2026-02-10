@@ -90,6 +90,15 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/host_api_capture_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/tensor_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/alignment.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/page_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/memory_config/memory_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/distributed_tensor_configs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
@@ -186,7 +195,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${CMAKE_CURRENT_SOURCE_DIR}/profiler
-        ${PROJECT_SOURCE_DIR}/tt_metal/include
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)

@@ -53,36 +53,34 @@ void kernel_main() {
                 {
                     cb_wait_front(local_cb_id, max_block_num_tiles);
                     experimental::remote_cb_reserve_back(remote_cb_id, 1);
-
                     uint32_t local_cb_addr = get_read_ptr(local_cb_id);
                     experimental::remote_cb_push_back_and_write_pages<skip_ptr_update>(
                         remote_cb_id,
                         local_cb_addr,
-                        1,  // wrt to the size of the packet (curr_block_size)
+                        1,
                         curr_block_height_in_tiles,
                         curr_coalesced_num_pages,
                         curr_coalesced_page_size,
                         noc);
-
                     noc_async_posted_writes_flushed();
-
                     cb_pop_front(local_cb_id, max_block_num_tiles);
                 }
+            }
+
+            if (t == num_tensors - 1) {
+                experimental::remote_cb_sender_barrier(remote_cb_id);
             }
         }
     }
 
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
-
     noc_async_atomic_barrier();
-
     // reset noc counters here because we didn't properly update ptrs for better perf.
     if (noc_mode == DM_DEDICATED_NOC) {
         ncrisc_noc_counters_init();
     } else {
         dynamic_noc_local_state_init();
     }
-
     // signal reader can exit, since reader cannot exit early due to the ongoing traffic on the same noc.
     cb_reserve_back(sync_cb_id, 1);
     cb_push_back(sync_cb_id, 1);

@@ -3,21 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <api/debug/dprint.h>
-#include <compute_kernel_api/reg_api.h>
+#include <api/compute/reg_api.h>
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/softplus.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 constexpr uint32_t onetile = 1U;
@@ -31,6 +31,9 @@ constexpr uint32_t onetile = 1U;
 //   masked ones.
 // This way, after applying softmax, masked positions will effectively become zero,
 // and only the unmasked positions will retain meaningful attention weights
+//
+// Note: Does NOT pop the mask tile - caller must pop explicitly when done with the tile.
+// This allows reusing the same mask tile for causal masks.
 void apply_mask_on_reg(
     const uint32_t register_idx,
     const uint32_t cb_attn_mask,
@@ -62,8 +65,6 @@ void apply_mask_on_reg(
     // unmasked positions remain unchanged
     add_binary_tile_init();
     add_binary_tile(register_idx, mask_register, register_idx);
-
-    cb_pop_front(cb_attn_mask, onetile);
 }
 
 // Recomputes attention weights from pre-softmax scores using stored statistics.
