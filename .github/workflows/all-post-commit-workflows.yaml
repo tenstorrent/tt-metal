@@ -232,6 +232,7 @@ jobs:
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
+      timeout: ${{ inputs.enable-watcher && 240 || 40 }}
 
   # FD Model Tests
   models-unit-tests:
@@ -254,6 +255,7 @@ jobs:
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
+      timeout: ${{ inputs.enable-watcher && 120 || 35 }}
 
   tt-train-cpp-unit-tests:
     needs: [build-artifact, tests-to-run]
