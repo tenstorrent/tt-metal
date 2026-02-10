@@ -71,6 +71,15 @@ npu_layout = ttnn.Layout.TILE
         (torch.int, ttnn.uint16, ttnn.int32),
         (torch.int, ttnn.int32, ttnn.uint16),
         (torch.int, ttnn.uint32, ttnn.uint16),
+        (torch.float32, ttnn.bfloat16, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.float16_b),
+        (torch.uint8, ttnn.uint8, ttnn.float32),
+        (torch.int, ttnn.uint16, ttnn.uint8),
+        (torch.int, ttnn.uint32, ttnn.uint8),
+        (torch.int, ttnn.int32, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.uint16),
+        (torch.uint8, ttnn.uint8, ttnn.uint32),
+        (torch.uint8, ttnn.uint8, ttnn.int32),
     ),
 )
 @pytest.mark.parametrize(
@@ -284,3 +293,19 @@ def test_typecast_bfp8_b_to_fp32(device):
     # print(cpu_version[0, 0:16])
     # print(npu_version[0, 0:16])
     assert passed
+
+
+def test_typecast_bf16_to_uint8_specific_case(device):
+    # Case from issue #36219: 1.0 -> 1 (not 3)
+    torch_ones = torch.ones([1, 1, 32, 32], dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_ones, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.typecast(input_tensor, ttnn.uint8)
+    output_torch = ttnn.to_torch(output)
+
+    expected = torch.ones([1, 1, 32, 32], dtype=torch.uint8)
+
+    # Check if any element is 3 (the original bug)
+    assert not torch.any(output_torch == 3), f"Found 3 in output: {output_torch}"
+    assert torch.equal(output_torch.to(torch.uint8), expected)
