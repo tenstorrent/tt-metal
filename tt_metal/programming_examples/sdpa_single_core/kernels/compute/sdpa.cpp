@@ -209,10 +209,15 @@ template <
     uint32_t cb_v_in,
     uint32_t cb_qkt_im,
     uint32_t cb_identity_scale_in,
-    uint32_t cb_out,
+    uint32_t cb_exp_max_diff,
     uint32_t scale_fp32>
 void sdpa_inner_loop_8x4x16(
-    const uint32_t cb_max_A, const uint32_t cb_max_B, const uint32_t cb_sum_A, const uint32_t cb_sum_B) {
+    const uint32_t cb_max_A,
+    const uint32_t cb_max_B,
+    const uint32_t cb_sum_A,
+    const uint32_t cb_sum_B,
+    const uint32_t cb_out_A,
+    const uint32_t cb_out_B) {
     DeviceZoneScopedN("sdpa_inner_loop_8x4x16");
     // Set up ping pong buffers
     // To be used (and swapped) later on, when we loop over Q chunks.
@@ -220,6 +225,8 @@ void sdpa_inner_loop_8x4x16(
     uint32_t alias_cur_sum = cb_sum_B;
     uint32_t alias_prev_max = cb_max_A;
     uint32_t alias_cur_max = cb_max_B;
+    uint32_t alias_prev_out = cb_out_A;
+    uint32_t alias_cur_out = cb_out_B;
 
     // Hardcoded for Q[8x4], Kt[4x16]
     const uint32_t in0_block_w = 4;
@@ -354,8 +361,8 @@ void sdpa_inner_loop_8x4x16(
 
         MATH(DPRINT << "Waiting for cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
         cb_wait_front(cb_v_in, Sv_chunk_t * head_dim_t);
-        MATH(DPRINT << "Reserving cb_out: " << qktv_output_num_tiles << " tiles" << ENDL());
-        cb_reserve_back(cb_out, qktv_output_num_tiles);
+        MATH(DPRINT << "Reserving alias_cur_out: " << qktv_output_num_tiles << " tiles" << ENDL());
+        cb_reserve_back(alias_cur_out, qktv_output_num_tiles);
 
         for (uint32_t q_subblock = 0; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
             MATH(DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ENDL());
@@ -426,13 +433,13 @@ void sdpa_inner_loop_8x4x16(
                     for (uint32_t r = 0; r < qktv_subblock_h; r++) {
                         uint32_t out_row_offset = (r + q_subblock * qktv_subblock_h) * head_dim_t;
                         for (uint32_t c = 0; c < qktv_subblock_w; c++) {
-                            pack_tile<true>(dst_idx, cb_out, out_row_offset + out_col_offset + c);
+                            pack_tile<true>(dst_idx, alias_cur_out, out_row_offset + out_col_offset + c);
                             dst_idx++;
                         }
                     }
                     tile_regs_release();
                     MATH(
-                        DPRINT << "Packed " << qktv_subblock_h * qktv_subblock_w << " tiles to cb_out for Q["
+                        DPRINT << "Packed " << qktv_subblock_h * qktv_subblock_w << " tiles to alias_cur_out for Q["
                                << q_subblock << "] V[" << v_subblock << "]" << ENDL());
                 }
 
@@ -442,9 +449,9 @@ void sdpa_inner_loop_8x4x16(
             qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
             qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
             MATH(
-                DPRINT << "Pushing " << qktv_subblock_h * head_dim_t << " tiles to cb_out for Q_subblock " << q_subblock
-                       << ENDL());
-            cb_push_back(cb_out, qktv_subblock_h * head_dim_t);
+                DPRINT << "Pushing " << qktv_subblock_h * head_dim_t << " tiles to alias_cur_out for Q_subblock "
+                       << q_subblock << ENDL());
+            cb_push_back(alias_cur_out, qktv_subblock_h * head_dim_t);
         }
 
         MATH(DPRINT << "Popping cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
@@ -457,8 +464,8 @@ void sdpa_inner_loop_8x4x16(
     cb_push_back(alias_cur_sum, Sq_chunk_t);
     cb_pop_front(alias_cur_sum, Sq_chunk_t);
 
-    cb_wait_front(cb_out, Sq_chunk_t * head_dim_t);
-    cb_pop_front(cb_out, Sq_chunk_t * head_dim_t);
+    cb_wait_front(alias_cur_out, Sq_chunk_t * head_dim_t);
+    cb_pop_front(alias_cur_out, Sq_chunk_t * head_dim_t);
     MATH(DPRINT << "Finished QKT @ V computation" << ENDL());
     // tensix_sync();
 }
@@ -475,12 +482,15 @@ void kernel_main() {
     constexpr uint32_t cb_kt_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_qkt_im = tt::CBIndex::c_2;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_out = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+
+    constexpr uint32_t cb_out_A = tt::CBIndex::c_25;
+    constexpr uint32_t cb_out_B = tt::CBIndex::c_26;
     constexpr uint32_t cb_max_A = tt::CBIndex::c_27;
     constexpr uint32_t cb_max_B = tt::CBIndex::c_28;
     constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
     constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
+    constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
 
     mm_init(cb_q_in, cb_kt_in, cb_qkt_im);
 
@@ -497,8 +507,8 @@ void kernel_main() {
                 cb_v_in,
                 cb_qkt_im,
                 cb_identity_scale_in,
-                cb_out,
-                scale_fp32>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B);
+                cb_exp_max_diff,
+                scale_fp32>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B, cb_out_A, cb_out_B);
         }
     }
 }
