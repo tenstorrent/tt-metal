@@ -6,3 +6,13 @@ ttnn/ttnn/operations/layer_norm_rm/agent_logs/analyzer_softmax_breadcrumbs.jsonl
 ttnn/ttnn/operations/layer_norm_rm/agent_logs/analyzer_untilize_breadcrumbs.jsonl
 ttnn/ttnn/operations/layer_norm_rm/layer_norm_rm_spec.md
 ttnn/ttnn/operations/layer_norm_rm/agent_logs/ttnn-operation-planner_execution_log.md
+ttnn/ttnn/operations/layer_norm_rm/agent_logs/generic_op_builder_breadcrumbs.jsonl
+ttnn/ttnn/operations/layer_norm_rm/__init__.py
+ttnn/ttnn/operations/layer_norm_rm/layer_norm_rm.py
+ttnn/ttnn/operations/layer_norm_rm/layer_norm_rm_program_descriptor.py
+ttnn/ttnn/operations/layer_norm_rm/kernels/layer_norm_rm_reader.cpp
+ttnn/ttnn/operations/layer_norm_rm/kernel_design.md
+ttnn/ttnn/operations/layer_norm_rm/kernels/layer_norm_rm_compute.cpp
+ttnn/ttnn/operations/layer_norm_rm/kernels/layer_norm_rm_writer.cpp
+ttnn/ttnn/operations/layer_norm_rm/test_layer_norm_rm.py
+ttnn/ttnn/operations/layer_norm_rm/agent_logs/generic_op_builder_summary.md
