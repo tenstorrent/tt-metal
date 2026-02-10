@@ -639,7 +639,16 @@ Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return ttnn::prim::binary_ng(input_a, input_b, BinaryOpType::FMOD, std::nullopt, output_mem_config, std::nullopt);
+    return BinaryOperationSfpu<BinaryOpType::FMOD>::invoke(
+        input_a,
+        input_b,
+        std::nullopt,  // output_dtype
+        output_mem_config,
+        std::nullopt,   // optional_output_tensor
+        {},             // post_activations
+        {},             // lhs_activations
+        {},             // rhs_activations
+        std::nullopt);  // use_legacy
 }
 
 Tensor ExecuteBinaryFmod::invoke(
