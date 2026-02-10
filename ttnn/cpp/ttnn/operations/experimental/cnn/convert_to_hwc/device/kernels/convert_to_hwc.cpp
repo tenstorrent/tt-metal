@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tilize.h"
 
 
 

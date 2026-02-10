@@ -195,7 +195,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${CMAKE_CURRENT_SOURCE_DIR}/profiler
-        ${PROJECT_SOURCE_DIR}/tt_metal/include
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
