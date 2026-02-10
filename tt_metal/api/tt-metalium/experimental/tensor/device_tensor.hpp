@@ -152,11 +152,11 @@ public:
     // // TODO-ask Alex: can we retire this method in favor of mesh_buffer()
     // Buffer* buffer() const;
     //
-    // /**
-    //  * From original tensor:
-    //  *  Returns device `MeshBuffer`.
-    //  */
-    //  std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
+    /**
+     * From original tensor:
+     *  Returns device `MeshBuffer`.
+     */
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const { return get_storage().mesh_buffer; }
 
     const DeviceStorage& get_storage() const { return std::get<DeviceStorage>(impl->get_storage()); }
 
