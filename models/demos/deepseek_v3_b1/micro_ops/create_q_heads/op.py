@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import torch
+
 import ttnn
 
 
@@ -47,6 +49,85 @@ class CreateQHeads:
         6: ttnn.CoreCoord(2, 2),
         7: ttnn.CoreCoord(3, 2),
     }
+
+    @staticmethod
+    def golden(qnope_input, qrope_input, qnope_grid, qrope_grid, receiver_grid):
+        """
+        PyTorch reference implementation of create Q heads.
+
+        Args:
+            qnope_input: (8, 4096) tensor - BLOCK_SHARDED across 8x8 grid with shard (1, 512)
+            qrope_input: (16, 256) tensor - BLOCK_SHARDED across 8x4 grid with shard (2, 64)
+            qnope_grid: 8x8 grid
+            qrope_grid: 4x8 grid
+            receiver_grid: 4x2 grid
+
+        Returns:
+            Output tensor matching kernel's phase-based layout (same as kernel writes):
+            Phase 1: all first halves  [head0 first 256, head1 first 256, ..., head7 first 256] = 2048 elements
+            Phase 2: all second halves [head0 second 256, ..., head7 second 256] = 2048 elements
+            Phase 3: all rope          [head0 rope 64, ..., head7 rope 64] = 512 elements
+            Total 4608 elements per receiver, reshaped to (8, 576) row-major.
+            Output shape: (16, 2304) for 8 receivers = (8, 576) per receiver.
+        """
+        # Extract dimensions
+        qnope_rows = qnope_grid.end.y - qnope_grid.start.y + 1  # 8
+        qnope_cols = qnope_grid.end.x - qnope_grid.start.x + 1  # 8
+        qrope_rows = qrope_grid.end.y - qrope_grid.start.y + 1  # 8
+        qrope_cols = qrope_grid.end.x - qrope_grid.start.x + 1  # 4
+        receiver_rows = receiver_grid.end.y - receiver_grid.start.y + 1  # 2
+        receiver_cols = receiver_grid.end.x - receiver_grid.start.x + 1  # 4
+
+        # Per-core shard sizes (from tensor shapes and grid)
+        qnope_shard_h = qnope_input.shape[0] // qnope_rows  # 1
+        qnope_shard_w = qnope_input.shape[1] // qnope_cols  # 512
+        qrope_shard_h = qrope_input.shape[0] // qrope_rows  # 2
+        qrope_shard_w = qrope_input.shape[1] // qrope_cols  # 64
+
+        half_qnope_size = qnope_shard_w // 2  # 256
+
+        head_elements = qnope_shard_w + qrope_shard_w  # 576
+        num_heads_per_receiver = qnope_cols  # 8
+
+        output = torch.zeros(
+            receiver_rows * num_heads_per_receiver, receiver_cols * head_elements, dtype=qnope_input.dtype
+        )
+
+        for ry_idx in range(receiver_rows):
+            for rx_idx in range(receiver_cols):
+                sender_row = rx_idx if ry_idx == 0 else (rx_idx + receiver_cols)
+                out_row_start = ry_idx * num_heads_per_receiver
+                out_col_start = rx_idx * head_elements
+
+                # Phase-based layout to match kernel: Phase 1 (all first halves), Phase 2 (all second halves), Phase 3 (all rope)
+                phase1 = []  # head0 first 256, head1 first 256, ..., head7 first 256
+                phase2 = []  # head0 second 256, ..., head7 second 256
+                phase3 = []  # head0 rope 64, ..., head7 rope 64
+                for head_idx in range(num_heads_per_receiver):
+                    qnope_col = head_idx
+                    qnope_row_start = sender_row * qnope_shard_h
+                    qnope_row_end = qnope_row_start + qnope_shard_h
+                    qnope_col_start = qnope_col * qnope_shard_w
+                    qnope_col_end = qnope_col_start + qnope_shard_w
+                    qnope_data = qnope_input[qnope_row_start:qnope_row_end, qnope_col_start:qnope_col_end].flatten()
+                    phase1.append(qnope_data[:half_qnope_size])
+                    phase2.append(qnope_data[half_qnope_size:])
+                    qrope_col_idx = head_idx // qrope_shard_h
+                    qrope_head = head_idx % qrope_shard_h
+                    qrope_row_start = sender_row * qrope_shard_h + qrope_head
+                    qrope_col_start = qrope_col_idx * qrope_shard_w
+                    qrope_col_end = qrope_col_start + qrope_shard_w
+                    phase3.append(qrope_input[qrope_row_start, qrope_col_start:qrope_col_end])
+
+                # After tilization, each row of the output corresponds to one head.
+                # Tilize treats each phase's data as [8, W] row-major, where row i = head i's data.
+                # Output tiles are appended sequentially: phase1 tiles (cols 0-255), phase2 tiles (cols 256-511),
+                # phase3 tiles (cols 512-575). When untilized, row i = [head_i_first256, head_i_second256, head_i_rope].
+                for head_idx in range(num_heads_per_receiver):
+                    row_data = torch.cat([phase1[head_idx], phase2[head_idx], phase3[head_idx]])
+                    output[out_row_start + head_idx, out_col_start : out_col_start + head_elements] = row_data
+
+        return output.reshape(1, -1)
 
     @staticmethod
     def op(qnope_tensor, qrope_tensor, interm_tensor, output_tensor, noc=None):
@@ -166,17 +247,6 @@ class CreateQHeads:
                     noc1_senders_per_receiver[core.y - sender_grid_start_y] += 1
         else:
             # Auto NOC routing: Choose the NOC with better overall hop distance
-            #
-            # IMPORTANT: Mixed NOC0/NOC1 routing (where some senders use NOC0 and others use NOC1)
-            # causes hangs and is NOT supported. Once a core is configured to use a NOC, it cannot
-            # switch during kernel execution. Therefore, we must use a SINGLE NOC for all senders.
-            #
-            # When fusing into the mega kernel (pre_sdpa_kernel.cpp), the NOC configuration is
-            # already determined by which RISC processor runs the sender code:
-            # - NCRISC defaults to NOC_0
-            # - BRISC defaults to NOC_1
-            # The sender logic should use whichever NOC is already configured for that RISC.
-            #
             total_noc0_hops = 0
             total_noc1_hops = 0
             for core in sender_cores_list:
