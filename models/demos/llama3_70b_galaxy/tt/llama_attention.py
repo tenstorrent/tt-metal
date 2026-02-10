@@ -806,7 +806,7 @@ class TtLlamaAttention(LightweightModule):
 
                 # Replicate active column's data to all columns for correct RMSNORM behavior.
                 # Chunked SDPA writes only to the column for this user_id; we zero others and all-reduce so every column has the same output.
-                if self.column_lower is not None:
+                if self.column_lower is not None and False:
                     # user_id_for_mask: [1, 1, 1, 1] — scalar user_id broadcast-friendly for comparison.
                     user_id_for_mask = ttnn.reshape(user_id, (1, 1, 1, 1))
                     # ge_lower: [1, 1, 1, 32] bool — True where user_id >= column lower bound (column belongs to this user or later).

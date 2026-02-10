@@ -506,7 +506,7 @@ class TtTransformer(LightweightModule):
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
-    def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None, user_id=0):
+    def process_output_prefill_logits(self, tt_out, last_token_idx, tt_out_logits_saved=None, user_id=0):
         """
         Process prefill output to get logits tensor for on-device sampling.
         Returns logits in the same format as decode (before all-gather), suitable for sampling module.
@@ -797,10 +797,10 @@ class TtTransformer(LightweightModule):
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
-        # Prefill: always slice full rot mats [chunk_start_idx, max_seq_len) so one trace graph works for
-        # both prefix-cached (chunk_start_idx > 0) and non-cached (chunk_start_idx == 0). When chunk_start_idx
-        # is 0, slice from 0 gives the full rot_mats. chunk_start_idx is 1D [N]; ttnn.slice needs start [0, 0, N, 0].
-        if mode == "prefill":
+        # Prefill: for prefix caching (start_pos > 0), slice rot_mats to [chunk_start_idx, max_seq_len).
+        # When start_pos == 0, use full rot_mats as-is (no slice) to avoid ttnn.concat/ttnn.slice device
+        # ops that can hang on some builds; trace capture for prefix-cached runs uses start_pos > 0.
+        if mode == "prefill" and start_pos > 0 and False:
             full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
             num_devices = self.args.cluster_shape[0] * self.args.cluster_shape[1]
             z = self._tt_slice_start_zeros_4
@@ -828,7 +828,7 @@ class TtTransformer(LightweightModule):
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
             if mode == "prefill":
-                logger.info(f"[DEBUG_HANG] forward prefill: layer {i}/{len(self.layers)}")
+                logger.info(f"forward prefill: layer {i}/{len(self.layers)}")
             x, h = layer(
                 x,
                 h,

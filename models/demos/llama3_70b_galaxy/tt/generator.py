@@ -193,7 +193,7 @@ class Generator:
                 enable_trace,
                 None,
                 empty_slots,
-                tt_out_logits_all_users,
+                None,
             )
 
         return_logits = sampling_params is None
@@ -230,7 +230,12 @@ class Generator:
 
         # If batch is 32 and prompt_lens are all the same and batch_seq_len * batch is less than 128*1024, use batched prefill
         use_batched_prefill = False
-        if batch >= 16 and len(set(prefill_seq_lens)) == 1 and prefill_seq_lens[0] == 128 and (start_pos is None or all(x == 0 for x in start_pos)):
+        if (
+            batch >= 16
+            and len(set(prefill_seq_lens)) == 1
+            and prefill_seq_lens[0] == 128
+            and (start_pos is None or all(x == 0 for x in start_pos))
+        ):
             use_batched_prefill = True
 
         if return_logits:
@@ -287,8 +292,6 @@ class Generator:
                 last_token_idx = seq_len - 1  # Absolute index including cached tokens
                 prefill_seq_len = prefill_seq_lens[id]
 
-                if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
-                    enable_trace = False
                 # Extract tokens skipping cached ones
                 num_cached_tokens = num_cached_tokens_list[id]
                 new_tokens_len = seq_len - num_cached_tokens
@@ -332,23 +335,25 @@ class Generator:
                 tt_out_logits_saved = torch.zeros(1, self.model.args.padded_vocab_size)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
-            # Disable tracing when prefix caching is active (cached tokens)
-            if use_batched_prefill:
-                enable_trace_current = enable_trace
-            else:
-                enable_trace_current = enable_trace and (num_cached_tokens_list[id] == 0)
-
-            if enable_trace_current:
+            if enable_trace:
                 # For batched prefill, reset to empty list since we use extend()
                 if use_batched_prefill and do_device_sampling:
                     self.tt_logits_accumulated_batched = []
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
+                last_token_idx_output = last_token_idx
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
+                # With prefix caching, output tensor has only prefill_seq_len positions (the chunk).
+                # Use relative index within the chunk for slicing.
+                num_cached = num_cached_tokens_list[id]
+                last_token_idx_output = last_token_idx - num_cached if num_cached > 0 else last_token_idx
 
             if not do_device_sampling:
                 tt_tok = self.model.process_output_prefill(
-                    tt_tok, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
+                    tt_tok,
+                    last_token_idx=last_token_idx_output,
+                    tt_out_logits_saved=tt_out_logits_saved,
+                    user_id=prefill_kwargs["user_id"],
                 )
                 if use_batched_prefill:
                     # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
@@ -362,7 +367,7 @@ class Generator:
             else:
                 # Process prefill output to get logits (before all-gather) for on-device sampling
                 # Returns list of logits in sharded format (same as decode)
-                tt_logits_list = self.model.process_output_prefill_logits(tt_tok, last_token_idx=last_token_idx)
+                tt_logits_list = self.model.process_output_prefill_logits(tt_tok, last_token_idx=last_token_idx_output)
                 if use_batched_prefill:
                     # Batched prefill: logits list has 32 entries ordered by slot position
                     self.tt_logits_accumulated_batched.extend(tt_logits_list)
@@ -564,12 +569,6 @@ class Generator:
             rot_mats=full_rot_mats,
             batch_size=batch_size,
         )
-        tt_toks = self.model.process_output_prefill(
-            tt_toks,
-            last_token_idx=prefill_last_token_idx,
-            tt_out_logits_saved=tt_out_logits_saved,
-            user_id=user_id,
-        )
         return tt_toks
 
     def _easy_trace_prefill(
@@ -693,6 +692,11 @@ class Generator:
         tt_tokens, tt_user_id, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx = transformed_inputs
         full_rot_mats = self.model.get_or_create_prefill_rot_mats()
 
+        # Ensure CCL indices are zero before compile run (e.g. if this model was reused from
+        # a previous test). Other demos reset before trace capture; we also reset before
+        # the first use (compile run) so semaphore/buffer state is deterministic.
+        self.model.tt_ccl.reset_gather_and_buffer_idx()
+
         # Compile run
         tt_out_trace = self.model.ttnn_prefill_forward(
             x=tt_tokens,
@@ -714,6 +718,8 @@ class Generator:
             (tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host, tt_chunk_start_idx_host),
             mesh_device=self.mesh_device,
         )
+        # Recorded trace must see CCL indices at 0; replay path resets before execute_trace.
+        self.model.tt_ccl.reset_gather_and_buffer_idx()
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_tokens, tt_user_id, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx = transformed_inputs
@@ -769,6 +775,9 @@ class Generator:
             device_tensors=device_inputs,
         )
 
+        # Replay must see CCL indices at 0 (same as at capture). Sync so prior work (e.g. process_output_prefill) is done before we reset and replay.
+        ttnn.synchronize_device(self.mesh_device)
+        self.model.tt_ccl.reset_gather_and_buffer_idx()
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
