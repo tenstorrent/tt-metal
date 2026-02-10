@@ -58,7 +58,7 @@ void kernel_main() {
 
     if constexpr (is_ncrisc_sender) {
         // NOC0 sender on NCRISC
-        uint32_t receiver_data_addr = get_arg_val<uint32_t>(0);
+        uint32_t receiver_data_addr = get_common_arg_val<uint32_t>(0);
         deepseek_b1_ops::GatherHeads::SenderArgs gather_heads_args{
             get_named_compile_time_arg_val("sender_grid_start_x"),
             get_named_compile_time_arg_val("sender_grid_start_y"),
@@ -135,7 +135,7 @@ void kernel_main() {
 
     if constexpr (is_brisc_sender) {
         // NOC1 sender on BRISC
-        uint32_t receiver_data_addr = get_arg_val<uint32_t>(0);
+        uint32_t receiver_data_addr = get_common_arg_val<uint32_t>(0);
         deepseek_b1_ops::GatherHeads::SenderArgs gather_heads_args{
             get_named_compile_time_arg_val("sender_grid_start_x"),
             get_named_compile_time_arg_val("sender_grid_start_y"),

@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // cb_in0: remote data (intermediate tensor from other device)
     // cb_in1: local data (input tensor)
     // cb_out0: output tensor
@@ -106,4 +105,3 @@ void MAIN {
         cb_push_back(cb_out0, num_tiles);
     }
 }
-}  // namespace NAMESPACE

@@ -8,13 +8,13 @@
 // Implements: Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce
 // - Matmul1: [1, 512] x [512, 128] -> [1, 128] on 64 cores (8x8)
 // - Gather1: Collect [1, 128] from 64 cores to [1, 8192] on gather core
-// - Mcast: Broadcast [1, 8192] to 117 cores (13x9 grid, rectangular)
+// - Mcast: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular)
 // - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (rows 0-7 full 13 + row 8 cols 0-7)
 // - Gather2: Collect [1, 64] from 112 active cores to [1, 7168] on gather core
 // - CCL All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 //
-// Note: Mcast grid (13x9=117) includes 5 inactive cores (row 8, cols 8-12) which receive
-// mcast data but skip matmul2 via is_matmul2_core=false
+// Note: Mcast grid (13x10=130) includes 18 inactive cores (row 8 cols 8-12, row 9 cols 0-12)
+// which receive mcast data but skip matmul2 via is_matmul2_core=false
 //
 // CCL Core Layout:
 // - CCL Receiver = Gather core (12, 9): already has local data after Gather2
@@ -34,7 +34,7 @@ struct Core {
     static constexpr bool is_matmul1_core = get_named_compile_time_arg_val("is_matmul1_core") == 1;
     // Gather core (12, 9) - receives gather1, sends mcast, receives gather2, CCL receiver
     static constexpr bool is_gather_receiver_core = get_named_compile_time_arg_val("is_gather_receiver_core") == 1;
-    // Mcast receiver grid (13x9 = 117 cores) - receives mcast data
+    // Mcast receiver grid (13x10 = 130 cores) - receives mcast data
     static constexpr bool is_mcast_receiver_core = get_named_compile_time_arg_val("is_mcast_receiver_core") == 1;
     // Active matmul2 cores (112 cores: rows 0-7 full 13 + row 8 cols 0-7)
     static constexpr bool is_matmul2_core = get_named_compile_time_arg_val("is_matmul2_core") == 1;
@@ -49,7 +49,7 @@ void kernel_main() {
 // NCRISC (Reader)
 // - Matmul1 reader (8x8 grid): setup sharded buffers
 // - Gather1 sender (8x8 grid): send matmul1 output to gather core
-// - Mcast receiver (13x9 grid = 117 cores): receive mcast data
+// - Mcast receiver (13x10 grid = 130 cores): receive mcast data
 // - Matmul2 reader (112 active cores): setup weights buffer
 // - Gather2 sender (112 active cores): send matmul2 output to gather core
 // - CCL sender (11, 9): read gather2 output from gather core
@@ -128,7 +128,7 @@ void kernel_main() {
 // ============================================================================
 // BRISC (Writer)
 // - Gather1 receiver (gather core): receive from 8x8 grid
-// - Mcast sender (gather core): broadcast to 13x9 grid (117 cores)
+// - Mcast sender (gather core): broadcast to 13x10 grid (130 cores)
 // - Gather2 receiver (gather core): receive from 112 active matmul2 cores
 // - CCL sender (11, 9): send gather2 output via fabric
 // ============================================================================
@@ -288,33 +288,25 @@ void kernel_main() {
     }
 
     // ========================================================================
-    // Mcast: gather core -> 13x9 mcast grid (117 cores)
+    // Mcast: gather core -> 13x10 mcast grid (130 cores)
     // Broadcasts [1, 8192] to each core in mcast grid
     // Source: gather1_dst_cb (CB 3), Destination: mcast_dst_cb = matmul2_in0 (CB 4)
-    // Note: is_mcast_receiver_core (117 cores) includes 5 inactive cores that receive but skip matmul
+    // Note: is_mcast_receiver_core (130 cores) includes 18 inactive cores that receive but skip matmul
     // ========================================================================
-    deepseek_b1_ops::Mcast::
-        Op<McastCTArgs, Core::is_gather_receiver_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
-            mcast;
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_gather_receiver_core) {
-        mcast.init(mcast_args);
-    }
-#endif
+    constexpr bool is_mcast_receiver = Core::is_mcast_receiver_core && !Core::is_gather_receiver_core;
+    deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_gather_receiver_core, is_mcast_receiver, is_mcast_receiver, true>
+        mcast;
+    mcast.init(mcast_args);
     {
         DeviceZoneScopedN("MCAST");
         mcast(mcast_args);
     }
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_gather_receiver_core) {
-        mcast.teardown();
-    }
-#endif
+    mcast.teardown();
 
     // ========================================================================
     // Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)
     // Input: mcast_dst_cb (CB 4), Weights: matmul2_in1 (CB 5), Output: matmul2_out (CB 6)
-    // Only runs on 112 active cores (is_matmul2_core=true), 5 inactive cores skip
+    // Only runs on 112 active cores (is_matmul2_core=true), 18 inactive cores skip
     // ========================================================================
     {
         DeviceZoneScopedN("MATMUL2");

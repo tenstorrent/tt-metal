@@ -128,6 +128,19 @@ public:
         uint32_t pages,
         const void* data = nullptr);
 
+    // Variant that allows specifying a different inline data size than write_paged pages * page_size
+    // Used when we need to pass through alignment prefix bytes directly via relay_inline
+    // Always inlines the data (no template parameter needed)
+    void add_dispatch_write_paged_with_custom_inline_size(
+        bool flush_prefetch,
+        uint8_t is_dram,
+        uint16_t start_page,
+        uint32_t base_addr,
+        uint32_t page_size,
+        uint32_t pages,
+        uint32_t inline_data_sizeB,
+        const void* data);
+
     template <bool inline_data = false>
     void add_dispatch_write_host(
         bool flush_prefetch, uint64_t data_sizeB, bool is_event, uint16_t pad1, const void* data = nullptr);

@@ -163,7 +163,7 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
-              "name": "[WH-GLX][v1] GPT-OSS-120B",
+              "name": "[WH-GLX][v1] GPT-OSS-120B (low-latency)",
               "model": "openai/gpt-oss-120b",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -172,14 +172,31 @@ jobs:
               "mesh-device": "(4, 8)",
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--max_num_seqs 1 --num_scheduler_steps 1",
+              "additional-server-args": "--max_num_seqs 1",
               "use-vllm-v1": true,
               "structured-output": true,
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
             },
             {
-              "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct with sampling-tests",
+              "name": "[WH-GLX][v1] GPT-OSS-120B (high-throughput)",
+              "model": "openai/gpt-oss-120b",
+              "server-timeout": 35,
+              "benchmark-timeout": 10,
+              "runner-label": "topology-6u",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "(4, 8)",
+              "multimodal": false,
+              "tt-llama-text-ver": "tt_transformers",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\"}",
+              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32",
+              "use-vllm-v1": true,
+              "structured-output": true,
+              "co-owner-1-id": "U08TJ70UFRT",
+              "co-owner-2-id": "U06F3ER8X9A"
+            },
+            {
+              "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 5,

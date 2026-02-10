@@ -30,8 +30,6 @@ void kernel_main() {
         while (outstanding_data_size) {
             // Wait for pages in H2D socket
             socket_wait_for_pages(receiver_socket, 1);
-            // Wait for space in D2H socket
-            socket_reserve_pages(sender_socket, 1);
 
             if constexpr (pull_from_host) {
                 // Pages available in H2D socket - read over PCIe
@@ -44,6 +42,9 @@ void kernel_main() {
                     page_size);
                 noc_async_read_barrier();
             }
+
+            // Wait for space in D2H socket
+            socket_reserve_pages(sender_socket, 1);
             // Space available in D2H socket - write to host over PCIe
             noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
                 NOC_INDEX,
@@ -54,13 +55,11 @@ void kernel_main() {
                 page_size,
                 1);
 
-            socket_pop_pages(receiver_socket, 1);
             socket_push_pages(sender_socket, 1);
-
-            noc_async_write_barrier();
-
             // Notify Host that pages were pushed to D2H socket
             socket_notify_receiver(sender_socket);
+            socket_pop_pages(receiver_socket, 1);
+            noc_async_writes_flushed();
             // Notify Host that pages were popped from H2D socket
             socket_notify_sender(receiver_socket);
 
@@ -71,4 +70,7 @@ void kernel_main() {
     update_socket_config(receiver_socket);
     update_socket_config(sender_socket);
     socket_barrier(sender_socket);
+
+    noc_async_write_barrier();
+    noc_async_read_barrier();
 }

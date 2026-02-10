@@ -1991,6 +1991,10 @@ CBReaderWithManualRelease<
 
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
 inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
+    // In initial return, we return the header bytes as well
+    uint32_t initial_data_to_return = sizeof(CQPrefetchHToPrefetchDHeader);
+    data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
+    wlength -= sizeof(CQPrefetchHToPrefetchDHeader);
     // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
     while (wlength > 0) {
         // Ensure at least one upstream page is available
@@ -2023,8 +2027,27 @@ inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, u
         // Release upstream pages so prefetch_h can make more available. Ensure to flush the writes just made to prevent
         // data race.
         noc_async_writes_flushed();
-        uint32_t pages_to_free = (can_read_now + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
-        relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
+        // wait_for_available_data always returns up to a page boundary, so the rounding only matters on the final chunk
+        // and lets us return the final bytes in the page early.
+        uint32_t pages_to_free =
+            (can_read_now + initial_data_to_return + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
+        initial_data_to_return = 0;
+        uint32_t watcher_data_ptr = data_ptr;
+#if ASSERT_ENABLED
+        if (wlength == 0) {
+            // This normally happens after the end of the loop, but do it early here so we don't hit assertions. Data
+            // until the end of the page isn't used.
+            watcher_data_ptr = round_up_pow2(watcher_data_ptr, cmddat_q_page_size);
+        }
+#endif
+        // data_ptr may not be page-aligned mid-stream, so allow it to be up to one page ahead
+        relay_client.release_pages<
+            my_noc_index,
+            upstream_noc_xy,
+            upstream_cb_sem_id,
+            cmddat_q_base,
+            cmddat_q_end,
+            cmddat_q_page_size>(pages_to_free, watcher_data_ptr);
     }
     local_downstream_data_ptr =
         round_up_pow2(local_downstream_data_ptr, DispatchRelayInlineState::downstream_page_size);
@@ -2053,8 +2076,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
 
         if (cmd_ptr->header.raw_copy) {
             uint64_t wlength = cmd_ptr->header.length;
-            data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
-            relay_raw_data_to_downstream(data_ptr, wlength - sizeof(CQPrefetchHToPrefetchDHeader), downstream_data_ptr);
+            relay_raw_data_to_downstream(data_ptr, wlength, downstream_data_ptr);
         } else {
             uint32_t length = cmd_ptr->header.length;
             // Ensure the entire command payload is present before returning
@@ -2166,6 +2188,9 @@ void kernel_main_d() {
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, my_noc_index);
 #endif
 
+    // Initialize cmd_ptr tracking for release_pages synchronization assertions
+    relay_client.init_cmd_ptr_tracking<cmddat_q_base>();
+
     while (!done) {
         // cmds come in packed batches based on HostQ reads in prefetch_h
         // once a packed batch ends, we need to jump to the next page
@@ -2187,10 +2212,16 @@ void kernel_main_d() {
         uint32_t pages_to_free = (total_length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
         // Ensure all writes that consumed this payload have completed before releasing upstream pages
         noc_async_writes_flushed();
-        relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
+        relay_client.release_pages<
+            my_noc_index,
+            upstream_noc_xy,
+            upstream_cb_sem_id,
+            cmddat_q_base,
+            cmddat_q_end,
+            cmddat_q_page_size>(pages_to_free, cmd_ptr);
     }
 
     // Set upstream semaphore MSB to signal completion and path teardown

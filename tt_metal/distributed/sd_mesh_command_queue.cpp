@@ -25,7 +25,7 @@ std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     return std::nullopt;
 }
 
-void SDMeshCommandQueue::write_shard_to_device(
+bool SDMeshCommandQueue::write_shard_to_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
     const void* src,
@@ -33,7 +33,7 @@ void SDMeshCommandQueue::write_shard_to_device(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return;  // Skip hardware write for mock devices
+        return false;  // Skip hardware write for mock devices
     }
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
@@ -42,12 +42,13 @@ void SDMeshCommandQueue::write_shard_to_device(
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
-        return;
+        return false;
     }
 
     tt::tt_metal::detail::WriteToBuffer(
         *shard_view,
         tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size));
+    return false;  // Slow dispatch doesn't support pinned memory
 }
 
 void SDMeshCommandQueue::read_shard_from_device(

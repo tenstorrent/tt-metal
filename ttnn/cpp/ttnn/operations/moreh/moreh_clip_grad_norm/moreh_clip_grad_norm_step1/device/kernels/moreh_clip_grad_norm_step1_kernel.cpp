@@ -6,8 +6,7 @@
 
 ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     int i{0};
     const auto num_tiles = get_arg_val<uint32_t>(i++);
     const auto p = get_arg_val<uint32_t>(i++);
@@ -151,6 +150,4 @@ void MAIN {
     if (do_mask_h || do_mask_w) {
         cb_pop_front(cb_mask_h_w, 2);
     }
-
-}  // void MAIN
-}  // namespace NAMESPACE
+}

@@ -4,15 +4,15 @@
 #include <cfloat>
 #include <cstdint>
 
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/add_int_sfpu.h"
-#include "compute_kernel_api/copy_dest_values.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tilize.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/pack.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/add_int_sfpu.h"
+#include "api/compute/copy_dest_values.h"
 
 #define DEBUG_PRINT 0
 
@@ -30,9 +30,7 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
@@ -283,5 +281,3 @@ void MAIN {
         cb_pop_front(clear_value_cb_id, 1);
     }
 }
-
-}  // namespace NAMESPACE

@@ -147,7 +147,7 @@ def run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chun
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
-@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
+@pytest.mark.parametrize("q_chunk_size", [96, 128, 192, 256], ids=["q96", "q128", "q192", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
 @pytest.mark.parametrize(
     "s",

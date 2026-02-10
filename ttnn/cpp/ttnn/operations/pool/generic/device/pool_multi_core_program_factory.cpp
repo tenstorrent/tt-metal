@@ -168,7 +168,6 @@ static Tensor create_scalar_config_tensor(
 
                 if (output_stick_n == n_dim) {
                     nhw_linear -= output_stick_n * config.out_w * config.out_h;
-                    output_stick_n = 0;
                     output_stick_h = 0;
                     output_stick_w = 0;
                 }
@@ -178,6 +177,13 @@ static Tensor create_scalar_config_tensor(
 
     constexpr uint32_t entry_size = 3;
     const uint32_t entries_per_core = entry_size * max_scalars_cnt;
+
+    TT_FATAL(
+        entries_per_core != 0,
+        "entries_per_core cannot be zero. max_scalars_cnt: {}, num_iterations: {}, in_memory_layout: {}",
+        max_scalars_cnt,
+        num_iterations,
+        in_memory_layout);
 
     switch (in_memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED:

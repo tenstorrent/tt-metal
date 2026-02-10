@@ -318,14 +318,16 @@ public:
     void configure_ethernet_cores_for_fabric_routers(
         tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
-    void initialize_fabric_config(
-        tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
-
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
 
-    // Returns whether we are running on UBB Galaxy.
+    // Returns whether the Cluster instance is running on UBB Galaxy.
     bool is_ubb_galaxy() const;
+
+    static bool is_ubb_galaxy(tt::tt_metal::ClusterType cluster_type) {
+        return cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY ||
+               cluster_type == tt::tt_metal::ClusterType::GALAXY;
+    }
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(ChipId chip_id) const;
