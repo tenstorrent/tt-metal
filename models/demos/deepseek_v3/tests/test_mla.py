@@ -529,7 +529,7 @@ def run_test_forward_pass_mla2d(
 # Base test cases - ranges will be expanded into individual test cases
 # see documentation for expand_test_cases_with_position_ids_ranges for more details
 BASE_TEST_CASES = [
-    ("prefill", seq_len, 1, None) for seq_len in [1 * 1024]  # PREFILL_SEQ_LENS
+    ("prefill", seq_len, 1, None) for seq_len in [1 * 1024, 2 * 1024, 4 * 1024, 8 * 1024]  # PREFILL_SEQ_LENS
 ]  # decode_position_ids is not applicable for prefill
 # [
 #     # mode, seq_len, batch_size_per_row, decode_position_ids
