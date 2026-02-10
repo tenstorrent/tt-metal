@@ -418,7 +418,6 @@ def serialize_operation_parameters(
                         elif type_name in [
                             "WormholeComputeKernelConfig",
                             "BlackholeComputeKernelConfig",
-                            "GrayskullComputeKernelConfig",
                             "DeviceComputeKernelConfig",
                         ]:
                             return serializers["compute_kernel_config_to_dict"](value)
