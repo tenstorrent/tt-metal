@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
 
 constexpr uint32_t num_output_tiles_to_process = get_compile_time_arg_val(0);
 constexpr uint32_t reduction_dim_size = get_compile_time_arg_val(1);
@@ -12,8 +12,7 @@ constexpr uint32_t compute_input_cb_id_0 = get_compile_time_arg_val(3);
 constexpr uint32_t compute_input_cb_id_1 = get_compile_time_arg_val(4);
 constexpr uint32_t compute_output_cb_id = get_compile_time_arg_val(5);
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // hardcoded constants
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t one_tile = 1;
@@ -48,4 +47,3 @@ void MAIN {
         cb_push_back(compute_output_cb_id, one_tile);
     }
 }
-}  // namespace NAMESPACE

@@ -60,7 +60,8 @@ void kernel_main() {
     // kv cache rmsnorm reader args
     deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{};
 
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt")>;
+    using K_RopeCTArgs =
+        deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
     constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
@@ -132,11 +133,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
         get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
-        get_arg_val<uint32_t>(0),  // epsilon
-        get_arg_val<float>(1),     // scalar (1/sqrt(512))
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(512))
     };
 
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::ComputeCTArgs<get_named_compile_time_arg_val("Wt")>;
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::
+        ComputeCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
 
     // CB indices (passed as runtime args to ComputeArgs)
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
@@ -225,4 +227,67 @@ void kernel_main() {
         deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> k_rope;
         k_rope(k_rope_args);
     }
+    // ========================================================================
+    // KV Cache Update: Write results to DRAM interleaved tensor
+    // BRISC handles writing from output CBs to DRAM
+    // ========================================================================
+#if defined(COMPILE_FOR_BRISC)
+    // Unit testing the KV Cache write to DRAM.
+    // Support 8 shards, one per DRAM core, each shard is 576x2 bytes (BFLOAT16)
+    // KNOPE writes to first 512x2 bytes, each KROPE core writes to the remaining 64x2 bytes.
+    DeviceZoneScopedN("KV_CACHE_UPDATE");
+    // Get runtime args: buffer address and starting tile ID
+    uint32_t kv_cache_buffer_addr = get_common_arg_val<uint32_t>(0);
+    uint32_t kv_cache_start_tile_id = get_common_arg_val<uint32_t>(1);
+
+    // Create TensorAccessor for DRAM interleaved tensor
+    auto kv_cache_addr_gen = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+        kv_cache_buffer_addr,
+        576 * 2  // page_size
+    );
+    // Actual calculations will differ in deepseek fused kernel, depending on the sharding scheme
+    // Write RMSNorm output (nope portion) to KV cache
+    if constexpr (Core::is_kv_rmsnorm_core) {
+        constexpr uint32_t kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb");
+        constexpr uint32_t kv_rmsnorm_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
+
+        // Get tile size from the output CB
+        uint32_t tile_size = get_tile_size(kv_rmsnorm_output_cb);
+
+        cb_wait_front(kv_rmsnorm_output_cb, kv_rmsnorm_num_tiles);
+        uint32_t l1_read_addr = get_read_ptr(kv_rmsnorm_output_cb);
+
+        for (uint32_t tile_idx = 0; tile_idx < kv_rmsnorm_num_tiles; tile_idx++) {
+            uint32_t tile_id = kv_cache_start_tile_id + tile_idx;
+            noc_async_write_page(tile_id, kv_cache_addr_gen, l1_read_addr, tile_size, 0);
+            l1_read_addr += tile_size;
+        }
+        noc_async_write_barrier();
+        cb_pop_front(kv_rmsnorm_output_cb, kv_rmsnorm_num_tiles);
+    }
+
+    // Write Rope output to KV cache (after nope tiles)
+    if constexpr (Core::is_krope_core) {
+        constexpr uint32_t k_rope_output_cb = get_named_compile_time_arg_val("k_rope_output_cb");
+        constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+
+        // Get tile size from the output CB
+        uint32_t tile_size = get_tile_size(k_rope_output_cb);
+
+        cb_wait_front(k_rope_output_cb, Wt);
+        uint32_t l1_read_addr = get_read_ptr(k_rope_output_cb);
+
+        uint32_t rope_offset = get_absolute_logical_y() - 8;  // yea...
+        for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx++) {
+            // Rope tiles come after nope tiles
+            uint32_t tile_id = kv_cache_start_tile_id + tile_idx;
+            noc_async_write_page(
+                tile_id, kv_cache_addr_gen, l1_read_addr, tile_size, 512 * 2 + tile_size * rope_offset);
+            l1_read_addr += tile_size;
+        }
+        noc_async_write_barrier();
+        cb_pop_front(k_rope_output_cb, Wt);
+    }
+#endif
 }

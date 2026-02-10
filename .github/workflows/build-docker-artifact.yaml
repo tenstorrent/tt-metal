@@ -193,11 +193,12 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-build
-          push: true
           tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
@@ -205,11 +206,12 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-test
-          push: true
           tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
@@ -217,11 +219,12 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: dev
-          push: true
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
         uses: docker/build-push-action@v6
@@ -229,11 +232,12 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: base
-          push: true
           tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true'
         uses: docker/build-push-action@v6
@@ -241,11 +245,12 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
-          push: true
           tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
   build-manylinux-image:
@@ -270,10 +275,11 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.manylinux
-          push: true
           tags: ${{ needs.check-docker-images.outputs.manylinux-tag }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Cannot use needs.build-*-images to ensure this job runs sequentially after the build jobs because it would break when the build jobs are skipped
   # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
@@ -286,6 +292,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/push-latest-image-to-ghcr
+          sparse-checkout-cone-mode: false
 
       - name: "Push latest CI Build tag"
         if: needs.check-docker-images.outputs.ci-build-exists == 'true'

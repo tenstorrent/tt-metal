@@ -74,4 +74,20 @@ inline void llk_math_eltwise_binary_sfpu_le_int32(
         vector_mode);
 }
 
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_eq_fp32_init() {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::eq, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_eq_fp32(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::eq>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
 }  // namespace ckernel

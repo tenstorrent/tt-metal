@@ -569,6 +569,11 @@ class ModelArgs:
                     "TG": 128,
                     "P150x4": 128,
                 },  # Conservative: Allow on all devices
+                "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
+                "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -587,9 +592,10 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
-            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"
-        ):
+        if (
+            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b"]
+            and self.device_name == "N150"
+        ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
@@ -1329,7 +1335,65 @@ class ModelArgs:
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
+            self.num_reduce_scatter_links = 1
+            self.num_all_gather_links = (
+                2 if self.is_galaxy else 1
+            )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
+
+            # model specific CCL configs
+            default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_mlp_rs = {
+                "num_links": self.num_reduce_scatter_links,
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            }
+            default_sampling_force_argmax = {
+                "allow_force_argmax": False,
+                "num_links": 1,
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "topology": ttnn.Topology.Linear,
+            }
+            model_specific_ccl_configs = {
+                "Llama-3.1-8B": {
+                    "attn_ln_ag": {"num_links": 4, "chunks_per_sync": 10, "num_workers_per_link": 1},
+                    "ffn_ln_ag": {"num_links": 4, "chunks_per_sync": 25, "num_workers_per_link": 1},
+                    "attn_agmm": {"num_links": 4, "chunks_per_sync": 1, "num_workers_per_link": 1},
+                    "mlp_rs": {
+                        "num_links": 4,
+                        "chunks_per_sync": 1,
+                        "num_workers_per_link": 1,
+                        "rs_memory_config": ttnn.L1_MEMORY_CONFIG,
+                    },
+                    "sampling_force_argmax": {
+                        "allow_force_argmax": True,
+                        "num_links": 4,
+                        "chunks_per_sync": 10,
+                        "num_workers_per_link": 2,
+                        "topology": ttnn.Topology.Ring,
+                    },
+                }
+            }
+            # Model-specific CCL configs are tuned for Galaxy (TG) with 4 links
+            # Only apply them on Galaxy, otherwise use defaults
+            executed_on_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+            if executed_on_galaxy and self.base_model_name in model_specific_ccl_configs:
+                self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_ln_ag"]
+                self.model_config["FFN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["ffn_ln_ag"]
+                self.model_config["ATTN_AGMM_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_agmm"]
+                self.model_config["MLP_RS_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["mlp_rs"]
+                self.model_config["SAMPLING_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name][
+                    "sampling_force_argmax"
+                ]
+            else:
+                self.model_config["ATTN_LN_AG_CONFIG"] = default_ln_ag
+                self.model_config["FFN_LN_AG_CONFIG"] = default_ln_ag
+                self.model_config["ATTN_AGMM_CONFIG"] = default_agmm
+                self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
+                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
 
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")

@@ -851,6 +851,21 @@ def pytest_addoption(parser):
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
+    parser.addoption(
+        "--trace-params",
+        action="store_true",
+        default=False,
+        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). By default, only tensor metadata is saved. To include tensor values, call ttnn.operation_tracer.enable_tensor_value_serialization(True). See tech_reports/ttnn/operation-tracing.md for details.",
+    )
+
+
+def pytest_configure(config):
+    """Set a flag in ttnn.operation_tracer when --trace-params is enabled."""
+    if config.getoption("--trace-params", default=False):
+        # Set a module-level flag that can be checked by operation_tracer
+        import ttnn.operation_tracer
+
+        ttnn.operation_tracer._ENABLE_TRACE = True
 
 
 @pytest.fixture
@@ -1044,7 +1059,7 @@ def pytest_runtest_teardown(item, nextitem):
             pci_ids = getattr(item.parent, "pci_ids", None)
         if pci_ids is not None:
             logger.info(f"In custom teardown, open device ids: {set(pci_ids)}")
-            reset_tensix(set(pci_ids))
+            # reset_tensix(set(pci_ids))
 
 
 def reset_tensix(tt_open_devices=None):

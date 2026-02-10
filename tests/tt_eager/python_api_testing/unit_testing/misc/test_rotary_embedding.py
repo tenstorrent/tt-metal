@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, divup, is_grayskull, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, divup
 
 
 def rotate_half(x):
@@ -176,7 +176,6 @@ def test_rotary_embedding_decode(
     assert p
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 128, 64)])
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("in_sharded", [True])
@@ -248,7 +247,6 @@ def test_rotary_embedding_prefill_fp32(
     assert p
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 32, 64)])
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("token_idx", [0, 128])

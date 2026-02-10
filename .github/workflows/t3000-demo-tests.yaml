@@ -122,4 +122,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.model || 'all' }}
       extra-tag: ${{ inputs.extra-tag || 'in-service' }}
-      mlperf-read-only: ${{ inputs.mlperf-read-only }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}

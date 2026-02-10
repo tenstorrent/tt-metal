@@ -47,7 +47,7 @@ repos:
   hooks:
     - id: validate-metalium-includes
       name: validate-metalium-includes
-      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
+      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api --check-ttnn-forwards
       language: system
       pass_filenames: false
     - id: validate-metalium-deprecation

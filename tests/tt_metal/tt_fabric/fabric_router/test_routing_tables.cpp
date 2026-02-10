@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
+#include <algorithm>
 #include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
@@ -20,6 +21,8 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace {
 
@@ -124,11 +127,45 @@ TEST(MeshGraphValidation, TestMGDConnections) {
 }
 
 TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
+    // Reset MetalContext's control plane to ensure a clean state
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    // initialize_fabric_config() calls get_control_plane() which creates the control plane and writes the mapping file
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Determine golden file name based on cluster descriptor
+    const char* mock_cluster = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    const char* mesh_graph = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    std::string golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD";
+
+    if (mock_cluster) {
+        std::string cluster_str(mock_cluster);
+        if (cluster_str.find("2xp150") != std::string::npos) {
+            golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_2xp150";
+        } else if (cluster_str.find("4xn300") != std::string::npos) {
+            golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_4xn300";
+        } else if (cluster_str.find("bh_galaxy_xyz") != std::string::npos) {
+            if (mesh_graph) {
+                std::string mgd_str(mesh_graph);
+                if (mgd_str.find("single_bh_galaxy_torus_xy") != std::string::npos) {
+                    golden_name =
+                        "ControlPlaneFixture_TestControlPlaneInitNoMGD_bh_galaxy_xyz_single_bh_galaxy_torus_xy";
+                } else if (mgd_str.find("single_bh_galaxy") != std::string::npos) {
+                    golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_bh_galaxy_xyz_single_bh_galaxy";
+                } else {
+                    golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_bh_galaxy_xyz";
+                }
+            } else {
+                golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_bh_galaxy_xyz";
+            }
+        }
+    }
+
+    check_asic_mapping_against_golden("TestControlPlaneInitNoMGD", golden_name);
 }
 
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
@@ -142,10 +179,29 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
+    // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    // Delete any existing mapping file to ensure we check the one written by the test's ControlPlane
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::string generated_filename =
+        "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
+    std::filesystem::path generated_file = generated_dir / generated_filename;
+    if (std::filesystem::exists(generated_file)) {
+        std::filesystem::remove(generated_file);
+    }
+
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
+
+    check_asic_mapping_against_golden("TestT3kControlPlaneInit", "ControlPlaneFixture_T3k");
 }
 
 TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
@@ -201,6 +257,8 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane_1d(galaxy_6u_mesh_graph_desc_path);
+
+    check_asic_mapping_against_golden("TestSingleGalaxy1x32ControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
@@ -234,6 +292,49 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
     }
 }
 
+TEST_F(ControlPlaneFixture, TestSingleGalaxy1x16ControlPlaneInit) {
+    GTEST_SKIP();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto";
+    auto control_plane = make_control_plane_1d(galaxy_6u_mesh_graph_desc_path);
+}
+
+TEST_F(ControlPlaneFixture, TestSingleGalaxy1x16FabricRoutes) {
+    GTEST_SKIP();
+    const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto";
+    auto control_plane = make_control_plane_1d(galaxy_6u_mesh_graph_desc_path);
+
+    // Test routing from first chip (0) to last chip (15) in the 1x16 topology
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 15), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test routing on second routing plane
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 15), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test that all forwarding directions are valid
+    auto src_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    for (unsigned int x = 1; x < 16; ++x) {
+        auto dst_fabric_node_id = FabricNodeId(MeshId{0}, x);
+        auto forwarding_direction = control_plane->get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+        EXPECT_EQ(forwarding_direction.has_value(), true);
+    }
+}
+
 class T3kCustomMeshGraphControlPlaneFixture
     : public ControlPlaneFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {};
@@ -247,10 +348,62 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kMeshGraphInit) {
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+
+    // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
+    // This prevents MetalContext from creating an auto-discovery control plane that writes a mapping file first
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    // Delete any existing mapping file to ensure we check the one written by the test's ControlPlane
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::string generated_filename =
+        "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
+    std::filesystem::path generated_file = generated_dir / generated_filename;
+    if (std::filesystem::exists(generated_file)) {
+        std::filesystem::remove(generated_file);
+    }
+
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
-    [[maybe_unused]] auto control_plane = make_control_plane(
+    auto control_plane = make_control_plane(
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+
+    // Extract MGD filename (without extension) for golden file naming
+    std::filesystem::path mgd_path(mesh_graph_desc_path);
+    std::string mgd_filename = mgd_path.stem().string();
+    // Replace any special characters that might cause issues in filenames
+    std::replace(mgd_filename.begin(), mgd_filename.end(), '/', '_');
+    std::replace(mgd_filename.begin(), mgd_filename.end(), '-', '_');
+
+    // Extract parameter index from test name (format: TestName/Index)
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    std::string full_test_name = std::string(test_info->test_suite_name()) + "/" + test_info->name();
+    int param_index = 0;
+    // Test name format: TestSuiteName/TestName/Index
+    size_t last_slash = full_test_name.find_last_of('/');
+    if (last_slash != std::string::npos && last_slash + 1 < full_test_name.length()) {
+        try {
+            param_index = std::stoi(full_test_name.substr(last_slash + 1));
+        } catch (...) {
+            // If parsing fails, try to find index by searching through parameters
+            for (size_t i = 0; i < t3k_mesh_descriptor_chip_mappings.size(); ++i) {
+                if (std::get<0>(t3k_mesh_descriptor_chip_mappings[i]) == mesh_graph_desc_path &&
+                    std::get<1>(t3k_mesh_descriptor_chip_mappings[i]) == mesh_graph_eth_coords) {
+                    param_index = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    std::string golden_name =
+        "T3kCustomMeshGraph_TestT3kControlPlaneInit_" + mgd_filename + "_" + std::to_string(param_index);
+
+    check_asic_mapping_against_golden("TestT3kControlPlaneInit", golden_name);
 }
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
@@ -376,6 +529,8 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     auto asic_location_y_size = physical_system_descriptor->get_asic_location(tt::tt_metal::AsicID{asic_id_y_size});
     EXPECT_EQ(*tray_id_y_size, 1) << "Fabric node id " << y_size << " should map to tray ID 1";
     EXPECT_EQ(*asic_location_y_size, 2) << "Fabric node id " << y_size << " should map to ASIC location 2";
+
+    check_asic_mapping_against_golden("TestSingleGalaxyControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
