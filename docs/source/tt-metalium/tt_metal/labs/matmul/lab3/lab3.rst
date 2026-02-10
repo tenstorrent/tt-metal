@@ -221,7 +221,7 @@ Before looking at code in more detail, it is helpful to describe the multicast p
 
 .. figure:: images/multicast_protocol.png
    :alt: Multicast Protocol
-   :width: 700
+   :width: 1200
    :align: center
 
    Figure 4: Multicast Protocol
