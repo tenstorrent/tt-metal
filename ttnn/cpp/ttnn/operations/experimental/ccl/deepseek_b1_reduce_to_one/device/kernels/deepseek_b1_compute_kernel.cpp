@@ -3,11 +3,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-
-namespace NAMESPACE {
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
 
 enum MeshRole : uint32_t { MESH_LEAF = 0, MESH_ROOT3 = 1, MESH_ROOT2 = 2, MESH_ROOT1 = 3 };
 
@@ -52,7 +50,7 @@ FORCE_INLINE void pack_tiles_from_dest(uint32_t cb, uint32_t n_tiles) {
     cb_push_back(cb, n_tiles);
 }
 
-void MAIN {
+void kernel_main() {
     if constexpr (device_role == MESH_LEAF) {
         return;
     }
@@ -77,5 +75,3 @@ void MAIN {
     // Pack final result once
     pack_tiles_from_dest(scratch_cb, num_tiles);
 }
-
-}  // namespace NAMESPACE

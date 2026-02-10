@@ -135,7 +135,6 @@ class DistributedRMSNorm(RMSNormBase):
                 cluster_axis=1,
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 memory_config=rms_norm_stats_memory_config,
-                topology=ttnn.Topology.Linear,
             ),
             "rms_norm_post_all_gather": RMSNormPostAllGatherConfig(
                 epsilon=hf_config.rms_norm_eps,

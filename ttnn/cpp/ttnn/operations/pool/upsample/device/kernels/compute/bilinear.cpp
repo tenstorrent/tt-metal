@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/tilize.h"
+#include "api/compute/reduce.h"
+#include "api/compute/pack_untilize.h"
 #include "internal/circular_buffer_interface.h"
 
 // Push 1 stick or partial stick to a cb (a (partial) stick consists of num_pages pages, in our case, size of a page is
