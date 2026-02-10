@@ -61,8 +61,8 @@ def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=Tru
         in_channels=in_channels,
         out_channels=out_channels,
         bias=bias,
-        torch_ref=reference_model,
     )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
 
     return reference_model, tt_model
 
@@ -183,33 +183,40 @@ def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_
 
     # Create TT model
     tt_model = TtResBlock(
+        reference_model.in_channels,
+        reference_model.out_channels,
         mesh_device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
-        torch_ref=reference_model,
     )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
 
     return reference_model, tt_model
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "N, C, T, H, W",
+    ("N", "C", "T", "H", "W"),
     [
         # small latent
-        (1, 768, 28, 40, 50),
-        (1, 512, 84, 80, 100),
-        (1, 256, 168, 160, 200),
-        (1, 128, 168, 320, 400),
+        pytest.param(1, 768, 28, 40, 50, id="s768"),
+        pytest.param(1, 512, 84, 80, 100, id="s512"),
+        pytest.param(1, 256, 168, 160, 200, id="s256"),
+        pytest.param(1, 128, 168, 320, 400, id="s128"),
         # large latent
-        (1, 768, 28, 60, 106),
-        (1, 512, 84, 120, 212),
-        (1, 256, 168, 240, 424),
-        (1, 128, 168, 480, 848),
+        pytest.param(1, 768, 28, 60, 106, id="l768"),
+        pytest.param(1, 512, 84, 120, 212, id="l512"),
+        pytest.param(1, 256, 168, 240, 424, id="l256"),
+        pytest.param(1, 128, 168, 480, 848, id="l128"),
     ],
-    ids=["s768", "s512", "s256", "s128", "l768", "l512", "l256", "l128"],
 )
-@pytest.mark.parametrize("num_links", [4, 1], ids=["4links", "1link"])
+@pytest.mark.parametrize(
+    "num_links",
+    [
+        pytest.param(4, id="4links"),
+        pytest.param(1, id="1link"),
+    ],
+)
 @vae_device_config
 def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links):
     """Test complete forward pass of TtResBlock."""
@@ -345,7 +352,6 @@ def create_random_causalupsampleblock_models(
         mesh_device=mesh_device,
         in_channels=in_channels,
         out_channels=out_channels,
-        torch_ref=reference_model,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
         num_res_blocks=num_layers,
@@ -353,6 +359,7 @@ def create_random_causalupsampleblock_models(
         spatial_expansion=spatial_expansion,
         temporal_offset=temporal_offset,
     )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
 
     return reference_model, tt_model
 
@@ -432,7 +439,13 @@ def create_random_causalupsampleblock_models(
     ],
     ids=["l768", "l512", "l256", "s768", "s512", "s256"],
 )
-@pytest.mark.parametrize("num_links", [4, 1], ids=["4links", "1link"])
+@pytest.mark.parametrize(
+    "num_links",
+    [
+        pytest.param(4, id="4links"),
+        pytest.param(1, id="1link"),
+    ],
+)
 @vae_device_config
 def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     """Test TtCausalUpsampleBlock against reference implementation."""
@@ -593,7 +606,6 @@ def create_decoder_models(
     # Create TT model with same weights
     tt_model = TtDecoder(
         mesh_device=mesh_device,
-        torch_ref=reference_model,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
         out_channels=out_channels,
@@ -606,6 +618,7 @@ def create_decoder_models(
         nonlinearity=nonlinearity,
         output_nonlinearity=output_nonlinearity,
     )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
 
     return reference_model, tt_model
 
@@ -715,8 +728,20 @@ def load_dit(
     decoder_test_configs,
     ids=[cfg["name"] for cfg in decoder_test_configs],
 )
-@pytest.mark.parametrize("load_dit_weights", [False, True], ids=["no_dit", "load_dit"])
-@pytest.mark.parametrize("num_links", [4, 1], ids=["4links", "1link"])
+@pytest.mark.parametrize(
+    "load_dit_weights",
+    [
+        pytest.param(False, id="no_dit"),
+        pytest.param(True, id="load_dit"),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_links",
+    [
+        pytest.param(4, id="4links"),
+        pytest.param(1, id="1link"),
+    ],
+)
 @vae_device_config
 def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, num_links):
     input_shape = config["input_shape"]

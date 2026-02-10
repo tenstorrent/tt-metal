@@ -11,7 +11,7 @@ from ...layers.linear import ColParallelLinear
 from ...layers.module import Module
 from ...layers.normalization import RMSNorm
 from ...utils.padding import pad_weight_tensor
-from ...utils.substate import substate
+from ...utils.substate import pop_substate, rename_substate
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
@@ -135,60 +135,7 @@ class SD35JointAttention(Module):
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def to_cached_state_dict(self, path_prefix):
-        cache_dict = {}
-
-        # Cache normalization layers
-        norm_q_cache = self.norm_q.to_cached_state_dict(path_prefix + "norm_q.")
-        norm_k_cache = self.norm_k.to_cached_state_dict(path_prefix + "norm_k.")
-        norm_added_q_cache = self.norm_added_q.to_cached_state_dict(path_prefix + "norm_added_q.")
-        norm_added_k_cache = self.norm_added_k.to_cached_state_dict(path_prefix + "norm_added_k.")
-
-        # Add norm prefixes to all keys
-        for key, value in norm_q_cache.items():
-            cache_dict[f"norm_q.{key}"] = value
-        for key, value in norm_k_cache.items():
-            cache_dict[f"norm_k.{key}"] = value
-        for key, value in norm_added_q_cache.items():
-            cache_dict[f"norm_added_q.{key}"] = value
-        for key, value in norm_added_k_cache.items():
-            cache_dict[f"norm_added_k.{key}"] = value
-
-        # Cache linear layers
-        to_qkv_cache = self.to_qkv.to_cached_state_dict(path_prefix + "to_qkv.")
-        add_qkv_proj_cache = self.add_qkv_proj.to_cached_state_dict(path_prefix + "add_qkv_proj.")
-        to_out_cache = self.to_out.to_cached_state_dict(path_prefix + "to_out.")
-
-        # Add linear layer prefixes to all keys
-        for key, value in to_qkv_cache.items():
-            cache_dict[f"to_qkv.{key}"] = value
-        for key, value in add_qkv_proj_cache.items():
-            cache_dict[f"add_qkv_proj.{key}"] = value
-        for key, value in to_out_cache.items():
-            cache_dict[f"to_out.{key}"] = value
-
-        # Cache optional to_add_out layer
-        if self.context_pre_only is not None and not self.context_pre_only:
-            to_add_out_cache = self.to_add_out.to_cached_state_dict(path_prefix + "to_add_out.")
-            for key, value in to_add_out_cache.items():
-                cache_dict[f"to_add_out.{key}"] = value
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.norm_q.from_cached_state_dict(substate(cache_dict, "norm_q"))
-        self.norm_k.from_cached_state_dict(substate(cache_dict, "norm_k"))
-        self.norm_added_q.from_cached_state_dict(substate(cache_dict, "norm_added_q"))
-        self.norm_added_k.from_cached_state_dict(substate(cache_dict, "norm_added_k"))
-
-        self.to_qkv.from_cached_state_dict(substate(cache_dict, "to_qkv"))
-        self.add_qkv_proj.from_cached_state_dict(substate(cache_dict, "add_qkv_proj"))
-        self.to_out.from_cached_state_dict(substate(cache_dict, "to_out"))
-
-        if self.context_pre_only is not None and not self.context_pre_only:
-            self.to_add_out.from_cached_state_dict(substate(cache_dict, "to_add_out"))
-
-    def load_torch_state_dict(self, state_dict):
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def reshape_and_merge_qkv(q_state, k_state, v_state):
             # Rearrange QKV projections such column-fracturing shards the heads
             def _merge_tensors(q, k, v):
@@ -218,30 +165,33 @@ class SD35JointAttention(Module):
                 out_state["bias"] = bias
             return out_state
 
-        def pad_dense_out(state):
-            # Pad dense output weights and biases to match the padded heads
-            weight = state["weight"].T
-            bias = state["bias"]
-            if self.padding_config is not None:
-                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
-            weight = weight.T
-            return {"weight": weight, "bias": bias}
-
-        self.norm_q.load_torch_state_dict(substate(state_dict, "norm_q"))
-        self.norm_k.load_torch_state_dict(substate(state_dict, "norm_k"))
         qkv_state = reshape_and_merge_qkv(
-            substate(state_dict, "to_q"), substate(state_dict, "to_k"), substate(state_dict, "to_v")
+            pop_substate(state, "to_q"), pop_substate(state, "to_k"), pop_substate(state, "to_v")
         )
-        self.to_qkv.load_torch_state_dict(qkv_state)
+        state["to_qkv.weight"] = qkv_state["weight"]
+        if "bias" in qkv_state:
+            state["to_qkv.bias"] = qkv_state["bias"]
+
         add_qkv_state = reshape_and_merge_qkv(
-            substate(state_dict, "add_q_proj"), substate(state_dict, "add_k_proj"), substate(state_dict, "add_v_proj")
+            pop_substate(state, "add_q_proj"),
+            pop_substate(state, "add_k_proj"),
+            pop_substate(state, "add_v_proj"),
         )
-        self.add_qkv_proj.load_torch_state_dict(add_qkv_state)
-        self.to_out.load_torch_state_dict(pad_dense_out(substate(state_dict, "to_out.0")))
-        if self.context_pre_only is not None and not self.context_pre_only:
-            self.to_add_out.load_torch_state_dict(pad_dense_out(substate(state_dict, "to_add_out")))
-        self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
-        self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
+        state["add_qkv_proj.weight"] = add_qkv_state["weight"]
+        if "bias" in add_qkv_state:
+            state["add_qkv_proj.bias"] = add_qkv_state["bias"]
+
+        rename_substate(state, "to_out.0", "to_out")
+
+        if self.padding_config is not None:
+            if "to_out.weight" in state:
+                weight = state["to_out.weight"].T
+                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+                state["to_out.weight"] = weight.T
+            if "to_add_out.weight" in state:
+                weight = state["to_add_out.weight"].T
+                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+                state["to_add_out.weight"] = weight.T
 
     def forward(self, spatial_1BND, prompt_1BLD, N):
         """

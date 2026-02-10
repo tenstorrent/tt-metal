@@ -5,35 +5,37 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import torch
 
 import ttnn
 
 from ...layers.conv3d import ContextParallelConv3d
+from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import GroupNorm
-from ...parallel.config import vae_all_gather, vae_neighbor_pad, vae_slice_reshard
-from ...utils.tensor import bf16_tensor
+from ...parallel.config import MochiVAEParallelConfig, vae_all_gather, vae_neighbor_pad, vae_slice_reshard
+from ...parallel.manager import CCLManager
+from ...utils.substate import rename_substate
 
 if TYPE_CHECKING:
-    pass
+    from collections.abc import Callable, Sequence
 
 
 def get_padded_size(numerator, denominator):
     return ((numerator + denominator - 1) // denominator) * denominator
 
 
-class Conv1x1:
+class Conv1x1(Module):
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
+        *,
         bias: bool = True,
-        swizzle_weight: Callable = None,
-        mesh_device=None,
-        torch_ref=None,
-    ):
+        swizzle_weight: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        mesh_device: ttnn.MeshDevice,
+    ) -> None:
         """
         A 1x1 convolution implemented as a linear operation for ttnn.
 
@@ -50,15 +52,16 @@ class Conv1x1:
             bias: Whether to include bias
             swizzle_weight: Function to swizzle weights, useful for channel expansion
         """
-        self.in_features = in_channels
-        self.out_features = out_channels
-        self.use_bias = bias
+        super().__init__()
+
+        self.weight = Parameter(total_shape=[in_channels, out_channels], device=mesh_device)
+        self.bias = Parameter(total_shape=[1, out_channels], device=mesh_device) if bias else None
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.swizzle_weight = swizzle_weight
         self.mesh_device = mesh_device
-        self.weight = None
-        self.bias = None
 
-        # Configure compute kernel
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -66,68 +69,25 @@ class Conv1x1:
             packer_l1_acc=False,
         )
 
-        if torch_ref is not None:
-            self.load_state_dict(torch_ref.state_dict())
-        else:
-            self.weight = bf16_tensor(
-                torch.randn(self.in_features, self.out_features),
-                device=self.mesh_device,
-                mesh_axis=None,
-                shard_dim=None,
-            )
-            if self.use_bias:
-                self.bias = bf16_tensor(
-                    torch.randn(1, self.out_features), device=self.mesh_device, mesh_axis=None, shard_dim=None
-                )
-            else:
-                self.bias = None
-
-    def load_state_dict(self, state_dict):
-        # Load weights - supports both Conv3d(1,1,1) and Conv1x1 format
-        weight = state_dict["weight"]
-        if weight.ndim == 5:  # Conv3d weight
-            # Convert from (out_channels, in_channels, 1, 1, 1) to (out_channels, in_channels)
-            weight = weight.squeeze()
-        weight = weight.transpose(0, 1)  # (out_channels, in_channels) -> (in_channels, out_channels)
-        if self.swizzle_weight:
-            weight = self.swizzle_weight(weight)
-
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
-        )
-        self.weight = ttnn.from_torch(
-            weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=self.mesh_device, mesh_mapper=mesh_mapper
-        )
-        assert self.use_bias == ("bias" in state_dict)
-        if self.use_bias:
-            bias_weight = state_dict["bias"]
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        weight = state.get("weight")
+        if weight is not None:
+            # Load weights - supports both Conv3d(1,1,1) and Conv1x1 format
+            if weight.ndim == 5:  # Conv3d weight
+                # Convert from (out_channels, in_channels, 1, 1, 1) to (out_channels, in_channels)
+                weight = weight.squeeze()
+            weight = weight.transpose(0, 1)  # (out_channels, in_channels) -> (in_channels, out_channels)
             if self.swizzle_weight:
-                bias_weight = self.swizzle_weight(bias_weight)
-            self.bias = ttnn.from_torch(
-                bias_weight.reshape(1, -1),
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                device=self.mesh_device,
-                mesh_mapper=mesh_mapper,
-            )
-        else:
-            self.bias = None
+                weight = self.swizzle_weight(weight)
+            state["weight"] = weight
 
-    @classmethod
-    def from_torch(
-        cls, torch_ref, in_channels=None, out_channels=None, bias=None, swizzle_weight=None, mesh_device=None
-    ):
-        layer = cls(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            bias=bias,
-            swizzle_weight=swizzle_weight,
-            mesh_device=mesh_device,
-            torch_ref=torch_ref,
-        )
-        return layer
+        bias = state.get("bias")
+        if bias is not None:
+            if self.swizzle_weight:
+                bias = self.swizzle_weight(bias)
+            state["bias"] = bias.reshape(1, -1)
 
-    def __call__(self, x_NTHWC):
+    def forward(self, x_NTHWC):
         """
         Forward pass for Conv1x1.
 
@@ -144,8 +104,8 @@ class Conv1x1:
         # Apply linear transformation
         x_tile_NTHWO = ttnn.linear(
             x_tile_NTHWC,
-            self.weight,
-            bias=self.bias,
+            self.weight.data,
+            bias=self.bias.data if self.bias is not None else None,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -160,17 +120,21 @@ class Conv1x1:
         return x_NTHWO
 
 
-class ResBlock:
+class ResBlock(Module):
     def __init__(
         self,
+        in_channels: int,
+        out_channels: int,
+        *,
         causal: bool = True,
         padding_mode: str = "replicate",
         bias: bool = True,
-        mesh_device=None,
-        parallel_config=None,
-        ccl_manager=None,
-        torch_ref=None,
-    ):
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: MochiVAEParallelConfig,
+        ccl_manager: CCLManager,
+    ) -> None:
+        super().__init__()
+
         self.core_grid_y_map = {
             # large latent
             768: {
@@ -203,26 +167,28 @@ class ResBlock:
         grid_size_x = mesh_device.core_grid.x
         grid_size_y = (
             self.core_grid_y_map[768][self.parallel_config.time_parallel.factor]
-            if torch_ref.in_channels == 768
+            if in_channels == 768
             else mesh_device.core_grid.y
         )
         self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size_x)
 
         self.norm1 = GroupNorm(
+            in_channels,
             num_groups=32,
             mesh_device=mesh_device,
             mesh_axis=None,
             core_grid=self.grid_size,
-            torch_ref=torch_ref.norm1.norm_layer if torch_ref is not None else None,
         )
         self.norm2 = GroupNorm(
+            out_channels,
             num_groups=32,
             mesh_device=mesh_device,
             mesh_axis=None,
             core_grid=self.grid_size,
-            torch_ref=torch_ref.norm2.norm_layer if torch_ref is not None else None,
         )
         self.conv1 = ContextParallelConv3d(
+            in_channels,
+            out_channels,
             mesh_device=mesh_device,
             kernel_size=(3, 3, 3),
             stride=(1, 1, 1),
@@ -231,9 +197,10 @@ class ResBlock:
             causal=causal,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            torch_ref=torch_ref.conv1.conv if torch_ref is not None else None,
         )
         self.conv2 = ContextParallelConv3d(
+            out_channels,
+            out_channels,
             mesh_device=mesh_device,
             kernel_size=(3, 3, 3),
             stride=(1, 1, 1),
@@ -242,8 +209,13 @@ class ResBlock:
             causal=causal,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            torch_ref=torch_ref.conv2.conv if torch_ref is not None else None,
         )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "norm1.norm_layer", "norm1")
+        rename_substate(state, "norm2.norm_layer", "norm2")
+        rename_substate(state, "conv1.conv", "conv1")
+        rename_substate(state, "conv2.conv", "conv2")
 
     def get_tensor_shapes(self, x):
         return x.shape
@@ -304,7 +276,7 @@ class ResBlock:
         output = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [N, T, H, W, C])
         return output
 
-    def __call__(self, x_NTHWC):
+    def forward(self, x_NTHWC: ttnn.Tensor) -> ttnn.Tensor:
         shapes = self.get_tensor_shapes(x_NTHWC)
         N, T, H, W, C = shapes
         if self.parallel_config.w_parallel.factor > 1:
@@ -483,43 +455,44 @@ class ResBlock:
         return x_NTHWC
 
 
-class CausalUpsampleBlock:
+class CausalUpsampleBlock(Module):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
         in_channels: int,
         out_channels: int,
-        torch_ref=None,
-        parallel_config=None,
-        ccl_manager=None,
         num_res_blocks: int = 0,
+        *,
+        parallel_config: MochiVAEParallelConfig,
+        ccl_manager: CCLManager,
         temporal_expansion: int = 2,
         spatial_expansion: int = 2,
         temporal_offset: int = 0,
         has_attention: bool = False,
-        affine: bool = True,
-        attn_block=None,
         causal: bool = True,
         prune_bottleneck: bool = False,
         padding_mode: str = "replicate",
         bias: bool = True,
-    ):
+    ) -> None:
+        super().__init__()
+
         assert causal
         assert not prune_bottleneck
         assert not has_attention
         self.mesh_device = mesh_device
-        self.blocks = [
+        self.resnets = ModuleList(
             ResBlock(
+                in_channels,
+                in_channels,
                 mesh_device=mesh_device,
                 causal=causal,
                 padding_mode=padding_mode,
                 bias=bias,
-                torch_ref=resnet,
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
-            for resnet in torch_ref.resnets
-        ]
+            for _ in range(num_res_blocks)
+        )
 
         self.temporal_expansion = temporal_expansion
         self.spatial_expansion = spatial_expansion
@@ -555,7 +528,6 @@ class CausalUpsampleBlock:
             out_channels=out_channels * temporal_expansion * (spatial_expansion**2),
             bias=bias,
             swizzle_weight=swizzle_weight,
-            torch_ref=torch_ref.proj,
         )
 
     def depth_to_spacetime(self, x_NTHWC):
@@ -606,9 +578,9 @@ class CausalUpsampleBlock:
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
         return x_NTHWC
 
-    def __call__(self, x_NTHWC):
+    def forward(self, x_NTHWC: ttnn.Tensor) -> ttnn.Tensor:
         N, T, H, W, C = x_NTHWC.shape
-        for block in self.blocks:
+        for block in self.resnets:
             x_NTHWC = block(x_NTHWC)
         x_NTHWO = self.proj(x_NTHWC)
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
@@ -617,32 +589,33 @@ class CausalUpsampleBlock:
         return x_NTHWC
 
 
-class MochiVAEDecoder:
+class MochiVAEDecoder(Module):
     def __init__(
         self,
+        out_channels: int,
+        *,
         mesh_device: ttnn.MeshDevice,
-        torch_ref=None,
-        parallel_config=None,
-        ccl_manager=None,
-        out_channels=3,
-        base_channels=128,
-        channel_multipliers=[1, 2, 4, 6],
-        temporal_expansions=[1, 2, 3],
-        spatial_expansions=[2, 2, 2],
-        num_res_blocks=[3, 3, 4, 6, 3],
-        latent_dim=12,
-        has_attention=[False, False, False, False, False],
-        output_norm=False,
-        nonlinearity="silu",
-        output_nonlinearity="silu",
-        causal=True,
+        parallel_config: MochiVAEParallelConfig,
+        ccl_manager: CCLManager,
+        base_channels: int = 128,
+        channel_multipliers: Sequence[int] = (1, 2, 4, 6),
+        temporal_expansions: Sequence[int] = (1, 2, 3),
+        spatial_expansions: Sequence[int] = (2, 2, 2),
+        num_res_blocks: Sequence[int] = (3, 3, 4, 6, 3),
+        latent_dim: int = 12,
+        has_attention: Sequence[bool] = (False, False, False, False, False),
+        nonlinearity: str = "silu",
+        output_nonlinearity: str = "silu",
+        causal: bool = True,
         latents_mean=None,
         latents_std=None,
         scaling_factor=1.0,
-    ):
+    ) -> None:
         """
         TTNN implementation of the VAE Decoder.
         """
+        super().__init__()
+
         self.input_channels = latent_dim
         self.output_channels = out_channels
         self.base_channels = base_channels
@@ -659,7 +632,7 @@ class MochiVAEDecoder:
         assert nonlinearity == "silu"
         assert causal
         assert not any(has_attention), "Attention is not supported in the decoder"
-        attn_block = None
+
         # Calculate channels for each level
         ch = [mult * base_channels for mult in channel_multipliers]
         self.num_up_blocks = len(ch) - 1
@@ -671,66 +644,55 @@ class MochiVAEDecoder:
         assert len(num_res_blocks) == len(has_attention) == self.num_up_blocks + 2
 
         # Create the initial projection from latent space
-        self.input_proj = Conv1x1(
-            mesh_device=mesh_device,
-            in_channels=latent_dim,
-            out_channels=ch[-1],
-            torch_ref=torch_ref.conv_in,
-        )
+        self.input_proj = Conv1x1(latent_dim, ch[-1], mesh_device=mesh_device)
 
         # First set of residual blocks
-        self.first_blocks = [
+        self.first_blocks = ModuleList(
             ResBlock(
+                ch[-1],
+                ch[-1],
                 mesh_device=mesh_device,
                 causal=causal,
                 padding_mode="replicate",
-                torch_ref=resnet,
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
-            for resnet in torch_ref.block_in.resnets
-        ]
+            for _ in range(num_res_blocks[-1])
+        )
 
         # Create upsampling blocks
-        self.up_blocks = [
+        self.up_blocks = ModuleList(
             CausalUpsampleBlock(
                 mesh_device=mesh_device,
                 in_channels=ch[-i - 1],
                 out_channels=ch[-i - 2],
                 num_res_blocks=num_res_blocks[-i - 2],
-                attn_block=attn_block,
                 temporal_expansion=temporal_expansions[-i - 1],
                 spatial_expansion=spatial_expansions[-i - 1],
                 causal=causal,
                 padding_mode="replicate",
-                torch_ref=upblock,
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
-            for i, upblock in enumerate(torch_ref.up_blocks)
-        ]
+            for i in range(len(ch) - 1)
+        )
 
         # Last set of residual blocks
-        self.last_blocks = [
+        self.last_blocks = ModuleList(
             ResBlock(
+                ch[0],
+                ch[0],
                 mesh_device=mesh_device,
                 causal=causal,
                 padding_mode="replicate",
-                torch_ref=resnet,
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
-            for resnet in torch_ref.block_out.resnets
-        ]
+            for _ in range(num_res_blocks[0])
+        )
 
         # Final output projection
-        self.output_proj = Conv1x1(
-            mesh_device=mesh_device,
-            in_channels=ch[0],
-            out_channels=out_channels,
-            bias=True,
-            torch_ref=torch_ref.proj_out,
-        )
+        self.output_proj = Conv1x1(ch[0], out_channels, mesh_device=mesh_device)
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -738,6 +700,13 @@ class MochiVAEDecoder:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "conv_in", "input_proj")
+        rename_substate(state, "proj_out", "output_proj")
+
+        rename_substate(state, "block_in.resnets", "first_blocks")
+        rename_substate(state, "block_out.resnets", "last_blocks")
 
     def dealloc(self):
         self.input_proj.dealloc()
@@ -839,7 +808,7 @@ class MochiVAEDecoder:
         x_NCTHW_torch = x_NTHWC_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
         return x_NCTHW_torch
 
-    def __call__(self, x_NTHWC):
+    def forward(self, x_NTHWC: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass for the decoder.
 

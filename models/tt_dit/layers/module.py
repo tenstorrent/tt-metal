@@ -155,27 +155,24 @@ class Module(ABC):
     def load_state_dict(self, state_dict: Mapping[str, torch.Tensor]) -> None:
         self.load_torch_state_dict(state_dict)
 
-    def save(self, directory: str | Path, /) -> None:
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
-        directory.mkdir(exist_ok=True)
+        directory.mkdir(exist_ok=True, parents=True)
 
         for name, child in self.named_children():
-            child.save(directory / name)
+            child.save(directory, prefix=f"{prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            parameter.save(directory / f"{name}.tensorbin")
+            parameter.save(directory / f"{prefix}{name}.tensorbin")
 
-    def load(self, directory: str | Path, /) -> None:
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
-        if not directory.exists():
-            msg = f"directory does not exist: {directory}"
-            raise RuntimeError(msg)
 
         for name, child in self.named_children():
-            child.load(directory / name)
+            child.load(directory, prefix=f"{prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            path = directory / f"{name}.tensorbin"
+            path = directory / f"{prefix}{name}.tensorbin"
             try:
                 parameter.load(path)
             except LoadingError as err:
@@ -402,7 +399,12 @@ class Parameter:
         ttnn.dump_tensor(path, self.data)
 
     def load(self, path: str | Path, /) -> None:
-        self.data = ttnn.load_tensor(path, device=None if self.on_host else self.device)
+        try:
+            tensor = ttnn.load_tensor(path, device=None if self.on_host else self.device)
+        except RuntimeError as err:
+            msg = f"TT-NN error «{err}»"
+            raise LoadingError(msg) from err
+        self.data = tensor
 
     @property
     def data(self) -> ttnn.Tensor:
