@@ -178,6 +178,9 @@ private:
     // Internal helper to convert proto grouping to GroupingInfo
     GroupingInfo convert_grouping_to_info(const proto::Grouping& grouping) const;
 
+    // Helper to get ASIC count for a grouping name (from cache)
+    uint32_t get_grouping_asic_count(const std::string& grouping_name) const;
+
     // Helper for reading files
     static std::string read_file_to_string(const std::filesystem::path& file_path);
 
