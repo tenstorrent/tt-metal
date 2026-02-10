@@ -199,7 +199,7 @@ private:
     std::atomic<bool> thread_exception_state_ = false;
 
 protected:
-    void write_shard_to_device(
+    bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,
