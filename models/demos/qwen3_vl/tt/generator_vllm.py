@@ -99,7 +99,6 @@ class TT_Qwen3VLProcessingInfo(Qwen3VLProcessingInfo):
         return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
 
-# TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
 @MULTIMODAL_REGISTRY.register_processor(
     Qwen3VLMultiModalProcessor, info=TT_Qwen3VLProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
@@ -181,8 +180,7 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             x == 0 for x in start_pos
         ), f"Prefix caching is not supported for Qwen3VL, got start_pos: {start_pos}"
         # Must add this so that vLLM can call without errors
-        enable_trace = False
-        logger.warning("Tracing in prefill mode is not supported for Qwen3VL")
+        assert enable_trace is False, "Tracing in prefill mode is not supported for Qwen3VL"
 
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
