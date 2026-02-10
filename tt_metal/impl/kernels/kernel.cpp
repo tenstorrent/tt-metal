@@ -570,13 +570,13 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
 
 uint32_t Kernel::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
-    auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+    auto iter = binaries_.find(BuildEnvManager::get_instance().get_build_key(device->build_id()));
     return iter != this->binaries_.end() ? iter->second[index]->get_packed_size() : 0;
 }
 
 uint32_t Kernel::get_binary_text_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
-    auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+    auto iter = binaries_.find(BuildEnvManager::get_instance().get_build_key(device->build_id()));
     return iter != this->binaries_.end() ? iter->second[index]->get_text_size() : 0;
 }
 
@@ -591,7 +591,7 @@ void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
 
 void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
     jit_build_genfiles_kernel_include(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
+        BuildEnvManager::get_instance().get_build_env(device->build_id()), *this, this->kernel_src_);
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -604,7 +604,7 @@ void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*b
 
 void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
     jit_build_genfiles_kernel_include(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
+        BuildEnvManager::get_instance().get_build_env(device->build_id()), *this, this->kernel_src_);
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -617,7 +617,7 @@ void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build
 
 void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
     jit_build_genfiles_triscs_src(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
+        BuildEnvManager::get_instance().get_build_env(device->build_id()), *this, this->kernel_src_);
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
@@ -656,8 +656,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     binaries.push_back(&binary_mem);
     [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
-    this->set_binaries(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
+    this->set_binaries(BuildEnvManager::get_instance().get_build_key(device->build_id()), std::move(binaries));
 }
 
 void EthernetKernel::read_binaries(IDevice* device) {
@@ -691,8 +690,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
     binaries.push_back(&binary_mem);
     [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);
-    this->set_binaries(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
+    this->set_binaries(BuildEnvManager::get_instance().get_build_key(device->build_id()), std::move(binaries));
 }
 
 void ComputeKernel::read_binaries(IDevice* device) {
@@ -712,8 +710,7 @@ void ComputeKernel::read_binaries(IDevice* device) {
             llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
         binaries.push_back(&binary_mem);
     }
-    this->set_binaries(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
+    this->set_binaries(BuildEnvManager::get_instance().get_build_key(device->build_id()), std::move(binaries));
 }
 
 bool DataMovementKernel::configure(
@@ -724,7 +721,7 @@ bool DataMovementKernel::configure(
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem =
-        *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key())[0];
+        *this->binaries(BuildEnvManager::get_instance().get_build_key(device->build_id()))[0];
     int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
     llrt::write_binary_to_address(binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
 
@@ -737,7 +734,7 @@ bool EthernetKernel::configure(
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem =
-        *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key())[0];
+        *this->binaries(BuildEnvManager::get_instance().get_build_key(device->build_id()))[0];
 
     if (hal.get_core_kernel_stored_in_config_buffer(this->get_kernel_programmable_core_type())) {
         uint32_t offset_idx = hal.get_processor_index(
@@ -765,7 +762,7 @@ bool ComputeKernel::configure(
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries =
-        this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+        this->binaries(BuildEnvManager::get_instance().get_build_key(device->build_id()));
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         llrt::write_binary_to_address(
             *binaries[trisc_id], device_id, worker_core, base_address + offsets[2 + trisc_id]);
@@ -799,7 +796,7 @@ uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
 
 void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions&) const {
     jit_build_genfiles_kernel_include(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
+        BuildEnvManager::get_instance().get_build_env(device->build_id()), *this, this->kernel_src_);
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -831,8 +828,7 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
             llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
         binaries.push_back(&binary_mem);
     }
-    this->set_binaries(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
+    this->set_binaries(BuildEnvManager::get_instance().get_build_key(device->build_id()), std::move(binaries));
 }
 
 void QuasarDataMovementKernel::process_defines(
@@ -852,7 +848,7 @@ bool QuasarDataMovementKernel::configure(
     const ChipId device_id = device->id();
     const CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries =
-        this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+        this->binaries(BuildEnvManager::get_instance().get_build_key(device->build_id()));
     for (int i = 0; i < this->expected_num_binaries(); i++) {
         llrt::write_binary_to_address(
             *binaries[i],

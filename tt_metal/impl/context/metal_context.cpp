@@ -275,8 +275,7 @@ void MetalContext::initialize(
                     // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
                     // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
                     // Uses full 64-bit fw_compile_hash for proper change detection
-                    uint64_t fw_build_key =
-                        BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
+                    uint64_t fw_build_key = BuildEnvManager::get_instance().get_build_key(device_id) ^ fw_compile_hash;
 
                     jit_build_once(
                         fw_build_key, [device_id] { BuildEnvManager::get_instance().build_firmware(device_id); });

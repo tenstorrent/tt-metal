@@ -181,26 +181,47 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw
 void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
     uint64_t build_key = compute_build_key(device_id, num_hw_cqs);
+    device_id_to_build_key_[device_id] = build_key;
+
+    if (build_key_to_build_env_.contains(build_key)) {
+        return;
+    }
+
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
     const size_t fw_compile_hash =
         std::hash<std::string>{}(tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
     const uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    device_id_to_build_env_[device_id].build_env.init(
+    DeviceBuildEnv& dev_build_env = build_key_to_build_env_[build_key];
+    dev_build_env.build_env.init(
         build_key,
         fw_compile_hash,
         tt::tt_metal::MetalContext::instance().get_cluster().arch(),
         max_cbs,
         device_kernel_defines);
-    device_id_to_build_env_[device_id].firmware_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, true);
-    device_id_to_build_env_[device_id].kernel_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, false);
+    dev_build_env.firmware_build_states = create_build_state(dev_build_env.build_env, true);
+    dev_build_env.kernel_build_states = create_build_state(dev_build_env.build_env, false);
 }
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    TT_ASSERT(device_id_to_build_env_.contains(device_id), "Couldn't find build env for device {}.", device_id);
-    return device_id_to_build_env_[device_id];
+    TT_ASSERT(device_id_to_build_key_.contains(device_id), "Couldn't find build key for device {}.", device_id);
+    uint64_t build_key = device_id_to_build_key_.at(device_id);
+    TT_ASSERT(build_key_to_build_env_.contains(build_key), "Couldn't find build env for build key {}.", build_key);
+    return build_key_to_build_env_.at(build_key);
+}
+
+uint64_t BuildEnvManager::get_build_key(ChipId device_id) {
+    const std::lock_guard<std::mutex> lock(this->lock);
+    TT_ASSERT(device_id_to_build_key_.contains(device_id), "Couldn't find build key for device {}.", device_id);
+    return device_id_to_build_key_.at(device_id);
+}
+
+const JitBuildEnv& BuildEnvManager::get_build_env(ChipId device_id) {
+    return get_device_build_env(device_id).build_env;
+}
+
+const std::string& BuildEnvManager::get_out_kernel_root_path(ChipId device_id) {
+    return get_build_env(device_id).get_out_kernel_root_path();
 }
 
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
@@ -268,9 +289,11 @@ void BuildEnvManager::build_firmware(ChipId device_id) {
 std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
     const std::lock_guard<std::mutex> lock(this->lock);
     std::vector<BuildEnvInfo> build_env_info;
-    build_env_info.reserve(device_id_to_build_env_.size());
-    for (const auto& [device_id, build_env] : device_id_to_build_env_) {
-        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_out_firmware_root_path());
+    build_env_info.reserve(device_id_to_build_key_.size());
+    for (const auto& [device_id, build_key] : device_id_to_build_key_) {
+        const DeviceBuildEnv& dev_build_env = build_key_to_build_env_.at(build_key);
+        build_env_info.emplace_back(
+            device_id, dev_build_env.build_key(), dev_build_env.build_env.get_out_firmware_root_path());
     }
     return build_env_info;
 }

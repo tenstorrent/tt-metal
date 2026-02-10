@@ -49,6 +49,11 @@ public:
     // Getter functions for build envs/keys/states
     const DeviceBuildEnv& get_device_build_env(ChipId device_id);
 
+    // Convenience functions
+    uint64_t get_build_key(ChipId device_id);
+    const JitBuildEnv& get_build_env(ChipId device_id);
+    const std::string& get_out_kernel_root_path(ChipId device_id);
+
     // Helper functions to extract build states from the build env.
     const JitBuildState& get_firmware_build_state(
         ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
@@ -70,7 +75,8 @@ private:
     BuildEnvManager();
     ~BuildEnvManager() = default;
 
-    std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
+    std::unordered_map<ChipId, uint64_t> device_id_to_build_key_;
+    std::unordered_map<uint64_t, DeviceBuildEnv> build_key_to_build_env_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.
     // TODO: processor_type_count can be looked up in the hal, do we need this in here?

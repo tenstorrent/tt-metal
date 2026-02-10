@@ -149,7 +149,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
     try {
         jit_build_genfiles_descriptors(
-            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
+            BuildEnvManager::get_instance().get_build_env(device->build_id()), build_options);
         kernel->generate_binaries(device, build_options);
     } catch (std::runtime_error& ex) {
         TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
@@ -1128,8 +1128,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance().get_build_key(device->build_id()));
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1344,7 +1343,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance().get_build_key(device->build_id());
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
@@ -1386,7 +1385,7 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
 void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance().get_build_key(device->build_id());
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
