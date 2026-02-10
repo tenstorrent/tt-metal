@@ -627,8 +627,7 @@ void kernel_main() {
             Core::Routed::is_sender_core,
             Core::Routed::is_mcast_grid_core,
             Core::Routed::is_gate_proj_core,
-            true,  // pop_src
-            true>  // UpdateSemaphoreAddr
+            true>  // pop_src
             expert_scale_mcast;
         expert_scale_mcast(moe.routed.expert_scale_mcast_args);
     }
@@ -711,8 +710,7 @@ void kernel_main() {
             Core::Routed::is_sender_core,
             Core::Routed::is_mcast_grid_core,
             Core::Routed::is_gate_proj_core,
-            true,  // pop_src
-            true>  // UpdateSemaphoreAddr
+            true>  // pop_src
             down_proj_mcast;
         down_proj_mcast(moe.routed.down_proj_mcast_args);
     }

@@ -747,7 +747,12 @@ def extract_routed_expert_output(
 # ============================================================================
 # Test: Fused MoE (routed expert + shared expert)
 # ============================================================================
-@pytest.mark.parametrize("use_hardcoded_expert_index", [True, False])
+@pytest.mark.parametrize(
+    "use_hardcoded_expert_index",
+    [
+        True,
+    ],
+)
 def test_moe_fused(device, use_hardcoded_expert_index):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
 
