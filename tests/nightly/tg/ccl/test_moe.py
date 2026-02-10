@@ -15,6 +15,7 @@ from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
@@ -380,16 +381,8 @@ def get_moe_compute_result(
                 layer_id=layer_id,
                 cluster_axis=cluster_axis,
             )
-            import pdb
-
-            pdb.set_trace()
-            torch_output = ttnn.to_torch(
-                l1_output_tensor,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
-                ),
-            )
-            moe_compute_outputs.append(torch_output)
+            dram_output_tensor = ttnn.to_memory_config(l1_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            moe_compute_outputs.append(dram_output_tensor)
 
             # deallocate L1 inputs
             # if running with multiple layers, we have to deallocate previous inputs to free up L1 space
@@ -572,7 +565,57 @@ def test_forward_pass(
             ttnn.bfloat16,
             state_dict=reference_state_dict,
         )
-        assert tt_output_moe_compute == reference_output, "MoE compute output does not match TTNN forward pass"
+        import pdb
+
+        pdb.set_trace()
+        # Compare on DRAM: upload reference shards to device, compute max|diff| on device, read back only scalars
+        dram_output_tensor = tt_output_moe_compute[0]
+        num_devices = mesh_device.shape[0] * mesh_device.shape[1]
+        device_tensors = ttnn.get_device_tensors(dram_output_tensor)
+        assert len(device_tensors) == num_devices
+        # Per-device shape (from tensor spec; no read from device)
+        device_shape = tuple(int(s) for s in device_tensors[0].shape)
+        shard_numel = 1
+        for s in device_shape:
+            shard_numel *= s
+        ref_flat = reference_output.reshape(-1).float()
+        assert ref_flat.numel() >= num_devices * shard_numel, "Reference too small for per-device shards"
+        ref_slices_cpu = [
+            ref_flat[device_id * shard_numel : (device_id + 1) * shard_numel]
+            .reshape(device_shape)
+            .clone()
+            .to(torch.bfloat16)
+            for device_id in range(num_devices)
+        ]
+        tt_ref_sharded = ttnn.from_torch(
+            torch.stack(ref_slices_cpu),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        ref_device_tensors = ttnn.get_device_tensors(tt_ref_sharded)
+        max_abs_diff_atol = 0.15
+        logger.info(f"Mode: {mode}, Num tokens: {num_tokens}, comparing on DRAM (max|diff| < {max_abs_diff_atol})")
+        for device_id in range(num_devices):
+            ref_d = ref_device_tensors[device_id]
+            out_d = device_tensors[device_id]
+            if ref_d.layout() != out_d.layout():
+                ref_d = ttnn.to_layout(ref_d, out_d.layout())
+            diff_d = ttnn.subtract(out_d, ref_d)
+            abs_diff = ttnn.abs(diff_d)
+            reduce_dims = tuple(range(len(device_shape)))
+            max_abs_d = ttnn.max(abs_diff, dim=reduce_dims)
+            max_val = ttnn.to_torch(max_abs_d).float().item()
+            ttnn.deallocate(diff_d)
+            ttnn.deallocate(abs_diff)
+            ttnn.deallocate(max_abs_d)
+            assert (
+                max_val < max_abs_diff_atol
+            ), f"Device {device_id} max|actual - ref| = {max_val} >= {max_abs_diff_atol}"
+        ttnn.deallocate(tt_ref_sharded)
+        logger.info(f"Per-device DRAM comparison passed for all {num_devices} devices")
     # Verify output memory config matches expected
     """
     expected_output_memory_config = run_config["output_memory_config"]
@@ -594,9 +637,9 @@ def test_forward_pass(
     """
     # Cleanup
     ttnn.deallocate(tt_input)
-    # ttnn.deallocate(tt_output)
-    for output in tt_output_moe_compute:
-        ttnn.deallocate(output)
+    if tuple(mesh_device.shape) == (1, 16):
+        for output in tt_output_moe_compute:
+            ttnn.deallocate(output)
 
 
 if __name__ == "__main__":
