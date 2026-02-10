@@ -16,6 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.rope.rope_1d import RotarySetup1D, RotarySetup1DConfig, _compute_cos_sin_matrices
 from models.common.utility_functions import comp_pcc
 
@@ -312,10 +313,11 @@ def test_rope_1d_cos_sin_vs_reference(
     v2_cos_sin = rope_v2.get_rot_mats(position_idxs)
     v1_cos_sin = rope_v1.get_rot_mats(position_idxs)
 
-    v2_cos_torch = ttnn.to_torch(v2_cos_sin[0], mesh_composer=None)
-    v1_cos_torch = ttnn.to_torch(v1_cos_sin[0], mesh_composer=None)
-    v2_sin_torch = ttnn.to_torch(v2_cos_sin[1], mesh_composer=None)
-    v1_sin_torch = ttnn.to_torch(v1_cos_sin[1], mesh_composer=None)
+    # Replicated tensors: use auto_compose to get single-device view
+    v2_cos_torch = to_torch_auto_compose(v2_cos_sin[0])
+    v1_cos_torch = to_torch_auto_compose(v1_cos_sin[0])
+    v2_sin_torch = to_torch_auto_compose(v2_cos_sin[1])
+    v1_sin_torch = to_torch_auto_compose(v1_cos_sin[1])
 
     pcc_cos, msg_cos = comp_pcc(v1_cos_torch, v2_cos_torch, 0.9999)
     pcc_sin, msg_sin = comp_pcc(v1_sin_torch, v2_sin_torch, 0.9999)
@@ -331,8 +333,8 @@ def test_rope_1d_cos_sin_vs_reference(
     v1_trans = rope_v1.get_both_trans_mats()
 
     for key in ["decode", "prefill"]:
-        v2_t = ttnn.to_torch(v2_trans[key], mesh_composer=None)
-        v1_t = ttnn.to_torch(v1_trans[key], mesh_composer=None)
+        v2_t = to_torch_auto_compose(v2_trans[key])
+        v1_t = to_torch_auto_compose(v1_trans[key])
         pcc_ok, msg = comp_pcc(v1_t, v2_t, 0.9999)
         logger.info(f"trans_mat[{key}] PCC: {msg}")
         assert pcc_ok, f"trans_mat[{key}] mismatch: {msg}"
