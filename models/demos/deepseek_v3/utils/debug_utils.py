@@ -35,7 +35,7 @@ def _format_memory_view(view: ttnn._ttnn.device.MemoryView, label: str) -> str:
 
 
 def dump_ttnn_meminfo(mesh_device: ttnn.MeshDevice, header: str = "") -> None:
-    """Dump the memory information of the mesh device to the log."""
+    """Dump DRAM memory usage of the mesh device to the log."""
     dram_view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
     logger.info(_format_memory_view(dram_view, f"DRAM ({header})"))
     # TODO: Add L1 memory view.
