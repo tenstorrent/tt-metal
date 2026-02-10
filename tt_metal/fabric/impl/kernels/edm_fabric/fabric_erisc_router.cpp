@@ -1770,22 +1770,27 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
 
-            uint8_t src_ch_id;
-            if constexpr (skip_src_ch_id_update) {
-                // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
-                // sender channel so we don't dynamically fetch it off the packet header
-                src_ch_id = receiver_channel_pointers.get_src_chan_id();
-            } else {
-                auto receiver_buffer_index = ack_counter.get_buffer_index();
-                tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
-                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
-                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
-            }
+            // Credit retry safety: check if this buffer slot was already consumed.
+            // If payload_size_bytes is 0, this is a stale credit from a sender retry -
+            // the credit has been decremented above, so just skip the ACK.
+            auto ack_buf_idx = ack_counter.get_buffer_index();
+            tt_l1_ptr PACKET_HEADER_TYPE* ack_pkt_hdr = const_cast<PACKET_HEADER_TYPE*>(
+                local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(ack_buf_idx));
+            if (ack_pkt_hdr->payload_size_bytes != 0) {
+                uint8_t src_ch_id;
+                if constexpr (skip_src_ch_id_update) {
+                    // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
+                    // sender channel so we don't dynamically fetch it off the packet header
+                    src_ch_id = receiver_channel_pointers.get_src_chan_id();
+                } else {
+                    receiver_channel_pointers.set_src_chan_id(ack_buf_idx, ack_pkt_hdr->src_ch_id);
+                    src_ch_id = receiver_channel_pointers.get_src_chan_id(ack_buf_idx);
+                }
 
-            receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender, src_ch_id);
-            ack_counter.increment();
+                receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                    receiver_channel_response_credit_sender, src_ch_id);
+                ack_counter.increment();
+            }
         }
         unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
 
@@ -1845,6 +1850,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
             can_send_to_all_local_chip_receivers &= trid_flushed;
         }
+        // Credit retry safety: prevent forwarding of consumed/stale slots
+        if constexpr (!enable_first_level_ack) {
+            can_send_to_all_local_chip_receivers &= (packet_header->payload_size_bytes != 0);
+        }
         if (can_send_to_all_local_chip_receivers) {
             did_something = true;
             progress = true;
@@ -1875,6 +1884,13 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             if constexpr (!enable_first_level_ack) {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
             }
+        } else {
+            // Credit retry safety: consume false credits for consumed/stale slots
+            if constexpr (!enable_first_level_ack) {
+                if (packet_header->payload_size_bytes == 0) {
+                    increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+                }
+            }
         }
     }
 
@@ -1890,6 +1906,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             if (next_trid_flushed) {
                 wr_flush_counter.increment();
                 receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+                // Credit retry safety: mark slot as consumed after DMA confirmed complete
+                const_cast<PACKET_HEADER_TYPE*>(
+                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index))
+                    ->payload_size_bytes = 0;
             }
         }
 
@@ -1928,6 +1948,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender, src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+            // Credit retry safety: mark slot as consumed after DMA confirmed complete
+            const_cast<PACKET_HEADER_TYPE*>(
+                local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index))
+                ->payload_size_bytes = 0;
             completion_counter.increment();
         }
     }
@@ -2174,6 +2198,14 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
     auto execute_main_loop = [&]() {
+        // Credit retry: stall detection counters for sender->receiver credit resend.
+        // If the sender has outstanding packets but receives no completions for
+        // CREDIT_RESEND_STALL_THRESHOLD outer loop iterations, resend one credit
+        // notification in case the original was lost at the ethernet PHY level.
+        constexpr uint32_t CREDIT_RESEND_STALL_THRESHOLD = 128;
+        uint32_t ch0_stall_counter = 0;
+        uint32_t ch0_prev_free_slots = outbound_to_receiver_channel_pointer_ch0.num_free_slots;
+
         // while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending/*<ENABLE_RISC_CPU_DATA_CACHE>*/()) {
         while (continue_running_main_run_loop<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr, state_manager_l1)) {
             did_something = false;
@@ -2356,6 +2388,26 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_fabric_telemetry);
 #endif  // FABRIC_2D_VC1_SERVICED
                 }
+            }
+
+            // Credit retry: detect sender->receiver credit stall and resend
+            {
+                auto ch0_cur_free_slots = outbound_to_receiver_channel_pointer_ch0.num_free_slots;
+                if (ch0_cur_free_slots == ch0_prev_free_slots &&
+                    ch0_cur_free_slots < REMOTE_RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]) {
+                    ch0_stall_counter++;
+                    if (ch0_stall_counter >= CREDIT_RESEND_STALL_THRESHOLD) {
+                        if (!internal_::eth_txq_is_busy(sender_txq_id)) {
+                            remote_update_ptr_val<
+                                to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
+                                sender_txq_id>(1U);
+                        }
+                        ch0_stall_counter = 0;
+                    }
+                } else {
+                    ch0_stall_counter = 0;
+                }
+                ch0_prev_free_slots = ch0_cur_free_slots;
             }
 
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
