@@ -61,6 +61,7 @@ Tensor _addcdiv(
     return result;
 }
 
+// Fallback composite implementation for lerp (with scalar weight)
 // lerp(input, end, weight) = start + weight * (end - start)
 Tensor _lerp_overload(
     const Tensor& input,
@@ -101,6 +102,7 @@ Tensor _lerp_overload(
     return result;
 }
 
+// LLK implementation for lerp (with tensor weight)
 Tensor _lerp(
     const Tensor& input,
     const Tensor& end,
