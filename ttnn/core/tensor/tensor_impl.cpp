@@ -1457,15 +1457,13 @@ tt::tt_metal::HostStorage transform_storage(
 
 }  // namespace detail
 
-Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
+HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     const auto src_type = input_tensor.dtype();
     if (src_type == dtype) {
         return input_tensor;
     }
 
-    TT_FATAL(is_cpu_tensor(input_tensor), "to_dtype(...) function only supports host tensors!");
-
-    auto input_storage = detail::preprocess_storage(input_tensor.host_storage(), src_type);
+    auto input_storage = detail::preprocess_storage(input_tensor.get_storage(), src_type);
 
     auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_storage]() {
         auto with_src_and_dst = [&]<typename SrcType, typename DstType>() {
@@ -1513,7 +1511,8 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
 
-    return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
+    return HostTensor(
+        tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 }
 
 }  // namespace tt::tt_metal::tensor_impl
