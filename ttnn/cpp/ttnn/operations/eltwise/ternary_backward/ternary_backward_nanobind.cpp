@@ -47,17 +47,15 @@ void bind_ternary_backward(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
 
             {4}
         )doc",
@@ -118,7 +116,7 @@ void bind_ternary_backward_op(
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             For Inputs : :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c`
 
@@ -127,10 +125,8 @@ void bind_ternary_backward_op(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
                  - TILE
-                 - 2, 3, 4
 
             For Inputs : :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`scalar`
 
@@ -139,10 +135,8 @@ void bind_ternary_backward_op(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -215,17 +209,15 @@ void bind_ternary_backward_optional_output(
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),

@@ -141,17 +141,17 @@ void bind_binary_operation(
         {7}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {6}
         )doc",
@@ -250,11 +250,6 @@ void bind_binary_gcd_lcm_operation(
     const std::string& description,
     const std::string& math,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& example_tensor1 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& example_tensor2 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
@@ -277,22 +272,22 @@ void bind_binary_gcd_lcm_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        {9}
+        {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - {5}
+                 - TILE, ROW_MAJOR
 
-            {8}
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+
+            {5}
         )doc",
 
         operation.base_name(),
@@ -300,9 +295,6 @@ void bind_binary_gcd_lcm_operation(
         description,
         math,
         supported_dtype,
-        supported_rank,
-        example_tensor1,
-        example_tensor2,
         note,
         BINARY_BROADCAST_DOC);
 
@@ -372,17 +364,17 @@ void bind_binary_unary_max_operation(
         {5}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {4}
         )doc",
@@ -500,17 +492,17 @@ void bind_binary_unary_operation(
         {7}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {6}
         )doc",
@@ -627,17 +619,17 @@ void bind_binary_with_float_param(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -701,17 +693,17 @@ void bind_bitwise_binary_ops_operation(
         {7}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {6}
         )doc",
@@ -823,17 +815,17 @@ void bind_logical_binary_ops_operation(
         {7}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {6}
         )doc",
@@ -885,11 +877,6 @@ void bind_binary_composite(
     const std::string& description,
     const std::string& math,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& example_tensor1 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& example_tensor2 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
@@ -908,22 +895,22 @@ void bind_binary_composite(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        {9}
+        {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - {5}
+                 - TILE, ROW_MAJOR
 
-            {8}
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+
+            {5}
         )doc",
 
         operation.base_name(),
@@ -931,9 +918,6 @@ void bind_binary_composite(
         description,
         math,
         supported_dtype,
-        supported_rank,
-        example_tensor1,
-        example_tensor2,
         note,
         BINARY_BROADCAST_DOC);
 
@@ -980,17 +964,17 @@ void bind_binary_composite_with_rtol_atol(
         {4}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
         )doc",
 
         operation.base_name(),
@@ -1030,11 +1014,6 @@ void bind_binary_composite_overload(
     const binary_operation_t& operation,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& example_tensor1 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& example_tensor2 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1053,30 +1032,27 @@ void bind_binary_composite_overload(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        {8}
+        {5}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - {4}
+                 - TILE, ROW_MAJOR
 
-            {7}
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+
+            {4}
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
         supported_dtype,
-        supported_rank,
-        example_tensor1,
-        example_tensor2,
         note,
         BINARY_BROADCAST_DOC);
 
@@ -1113,11 +1089,6 @@ void bind_prelu(
     const binary_operation_t& operation,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& example_tensor1 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& example_tensor2 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1136,30 +1107,27 @@ void bind_prelu(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        {8}
+        {5}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - {4}
+                 - TILE, ROW_MAJOR
 
-            {7}
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+
+            {4}
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
         supported_dtype,
-        supported_rank,
-        example_tensor1,
-        example_tensor2,
         note,
         BINARY_BROADCAST_DOC);
 
@@ -1234,17 +1202,17 @@ void bind_div(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
         )doc",
 
@@ -1377,17 +1345,17 @@ void bind_binary_operation_with_fast_approx(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1511,17 +1479,17 @@ void bind_polyval(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1579,17 +1547,17 @@ void bind_binary_overload_operation(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1665,17 +1633,17 @@ void bind_inplace_operation(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                 :header-rows: 1
 
                 * - Dtypes
                   - Layouts
-                  - Ranks
                 * - {4}
-                  - TILE
-                  - 2, 3, 4
+                  - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1779,17 +1747,17 @@ void bind_inplace_operation_with_fast_approx(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1895,17 +1863,17 @@ void bind_logical_inplace_operation(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1952,26 +1920,53 @@ void bind_logical_inplace_operation(
 
 template <typename binary_operation_t>
 void bind_binary_inplace_operation(
-    nb::module_& mod, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+    nb::module_& mod,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
-            {2}
+        {2}
 
-            {4}
+        .. math::
+            {3}
 
-            .. math::
-                {3}
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
-            Args:
-                * :attr:`input_a` (ttnn.Tensor)
-                * :attr:`input_b` (ttnn.Tensor or Number)
-            Keyword args:
-                * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
+        Keyword args:
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
+            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
+            input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
+            use_legacy (bool, optional): use legacy implementation. Defaults to `None`.
+            sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
+
+        {6}
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - {4}
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+
+            {5}
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
         math,
+        supported_dtype,
+        note,
         BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
@@ -1998,8 +1993,8 @@ void bind_binary_inplace_operation(
                     use_legacy,
                     sub_core_grids);
             },
-            nb::arg("input_a"),
-            nb::arg("input_b"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
@@ -2027,8 +2022,8 @@ void bind_binary_inplace_operation(
                     use_legacy,
                     sub_core_grids);
             },
-            nb::arg("input_a"),
-            nb::arg("input_b"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
@@ -2062,17 +2057,17 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
         {3}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
-                 - 2, 3, 4
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {2}
         )doc",
@@ -2196,13 +2191,14 @@ void py_module(nb::module_& mod) {
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
     detail::bind_binary_inplace_operation(
         mod,
         ttnn::add_,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
-        R"doc(\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2210,13 +2206,14 @@ void py_module(nb::module_& mod) {
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
     detail::bind_binary_inplace_operation(
         mod,
         ttnn::subtract_,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
-        R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2276,7 +2273,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, \& \, \mathrm{{input\_tensor\_b}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16)doc",
         "INT32 for tensor-scalar is supported only when use_legacy= False.");
 
     detail::bind_binary_operation(
@@ -2285,7 +2282,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, | \, \mathrm{{input\_tensor\_b}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2293,7 +2290,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2301,7 +2298,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2309,7 +2306,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2317,7 +2314,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2325,7 +2322,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_operation_with_fast_approx(
         mod,
@@ -2433,7 +2430,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes nextafter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \begin{cases} \mathrm{next\_float}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i), & \text{if } \mathrm{input\_tensor\_a}_i \neq \mathrm{input\_tensor\_b}_i \\ \mathrm{input\_tensor\_a}_i, & \text{if } \mathrm{input\_tensor\_a}_i = \mathrm{input\_tensor\_b}_i \end{cases}
         )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_unary_max_operation(
         mod,
@@ -2446,10 +2443,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \arctan\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)
         )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
         R"doc(Input arguments for the atan2 function are in the format (y, x))doc");
 
     detail::bind_binary_operation(
@@ -2458,28 +2452,28 @@ void py_module(nb::module_& mod) {
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = (\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc",
         ".",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         mod,
         ttnn::logical_or_,
         R"doc(Computes inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         mod,
         ttnn::logical_xor_,
         R"doc(Computes inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         mod,
         ttnn::logical_and_,
         R"doc(Computes inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_gcd_lcm_operation(
         mod,
@@ -2488,10 +2482,7 @@ void py_module(nb::module_& mod) {
         [supported range [-2147483648, 2147483647]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|gcd|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
-        R"doc(INT32)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc");
+        R"doc(INT32)doc");
 
     detail::bind_binary_gcd_lcm_operation(
         mod,
@@ -2500,24 +2491,21 @@ void py_module(nb::module_& mod) {
         [supported range [-32768, 32767]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|lcm|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
-        R"doc(INT32)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc");
+        R"doc(INT32)doc");
 
     detail::bind_binary_with_float_param(
         mod,
         ttnn::addalpha,
         R"doc(Computes addalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ + input\_tensor\_b\ * \alpha}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_with_float_param(
         mod,
         ttnn::subalpha,
         R"doc(Computes subalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_composite_with_rtol_atol(
         mod,
@@ -2559,10 +2547,7 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::prelu,
         R"doc(Perform an eltwise-prelu operation.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(2, 3, 4, 5)doc",
-        R"doc(ttnn.from_torch(torch.rand([1, 2, 32, 32], dtype=torch.bfloat16), device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([1, 2], dtype=torch.bfloat16), device=device))doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
         R"doc(PReLU supports the case where weight is a scalar or 1D list/array of size=1 or a 1D tensor :attr:`input_tensor_b` of size = the second dimension in :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
@@ -2570,10 +2555,7 @@ void py_module(nb::module_& mod) {
         ttnn::outer,
         R"doc(Computes outer for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \mathrm{input\_tensor\_a} \text{ } \otimes \text{ } \mathrm{input\_tensor\_b})doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(4)doc",
-        R"doc(ttnn.from_torch(torch.rand([1, 1, 32, 1], dtype=torch.bfloat16), device=device))doc",
-        R"doc(ttnn.from_torch(torch.rand([1, 1, 1, 32], dtype=torch.bfloat16), device=device))doc");
+        R"doc(BFLOAT16, FLOAT32)doc");
 
     detail::bind_polyval(
         mod,
@@ -2581,7 +2563,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes polyval of all elements of :attr:`input_tensor_a` with coefficients :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \sum_{i=0}^{n} (\mathrm{coeffs}_i) (\mathrm{input\_tensor}^i)
         )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_overload_operation(
         mod,
@@ -2602,70 +2584,70 @@ void py_module(nb::module_& mod) {
         ttnn::gt_,
         R"doc(Performs Greater than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} > \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::ge_,
         R"doc(Performs Greater than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} >= \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::lt_,
         R"doc(Performs Less than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} < \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::le_,
         R"doc(Performs Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} <= \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::eq_,
         R"doc(Performs Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} == \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::ne_,
         R"doc(Performs Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}\: != \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::ldexp_,
         R"doc(Performs ldexp in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::logaddexp_,
         R"doc(Performs logaddexp in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::logaddexp2_,
         R"doc(Performs logaddexp2 in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::squared_difference_,
         R"doc(Performs squared_difference in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation_with_fast_approx(
         mod,
@@ -2702,7 +2684,7 @@ void py_module(nb::module_& mod) {
         ttnn::bias_gelu_,
         R"doc(Performs bias_gelu in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_power(
         mod,

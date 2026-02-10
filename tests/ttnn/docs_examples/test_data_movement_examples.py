@@ -57,6 +57,38 @@ def test_reshape(device):
     logger.info("Reshaped Tensor Shape:", reshaped_tensor.shape)  # Reshaped Tensor Shape: Shape([1, 1, 2, 2])
 
 
+def test_scatter(device):
+    # Create input, index, and source tensors
+    input_torch = torch.randn([10, 20, 30, 20, 10], dtype=torch.float32)
+    index_torch = torch.randint(0, 10, [10, 20, 30, 20, 5], dtype=torch.int64)
+    source_torch = torch.randn([10, 20, 30, 20, 10], dtype=input_torch.dtype)
+
+    input_ttnn = ttnn.from_torch(input_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    index_ttnn = ttnn.from_torch(index_torch, dtype=ttnn.int32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    dim = -1
+
+    # Perform scatter operation
+    output = ttnn.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
+    logger.info(f"Scatter operation result: {output}")
+
+
+def test_scatter_add(device):
+    # Create input, index, and source tensors for scatter_add
+    input_torch = torch.tensor([[1, 2], [3, 4]], dtype=torch.float32)
+    index_torch = torch.tensor([[0, 1], [1, 0]], dtype=torch.int64)
+    source_torch = torch.tensor([[5, 6], [7, 8]], dtype=torch.float32)
+
+    input_ttnn = ttnn.from_torch(input_torch, dtype=ttnn.float32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    index_ttnn = ttnn.from_torch(index_torch, dtype=ttnn.int32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    dim = 1
+
+    # Perform scatter_add operation (adds source values to input at specified indices)
+    output = ttnn.scatter_add(input_ttnn, dim, index_ttnn, source_ttnn)
+    logger.info(f"Scatter add operation result: {output}")
+
+
 def test_repeat(device):
     # Create a tensor to repeat
     input_tensor = torch.tensor([[1, 2], [3, 4]])
