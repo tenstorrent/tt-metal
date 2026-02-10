@@ -104,11 +104,10 @@ struct CreateQHeads {
     // Template parameters:
     //   IsSenderCore: true if this core is a sender (QNOPE or QROPE)
     //   IsReceiverCore: true if this core is a receiver (SDPA input)
-    //   setup_sharded_input: true to call setup_sharded_buffer (standalone op)
+    //   setup_sharded_input: whether to setup the sharded input CB
     //   pop_src: whether to pop the source CB after sending
-    //   use_cb_output: true to use cb_reserve_back/cb_push_back
     // ========================================================================
-    template <bool IsSenderCore, bool IsReceiverCore, bool setup_sharded_input, bool pop_src, bool use_cb_output>
+    template <bool IsSenderCore, bool IsReceiverCore, bool setup_sharded_input, bool pop_src>
     class Op {
     public:
         // Overload for sender args
@@ -130,10 +129,9 @@ struct CreateQHeads {
         }
 
         // Overload for compute args - tilization
-        // Only runs when use_cb_output is true (tilization enabled)
         void operator()([[maybe_unused]] const ComputeArgs& args) {
 #if defined(COMPILE_FOR_TRISC)
-            if constexpr (IsReceiverCore && use_cb_output) {
+            if constexpr (IsReceiverCore) {
                 compute_impl(args);
             }
 #endif
@@ -234,9 +232,6 @@ struct CreateQHeads {
             if (args.num_nope_senders > 0) {
                 noc_semaphore_wait(phase1_semaphore_ptr, args.num_nope_senders);
                 noc_semaphore_set(phase1_semaphore_ptr, 0);
-            }
-
-            if constexpr (use_cb_output) {
                 cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 cb_push_back(args.receiver_in_cb, args.nope_tiles);
             }
@@ -244,9 +239,6 @@ struct CreateQHeads {
             if (args.num_nope_senders > 0) {
                 noc_semaphore_wait(phase2_semaphore_ptr, args.num_nope_senders);
                 noc_semaphore_set(phase2_semaphore_ptr, 0);
-            }
-
-            if constexpr (use_cb_output) {
                 cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 cb_push_back(args.receiver_in_cb, args.nope_tiles);
             }
@@ -254,9 +246,6 @@ struct CreateQHeads {
             if (args.num_rope_senders > 0) {
                 noc_semaphore_wait(rope_semaphore_ptr, args.num_rope_senders);
                 noc_semaphore_set(rope_semaphore_ptr, 0);
-            }
-
-            if constexpr (use_cb_output) {
                 cb_reserve_back(args.receiver_in_cb, args.rope_tiles);
                 cb_push_back(args.receiver_in_cb, args.rope_tiles);
             }

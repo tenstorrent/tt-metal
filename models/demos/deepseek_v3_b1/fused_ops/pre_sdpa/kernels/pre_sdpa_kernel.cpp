@@ -820,11 +820,9 @@ void kernel_main() {
             // CreateQHeads Op configuration:
             // - IsSenderCore: is_qnope_core || is_qrope_core
             // - IsReceiverCore: is_sdpa_input_core
-            // - setup_sharded_input: false (data already in CB from previous compute)
             // - pop_src: true (pop source CB after sending)
-            // - use_cb_output: true (receiver uses cb_reserve_back/cb_push_back, TRISC tilizes)
             constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
-            deepseek_b1_ops::CreateQHeads::Op<is_create_q_heads_sender, Core::is_sdpa_input_core, false, true, true>
+            deepseek_b1_ops::CreateQHeads::Op<is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
                 create_q_heads;
             create_q_heads(create_q_heads_args);
         }

@@ -37,9 +37,7 @@ struct Core {
 };
 
 // Standalone op configuration:
-// - setup_sharded_input: true (input tensors are sharded)
 // - pop_src: true (pop source CB after sending)
-// - use_cb_output: true (use CB for output with tilization)
 //
 // For standalone op, senders can be on NOC0 (NCRISC) or NOC1 (BRISC).
 // Receivers run on the opposite RISC from their sender role.
@@ -55,8 +53,7 @@ void kernel_main() {
 
     // setup_sharded_input=true: explicitly mark sharded input CB pages as available
     //   (cb_descriptor_from_sharded_tensor binds buffer but does NOT pre-populate)
-    // use_cb_output=true: enable CB operations for tilization pipeline
-    using CreateQHeadsOp = deepseek_b1_ops::CreateQHeads::Op<is_ncrisc_sender, is_ncrisc_receiver, true, true, true>;
+    using CreateQHeadsOp = deepseek_b1_ops::CreateQHeads::Op<is_ncrisc_sender, is_ncrisc_receiver, true, true>;
     CreateQHeadsOp create_q_heads;
 
     if constexpr (is_ncrisc_sender) {
@@ -115,8 +112,7 @@ void kernel_main() {
     constexpr bool is_brisc_receiver = Core::is_receiver_core && !Core::is_noc1_sender;
 
     // setup_sharded_input=true: explicitly mark sharded input CB pages as available
-    // use_cb_output=true: enable CB operations for tilization pipeline
-    using CreateQHeadsOp = deepseek_b1_ops::CreateQHeads::Op<is_brisc_sender, is_brisc_receiver, true, true, true>;
+    using CreateQHeadsOp = deepseek_b1_ops::CreateQHeads::Op<is_brisc_sender, is_brisc_receiver, true, true>;
     CreateQHeadsOp create_q_heads;
 
     if constexpr (is_brisc_sender) {
@@ -173,8 +169,7 @@ void kernel_main() {
     // All TRISCs run, but each handles its respective part:
     // TR0 (UNPACK): CB operations, TR1 (MATH): compute, TR2 (PACK): output
     if constexpr (Core::is_receiver_core) {
-        // use_cb_output=true: enable tilization pipeline
-        using CreateQHeadsOp = deepseek_b1_ops::CreateQHeads::Op<false, true, false, true, true>;
+        using CreateQHeadsOp = deepseek_b1_ops::CreateQHeads::Op<false, true, false, true>;
         CreateQHeadsOp create_q_heads;
 
         deepseek_b1_ops::CreateQHeads::ComputeArgs compute_args{
