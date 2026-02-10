@@ -24,7 +24,8 @@
 //   8.  Fused mul (routed, 8 DRAM cores)
 //   9.  down_proj Gather (routed, gate_proj → sender)
 //  10.  down_proj Mcast (routed, sender → gate_proj)
-// 10b.  Down Mcast (shared, sender → 130 cores): gated reduce output [1, K_down]
+// 10b.  Down Mcast (shared, sender → 112 cores): gated reduce output [1, K_down]
+// 10c.  Down Proj Matmul (shared, 112 cores): SRAM matmul [1,K_down] x [K_down,N_per_core]
 //  11.  down_proj DRAM MM (routed, 8 DRAM cores)
 //  12.  Eltwise Add (routed, down_proj + fused_add)
 //
@@ -271,6 +272,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_down_mcast_dst_cb"),
                 get_named_compile_time_arg_val("shared_down_mcast_dst_num_pages"),
             };
+
+            // Down Proj Matmul — reader (no-op for NCRISC)
+            using DownMatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+            deepseek_b1_ops::Matmul::ReaderArgs down_matmul_args{};
         } shared;
     } moe;
 
@@ -313,6 +318,12 @@ void kernel_main() {
         constexpr uint32_t shared_gu_weights_cb = get_named_compile_time_arg_val("shared_gu_weights_cb");
         constexpr uint32_t shared_gu_weights_num_pages = get_named_compile_time_arg_val("shared_gu_weights_num_pages");
         unified_kernels::setup_sharded_buffer(shared_gu_weights_cb, shared_gu_weights_num_pages);
+    }
+    if constexpr (Core::Shared::is_mcast_receiver_core) {
+        constexpr uint32_t shared_down_in1 = get_named_compile_time_arg_val("shared_down_matmul_in1");
+        constexpr uint32_t shared_down_k = get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles");
+        constexpr uint32_t shared_down_w = get_named_compile_time_arg_val("shared_down_matmul_out_w_per_core");
+        unified_kernels::setup_sharded_buffer(shared_down_in1, shared_down_k * shared_down_w);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -460,16 +471,13 @@ void kernel_main() {
             using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs;
             deepseek_b1_ops::GatedReduce::WriterArgs gated_reduce_args{};
 
-            // Residual Mcast — sender
-            using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-                get_named_compile_time_arg_val("shared_residual_mcast_num_cores"),
-                get_named_compile_time_arg_val("shared_residual_mcast_is_part_of_receiver_grid") == 1,
-                /*Loopback=*/false>;
+            // Residual Mcast — sender (reuse Routed::McastCTArgs: same grid, same persistent sender)
+            using ResidualMcastCTArgs = Routed::McastCTArgs;
             deepseek_b1_ops::Mcast::SenderArgs residual_mcast_args{
-                get_named_compile_time_arg_val("shared_residual_mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("shared_residual_mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("shared_residual_mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("shared_residual_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
                 get_named_compile_time_arg_val("shared_residual_mcast_data_sender_semaphore"),
                 get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore"),
                 get_named_compile_time_arg_val("shared_residual_mcast_data_size_bytes"),
@@ -479,16 +487,13 @@ void kernel_main() {
                 get_write_ptr(get_named_compile_time_arg_val("shared_residual_mcast_dst_cb")),
             };
 
-            // Down Mcast — sender (gated reduce output → all 130 cores)
-            using DownMcastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-                get_named_compile_time_arg_val("shared_down_mcast_num_cores"),
-                get_named_compile_time_arg_val("shared_down_mcast_is_part_of_receiver_grid") == 1,
-                /*Loopback=*/false>;
+            // Down Mcast — sender (reuse Routed::McastCTArgs: same grid, same persistent sender)
+            using DownMcastCTArgs = Routed::McastCTArgs;
             deepseek_b1_ops::Mcast::SenderArgs down_mcast_args{
-                get_named_compile_time_arg_val("shared_down_mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("shared_down_mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("shared_down_mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("shared_down_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
                 get_named_compile_time_arg_val("shared_down_mcast_data_sender_semaphore"),
                 get_named_compile_time_arg_val("shared_down_mcast_data_receiver_semaphore"),
                 get_named_compile_time_arg_val("shared_down_mcast_data_size_bytes"),
@@ -497,6 +502,10 @@ void kernel_main() {
                 get_read_ptr(get_named_compile_time_arg_val("shared_down_mcast_src_cb")),
                 get_write_ptr(get_named_compile_time_arg_val("shared_down_mcast_dst_cb")),
             };
+
+            // Down Proj Matmul — writer (no-op for BRISC)
+            using DownMatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+            deepseek_b1_ops::Matmul::WriterArgs down_matmul_args{};
         } shared;
     } moe;
 
@@ -643,6 +652,16 @@ void kernel_main() {
             // Down Mcast — compute no-op
             using DownMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
             deepseek_b1_ops::Mcast::ComputeArgs down_mcast_args{};
+
+            // Down Proj Matmul (compute)
+            using DownMatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val(
+                "shared_down_matmul_out_w_per_core")>;
+            deepseek_b1_ops::Matmul::ComputeArgs down_matmul_args{
+                get_named_compile_time_arg_val("shared_down_matmul_in0"),
+                get_named_compile_time_arg_val("shared_down_matmul_in1"),
+                get_named_compile_time_arg_val("shared_down_matmul_out"),
+                get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles"),
+            };
         } shared;
     } moe;
 
@@ -673,8 +692,8 @@ void kernel_main() {
         deepseek_b1_ops::Mcast::Op<
             Moe::Shared::ResidualMcastCTArgs,
             Core::is_sender_core,
-            Core::is_mcast_grid_core,              // ALL 130 cores in rectangle (must ack semaphore)
-            Core::Shared::is_mcast_receiver_core,  // 112 down-proj matmul cores (receive into CB)
+            Core::is_mcast_grid_core,
+            Core::Shared::is_mcast_receiver_core,
             true>
             shared_residual_mcast;
         shared_residual_mcast(moe.shared.residual_mcast_args);
@@ -820,10 +839,22 @@ void kernel_main() {
             Moe::Shared::DownMcastCTArgs,
             Core::is_sender_core,
             Core::is_mcast_grid_core,
-            Core::Shared::is_mcast_receiver_core,  // 112 down-proj matmul cores
+            Core::Shared::is_mcast_receiver_core,
             true>
             shared_down_mcast;
         shared_down_mcast(moe.shared.down_mcast_args);
+    }
+
+    // 10c. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores
+    {
+        DeviceZoneScopedN("SHARED_DOWN_MATMUL");
+        deepseek_b1_ops::Matmul::Op<
+            Moe::Shared::DownMatmulCTArgs,
+            Core::Shared::is_mcast_receiver_core,
+            /*pop_in0=*/true,
+            /*pop_in1=*/false>
+            shared_down_matmul;
+        shared_down_matmul(moe.shared.down_matmul_args);
     }
 
     // 11. down_proj: DRAM Streaming Matmul

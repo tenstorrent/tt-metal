@@ -841,6 +841,7 @@ def test_moe_fused(device, use_hardcoded_expert_index):
             shared_bias_tensor=s["ttnn_bias"],
             shared_residual_mcast_dst_tensor=s["ttnn_residual_mcast_dst"],
             shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
+            shared_down_weights_tensor=s["ttnn_down_weights"],
             shared_k_parallel=s["k_parallel"],
             shared_n_parallel=s["n_parallel"],
             use_hardcoded_expert_index=use_hardcoded_expert_index,
