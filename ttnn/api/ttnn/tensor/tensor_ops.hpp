@@ -10,6 +10,7 @@
 #include <tt_stl/optional_reference.hpp>
 
 #include <tt-metalium/experimental/tensor/device_tensor.hpp>
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
@@ -56,6 +57,13 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 
 Tensor pad(
     const Tensor& input_tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value);
+
+// TODO: Move this to tt_metal
+HostTensor pad(
+    const HostTensor& input_tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);

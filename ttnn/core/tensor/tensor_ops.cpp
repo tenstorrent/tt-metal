@@ -157,6 +157,8 @@ Tensor pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
+
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
     TT_ASSERT(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
@@ -169,10 +171,19 @@ Tensor pad(
         return input_tensor;
     }
 
-    auto output = tensor_impl::pad(input_tensor, output_padded_shape, input_tensor_start, pad_value);
+    Tensor output =
+        Tensor(tensor_impl::pad(input_tensor.host_tensor(), output_padded_shape, input_tensor_start, pad_value));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
+}
+
+HostTensor pad(
+    const HostTensor& input_tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value) {
+    return tensor_impl::pad(input_tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
 Tensor unpad(
@@ -182,7 +193,7 @@ Tensor unpad(
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
-    auto output = tensor_impl::unpad(input_tensor, output_tensor_start, output_tensor_end);
+    Tensor output = Tensor(tensor_impl::unpad(input_tensor.host_tensor(), output_tensor_start, output_tensor_end));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
