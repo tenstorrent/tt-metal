@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
     [
         (
             7168,
-            ttnn.CoreCoord(11, 9),
+            ttnn.CoreCoord(12, 9),
             ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7)),
@@ -31,23 +31,23 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
             ),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 9),
+                ttnn.CoreCoord(12, 9),
             ),
             ttnn.NOC.NOC_1,
         ),  # q_a_proj input + kv_a_proj input, 96 cores + 18 cores (120 cores total)
         (
             1536,
-            ttnn.CoreCoord(11, 9),
+            ttnn.CoreCoord(12, 9),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 9),
+                ttnn.CoreCoord(12, 9),
             ),
             ttnn.NOC.NOC_1,
         ),  # q_b_proj input, 96 cores (120 cores total)
         (
             8192,
-            ttnn.CoreCoord(11, 9),
+            ttnn.CoreCoord(12, 9),
             ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7)),
@@ -56,17 +56,17 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
             ),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 9),
+                ttnn.CoreCoord(12, 9),
             ),
             ttnn.NOC.NOC_1,
         ),  # o_proj input (TP 2), 112 cores (120 cores total)
         (
             1536,
-            ttnn.CoreCoord(11, 9),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))}),
+            ttnn.CoreCoord(12, 9),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 9))}),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 9),
+                ttnn.CoreCoord(12, 9),
             ),
             ttnn.NOC.NOC_1,
         ),  # loopback test for testing, not used in model

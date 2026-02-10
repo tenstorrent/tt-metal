@@ -991,9 +991,8 @@ class MoeRoutedExpert:
         expert_scale_tile_size = expert_scale_tile.get_tile_size(expert_scale_dtype)
 
         # Expert scale mcast parameters (different semaphores to avoid race condition with back-to-back mcasts)
-        # Using UpdateSemaphoreAddr=true in kernel allows using different semaphore addresses
-        expert_scale_mcast_sender_semaphore_id = 4  # Different from index_mcast
-        expert_scale_mcast_receiver_semaphore_id = 5  # Different from index_mcast
+        expert_scale_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
+        expert_scale_mcast_receiver_semaphore_id = 4  # Different from index_mcast
         expert_scale_mcast_num_pages = 1
         expert_scale_mcast_data_size_bytes = expert_scale_tile_size
 
@@ -1387,14 +1386,6 @@ class MoeRoutedExpert:
             initial_value=0,
         )
 
-        # Expert scale mcast uses separate semaphores (IDs 4 and 5) to avoid race condition
-        # with back-to-back mcasts. Kernel uses UpdateSemaphoreAddr=true to update addresses.
-        expert_scale_mcast_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=expert_scale_mcast_sender_semaphore_id,
-            core_ranges=full_device_grid,
-            initial_value=1,  # Sender semaphore starts as VALID (1)
-        )
-
         expert_scale_mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=expert_scale_mcast_receiver_semaphore_id,
             core_ranges=full_device_grid,
@@ -1536,7 +1527,6 @@ class MoeRoutedExpert:
             mcast_receiver_semaphore_descriptor,
             gather_noc0_semaphore_descriptor,
             gather_noc1_semaphore_descriptor,
-            expert_scale_mcast_sender_semaphore_descriptor,
             expert_scale_mcast_receiver_semaphore_descriptor,
         ]
 

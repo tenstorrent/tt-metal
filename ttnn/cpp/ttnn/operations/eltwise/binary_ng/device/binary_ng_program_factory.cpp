@@ -766,8 +766,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     if (op_type == BinaryOpType::WHERE_TTS || op_type == BinaryOpType::WHERE_TST) {
         // Add common fill defines
         compute_kernel_defines["FILL_LLK"] = "fill_tile";
-        if (b_dtype == DataType::INT32 || b_dtype == DataType::UINT32) {
-            compute_kernel_defines["FILL_LLK"] = "fill_tile_int";
+        if (b_dtype == DataType::INT32) {
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
+            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+        } else if (b_dtype == DataType::UINT32) {
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
