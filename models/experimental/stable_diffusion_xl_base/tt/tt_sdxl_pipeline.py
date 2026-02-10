@@ -626,7 +626,7 @@ class TtSDXLPipeline(LightweightModule):
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
             # 2. Load tt_unet, tt_vae and tt_scheduler
             self.tt_unet_model_config = (
-                ModelOptimisations()
+                ModelOptimisations(force_full_grid=True)
                 if not self.torch_pipeline.unet.state_dict()["conv_in.weight"].shape[0] == 384
                 else RefinerModelOptimisations()
             )

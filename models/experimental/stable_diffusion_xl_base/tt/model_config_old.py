@@ -12,7 +12,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-class ModelOptimisations:
+class ModelOptimisationsOld:
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,
@@ -22,14 +22,14 @@ class ModelOptimisations:
         force_full_grid=False,
     ):
         self.conv_configs = {}
-        self.conv_output_dtype = ttnn.bfloat16
+        self.conv_output_dtype = conv_act_dtype
         self.matmul_configs = {}
         self.compute_configs = {}
         self.prepared_weights = False
-        self.conv_w_dtype = ttnn.bfloat16
-        self.conv_ws_dtype = ttnn.bfloat16
-        self.attention_weights_dtype = ttnn.bfloat16
-        self.ff_weights_dtype = ttnn.bfloat16
+        self.conv_w_dtype = conv_w_dtype
+        self.conv_ws_dtype = ttnn.bfloat8_b
+        self.attention_weights_dtype = attention_weights_dtype
+        self.ff_weights_dtype = ff_weights_dtype
 
         # region CONV2D CONFIGS
         # region HEIGHT SHARDED
@@ -41,17 +41,17 @@ class ModelOptimisations:
             enable_act_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=1024,
         )
         self.conv_configs["ABH_256_ADB"] = ttnn.Conv2dConfig(
-            weights_dtype=self.conv_ws_dtype,
+            weights_dtype=conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=False,
-            enable_act_double_buffer=False,
+            enable_act_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=256,
         )
         self.conv_configs["ABH_256_NO_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -61,27 +61,27 @@ class ModelOptimisations:
             enable_act_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=256,
         )
         self.conv_configs["ABH_128_NO_ADB_HS"] = ttnn.Conv2dConfig(
-            weights_dtype=self.conv_ws_dtype,
+            weights_dtype=conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=False,
             enable_act_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=128,
         )
         self.conv_configs["ABH_0_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,
+            enable_act_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=0,
         )
         self.conv_configs["ABH_0_NO_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -91,7 +91,7 @@ class ModelOptimisations:
             enable_act_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=0,
         )
 
         self.conv_configs["ABH_64_NO_ADB_HS"] = ttnn.Conv2dConfig(
@@ -102,7 +102,7 @@ class ModelOptimisations:
             enable_act_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=64,
         )
 
         self.conv_configs["ABH_32_ADB_HS"] = ttnn.Conv2dConfig(
@@ -110,7 +110,7 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=False,
-            enable_act_double_buffer=False,
+            enable_act_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=32,
@@ -124,7 +124,7 @@ class ModelOptimisations:
                 {
                     ttnn.CoreRange(
                         ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(7, 7),
+                        ttnn.CoreCoord(4, 7),
                     ),
                 }
             )
@@ -137,11 +137,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,  # 32
+            act_block_h_override=0,
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
@@ -151,11 +151,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=False,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,  # False
-            enable_weights_double_buffer=False,  # False
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=0,
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
@@ -164,11 +164,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=64,
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
@@ -177,11 +177,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=128,
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
@@ -190,11 +190,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=128,
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
@@ -206,7 +206,7 @@ class ModelOptimisations:
             enable_act_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=256,
         )
 
         self.conv_configs["ABH_256_ADB_WDB_BS_NO_MOVE"] = ttnn.Conv2dConfig(
@@ -214,11 +214,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=False,
             reallocate_halo_output=False,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=256,
         )
 
         self.conv_configs["ABH_256_ADB_WDB_BS"] = ttnn.Conv2dConfig(
@@ -226,11 +226,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=256,
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
@@ -244,7 +244,7 @@ class ModelOptimisations:
             enable_weights_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=512,
         )
 
         self.conv_configs["ABH_512_ADB_WDB_BS"] = ttnn.Conv2dConfig(
@@ -252,11 +252,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=512,
         )
 
         self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
@@ -264,11 +264,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=False,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=512,
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
@@ -282,7 +282,7 @@ class ModelOptimisations:
             enable_weights_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=1024,
         )
 
         self.conv_configs["ABH_1024_ADB_WDB_BS"] = ttnn.Conv2dConfig(
@@ -290,11 +290,11 @@ class ModelOptimisations:
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=1024,
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
@@ -302,24 +302,24 @@ class ModelOptimisations:
 
         # region DEFAULT CONF
         self.conv_configs["DEFAULT"] = ttnn.Conv2dConfig(
-            weights_dtype=self.conv_ws_dtype,
+            weights_dtype=conv_w_dtype,
             shard_layout=None,
             deallocate_activation=True,
             enable_act_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=0,
         )
 
         # DRAM CONF
         self.conv_configs["DEFAULT_DRAM"] = ttnn.Conv2dConfig(
-            weights_dtype=self.conv_ws_dtype,
+            weights_dtype=conv_w_dtype,
             shard_layout=None,
             deallocate_activation=False,
             enable_act_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=32,
+            act_block_h_override=0,
             output_layout=ttnn.TILE_LAYOUT,
         )
         # endregion
@@ -330,9 +330,9 @@ class ModelOptimisations:
             "40_cores": {
                 "2D_FF2_SEQ_LEN_1024": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     per_core_M=4,
                     per_core_N=8,
                     transpose_mcast=False,
@@ -340,9 +340,9 @@ class ModelOptimisations:
                 ),
                 "2D_FF2_SEQ_LEN_4096": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=4,
                     per_core_M=16,
                     per_core_N=4,
                     transpose_mcast=False,
@@ -350,7 +350,7 @@ class ModelOptimisations:
                 ),
                 "1D_RESNET_LINEAR": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=10,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     per_core_M=1,
@@ -361,11 +361,11 @@ class ModelOptimisations:
                 ),
                 "2D_GEGLU_LINEAR_640_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=16,
                     per_core_N=16,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
@@ -375,85 +375,85 @@ class ModelOptimisations:
                     per_core_M=16,
                     per_core_N=16,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=4,
                     per_core_N=32,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=4,
                     per_core_N=32,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 "2D_TM_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=16,
                     per_core_N=4,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_TM_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=4,
                     per_core_N=8,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_ATTN_QKV_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=16,
                     per_core_N=12,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_ATTN_QKV_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=4,
                     per_core_N=24,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=True,
                 ),
                 "2D_ATTEN_K_V_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,  # max is 64, 4 seems optimal
+                    in0_block_w=4,  # max is 64, 4 seems optimal
                     per_core_M=1,
                     per_core_N=3,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=3,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "1D_ATTEN_K_V_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,  # max is 64, 16 seems optimal
-                    out_subblock_h=1,
+                    in0_block_w=16,  # max is 64, 16 seems optimal
+                    out_subblock_h=3,
                     out_subblock_w=1,
                     per_core_M=3,
                     per_core_N=1,
@@ -463,75 +463,75 @@ class ModelOptimisations:
                 ),
                 "2D_ATTN_OUT_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=16,
                     per_core_N=4,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=True,
                 ),
                 "2D_ATTN_OUT_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=4,
                     per_core_N=8,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=True,
                 ),
                 "2D_RESNET_CONV_320_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=2,
                     per_core_M=16,
                     per_core_N=4,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=False,
                 ),
                 "2D_RESNET_CONV_640_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=4,
                     per_core_N=8,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_2560_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=2,
                     per_core_M=4,
                     per_core_N=8,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_1920_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=4,
                     per_core_N=8,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=False,
                 ),
                 "2D_RESNET_CONV_1920_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=3,
                     per_core_M=16,
                     per_core_N=4,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
@@ -540,26 +540,26 @@ class ModelOptimisations:
                     in0_block_w=1,
                     per_core_M=16,
                     per_core_N=4,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_960_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
+                    in0_block_w=2,
                     per_core_M=16,
                     per_core_N=4,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "1D_RESNET_CONV_960_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(8, 5),
-                    in0_block_w=1,
+                    in0_block_w=2,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     per_core_M=13,
                     per_core_N=10,
                     mcast_in0=False,
@@ -569,9 +569,9 @@ class ModelOptimisations:
                 ),
                 "1D_RESNET_CONV_640_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,  # 1 svuda
+                    in0_block_w=1,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     per_core_M=13,
                     per_core_N=10,
                     mcast_in0=False,
@@ -583,9 +583,9 @@ class ModelOptimisations:
             "full_grid": {
                 "2D_FF2_SEQ_LEN_1024": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=10,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     per_core_M=4,
                     per_core_N=5,
                     transpose_mcast=False,
@@ -593,9 +593,9 @@ class ModelOptimisations:
                 ),
                 "2D_FF2_SEQ_LEN_4096": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(7, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=3,
                     per_core_M=16,
                     per_core_N=3,
                     transpose_mcast=False,
@@ -603,7 +603,7 @@ class ModelOptimisations:
                 ),
                 "1D_RESNET_LINEAR": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=10,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     per_core_M=1,
@@ -614,99 +614,99 @@ class ModelOptimisations:
                 ),
                 "2D_GEGLU_LINEAR_640_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=16,
                     per_core_N=10,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_640_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=16,
                     per_core_N=10,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=4,
                     per_core_N=20,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=4,
                     per_core_N=20,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 "2D_TM_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=16,
                     per_core_N=3,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=3,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_TM_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=4,
                     per_core_N=5,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_ATTN_QKV_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=16,
                     per_core_N=8,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=8,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_ATTN_QKV_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=4,
                     per_core_N=15,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=True,
                 ),
                 "2D_ATTEN_K_V_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=1,
                     per_core_N=3,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=3,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "1D_ATTEN_K_V_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
-                    out_subblock_h=1,
+                    in0_block_w=16,
+                    out_subblock_h=3,
                     out_subblock_w=1,
                     per_core_M=3,
                     per_core_N=1,
@@ -716,75 +716,75 @@ class ModelOptimisations:
                 ),
                 "2D_ATTN_OUT_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=16,
                     per_core_N=3,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_h=2,
+                    out_subblock_w=3,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=True,
                 ),
                 "2D_ATTN_OUT_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=4,
                     per_core_N=5,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=True,
                 ),
                 "2D_RESNET_CONV_320_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=2,
                     per_core_M=16,
                     per_core_N=3,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_h=2,
+                    out_subblock_w=3,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=False,
                 ),
                 "2D_RESNET_CONV_640_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     per_core_M=4,
                     per_core_N=5,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_2560_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=2,
                     per_core_M=4,
                     per_core_N=5,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_1920_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=5,
                     per_core_M=4,
                     per_core_N=5,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=False,
                 ),
                 "2D_RESNET_CONV_1920_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=3,
                     per_core_M=16,
                     per_core_N=3,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_h=2,
+                    out_subblock_w=3,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
@@ -793,26 +793,26 @@ class ModelOptimisations:
                     in0_block_w=1,
                     per_core_M=16,
                     per_core_N=3,
-                    out_subblock_h=1,  # 1
-                    out_subblock_w=1,  # 1
+                    out_subblock_h=2,
+                    out_subblock_w=3,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_960_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=2,
                     per_core_M=16,
                     per_core_N=3,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=3,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "1D_RESNET_CONV_960_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=1,
+                    in0_block_w=2,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=5,
                     per_core_M=8,
                     per_core_N=10,
                     mcast_in0=False,
@@ -823,8 +823,8 @@ class ModelOptimisations:
                 "1D_RESNET_CONV_640_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
                     in0_block_w=1,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_h=2,
+                    out_subblock_w=2,
                     per_core_M=8,
                     per_core_N=10,
                     mcast_in0=False,
@@ -952,44 +952,44 @@ class ModelOptimisations:
 
         # region COMPUTE KERNEL CONFIGS
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
         self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
 
         self.compute_configs["CONV_LOFI_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,  # false
-            fp32_dest_acc_en=True,  # true
-            packer_l1_acc=False,  # false
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
 
         self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
 
         self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
 
         self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
         # endregion
 
@@ -1115,7 +1115,6 @@ class ModelOptimisations:
         return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
 
     def get_mm_output_memory_config(self, module_path):
-        return ttnn.DRAM_MEMORY_CONFIG
         if "attn1" in module_path or "attn2" in module_path:
             if not "to_out" in module_path:
                 return ttnn.L1_MEMORY_CONFIG
