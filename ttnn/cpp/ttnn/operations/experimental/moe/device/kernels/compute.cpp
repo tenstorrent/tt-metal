@@ -3,16 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_ring_common.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/matmul.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/pack_untilize.h"
 
 // DEBUG
-#include "compute_kernel_api/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/debug/dprint_tensix.h"
+// #include "enumerate_tile.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -251,11 +252,22 @@ void kernel_main() {
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
 
+            //             ckernel::enumerate_tile_init();
+            //             ckernel::enumerate_tile(0 , true, 1.0, expert_id*32);
+            //             ckernel::enumerate_tile(1 , true, 1.0, expert_id*32);
+            //             ckernel::enumerate_tile(2 , true, 1.0, expert_id*32);
+            //             ckernel::enumerate_tile(3 , true, 1.0, expert_id*32);
+
             //             fill_tile_init();
             //             fill_tile(0, (float) (ring_core_id + 1) * (expert_id+1));
             //             fill_tile(1,(float) (ring_core_id + 1) * (expert_id+1));
             //             fill_tile(2,(float) (ring_core_id + 1) * (expert_id+1));
             //             fill_tile(3, (float) (ring_core_id + 1) * (expert_id+1));
+
+            //             dprint_tensix_dest_reg(0);
+            //             dprint_tensix_dest_reg(1);
+            //             dprint_tensix_dest_reg(2);
+            //             dprint_tensix_dest_reg(3);
 
             tile_regs_commit();
 

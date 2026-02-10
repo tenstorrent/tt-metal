@@ -154,10 +154,10 @@ def create_torch_w0(L, E, K, N):
     #             le_val *= -1
 
     torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    torch_w0 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
-
-    k = min(K, N)
-    torch_w0[..., torch.arange(k), torch.arange(k)] = 1
+    # torch_w0 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
+    #
+    #     k = min(K,N)
+    #     torch_w0[..., torch.arange(k), torch.arange(k)] = 1
 
     return torch_w0
 
@@ -189,9 +189,9 @@ def create_torch_w1(L, E, K, N):
     #             le_val *= -1
 
     torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    torch_w1 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
-    k = min(K, N)
-    torch_w1[..., torch.arange(k), torch.arange(k)] = 1
+    #     torch_w1 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
+    #     k = min(K,N)
+    #     torch_w1[..., torch.arange(k), torch.arange(k)] = 1
 
     return torch_w1
 
@@ -223,12 +223,10 @@ def create_torch_w2(L, E, N, K):
     #             le_val *= -1
     torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
 
-    torch_w2 = torch.zeros((L, E, N, K), dtype=torch.bfloat16) - 0.5
-
-    # torch_w2[:,1,:,:] *=3
-    k = min(K, N)
-
-    torch_w2[..., torch.arange(k), torch.arange(k)] = 1
+    #     torch_w2 = torch.zeros((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    #
+    #     k = min(K,N)
+    #     torch_w2[..., torch.arange(k), torch.arange(k)] = 1
 
     return torch_w2
 
@@ -422,12 +420,12 @@ def prepare_output_tensor_from_combine_writer(
 
     shaped_torch_output = output_core_shards.view(output_shape)
 
-    for h in range(output_shard_height_dim):
-        for w in range(output_shard_width_dim):
-            for t in range(0, 1):
-                for e in range(E):
-                    print(f"{h=} {w=} {t=}  {e=}")
-                    print(f"output shards: {shaped_torch_output[h,w,e,t,:32]}")
+    #     for h in range(output_shard_height_dim):
+    #         for w in range(output_shard_width_dim):
+    #             for t in range(0,1):
+    #                 for e in range(E):
+    #                     print(f"{h=} {w=} {t=}  {e=}")
+    #                     print(f"output shards: {shaped_torch_output[h,w,e,t,:32]}")
 
     shaped_torch_output = shaped_torch_output.permute([2, 0, 3, 1, 4]).reshape([E, TOTAL_TOKENS, K])
     torch_output = torch.zeros([E, M, K], dtype=torch.bfloat16)
@@ -667,32 +665,32 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
         all_outputs.append(tt_to_torch_output)
 
-        # Compute checksums for all inputs before calling moe (only when check_accuracy is True)
-        seed = 0  # torch.manual_seed(0) was set earlier
-        input_checksums = {
-            "torch_input": compute_tensor_checksum(torch_input[layer_id]),
-            "torch_w0_w1": compute_tensor_checksum(torch_w0_w1_reordered),
-            "torch_w2": compute_tensor_checksum(torch_w2_reordered),
-            "tt_to_torch_output": compute_tensor_checksum(tt_to_torch_output),
-        }
-
-        # Load existing checksums and check against them
-        checksum_dict = load_or_create_checksum_dict()
-        if seed in checksum_dict:
-            existing_checksums = checksum_dict[seed]
-            for tensor_name, checksum in input_checksums.items():
-                if checksum != existing_checksums[tensor_name]:
-                    continue
-                    raise AssertionError(
-                        f"Checksum mismatch for {tensor_name} with seed {seed}! "
-                        f"Expected: {existing_checksums[tensor_name]}, Got: {checksum}"
-                    )
-        else:
-            # New seed - add all checksums
-            checksum_dict[seed] = input_checksums
-
-            # Save updated checksums
-            save_checksum_dict(checksum_dict)
+        # # Compute checksums for all inputs before calling moe (only when check_accuracy is True)
+    #         seed = 0  # torch.manual_seed(0) was set earlier
+    #         input_checksums = {
+    #             "torch_input": compute_tensor_checksum(torch_input[layer_id]),
+    #             "torch_w0_w1": compute_tensor_checksum(torch_w0_w1_reordered),
+    #             "torch_w2": compute_tensor_checksum(torch_w2_reordered),
+    #             "tt_to_torch_output": compute_tensor_checksum(tt_to_torch_output),
+    #         }
+    #
+    #         # Load existing checksums and check against them
+    #         checksum_dict = load_or_create_checksum_dict()
+    #         if seed in checksum_dict:
+    #             existing_checksums = checksum_dict[seed]
+    #             for tensor_name, checksum in input_checksums.items():
+    #                 if checksum != existing_checksums[tensor_name]:
+    #                     continue
+    #                     raise AssertionError(
+    #                         f"Checksum mismatch for {tensor_name} with seed {seed}! "
+    #                         f"Expected: {existing_checksums[tensor_name]}, Got: {checksum}"
+    #                     )
+    #         else:
+    #             # New seed - add all checksums
+    #             checksum_dict[seed] = input_checksums
+    #
+    #             # Save updated checksums
+    #             save_checksum_dict(checksum_dict)
 
     tt_to_torch_outputs = torch.stack(all_outputs)
 
@@ -713,9 +711,6 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             # (L, E, M, N) @ (L, E, N, K) -> (L, E, M, K)
             torch_output_ref = torch_intermediate_ref @ torch_w2
 
-            # print(f"{torch_output_ref[0,0,0,:]=}")
-            # print(f"{torch_output_ref[0,1,0,:]=}")
-
         # Calculate accuracy metrics for each layer and expert
         for layer_id, expert_id in itertools.product(range(L), range(E)):
             torch_layer_output = torch_output_ref[layer_id, expert_id, :, :]
@@ -723,7 +718,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
             for t in range(torch_layer_output.shape[0]):
                 print(f"{expert_id=} {t=}")
-                print(f"{torch_layer_output[t,:512]=}")
+                # print(f"{torch_layer_output[t,:512]=}")
                 print(f"{tt_layer_output[t,:512]=}")
 
             layer_metrics = get_accuracy_metrics(torch_layer_output, tt_layer_output)
@@ -786,6 +781,9 @@ def test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
     passing = True
     # Print the layers and experts that did not pass the PCC check
+
+    print(accuracy_metrics)
+
     for (layer_id, expert_id), metrics in accuracy_metrics.items():
         if metrics["pcc"] < PCC_THRESHOLD:
             passing = False

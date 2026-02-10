@@ -84,10 +84,11 @@ void kernel_main() {
     constexpr uint32_t shard_offset_per_expert_bytes =
         num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
     constexpr uint32_t source_buffer_iter_offset = 224 * in_tile_size;
-    const uint32_t width_tile_base = detail::accumulate(moe_ring::W2_TILES_PER_CORE_A, ring_core_id);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     constexpr uint32_t source_width_tiles = 20;  // token segments/core are all padded up to 20
     const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
+
+    const uint32_t width_tile_base = detail::accumulate(moe_ring::W2_TILES_PER_CORE_A, ring_core_id);
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -162,6 +163,9 @@ void kernel_main() {
             cb_wait_front(cb_c2w_rdy, 1);
             cb_pop_front(cb_c2w_rdy, 1);
 
+            const uint32_t dest_height_shard_start = (hb * tile_height) / max_tokens_per_height_shard;
+            const uint32_t shard_row_start = (hb * tile_height) % max_tokens_per_height_shard;
+
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
             // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
@@ -198,7 +202,7 @@ void kernel_main() {
             }
 
             uint32_t width_tiles_to_send = output_width_tiles_core;  // 18 or 19
-            uint32_t wb = 0;
+            uint32_t width_tiles_sent = 0;
 
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - hb * tile_height);
 
@@ -206,18 +210,19 @@ void kernel_main() {
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
 
             while (width_tiles_to_send > 0) {
-                const uint32_t width_tile_start = width_tile_base + wb;
+                const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
                 const uint32_t dest_width_shard = width_tile_start / combine_shard_width_tiles;
                 const uint32_t dest_width_offset_tiles = width_tile_start % combine_shard_width_tiles;
+
                 const uint32_t dest_width_offset_bytes = dest_width_offset_tiles * tile_width_size_bytes;
 
-                const uint32_t width_transfer_tiles =
-                    std::min(combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - wb);
+                const uint32_t width_transfer_tiles = std::min(
+                    combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
                 const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
 
-                for (uint32_t bt = 0, t = hb * tile_height; bt < num_tokens_block; ++bt, ++t) {
-                    const uint32_t dest_height_shard = t / max_tokens_per_height_shard;
-                    const uint32_t shard_row = t % max_tokens_per_height_shard;
+                uint32_t dest_height_shard = dest_height_shard_start;
+                uint32_t shard_row = shard_row_start;
+                for (uint32_t bt = 0; bt < num_tokens_block; ++bt) {
                     const uint32_t shard_row_offset_bytes =
                         shard_row * combine_shard_width_tiles * tile_width_size_bytes;
 
@@ -234,11 +239,16 @@ void kernel_main() {
                         output_base_l1_addr + expert_offset_bytes + dest_width_offset_bytes + shard_row_offset_bytes;
 
                     const uint32_t source_l1_addr =
-                        source_base_l1_addr + (bt * source_width_tiles + wb) * tile_width_size_bytes;
+                        source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
+
+                    if (++shard_row == max_tokens_per_height_shard) {
+                        ++dest_height_shard;
+                        shard_row = 0;
+                    }
                 }
-                wb += width_transfer_tiles;
+                width_tiles_sent += width_transfer_tiles;
                 width_tiles_to_send -= width_transfer_tiles;
             }
 
