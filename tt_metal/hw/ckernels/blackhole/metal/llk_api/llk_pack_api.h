@@ -112,7 +112,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
 
 #ifdef LIGHTWEIGHT_ASSERT_ENABLED
     const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces, 100 /* nop_count */);
+        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 
     if (!isPackerConfiguredCorrectly) {
         DPRINT_PACK(DPRINT << "llk_pack_init - Need to reconfigure packer." << ENDL());
@@ -156,8 +156,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_output_face_r_dim(output_id),
-        get_output_num_faces(output_id),
-        100 /* nop_count */);
+        get_output_num_faces(output_id));
 
     if (!isPackerConfiguredCorrectly) {
         DPRINT_PACK(DPRINT << "llk_pack - Need to reconfigure packer." << ENDL());
@@ -186,7 +185,7 @@ inline void llk_pack_untilize_init(
 
 #ifdef LIGHTWEIGHT_ASSERT_ENABLED
     const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces, 100 /* nop_count */);
+        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 
     if (!isPackerConfiguredCorrectly) {
         DPRINT_PACK(DPRINT << "llk_pack_untilize_init - Need to reconfigure packer." << ENDL());
@@ -230,7 +229,7 @@ inline void llk_pack_untilize(
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
 #ifdef LIGHTWEIGHT_ASSERT_ENABLED
         const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces, 100 /* nop_count */);
+            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 
         if (!isPackerConfiguredCorrectly) {
             DPRINT_PACK(DPRINT << "llk_pack_untilize - Need to reconfigure packer." << ENDL());
@@ -288,7 +287,10 @@ inline void llk_pack_rows(
 
 #ifdef LIGHTWEIGHT_ASSERT_ENABLED
     const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], 16, 4, 100 /* nop_count */);
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        get_output_face_r_dim(output_id),
+        get_output_num_faces(output_id));
 
     if (!isPackerConfiguredCorrectly) {
         DPRINT_PACK(DPRINT << "llk_pack_rows - Need to reconfigure packer." << ENDL());
@@ -326,8 +328,7 @@ inline void llk_matmul_pack(
             pack_src_format[output_id],
             pack_dst_format[output_id],
             get_output_face_r_dim(output_id),
-            get_output_num_faces(output_id),
-            100 /* nop_count */);
+            get_output_num_faces(output_id));
 
         if (!isPackerConfiguredCorrectly) {
             DPRINT_PACK(DPRINT << "llk_pack - Need to reconfigure packer." << ENDL());
