@@ -70,7 +70,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // Determine the router variant
-    bool has_z_router = fabric_context.has_z_router_on_device(local_node);
+    bool has_z_router = fabric_context.has_z_router_on_device(control_plane, local_node);
     RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
 
     // Create channel mapping EARLY (needed for computing injection flags)

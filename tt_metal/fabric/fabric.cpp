@@ -161,8 +161,8 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto forwarding_links =
-        get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+    const auto forwarding_links = get_forwarding_link_indices_in_direction(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
         "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
@@ -435,7 +435,7 @@ std::vector<uint32_t> get_forwarding_link_indices(
     }
 
     return get_forwarding_link_indices_in_direction(
-        src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
 tt::tt_fabric::Topology get_fabric_topology() {
