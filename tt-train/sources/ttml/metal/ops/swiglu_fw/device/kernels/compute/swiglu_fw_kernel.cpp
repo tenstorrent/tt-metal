@@ -162,17 +162,35 @@ inline void mul_XW_accumulate_k_block(
     constexpr uint32_t tiles_per_batch = block_size * block_size;
     cb_wait_front(cb_w_idx, tiles_per_batch);
 
-    mm_init_short(cb_x_idx, cb_w_idx, false);
+    // Use matmul_block with rt_dim=1 (single row), ct_dim=block_size (all k output columns)
+    // This processes all k tiles per inner dimension tile, reducing matmul calls from p×k to just p
+    // CB layout: [row0_tile0..row0_tile(block_size-1), row1_tile0..., ...] (row-major)
+    mm_block_init_short(
+        cb_x_idx,
+        cb_w_idx,
+        /*transpose=*/false,
+        /*ct_dim=*/block_size,
+        /*rt_dim=*/1,
+        /*kt_dim=*/p_block_size);
 
-    // Process each p in this p_block (only p_block_size valid rows, rest are padding)
-    // CB layout: [row0_tile0..row0_tile(block_size-1), row1_tile0..., ...]
+    // Process each p in this p_block using matmul_block
+    // X: single row, tiles at indices 0, 1, 2, ... (p_block_size tiles)
+    // W: p_block_size rows × block_size cols, row-major
+    uint32_t in0_index = 0;  // X tile index (increments by 1)
+    uint32_t in1_index = 0;  // W tile index (increments by block_size per row)
     for (uint32_t p = 0; p < p_block_size; ++p) {
-        const uint32_t cb_row_offset = p * block_size;  // Offset to start of row p in CB
-
-        // Accumulate: result[k] += X[p] * W[p, k] for all k in k_block
-        for (uint32_t k = 0; k < k_block_size; ++k) {
-            matmul_tiles(cb_x_idx, cb_w_idx, p, cb_row_offset + k, k);
-        }
+        matmul_block(
+            cb_x_idx,
+            cb_w_idx,
+            in0_index,
+            in1_index,
+            /*dst_index=*/0,
+            /*transpose=*/false,
+            /*ct_dim=*/block_size,
+            /*rt_dim=*/1,
+            /*kt_dim=*/p_block_size);
+        in0_index++;              // next X tile
+        in1_index += block_size;  // next W row (row-major stride)
     }
 
     // Pop ALL W tiles at once (matching the batched push)

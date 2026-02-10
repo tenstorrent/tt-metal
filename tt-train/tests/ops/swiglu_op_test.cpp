@@ -133,12 +133,12 @@ void CompareKernelVsReference(
  *   - S: sequence length (height for transformers)
  *   - C: feature dimension (width/embedding dimension)
  * @param hidden_dim Hidden dimension for the weight matrices
- * @param algorithm Algorithm to use (default: TRUE_FLASH for testing the optimized path)
+ * @param algorithm Algorithm to use (default: ORIGINAL for testing the optimized path)
  */
 static void CompareKernelVsReferenceWithShape(
     const std::vector<uint32_t>& input_shape,
     const uint32_t hidden_dim,
-    ttml::ops::SwiGLUAlgorithm algorithm = ttml::ops::SwiGLUAlgorithm::TRUE_FLASH) {
+    ttml::ops::SwiGLUAlgorithm algorithm = ttml::ops::SwiGLUAlgorithm::ORIGINAL) {
     using namespace ttml;
 
     // Generate random input data using parallel_generate (following RMSNorm pattern)
@@ -253,8 +253,7 @@ TEST_F(SwiGLUOpTest, SwiGLU_RepeatedRuns_NoHang) {
 
     const float tolerance = 1e-2f;
     for (int iteration = 0; iteration < 3; ++iteration) {
-        auto output_tensor =
-            ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor, ops::SwiGLUAlgorithm::TRUE_FLASH);
+        auto output_tensor = ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor, ops::SwiGLUAlgorithm::ORIGINAL);
         auto value = output_tensor->get_value();
         auto output_xtensor = core::to_xtensor(value);
 
