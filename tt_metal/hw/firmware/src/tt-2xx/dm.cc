@@ -52,6 +52,7 @@ tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailbo
 
 // Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
 thread_local ::experimental::LocalDFBInterface g_dfb_interface[32] __attribute__((used));
+RemapperAPI g_remapper_configurator __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -282,6 +283,11 @@ extern "C" uint32_t _start1() {
                     noc_local_state_init(noc_index);
                 }
 #endif
+                // Need to ensure that Remapper state is cleared for next kernel launch
+                if (g_remapper_configurator.is_remapper_enabled()) {
+                    g_remapper_configurator.clear_all_pairs();
+                    g_remapper_configurator.disable_remapper();
+                }
 
                 uint32_t go_message_index = mailboxes->go_message_index;
                 mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;

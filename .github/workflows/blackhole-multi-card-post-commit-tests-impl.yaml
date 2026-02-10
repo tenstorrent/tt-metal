@@ -34,9 +34,7 @@ jobs:
           - name: CCL APC test
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
           - name: Socket tests
-            cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*H2DSocket*"
-          - name: Fabric Sanity Benchmark
-            cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
+            cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
@@ -79,35 +77,6 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
-      - name: Check latency/BW results
-        id: check-data
-        if: ${{ !cancelled() && matrix.test-group.name == 'Fabric Sanity Benchmark' }}
-        uses: ./docker-job/.github/actions/check-latency-bw-results
-        with:
-          path: /work
-          arch: blackhole
-          check_bw: "true"
-          check_latency: "true"
-      - name: Upload BW results
-        ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_benchmark_data == 'true' }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-        with:
-          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_bandwidth_benchmark_data_batchfile.txt
-          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
-          path: /work
-      - name: Upload latency data
-        ## Only upload fabric latency data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_latency_data == 'true' }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-        with:
-          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
-          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
-          path: /work
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

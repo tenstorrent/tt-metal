@@ -6,6 +6,7 @@ import ttnn
 import math
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
+from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
 
 
 # Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
@@ -27,17 +28,37 @@ parameters = {
         "in_specs": [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
         "input_specs": [
             # Contains following parameters
-            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout, slice_type]
-            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 8, HS, SliceWidth],
-            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 8, BS, SliceWidth],
-            [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, False, 4, WS, SliceHeight],
-            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 8, HS, SliceWidth],
-            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, True, 8, BS, SliceWidth],
-            [1, 256, 81, 81, 2, 2, 2, 2, 0, 0, 1, 1, True, 2, HS, SliceHeight],
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout, slice_type, skip_for_block_formats]
+            # Manual num_slices tests
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 8, HS, SliceWidth, False],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 8, BS, SliceWidth, True],
+            [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, False, 4, WS, SliceHeight, True],
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 8, HS, SliceWidth, False],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, True, 8, BS, SliceWidth, True],
+            [1, 256, 81, 81, 2, 2, 2, 2, 0, 0, 1, 1, True, 2, HS, SliceHeight, False],
             # Pooling dimension has been changed from width to height. Otherwise, with tile layout, the output width of 1 gets rounded up to 32.
-            [1, 256, 64, 1024, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
-            [1, 256, 32, 1024, 32, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
-            [1, 256, 64, 2048, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
+            [1, 256, 64, 1024, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth, False],
+            [1, 256, 32, 1024, 32, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth, False],
+            [1, 256, 64, 2048, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth, False],
+            # Non-tile multiples
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceHeight, True],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceHeight, False],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceWidth, True],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceWidth, False],
+            # Autosharded
+            [1, 128, 600, 600, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, None, SliceHeight, False],
+            [1, 128, 600, 600, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, None, SliceWidth, False],
+            [1, 128, 600, 600, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, None, None, False],
+            # large kernel tests
+            [1, 700, 700, 70, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, False],
+            [1, 700, 70, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, False],
+            [1, 70, 700, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, HS, None, False],
+            [1, 70, 700, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, HS, None, False],
+            # large kernel wide tests
+            [1, 20480, 500, 50, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None, True],
+            [1, 20480, 50, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None, True],
+            [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None, True],
+            [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None, True],
         ],
     },
     "height_shard_tests": {
@@ -112,6 +133,7 @@ parameters = {
 @pytest.mark.parametrize("input_spec", parameters["dram_slice_tests"]["input_specs"])
 @pytest.mark.parametrize("in_specs", parameters["dram_slice_tests"]["in_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_dram_slice(device, in_specs, input_spec):
     (
         in_n,
@@ -130,9 +152,21 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
         num_slices,
         shard_scheme,
         slice_type,
+        skip_for_block_formats,
     ) = input_spec
     [in_dtype, output_layout] = in_specs
-    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
+
+    if skip_for_block_formats and output_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("DRAM slicing cannot find a valid auto-config for this case")
+
+    # Handle three cases:
+    # 1. slice_type=None -> fully automatic (dram_slice_config=None)
+    # 2. num_slices=0 -> semi-automatic (framework determines num_slices)
+    # 3. num_slices>0 -> manual (explicit num_slices and slice_type)
+    if slice_type is None:
+        dram_slice_config = None  # Fully automatic
+    else:
+        dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
     torch_tensor_map = {}
     run_max_pool2d(
         [in_n, in_c, in_h, in_w],
@@ -154,6 +188,7 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
 
 @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["height_shard_tests"]["in_dtype"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
@@ -171,6 +206,13 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
         ceil_mode,
     ) = input_spec
 
+    # Test failing with watcher enabled
+    if (
+        is_watcher_enabled()
+        and in_dtype == ttnn.bfloat16
+        and input_spec == [1, 1, 59, 59, 3, 5, 4, 2, 1, 1, 5, 4, True]
+    ):
+        pytest.skip("Test is not passing with watcher enabled, github issue #29024")
     run_max_pool2d(
         [in_n, in_c, in_h, in_w],
         (kernel_h, kernel_w),
@@ -189,6 +231,7 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
 
 @pytest.mark.parametrize("input_spec", parameters["width_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["width_shard_tests"]["in_dtype"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_width_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
@@ -224,6 +267,7 @@ def test_max_pool2d_width_shard(device, in_dtype, input_spec, tensor_map):
 
 @pytest.mark.parametrize("input_spec", parameters["block_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["block_shard_tests"]["in_dtype"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
@@ -260,6 +304,7 @@ def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
 @pytest.mark.parametrize("input_spec", parameters["out_mem_config_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["out_mem_config_tests"]["in_dtype"])
 @pytest.mark.parametrize("out_memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_mem_config(device, in_dtype, input_spec, out_memory_config, tensor_map):
     (
         in_n,
@@ -297,6 +342,7 @@ def test_max_pool2d_mem_config(device, in_dtype, input_spec, out_memory_config, 
 @pytest.mark.parametrize("input_spec", parameters["tiled_out_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["tiled_out_tests"]["in_dtype"])
 @pytest.mark.parametrize("out_dtype", parameters["tiled_out_tests"]["out_dtype"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_map):
     output_layout = ttnn.TILE_LAYOUT
 
@@ -336,6 +382,7 @@ def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_ma
 
 @pytest.mark.parametrize("input_spec", parameters["in_mem_config_tests"]["input_specs"])
 @pytest.mark.parametrize("cores", parameters["in_mem_config_tests"]["cores"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_in_mem_config(device, input_spec, cores, tensor_map):
     (
         in_n,

@@ -14,6 +14,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/device.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -30,6 +31,8 @@ protected:
 };
 
 TEST_F(ReduceOpTest, TestMeanDim0) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});

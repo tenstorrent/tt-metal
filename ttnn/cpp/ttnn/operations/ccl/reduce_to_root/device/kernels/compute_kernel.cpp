@@ -7,14 +7,14 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #define EXP_APPROX_MODE false
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 

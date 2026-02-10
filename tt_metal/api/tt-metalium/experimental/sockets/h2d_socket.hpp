@@ -6,7 +6,6 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/vector_aligned.hpp>
 #include <utility>
 
 namespace tt::umd {
