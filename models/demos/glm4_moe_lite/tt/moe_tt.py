@@ -988,7 +988,11 @@ def moe_sparse_experts_forward_tt(
     while len(expert_output_sparse.shape) > 4:
         expert_output_sparse = ttnn.squeeze(expert_output_sparse, 0)
 
-    expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))  # [E, num_blocks, block, H]
+    # `permute` can behave like a view (no refcounting). Materialize before freeing
+    # the source to avoid intermittent use-after-free corruption during decode.
+    expert_output_view = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))  # [E, num_blocks, block, H]
+    expert_output = ttnn.clone(expert_output_view, memory_config=memory_config)
+    ttnn.deallocate(expert_output_view, force=False)
     ttnn.deallocate(expert_output_sparse, force=False)
     expert_output = ttnn.reshape(
         expert_output,
