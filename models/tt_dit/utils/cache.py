@@ -112,6 +112,30 @@ def load_model(
     get_torch_state_dict: Callable[[], dict] | None = None,
     create_cache: bool = True,
 ) -> None:
+    """
+    Load model weights from cache or PyTorch state dict.
+
+    Attempts to load from cache first. If the cache does not exist, loads from PyTorch state dict
+    (if provided) and optionally creates the cache. Raises `MissingCacheError` if neither is
+    available.
+
+    Args:
+        `tt_model`: TT model instance to load weights into.
+        `model_name`: Model name (e.g., "flux1-dev", "stable-diffusion-3.5").
+        `subfolder`: Subfolder within model cache directory (e.g., "transformer", "vae").
+        `parallel_config`: Parallelism configuration (tensor/sequence parallel).
+        `mesh_shape`: Device mesh shape.
+        `dtype`: Data type for cached weights (default: "bf16").
+        `is_fsdp`: Whether FSDP is used (default: False).
+        `get_torch_state_dict`: Optional callable returning PyTorch state dict. Enables lazy
+            evaluation - PyTorch model only loads if the cache does not exist. If `None`, cache
+            must exist or `MissingCacheError` is raised.
+        `create_cache`: Create cache after loading from PyTorch (default: True).
+
+    Raises:
+        `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
+        `RuntimeError`: `TT_DIT_CACHE_DIR` is not set and `get_torch_state_dict` is `None`.
+    """
     cache_dir = model_cache_dir(
         model_name=model_name,
         subfolder=subfolder,
