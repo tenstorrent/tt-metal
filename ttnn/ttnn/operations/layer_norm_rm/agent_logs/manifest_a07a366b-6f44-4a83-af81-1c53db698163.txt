@@ -1,0 +1,8 @@
+ttnn/ttnn/operations/layer_norm_rm/agent_logs/analyzer_tilize_breadcrumbs.jsonl
+ttnn/ttnn/operations/layer_norm_rm/agent_logs/untilize_single_core_analysis.md
+ttnn/ttnn/operations/layer_norm_rm/agent_logs/softmax_general_analysis.md
+ttnn/ttnn/operations/layer_norm_rm/agent_logs/tilize_single_core_analysis.md
+ttnn/ttnn/operations/layer_norm_rm/agent_logs/analyzer_softmax_breadcrumbs.jsonl
+ttnn/ttnn/operations/layer_norm_rm/agent_logs/analyzer_untilize_breadcrumbs.jsonl
+ttnn/ttnn/operations/layer_norm_rm/layer_norm_rm_spec.md
+ttnn/ttnn/operations/layer_norm_rm/agent_logs/ttnn-operation-planner_execution_log.md
