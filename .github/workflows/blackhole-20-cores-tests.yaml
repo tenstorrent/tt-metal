@@ -23,6 +23,10 @@ on:
         required: false
         type: string
         default: "BH"
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   blackhole-20-cores-unit-tests:
@@ -63,6 +67,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
       - name: Run ${{ matrix.test-group.name }}
         timeout-minutes: 10
         env:
