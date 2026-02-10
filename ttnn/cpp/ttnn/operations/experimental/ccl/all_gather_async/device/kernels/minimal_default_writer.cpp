@@ -376,8 +376,11 @@ void kernel_main() {
                 // Backward worker: write second half of tiles in the packet
                 uint32_t start_tile = 0;
                 uint32_t end_tile = tiles_to_put_in_current_packet;
-                if (tiles_to_put_in_current_packet > 1) {
-                    start_tile = tiles_to_put_in_current_packet / 2;
+                if (ring_size % 2 == 0 && ring_size > 2) {  // if ring size is even, we need to write the second half of
+                                                            // the tiles, otherwise we write the entire packet
+                    if (tiles_to_put_in_current_packet > 1) {
+                        start_tile = tiles_to_put_in_current_packet / 2;
+                    }
                 }
                 for (uint32_t i = start_tile; i < end_tile; i++) {
                     noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
@@ -403,15 +406,18 @@ void kernel_main() {
                     }
                 }
                 // Forward worker: write first half of tiles in the packet
-                uint32_t start_tile = 0;
-                uint32_t end_tile = tiles_to_put_in_current_packet;
-                if (tiles_to_put_in_current_packet > 1) {
-                    end_tile = tiles_to_put_in_current_packet / 2;
+                if (ring_size % 2 == 0 && ring_size > 2) {  // if ring size is even, we need to write the first half of
+                                                            // the tiles, otherwise we write the entire packet
+                    uint32_t start_tile = 0;
+                    uint32_t end_tile = tiles_to_put_in_current_packet;
+                    if (tiles_to_put_in_current_packet > 1) {
+                        end_tile = tiles_to_put_in_current_packet / 2;
+                    }
+                    for (uint32_t i = start_tile; i < end_tile; i++) {
+                        noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
+                    }
+                    noc_async_write_barrier();
                 }
-                for (uint32_t i = start_tile; i < end_tile; i++) {
-                    noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
-                }
-                noc_async_write_barrier();
             }
             tiles_read += tiles_to_put_in_current_packet;
 
@@ -483,14 +489,15 @@ void kernel_main() {
         if (direction == 1) {
             writes_expected = num_targets_backward_direction - 1;
             // For 4-device ring, enable split forwarding for backward worker
-            if (ring_size == 4 && num_targets_backward_direction == 1) {
-                writes_expected = 1;  // Backward worker will also forward 1 slice (but only half of it)
+            // if (ring_size == 4 && num_targets_backward_direction == 1) {
+            if (ring_size % 2 == 0) {
+                writes_expected++;  // Backward worker will also forward 1 slice (but only half of it)
                 split_forwarding_enabled = true;
             }
         } else {
             writes_expected = num_targets_forward_direction - 1;
             // For 4-device ring, forward worker will only send half of last slice
-            if (ring_size == 4) {
+            if (ring_size % 2 == 0) {
                 split_forwarding_enabled = true;
             }
         }
