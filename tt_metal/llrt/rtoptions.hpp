@@ -336,8 +336,6 @@ public:
     // can override with a SW call.
     bool get_watcher_enabled() const { return watcher_settings.enabled.load(std::memory_order_relaxed); }
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled.store(enabled, std::memory_order_relaxed); }
-    // Return a hash of which watcher features are enabled
-    uint32_t get_watcher_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms.load(std::memory_order_relaxed); }
     void set_watcher_interval(int interval_ms) {
         watcher_settings.interval_ms.store(interval_ms, std::memory_order_relaxed);
@@ -474,39 +472,23 @@ public:
     bool get_validate_kernel_binaries() const { return validate_kernel_binaries; }
     void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
 
-    // Returns the string representation for hash computation.
-    std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
-        switch (feature) {
-            case RunTimeDebugFeatureDprint: {
-                std::string hash_str = std::to_string(get_feature_enabled(feature));
-                hash_str += std::to_string(get_feature_all_chips(feature));
-                return hash_str;
-            }
-            case RunTimeDebugFeatureReadDebugDelay:
-            case RunTimeDebugFeatureWriteDebugDelay:
-            case RunTimeDebugFeatureAtomicDebugDelay:
-                if (get_feature_enabled(feature)) {
-                    return std::to_string(get_watcher_debug_delay());
-                } else {
-                    return "false";
-                }
-            case RunTimeDebugFeatureEnableL1DataCache: return std::to_string(get_feature_enabled(feature));
-            default: return "";
-        }
-    }
     std::string get_compile_hash_string() const {
-        std::string compile_hash_str = fmt::format(
+        const auto& l1_cache_procs = get_feature_processors(RunTimeDebugFeatureEnableL1DataCache);
+        std::string proc_str;
+        for (uint32_t i = 0; i < tt_metal::NumHalProgrammableCoreTypes; ++i) {
+            if (i != 0) {
+                proc_str += ",";
+            }
+            proc_str +=
+                std::to_string(l1_cache_procs.get_processor_mask(static_cast<tt_metal::HalProgrammableCoreType>(i)));
+        }
+        return fmt::format(
             "{}_{}_{}_{}_{}",
-            get_watcher_hash(),
-            get_kernels_early_return(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_disable_fabric_2_erisc_mode());
-        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
-            compile_hash_str += "_";
-            compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
-        }
-        return compile_hash_str;
+            get_disable_fabric_2_erisc_mode(),
+            get_feature_enabled(RunTimeDebugFeatureEnableL1DataCache),
+            proc_str);
     }
 
     // Used for both watcher and dprint servers, this dev option (no corresponding env var) sets
