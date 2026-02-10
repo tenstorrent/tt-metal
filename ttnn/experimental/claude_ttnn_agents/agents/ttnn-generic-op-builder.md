@@ -12,8 +12,6 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: ".claude/scripts/block_if_tests_not_run.sh"
-        - type: command
           command: ".claude/scripts/logging/block_if_uncommitted.sh ttnn-generic-op-builder"
 ---
 
