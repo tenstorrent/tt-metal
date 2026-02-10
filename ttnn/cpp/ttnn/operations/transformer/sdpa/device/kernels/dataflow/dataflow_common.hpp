@@ -155,6 +155,54 @@ uint32_t read_chunk_with_padding(
     }
 }
 
+// Read subblock_h rows of Q tiles and push to CB.
+// start_tile_id is passed by reference and advances across successive calls.
+// Used for interleaved Q subblock push to overlap Q reads with compute.
+template <uint32_t tile_bytes, typename ReaderType>
+FORCE_INLINE void read_q_subblock(
+    const ReaderType& reader,
+    const uint32_t cb_id,
+    uint32_t& start_tile_id,
+    const uint32_t sb_start_row,
+    const uint32_t subblock_h,
+    const uint32_t src_rows,
+    const uint32_t src_cols,
+    const uint32_t dst_cols,
+    const uint32_t barrier_threshold) {
+    const uint32_t sb_tiles = subblock_h * dst_cols;
+    cb_reserve_back(cb_id, sb_tiles);
+    const uint32_t base_write_ptr = get_write_ptr(cb_id);
+
+    uint32_t barrier_count = 0;
+    for (uint32_t row = sb_start_row; row < sb_start_row + subblock_h; ++row) {
+        const uint32_t local_row = row - sb_start_row;
+        uint32_t write_ptr = base_write_ptr + local_row * dst_cols * tile_bytes;
+
+        if (row < src_rows) {
+            for (uint32_t col = 0; col < src_cols; ++col) {
+                noc_async_read_tile(start_tile_id++, reader, write_ptr);
+                write_ptr += tile_bytes;
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_read_barrier();
+                    barrier_count = 0;
+                }
+            }
+            // Zero-pad extra columns (src_cols < dst_cols case)
+            for (uint32_t col = src_cols; col < dst_cols; ++col) {
+                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+            }
+        } else {
+            // Entire row is padding
+            for (uint32_t col = 0; col < dst_cols; ++col) {
+                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+            }
+        }
+    }
+
+    noc_async_read_barrier();
+    cb_push_back(cb_id, sb_tiles);
+}
+
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
 void read_paged_chunk_with_padding(
     const ReaderType& reader,
