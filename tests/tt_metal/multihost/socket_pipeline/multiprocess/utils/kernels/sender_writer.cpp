@@ -7,7 +7,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "api/debug/dprint.h"
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -95,7 +94,9 @@ void kernel_main() {
         get_noc_addr_from_bank_id<false>(bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
-        downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.downstream_bytes_sent_addr);
+        downstream_enc.d2d.downstream_noc_x,
+        downstream_enc.d2d.downstream_noc_y,
+        sender_socket.downstream_bytes_sent_addr);
     uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
         receiver_socket.d2d.upstream_noc_x,
         receiver_socket.d2d.upstream_noc_y,
@@ -116,7 +117,7 @@ void kernel_main() {
 
     // 1. Send credit downstream
     uint64_t remote_credit_addr =
-        get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, credit_address);
+        get_noc_addr(downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, credit_address);
     volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_address);
     data_packet_header_addr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{remote_credit_addr, 1});
     fabric_connection.wait_for_empty_write_slot();
@@ -134,7 +135,7 @@ void kernel_main() {
         auto l1_read_addr = l1_read_addr_base;
         uint64_t start_timestamp = get_timestamp();
         socket_reserve_pages(sender_socket, 1);
-        uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
+        uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
             write_data_to_remote_core_with_ack(
                 fabric_connection,

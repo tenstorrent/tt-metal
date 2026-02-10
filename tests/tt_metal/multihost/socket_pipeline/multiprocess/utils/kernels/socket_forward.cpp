@@ -7,7 +7,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "api/debug/dprint.h"
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -82,14 +81,16 @@ void kernel_main() {
     fabric_set_unicast_route(upstream_socket_packet_header_addr, recv_socket);
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
-        downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, send_socket.downstream_bytes_sent_addr);
+        downstream_enc.d2d.downstream_noc_x,
+        downstream_enc.d2d.downstream_noc_y,
+        send_socket.downstream_bytes_sent_addr);
     uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
         recv_socket.d2d.upstream_noc_x, recv_socket.d2d.upstream_noc_y, recv_socket.d2d.upstream_bytes_acked_addr);
     uint64_t receiver_noc_coord_addr = get_noc_addr_from_bank_id<false>(
         downstream_bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
     // Initial Handshake
     uint64_t remote_credit_addr =
-        get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, credit_address);
+        get_noc_addr(downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, credit_address);
     volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_address);
     while (*credit_addr == 0) {
         invalidate_l1_cache();
@@ -105,8 +106,7 @@ void kernel_main() {
         socket_reserve_pages(send_socket, 1);
         socket_wait_for_pages(recv_socket, 1);
         auto l1_read_addr = recv_socket.read_ptr;
-        uint64_t dst_addr = receiver_noc_coord_addr + send_socket.write_ptr;
-
+        uint64_t dst_addr = receiver_noc_coord_addr + send_socket.write_ptr + send_socket.downstream_fifo_addr;
         // Forward data to downstream
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
             write_data_to_remote_core_with_ack(

@@ -44,6 +44,7 @@ void run_sr_test_migrated(
     std::cout << "Start Device ID: " << mesh_device->get_device(start_device_coord)->id() << std::endl;
     std::cout << "Intermed Device ID: " << mesh_device->get_device(intermed_device_coord)->id() << std::endl;
     std::cout << "Intermed Device 2 ID: " << mesh_device->get_device(intermed_device_coord_2)->id() << std::endl;
+    std::cout << "Intermed Device 3 ID: " << mesh_device->get_device(intermed_device_coord_3)->id() << std::endl;
     std::cout << "End Device ID: " << mesh_device->get_device(end_device_coord)->id() << std::endl;
 
     // Create connections for:
