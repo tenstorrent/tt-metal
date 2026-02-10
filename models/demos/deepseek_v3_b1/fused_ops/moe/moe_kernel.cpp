@@ -26,6 +26,7 @@
 //  10.  down_proj Mcast (routed, sender → gate_proj)
 // 10b.  Down Mcast (shared, sender → 112 cores): gated reduce output [1, K_down]
 // 10c.  Down Proj Matmul (shared, 112 cores): SRAM matmul [1,K_down] x [K_down,N_per_core]
+// 10d.  Residual Add (shared, 112 cores): matmul_out + shard(residual)
 //  11.  down_proj DRAM MM (routed, 8 DRAM cores)
 //  12.  Eltwise Add (routed, down_proj + fused_add)
 //
@@ -47,6 +48,7 @@
 #include "../../unified_kernels/eltwise_add.hpp"
 #include "../../unified_kernels/kn_sliced_matmul.hpp"
 #include "../../unified_kernels/gated_reduce.hpp"
+#include "../../unified_kernels/residual_add.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr.
 // Mirrors Python-side MoeRoutedExpertOp / MoeSharedExpertOp split.
@@ -276,6 +278,10 @@ void kernel_main() {
             // Down Proj Matmul — reader (no-op for NCRISC)
             using DownMatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
             deepseek_b1_ops::Matmul::ReaderArgs down_matmul_args{};
+
+            // Residual Add — reader (no-op for NCRISC)
+            using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::ReaderCTArgs;
+            deepseek_b1_ops::ResidualAdd::ReaderArgs residual_add_args{};
         } shared;
     } moe;
 
@@ -506,6 +512,10 @@ void kernel_main() {
             // Down Proj Matmul — writer (no-op for BRISC)
             using DownMatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
             deepseek_b1_ops::Matmul::WriterArgs down_matmul_args{};
+
+            // Residual Add — writer (no-op for BRISC)
+            using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::WriterCTArgs;
+            deepseek_b1_ops::ResidualAdd::WriterArgs residual_add_args{};
         } shared;
     } moe;
 
@@ -661,6 +671,17 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_down_matmul_in1"),
                 get_named_compile_time_arg_val("shared_down_matmul_out"),
                 get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles"),
+            };
+
+            // Residual Add (compute)
+            using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::ComputeCTArgs<get_named_compile_time_arg_val(
+                "shared_residual_add_out_w")>;
+            deepseek_b1_ops::ResidualAdd::ComputeArgs residual_add_args{
+                get_named_compile_time_arg_val("shared_residual_add_in0"),
+                get_named_compile_time_arg_val("shared_residual_add_in1"),
+                get_named_compile_time_arg_val("shared_residual_add_out"),
+                get_named_compile_time_arg_val("shared_residual_add_total_in1_tiles"),
+                get_named_compile_time_arg_val("shared_residual_add_core_idx"),
             };
         } shared;
     } moe;
@@ -855,6 +876,14 @@ void kernel_main() {
             /*pop_in1=*/false>
             shared_down_matmul;
         shared_down_matmul(moe.shared.down_matmul_args);
+    }
+
+    // 10d. Shared: Residual Add — matmul_out + shard(residual) on 112 cores
+    {
+        DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
+        deepseek_b1_ops::ResidualAdd::Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core>
+            shared_residual_add;
+        shared_residual_add(moe.shared.residual_add_args);
     }
 
     // 11. down_proj: DRAM Streaming Matmul

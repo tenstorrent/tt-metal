@@ -380,6 +380,11 @@ class _MoeSharedExpertContext:
     down_matmul_out_cb_descriptor: Any
     down_weights_num_pages: int  # for setup_sharded_buffer
 
+    # Residual Add (on 112 matmul cores)
+    residual_add_out_cb: int
+    residual_add_total_in1_tiles: int
+    residual_add_out_cb_descriptor: Any
+
 
 class MoeRoutedExpertOp:
     """
@@ -1330,6 +1335,7 @@ class MoeSharedExpertOp:
         shared_down_mcast_dst_cb = 34  # down mcast destination (gated reduce output → all 130 cores)
         shared_down_matmul_in1_cb = 35  # down proj weights (112 matmul cores, tensor-backed)
         shared_down_matmul_out_cb = 36  # down proj matmul output (112 matmul cores, manual)
+        shared_residual_add_out_cb = 37  # residual add output (112 matmul cores, manual)
 
         # ==================================================================
         # Dimensions
@@ -1548,6 +1554,22 @@ class MoeSharedExpertOp:
         )
 
         # ==================================================================
+        # Residual Add (matmul_out + residual → residual_add_out on 112 cores)
+        # ==================================================================
+        residual_add_total_in1_tiles = DownProj.NUM_MATMUL_CORES * down_matmul_out_w_per_core
+        residual_add_out_format = ttnn.CBFormatDescriptor(
+            buffer_index=shared_residual_add_out_cb,
+            data_format=data_format,
+            page_size=tile_1x32_size,
+            tile=tile_1x32_descriptor,
+        )
+        residual_add_out_cb_descriptor = ttnn.CBDescriptor(
+            total_size=down_matmul_out_w_per_core * tile_1x32_size,
+            core_ranges=DownProj.build_matmul_core_grid(),
+            format_descriptors=[residual_add_out_format],
+        )
+
+        # ==================================================================
         # Per-core values
         # ==================================================================
         # K-offset for matmul
@@ -1646,6 +1668,10 @@ class MoeSharedExpertOp:
             down_matmul_in1_cb_descriptor=down_matmul_in1_cb_descriptor,
             down_matmul_out_cb_descriptor=down_matmul_out_cb_descriptor,
             down_weights_num_pages=down_weights_num_pages,
+            # Residual Add
+            residual_add_out_cb=shared_residual_add_out_cb,
+            residual_add_total_in1_tiles=residual_add_total_in1_tiles,
+            residual_add_out_cb_descriptor=residual_add_out_cb_descriptor,
         )
 
     @staticmethod
@@ -1746,6 +1772,12 @@ class MoeSharedExpertOp:
             ("shared_down_matmul_out", ctx.down_matmul_out_cb),
             ("shared_down_matmul_k_num_tiles", ctx.down_matmul_k_num_tiles),
             ("shared_down_matmul_out_w_per_core", ctx.down_matmul_out_w_per_core),
+            # Residual add
+            ("shared_residual_add_in0", ctx.down_matmul_out_cb),  # matmul output
+            ("shared_residual_add_in1", ctx.residual_mcast_dst_cb),  # residual from mcast
+            ("shared_residual_add_out", ctx.residual_add_out_cb),
+            ("shared_residual_add_out_w", ctx.down_matmul_out_w_per_core),
+            ("shared_residual_add_total_in1_tiles", ctx.residual_add_total_in1_tiles),
         ]
         return ncrisc_args, brisc_args, trisc_args
 
@@ -1764,6 +1796,7 @@ class MoeSharedExpertOp:
             shared_ctx.down_mcast_dst_cb_descriptor,
             shared_ctx.down_matmul_in1_cb_descriptor,
             shared_ctx.down_matmul_out_cb_descriptor,
+            shared_ctx.residual_add_out_cb_descriptor,
         ]
 
     @staticmethod
@@ -1826,6 +1859,13 @@ class MoeSharedExpertOp:
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="shared_bg_sender_idx",
                 core_values=shared_ctx.bg_sender_idx_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="shared_residual_add_core_idx",
+                core_values=[
+                    (core, idx) for idx, core in enumerate(ttnn.corerange_to_cores(DownProj.build_matmul_core_grid()))
+                ],
                 other_value=0,
             ),
         ]
