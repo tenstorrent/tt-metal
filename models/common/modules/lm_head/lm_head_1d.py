@@ -14,7 +14,7 @@ Execution path:
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import List, Optional
 
@@ -23,76 +23,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE
-
-# =============================================================================
-# Config helper functions (adapted from TTTv1 model_config.py)
-# =============================================================================
-
-
-def _find_largest_divisor(n: int, max_divisor: int = 8) -> int:
-    for i in range(max_divisor, 0, -1):
-        if n % i == 0:
-            return i
-    return 1
-
-
-def _dram_matmul_config(
-    m: int, k: int, n: int, num_cores: int, tile_size: int = TILE_SIZE, fused_activation=None
-) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
-    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=_find_largest_divisor(k // (tile_size * num_cores)),
-        per_core_M=math.ceil(m / tile_size),
-        per_core_N=math.ceil(n / (tile_size * num_cores)),
-        fused_activation=fused_activation,
-    )
-
-
-def _find_grid_k_n(k_tiles: int, n_tiles: int, max_rows: int = 8, max_cols: int = 8) -> tuple[int, int]:
-    max_cores = max_rows * max_cols
-    possible_cores = [c for c in range(1, max_cores + 1) if k_tiles % c == 0 and n_tiles % c == 0]
-    possible_cores.sort(reverse=True)
-    for cores in possible_cores:
-        for rows in range(1, max_rows + 1):
-            if cores % rows == 0:
-                cols = cores // rows
-                if cols <= max_cols:
-                    return rows, cols
-    raise AssertionError(f"Cannot find grid for K={k_tiles}, N={n_tiles} tiles")
-
-
-def _dram_shard_core_grid_k_n(k: int, n: int, tile_size: int = TILE_SIZE) -> ttnn.CoreGrid:
-    rows, cols = _find_grid_k_n(k // tile_size, n // tile_size)
-    return ttnn.CoreGrid(x=cols, y=rows)
-
-
-def _compute_kernel_config_hifi2() -> ttnn.WormholeComputeKernelConfig:
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-
-
-def _create_dram_sharded_mem_config(
-    k: int, n: int, dram_grid: ttnn.CoreRangeSet, tile_size: int = TILE_SIZE, dram_cores: int = 12
-) -> ttnn.MemoryConfig:
-    padded_size = math.ceil(n / (tile_size * dram_cores)) * (tile_size * dram_cores)
-    shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-
-
-def _default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
-        return ttnn.Topology.Ring
-    elif num_devices > 1:
-        return ttnn.Topology.Linear
-    return None
-
 
 # =============================================================================
 # Config dataclass
@@ -427,7 +357,6 @@ def _resolve_lm_head_1d_config(config: LMHead1DConfig) -> LMHead1DConfig:
 
     # Program configs
     num_devices = mesh_device.get_num_devices()
-    tile_padded_batch_rows = TILE_SIZE * math.ceil(config.max_batch_size / TILE_SIZE)
 
     if config.program_configs is None:
         # Use None program configs for auto-resolve (let ttnn.linear auto-select).
@@ -437,11 +366,6 @@ def _resolve_lm_head_1d_config(config: LMHead1DConfig) -> LMHead1DConfig:
         to_set["program_configs"] = pcs
 
     # Weight memory configs + resolve LazyWeights
-    dram_size = mesh_device.dram_grid_size()
-    dram_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_size.x - 1, dram_size.y - 1))}
-    )
-
     if config.weights_memcfgs is None:
         # Use regular DRAM for auto-resolve (DRAM sharded requires DRAM-core-aligned padding
         # which is handled by from_model_args when it explicitly provides weights_memcfgs)
@@ -470,8 +394,6 @@ def _resolve_lm_head_1d_config(config: LMHead1DConfig) -> LMHead1DConfig:
         )
     to_set["output_weights"] = resolved_weights
 
-    from dataclasses import replace
-
     resolved = replace(config, **to_set)
     return resolved
 
@@ -489,3 +411,37 @@ def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: LMHead1DConfi
         return resolved_x.get_device_weight()
     assert isinstance(x, ttnn.Tensor)
     return x
+
+
+# =============================================================================
+# Config helper functions (adapted from TTTv1 model_config.py)
+# =============================================================================
+
+
+def _compute_kernel_config_hifi2() -> ttnn.WormholeComputeKernelConfig:
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def _create_dram_sharded_mem_config(
+    k: int, n: int, dram_grid: ttnn.CoreRangeSet, tile_size: int = TILE_SIZE, dram_cores: int = 12
+) -> ttnn.MemoryConfig:
+    padded_size = math.ceil(n / (tile_size * dram_cores)) * (tile_size * dram_cores)
+    shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+
+def _default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
+    num_devices = mesh_device.get_num_devices()
+    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+        ttnn.cluster.ClusterType.T3K,
+        ttnn.cluster.ClusterType.GALAXY,
+    ]:
+        return ttnn.Topology.Ring
+    elif num_devices > 1:
+        return ttnn.Topology.Linear
+    return None

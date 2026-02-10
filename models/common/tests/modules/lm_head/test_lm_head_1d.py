@@ -24,24 +24,6 @@ from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 # ============================================================================
-# Constants from lm_head_1d_test_cases.csv
-# ============================================================================
-
-LLAMA_1B = "meta-llama/Llama-3.2-1B-Instruct"
-LLAMA_3B = "meta-llama/Llama-3.2-3B-Instruct"
-LLAMA_8B = "meta-llama/Llama-3.1-8B-Instruct"
-LLAMA_11B = "meta-llama/Llama-3.2-11B-Vision-Instruct"
-LLAMA_70B = "meta-llama/Llama-3.3-70B-Instruct"
-MISTRAL_7B = "mistralai/Mistral-7B-Instruct-v0.3"
-QWEN2_7B = "Qwen/Qwen2-7B-Instruct"
-QWEN25_7B = "Qwen/Qwen2.5-7B-Instruct"
-QWEN25_72B = "Qwen/Qwen2.5-72B-Instruct"
-QWEN25_CODER_32B = "Qwen/Qwen2.5-Coder-32B-Instruct"
-QWEN3_32B = "Qwen/Qwen3-32B"
-DEEPSEEK_R1_14B = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
-
-
-# ============================================================================
 # Unit Tests - No device required
 # ============================================================================
 
@@ -70,6 +52,105 @@ def test_lm_head_1d_config_defaults():
     assert config.program_configs is None
     assert config.compute_kernel_config is None
     assert config.ccl_dtype == ttnn.bfloat8_b
+
+
+def test_lm_head_1d_config_is_resolved_single_device():
+    """Test is_resolved() treats topology as optional for single-device mesh."""
+    from unittest.mock import MagicMock
+
+    mock_device = MagicMock()
+    mock_device.get_num_devices.return_value = 1
+
+    config = LMHead1DConfig(
+        output_weights=[MagicMock()],
+        mesh_device=mock_device,
+        tt_ccl=MagicMock(),
+        topology=None,  # None is OK for single device
+        dim=4096,
+        program_configs=[None],
+        compute_kernel_config=MagicMock(),
+        output_memcfg=MagicMock(),
+        weights_memcfgs=[MagicMock()],
+    )
+    assert config.is_resolved()
+
+
+def test_lm_head_1d_config_is_resolved_multi_device_needs_topology():
+    """Test is_resolved() requires topology for multi-device mesh."""
+    from unittest.mock import MagicMock
+
+    mock_device = MagicMock()
+    mock_device.get_num_devices.return_value = 8
+
+    config = LMHead1DConfig(
+        output_weights=[MagicMock()],
+        mesh_device=mock_device,
+        tt_ccl=MagicMock(),
+        topology=None,  # Missing! Multi-device needs this
+        dim=4096,
+        program_configs=[None],
+        compute_kernel_config=MagicMock(),
+        output_memcfg=MagicMock(),
+        weights_memcfgs=[MagicMock()],
+    )
+    assert not config.is_resolved()
+
+
+def test_compute_kernel_config_hifi2():
+    """Test _compute_kernel_config_hifi2 returns valid config."""
+    from models.common.modules.lm_head.lm_head_1d import _compute_kernel_config_hifi2
+
+    cfg = _compute_kernel_config_hifi2()
+    assert cfg.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert cfg.packer_l1_acc is True
+    assert cfg.fp32_dest_acc_en is False
+
+
+def test_create_dram_sharded_mem_config():
+    """Test _create_dram_sharded_mem_config produces valid MemoryConfig."""
+    from models.common.modules.lm_head.lm_head_1d import _create_dram_sharded_mem_config
+
+    dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})
+    mc = _create_dram_sharded_mem_config(k=4096, n=16032, dram_grid=dram_grid, dram_cores=12)
+    assert mc.is_sharded()
+    assert mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    assert mc.buffer_type == ttnn.BufferType.DRAM
+
+
+def test_default_topology():
+    """Test _default_topology returns correct topology."""
+    from unittest.mock import MagicMock
+
+    from models.common.modules.lm_head.lm_head_1d import _default_topology
+
+    # Single device -> None
+    mock_single = MagicMock()
+    mock_single.get_num_devices.return_value = 1
+    assert _default_topology(mock_single) is None
+
+    # 2 devices -> Linear
+    mock_n300 = MagicMock()
+    mock_n300.get_num_devices.return_value = 2
+    assert _default_topology(mock_n300) == ttnn.Topology.Linear
+
+
+def test_from_model_args_rejects_galaxy():
+    """Test from_model_args raises for Galaxy devices."""
+    from unittest.mock import MagicMock
+
+    mock_args = MagicMock()
+    mock_args.is_galaxy = True
+
+    with pytest.raises(ValueError, match="Galaxy"):
+        LMHead1D.from_model_args(
+            mesh_device=MagicMock(),
+            tt_ccl=MagicMock(),
+            args=mock_args,
+            state_dict={},
+            state_dict_prefix="",
+            weight_cache_path="",
+            max_columns_per_device=32000,
+        )
 
 
 # ============================================================================
@@ -116,13 +197,24 @@ def _prepare_lm_head_weights(
 
 
 # ============================================================================
-# Integration Tests - Require device
+# Model names from HF to cover in tests
 # ============================================================================
 
-_slow = pytest.mark.slow
+LLAMA_1B = "meta-llama/Llama-3.2-1B-Instruct"
+LLAMA_3B = "meta-llama/Llama-3.2-3B-Instruct"
+LLAMA_8B = "meta-llama/Llama-3.1-8B-Instruct"
+LLAMA_11B = "meta-llama/Llama-3.2-11B-Vision-Instruct"
+LLAMA_70B = "meta-llama/Llama-3.3-70B-Instruct"
+MISTRAL_7B = "mistralai/Mistral-7B-Instruct-v0.3"
+QWEN2_7B = "Qwen/Qwen2-7B-Instruct"
+QWEN25_7B = "Qwen/Qwen2.5-7B-Instruct"
+QWEN25_72B = "Qwen/Qwen2.5-72B-Instruct"
+QWEN25_CODER_32B = "Qwen/Qwen2.5-Coder-32B-Instruct"
+QWEN3_32B = "Qwen/Qwen3-32B"
+DEEPSEEK_R1_14B = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
 
-# Collected from lm_head_1d_test_cases.csv (deduplicated)
-# Format: (mesh_shape, dim, vocab_size, num_splits, max_columns_per_device, hf_model_name)
+
+_slow = pytest.mark.slow
 
 
 def _list_test_cases() -> list[pytest.param]:
