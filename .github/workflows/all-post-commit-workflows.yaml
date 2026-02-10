@@ -231,6 +231,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
 
   # FD Model Tests
   models-unit-tests:
@@ -252,6 +253,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
 
   tt-train-cpp-unit-tests:
     needs: [build-artifact, tests-to-run]
@@ -273,6 +275,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
 
   run-profiler-regression:
     needs: [build-artifact, tests-to-run]
@@ -296,6 +299,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
     if: ${{ needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
     needs: [build-artifact, tests-to-run]
@@ -308,6 +312,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
 
   ops-unit-tests:
     needs: [build-artifact, tests-to-run]
@@ -329,6 +334,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
   # Enable ops-sanity workflow after issue:30675 resolved
   # ops-sanity:
   #   needs: build-artifact
