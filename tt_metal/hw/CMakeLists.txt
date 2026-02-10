@@ -358,7 +358,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal
         -I${PROJECT_SOURCE_DIR}/tt_metal/api
         -I${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
-        -I${PROJECT_SOURCE_DIR}/tt_metal/include
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-1xx
@@ -417,7 +417,7 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
         -I${PROJECT_SOURCE_DIR}/tt_metal
         -I${PROJECT_SOURCE_DIR}/tt_metal/api
         -I${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
-        -I${PROJECT_SOURCE_DIR}/tt_metal/include
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/api/debug
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
@@ -535,6 +535,108 @@ target_sources(
             inc/api/tensor/shard_pages_address_iterator.h
             inc/api/tensor/pages_address_iterator.h
             inc/api/tensor/page.h
+            # Compute API Headers (migrated from tt_metal/include)
+            inc/api/compute/compute_kernel_api.h
+            inc/api/compute/add_int_sfpu.h
+            inc/api/compute/bcast.h
+            inc/api/compute/binary_bitwise_sfpu.h
+            inc/api/compute/binary_comp.h
+            inc/api/compute/binary_max_min.h
+            inc/api/compute/binary_shift.h
+            inc/api/compute/blank.h
+            inc/api/compute/cb_api.h
+            inc/api/compute/common.h
+            inc/api/compute/common_globals.h
+            inc/api/compute/compute_kernel_hw_startup.h
+            inc/api/compute/copy_dest_values.h
+            inc/api/compute/cumsum.h
+            inc/api/compute/div_int32_floor.h
+            inc/api/compute/div_int32_sfpu.h
+            inc/api/compute/eltwise_binary.h
+            inc/api/compute/eltwise_binary_sfpu.h
+            inc/api/compute/eltwise_unary/README.md
+            inc/api/compute/eltwise_unary/activations.h
+            inc/api/compute/eltwise_unary/addcdiv.h
+            inc/api/compute/eltwise_unary/addcmul.h
+            inc/api/compute/eltwise_unary/binop_with_scalar.h
+            inc/api/compute/eltwise_unary/bitwise_and.h
+            inc/api/compute/eltwise_unary/bitwise_not.h
+            inc/api/compute/eltwise_unary/bitwise_or.h
+            inc/api/compute/eltwise_unary/bitwise_xor.h
+            inc/api/compute/eltwise_unary/cbrt.h
+            inc/api/compute/eltwise_unary/clamp.h
+            inc/api/compute/eltwise_unary/comp.h
+            inc/api/compute/eltwise_unary/dropout.h
+            inc/api/compute/eltwise_unary/eltwise_unary.h
+            inc/api/compute/eltwise_unary/elu.h
+            inc/api/compute/eltwise_unary/erf_erfc.h
+            inc/api/compute/eltwise_unary/erfinv.h
+            inc/api/compute/eltwise_unary/exp.h
+            inc/api/compute/eltwise_unary/fill.h
+            inc/api/compute/eltwise_unary/fmod.h
+            inc/api/compute/eltwise_unary/gelu.h
+            inc/api/compute/eltwise_unary/hardmish.h
+            inc/api/compute/eltwise_unary/hardtanh.h
+            inc/api/compute/eltwise_unary/i0.h
+            inc/api/compute/eltwise_unary/i1.h
+            inc/api/compute/eltwise_unary/identity.h
+            inc/api/compute/eltwise_unary/isinf_isnan.h
+            inc/api/compute/eltwise_unary/left_shift.h
+            inc/api/compute/eltwise_unary/log1p.h
+            inc/api/compute/eltwise_unary/logical_not_noti.h
+            inc/api/compute/eltwise_unary/negative.h
+            inc/api/compute/eltwise_unary/prelu.h
+            inc/api/compute/eltwise_unary/rand.h
+            inc/api/compute/eltwise_unary/rdiv.h
+            inc/api/compute/eltwise_unary/recip.h
+            inc/api/compute/eltwise_unary/relu.h
+            inc/api/compute/eltwise_unary/remainder.h
+            inc/api/compute/eltwise_unary/reverseops.h
+            inc/api/compute/eltwise_unary/right_shift.h
+            inc/api/compute/eltwise_unary/rounding.h
+            inc/api/compute/eltwise_unary/rpow.h
+            inc/api/compute/eltwise_unary/rsqrt.h
+            inc/api/compute/eltwise_unary/rsub.h
+            inc/api/compute/eltwise_unary/selu.h
+            inc/api/compute/eltwise_unary/sfpu_int_sum.h
+            inc/api/compute/eltwise_unary/sfpu_split_includes.h
+            inc/api/compute/eltwise_unary/softplus.h
+            inc/api/compute/eltwise_unary/sqrt.h
+            inc/api/compute/eltwise_unary/threshold.h
+            inc/api/compute/eltwise_unary/trigonometry.h
+            inc/api/compute/eltwise_unary/typecast.h
+            inc/api/compute/eltwise_unary/where.h
+            inc/api/compute/ema.h
+            inc/api/compute/experimental/mul_reduce_scalar.h
+            inc/api/compute/fmod_int32.h
+            inc/api/compute/gcd.h
+            inc/api/compute/layernorm.h
+            inc/api/compute/lcm.h
+            inc/api/compute/logsigmoid.h
+            inc/api/compute/mask.h
+            inc/api/compute/matmul.h
+            inc/api/compute/mul_int_sfpu.h
+            inc/api/compute/pack.h
+            inc/api/compute/pack_untilize.h
+            inc/api/compute/quantization.h
+            inc/api/compute/reconfig_data_format.h
+            inc/api/compute/reduce.h
+            inc/api/compute/reduce_custom.h
+            inc/api/compute/reg_api.h
+            inc/api/compute/remainder_int32.h
+            inc/api/compute/reshuffle.h
+            inc/api/compute/sentinel/compute_kernel_sentinel.h
+            inc/api/compute/sentinel/sentinel_core.h
+            inc/api/compute/sentinel/testing_spy.h
+            inc/api/compute/softmax.h
+            inc/api/compute/sub_int_sfpu.h
+            inc/api/compute/tile_move_copy.h
+            inc/api/compute/tilize.h
+            inc/api/compute/transpose_wh.h
+            inc/api/compute/transpose_wh_dest.h
+            inc/api/compute/untilize.h
+            inc/api/compute/welford.h
+            inc/api/compute/xlogy.h
             # Experimental 2.0 Headers
             inc/experimental/lock.h
             inc/experimental/noc.h

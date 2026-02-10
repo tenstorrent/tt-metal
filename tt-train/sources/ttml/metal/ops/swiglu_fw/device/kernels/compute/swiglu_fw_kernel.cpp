@@ -1,18 +1,17 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/copy_dest_values.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/common.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
-namespace NAMESPACE {
 
 // ----------------------------------------------------------------------
 // Problem:
@@ -163,7 +162,7 @@ inline void mul_MxW2_accumulate_Y(uint32_t k_block_size, uint32_t c_block_size, 
 //         Y_partial[r, c] += sum_k( M[r, k] * W2[k, c] )
 //     store Y_partial[r,c] → Y[r,c]
 // ============================================================================
-inline void MAIN {
+void kernel_main() {
     init_sfpu(cb_input_idx, cb_y_idx);
     binary_op_init_common(cb_input_idx, cb_w1_idx, cb_y_idx);
     for (uint32_t r = 0; r < num_rows_per_core; ++r) {
@@ -196,5 +195,3 @@ inline void MAIN {
         }
     }
 }
-
-}  // namespace NAMESPACE

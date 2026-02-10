@@ -72,7 +72,7 @@ on:
       - "(Galaxy) Multi-user Isolation Tests"
       - "(Galaxy) demo tests"
       - "(Galaxy) integration tests"
-      - "(Galaxy) model perf tests"
+      - "(Galaxy) perf tests"
       - "(Galaxy) e2e tests"
       - "(Galaxy) profiler tests"
       - "(Galaxy) Stress"
@@ -104,6 +104,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            infra
+          sparse-checkout-cone-mode: true
       - name: Output (safe) pipeline values
         run: |
           echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
@@ -213,6 +218,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            infra
+          sparse-checkout-cone-mode: true
       - uses: actions/setup-python@v5.0.0
         with:
           python-version: '3.10'
