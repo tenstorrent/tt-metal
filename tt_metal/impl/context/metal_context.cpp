@@ -134,6 +134,8 @@ void MetalContext::initialize_device_manager(
     size_t worker_l1_size,
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
+    // Ensure hardware resources are available (backward compatibility: auto-create if not explicitly created).
+    create_cluster();
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
     device_manager_->initialize(
         device_ids,
@@ -153,6 +155,9 @@ void MetalContext::initialize(
     size_t worker_l1_size,
     bool minimal) {
     ZoneScoped;
+
+    // Ensure hardware resources are available (backward compatibility: auto-create if not explicitly created).
+    create_cluster();
 
     // Workaround for galaxy, need to always re-init
     if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster()) {
@@ -452,49 +457,17 @@ MetalContext& MetalContext::instance() {
 //
 // This function won't be needed when MetalContext has explicit lifetime management.
 void MetalContext::reinitialize_for_real_hardware() {
-    std::lock_guard<std::mutex> lock(reinitialization_mutex_);
+    std::lock_guard<std::mutex> lock(cluster_lifecycle_mutex_);
 
     // Check if device_manager_ is initialized (MetalContext must be fully constructed)
     TT_FATAL(device_manager_ != nullptr, "Cannot reinitialize MetalContext before it is fully initialized");
 
-    // Check if any devices are actually active (not just if MetalContext was initialized)
-    // Note: initialized_ flag doesn't get reset until process exit, so we check active devices instead
-    auto active_devices = device_manager_->get_all_active_devices();
-    TT_FATAL(
-        active_devices.empty(),
-        "Cannot switch to real hardware while {} device(s) are active. Close all devices first by calling "
-        "MeshDevice::close() or letting the device go out of scope.",
-        active_devices.size());
-
     log_info(tt::LogMetal, "Reinitializing MetalContext for real hardware (switching from mock mode)");
 
+    // Use lock-free internal versions since we already hold cluster_lifecycle_mutex_.
+    destroy_cluster_impl();
     rtoptions_.clear_mock_cluster_desc();
-    teardown_base_objects();
-    initialize_base_objects();
-
-    // Clear and reinitialize device-specific maps: they contain data computed from the old cluster_/hal_ objects and
-    // must be cleared after switching to the new cluster configuration.
-    dram_bank_offset_map_.clear();
-    l1_bank_offset_map_.clear();
-    dram_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.clear();
-    worker_logical_col_to_virtual_col_.clear();
-    worker_logical_row_to_virtual_row_.clear();
-
-    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
-    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
-    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
-    for (ChipId device_id : cluster_->all_chip_ids()) {
-        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
-        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
-        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
-        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
-    }
+    create_cluster_impl();
 
     log_info(tt::LogMetal, "MetalContext reinitialized with real hardware");
 }
@@ -536,22 +509,16 @@ void MetalContext::initialize_base_objects() {
     }
 }
 
-MetalContext::MetalContext() {
-    // Check if mock mode was configured via API (before env vars take effect)
-    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
-        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-    }
+void MetalContext::populate_device_maps() {
+    // Initialize container members to allow threadsafe operations on them later.
+    // Requires cluster_ to be initialized.
+    dram_bank_offset_map_.clear();
+    l1_bank_offset_map_.clear();
+    dram_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.clear();
+    worker_logical_col_to_virtual_col_.clear();
+    worker_logical_row_to_virtual_row_.clear();
 
-    // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
-    // to initialize the control plane.
-    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
-        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
-    }
-
-    initialize_base_objects();
-
-    // Initialize some container members to allow threadsafe operations on them later
     dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
     l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
     dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
@@ -566,6 +533,81 @@ MetalContext::MetalContext() {
         worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
         worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
+}
+
+void MetalContext::create_cluster() {
+    std::lock_guard<std::mutex> lock(cluster_lifecycle_mutex_);
+    create_cluster_impl();
+}
+
+void MetalContext::destroy_cluster() {
+    std::lock_guard<std::mutex> lock(cluster_lifecycle_mutex_);
+    destroy_cluster_impl();
+}
+
+void MetalContext::create_cluster_impl() {
+    if (cluster_initialized_) {
+        return;
+    }
+
+    initialize_base_objects();
+    populate_device_maps();
+    cluster_initialized_ = true;
+}
+
+void MetalContext::destroy_cluster_impl() {
+    if (!cluster_initialized_) {
+        return;
+    }
+
+    // Ensure no devices are active before releasing hardware resources.
+    if (device_manager_) {
+        auto active_devices = device_manager_->get_all_active_devices();
+        TT_FATAL(
+            active_devices.empty(),
+            "Cannot destroy cluster while {} device(s) are active. Close all devices first by calling "
+            "MeshDevice::close() or letting the device go out of scope.",
+            active_devices.size());
+    }
+
+    // Note: we intentionally do NOT call teardown() here. teardown() performs dispatch/firmware-level
+    // cleanup that interacts with the cluster (hardware reads/writes, core assertions, etc.) and resets
+    // dispatch state. This is inappropriate during cluster destruction because:
+    //   1. The cluster is about to be destroyed - hardware interactions are wasteful/dangerous.
+    //   2. Dispatch state (dispatch_core_manager, etc.) will be rebuilt by the next initialize() call,
+    //      which has its own reinit logic to detect stale state.
+    //   3. Device-level dispatch teardown already happens when devices are closed (which we assert above).
+    // The initialized_ flag is reset so the next initialize() call does a full fresh initialization.
+    initialized_ = false;
+
+    teardown_base_objects();
+
+    // Clear device-specific maps that depend on cluster state.
+    dram_bank_offset_map_.clear();
+    l1_bank_offset_map_.clear();
+    dram_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.clear();
+    worker_logical_col_to_virtual_col_.clear();
+    worker_logical_row_to_virtual_row_.clear();
+
+    cluster_initialized_ = false;
+}
+
+MetalContext::MetalContext() {
+    // Check if mock mode was configured via API (before env vars take effect)
+    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
+        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
+    }
+
+    // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
+    // to initialize the control plane.
+    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
+        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
+    }
+
+    // Hardware resources are acquired explicitly via create_cluster(), not here.
+    // This keeps the constructor lightweight (no UMD/hardware connections).
 
     device_manager_ = std::make_unique<DeviceManager>();
 
@@ -598,7 +640,10 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
 
 MetalContext::~MetalContext() {
     device_manager_.reset();
-    teardown_base_objects();
+    if (cluster_initialized_) {
+        teardown_base_objects();
+        cluster_initialized_ = false;
+    }
 }
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }

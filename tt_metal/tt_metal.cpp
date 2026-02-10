@@ -375,6 +375,7 @@ std::map<ChipId, IDevice*> CreateDevices(
     [[maybe_unused]] bool ignored,
     bool initialize_fabric_and_dispatch_fw) {
     ZoneScoped;
+    MetalContext::instance().create_cluster();
     bool is_galaxy = MetalContext::instance().get_cluster().is_galaxy_cluster();
     MetalContext::instance().initialize_device_manager(
         device_ids,
@@ -988,17 +989,30 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 
 }  // namespace detail
 
-size_t GetNumAvailableDevices() { return MetalContext::instance().get_cluster().number_of_user_devices(); }
+size_t GetNumAvailableDevices() {
+    MetalContext::instance().create_cluster();
+    return MetalContext::instance().get_cluster().number_of_user_devices();
+}
 
-bool IsGalaxyCluster() { return MetalContext::instance().get_cluster().is_galaxy_cluster(); }
+bool IsGalaxyCluster() {
+    MetalContext::instance().create_cluster();
+    return MetalContext::instance().get_cluster().is_galaxy_cluster();
+}
 
-size_t GetNumPCIeDevices() { return MetalContext::instance().get_cluster().number_of_pci_devices(); }
+size_t GetNumPCIeDevices() {
+    MetalContext::instance().create_cluster();
+    return MetalContext::instance().get_cluster().number_of_pci_devices();
+}
 
 ChipId GetPCIeDeviceID(ChipId device_id) {
+    MetalContext::instance().create_cluster();
     return MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
-ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
+ClusterType GetClusterType() {
+    MetalContext::instance().create_cluster();
+    return MetalContext::instance().get_cluster().get_cluster_type();
+}
 
 std::string SerializeClusterDescriptor() {
     std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
@@ -1017,6 +1031,7 @@ IDevice* CreateDevice(
     const std::vector<uint32_t>& l1_bank_remap,
     const size_t worker_l1_size) {
     ZoneScoped;
+    MetalContext::instance().create_cluster();
 
     // MMIO devices do not support dispatch on galaxy cluster
     // Suggest the user to use the CreateDevices API

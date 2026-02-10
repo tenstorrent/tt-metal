@@ -41,9 +41,9 @@ class DispatchMemMap;
 class NOCDebugState;
 
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
-// Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
-// Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
-// only accessible after that.
+// Hardware resources (Cluster, Hal, DistributedContext) are acquired explicitly via create_cluster() and released via
+// destroy_cluster(). Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a
+// MetalContext::initialize() call, and only accessible after that.
 class MetalContext {
 public:
     MetalContext& operator=(const MetalContext&) = delete;
@@ -51,6 +51,18 @@ public:
     MetalContext(const MetalContext&) = delete;
     MetalContext(MetalContext&& other) noexcept = delete;
     static MetalContext& instance();
+
+    // Explicitly acquire hardware resources (Cluster, Hal, DistributedContext).
+    // Must be called before get_cluster(), hal(), or any hardware-dependent operation.
+    // Idempotent: safe to call multiple times.
+    void create_cluster();
+
+    // Explicitly release hardware resources.
+    // Requires all devices to be closed first (no active devices in DeviceManager).
+    void destroy_cluster();
+
+    // Returns true if create_cluster() has been called and hardware resources are available.
+    bool is_cluster_initialized() const { return cluster_initialized_; }
 
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
@@ -157,6 +169,11 @@ private:
     void teardown_fabric_config();
     void teardown_base_objects();
     void initialize_base_objects();
+    void populate_device_maps();
+
+    // Lock-free implementations called under cluster_lifecycle_mutex_.
+    void create_cluster_impl();
+    void destroy_cluster_impl();
 
     void reset_cores(ChipId device_id);
     void assert_cores(ChipId device_id);
@@ -190,6 +207,7 @@ private:
     dev_msgs::core_info_msg_t populate_core_info_msg(
         ChipId device_id, HalProgrammableCoreType programmable_core_type) const;
 
+    bool cluster_initialized_ = false;
     bool initialized_ = false;
     bool teardown_registered_ = false;
     bool force_reinit_ = false;
@@ -212,8 +230,9 @@ private:
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
 
-    // Mutex to protect reinitialization operations (switching between mock and real hardware)
-    std::mutex reinitialization_mutex_;
+    // Mutex to protect cluster lifecycle transitions (create_cluster, destroy_cluster, reinitialize_for_real_hardware).
+    // Serializes all operations that create or destroy the Cluster/Hal/DistributedContext objects.
+    std::mutex cluster_lifecycle_mutex_;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;

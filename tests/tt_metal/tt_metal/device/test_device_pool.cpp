@@ -30,6 +30,7 @@ void CloseDevicesInPool() {
 }
 
 TEST(DevicePool, DevicePoolOpenClose) {
+    MetalContext::instance().create_cluster();
     auto all_chip_ids = MetalContext::instance().get_cluster().all_chip_ids();
     std::vector<ChipId> device_ids{all_chip_ids.begin(), all_chip_ids.end()};
     int num_hw_cqs = 1;
@@ -48,6 +49,7 @@ TEST(DevicePool, DevicePoolOpenClose) {
 }
 
 TEST(DevicePool, DevicePoolReconfigDevices) {
+    MetalContext::instance().create_cluster();
     std::vector<ChipId> device_ids{*MetalContext::instance().get_cluster().all_chip_ids().begin()};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
@@ -81,6 +83,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
 }
 
 TEST(DevicePool, DevicePoolAddDevices) {
+    MetalContext::instance().create_cluster();
     if (GetNumAvailableDevices() != 8) {
         GTEST_SKIP();
     }
@@ -113,6 +116,7 @@ TEST(DevicePool, DevicePoolAddDevices) {
 }
 
 TEST(DevicePool, DevicePoolReduceDevices) {
+    MetalContext::instance().create_cluster();
     if (GetNumAvailableDevices() != 8) {
         GTEST_SKIP();
     }
