@@ -50,11 +50,11 @@ def create_program_descriptor(
     Wt = W // 32  # Number of tiles along width
     Ht = H // 32  # Number of tiles along height
 
-    # Calculate total number of rows/sticks (all batch dims * H)
+    # Calculate total number of rows/sticks (product of all dims except the last)
+    # For shape (N, C, H, W): num_sticks = N * C * H
     num_sticks = 1
     for i in range(len(input_shape) - 1):
         num_sticks *= input_shape[i]
-    num_sticks *= H
 
     # Number of tile-rows to process
     num_tile_rows = num_sticks // 32
@@ -115,16 +115,18 @@ def create_program_descriptor(
         )
     )
 
-    # c_1: Reduce scaler tile (1 tile)
+    # c_1: Reduce scaler tile (1 tile) - ALWAYS bfloat16
+    # The reduce hardware scaler is always in bfloat16 format regardless of input dtype.
+    bf16_tile_size = ttnn.tile_size(ttnn.bfloat16)
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=tile_size,
+            total_size=bf16_tile_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=1,
-                    data_format=input_data_format,
-                    page_size=tile_size,
+                    data_format=ttnn.bfloat16,
+                    page_size=bf16_tile_size,
                 )
             ],
         )
@@ -356,28 +358,30 @@ def create_program_descriptor(
     )
 
     # ========== 4. PREPARE SCALAR VALUES ==========
-    # Pack reduce scaler (1/W) in the correct format
-    # For bfloat16: (bf16 << 16 | bf16) format
-    # For float32: raw float32 bits
+
+    # Helper: pack float as bfloat16 double-packed: (bf16 << 16 | bf16)
+    def pack_bf16(value):
+        float_bits = struct.unpack(">I", struct.pack(">f", value))[0]
+        bf16_bits = (float_bits >> 16) & 0xFFFF
+        return (bf16_bits << 16) | bf16_bits
+
+    # Helper: pack float as raw float32 bits
+    def pack_f32(value):
+        return struct.unpack(">I", struct.pack(">f", value))[0]
+
+    # Reduce scaler (1/W): ALWAYS bfloat16 packed (bf16 << 16 | bf16)
+    # The reduce hardware scaler tile is always in bfloat16 format,
+    # regardless of the input data format.
     scaler_value = 1.0 / float(W)
+    reduce_scaler = pack_bf16(scaler_value)
 
+    # Epsilon scalar: depends on the data format
+    # For bfloat16: (bf16 << 16 | bf16)
+    # For float32: raw float32 bits
     if dtype == ttnn.bfloat16:
-        # Convert to bfloat16 representation (truncate float32 mantissa)
-        float_bits = struct.unpack(">I", struct.pack(">f", scaler_value))[0]
-        bf16_bits = (float_bits >> 16) & 0xFFFF
-        # Pack as (bf16 << 16 | bf16)
-        reduce_scaler = (bf16_bits << 16) | bf16_bits
+        eps_scalar = pack_bf16(epsilon)
     else:  # float32
-        # Pack as raw float32 bits
-        reduce_scaler = struct.unpack(">I", struct.pack(">f", scaler_value))[0]
-
-    # Pack epsilon scalar in the same format
-    if dtype == ttnn.bfloat16:
-        float_bits = struct.unpack(">I", struct.pack(">f", epsilon))[0]
-        bf16_bits = (float_bits >> 16) & 0xFFFF
-        eps_scalar = (bf16_bits << 16) | bf16_bits
-    else:  # float32
-        eps_scalar = struct.unpack(">I", struct.pack(">f", epsilon))[0]
+        eps_scalar = pack_f32(epsilon)
 
     # ========== 5. KERNEL DESCRIPTORS ==========
 
@@ -413,7 +417,10 @@ def create_program_descriptor(
         core_ranges=core_grid,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
-        config=ttnn.ReaderConfigDescriptor(),
+        config=ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_0,
+            noc=ttnn.NOC.RISCV_0_default,
+        ),
     )
 
     # --- Writer kernel ---
@@ -436,7 +443,10 @@ def create_program_descriptor(
         core_ranges=core_grid,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
-        config=ttnn.WriterConfigDescriptor(),
+        config=ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_1,
+            noc=ttnn.NOC.RISCV_1_default,
+        ),
     )
 
     # --- Compute kernel ---
