@@ -750,7 +750,11 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         // Use calculator to compute command sequence size
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_packed_large_unicast(write_sub_cmds.size());
-        calculator.add_prefetch_relay_linear_packed(relay_sub_cmds.size());
+        if (dispatch_params.remote_chip) {
+            calculator.add_prefetch_relay_linear_packed_h(relay_sub_cmds.size());
+        } else {
+            calculator.add_prefetch_relay_linear_packed(relay_sub_cmds.size());
+        }
 
         const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
         void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
@@ -761,8 +765,13 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, l1_alignment, write_sub_cmds.size(), write_sub_cmds);
 
         // Add relay linear packed command
-        command_sequence.add_prefetch_relay_linear_packed(
-            pinned_src_noc_xy, total_relay_length, relay_sub_cmds, relay_sub_cmds.size(), 0);
+        if (dispatch_params.remote_chip) {
+            command_sequence.add_prefetch_relay_linear_packed_h(
+                pinned_src_noc_xy, total_relay_length, relay_sub_cmds, relay_sub_cmds.size(), 0);
+        } else {
+            command_sequence.add_prefetch_relay_linear_packed(
+                pinned_src_noc_xy, total_relay_length, relay_sub_cmds, relay_sub_cmds.size(), 0);
+        }
 
         TT_ASSERT(
             command_sequence.write_offset_bytes() == cmd_sequence_sizeB,
@@ -1156,7 +1165,8 @@ bool write_to_device_buffer(
         if (has_pinned_inputs && is_unpadded) {
             auto device_id = buffer.device()->id();
             auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
-            if (noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == device_id) {
+            if (noc_addr_pair_opt.has_value()) {
+                remote_chip = noc_addr_pair_opt->device_id != device_id;
                 const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
                 const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
                 const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
