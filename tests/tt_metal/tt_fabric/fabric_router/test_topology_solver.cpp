@@ -8,15 +8,20 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "tt_cluster.hpp"
 #include "tt_metal/fabric/topology_solver_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
+#include <tt-metalium/experimental/mock_device.hpp>
 
 namespace tt::tt_fabric {
 
 class TopologySolverTest : public ::testing::Test {
 protected:
+    // Cluster type doesn't matter as this test suite is CPU only
+    const tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
+
     void SetUp() override { setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "10", 1); }
 
     void TearDown() override {}
@@ -31,7 +36,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
 
     // Create mesh graph from descriptor
-    auto mesh_graph = MeshGraph(mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
 
     // Build adjacency map logical
     auto adjacency_map = build_adjacency_map_logical(mesh_graph);
@@ -83,7 +88,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{103}] = MeshHostRankId{0};
 
     // Build adjacency map physical
-    auto adjacency_map = build_adjacency_map_physical(physical_system_descriptor, asic_id_to_mesh_rank);
+    auto adjacency_map = build_adjacency_map_physical(cluster_type, physical_system_descriptor, asic_id_to_mesh_rank);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes";
@@ -2102,6 +2107,81 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_ResultStructure) {
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
     EXPECT_EQ(result.constraint_stats.required_satisfied, 1u) << "Should satisfy required constraint";
     EXPECT_GE(result.constraint_stats.preferred_satisfied, 0u) << "Should track preferred constraints";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogical_WithSwitchMeshes) {
+    // Test that topology solver works correctly with switch meshes
+    // Use T3K 2x2 TT-Switch MGD (has 1 compute mesh and 1 switch mesh)
+    // Use same infrastructure as BuildAdjacencyMapLogical test
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_ttswitch_mgd.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical - this should include both regular meshes and switch meshes
+    auto adjacency_map = build_adjacency_map_logical(mesh_graph);
+
+    // Verify that we have adjacency graphs for all meshes (including switches)
+    EXPECT_GT(adjacency_map.size(), 0u);
+
+    // Get all mesh IDs (includes switches)
+    auto all_mesh_ids = mesh_graph.get_all_mesh_ids();
+    auto compute_mesh_ids = mesh_graph.get_mesh_ids();  // Excludes switches
+    auto switch_ids = mesh_graph.get_switch_ids();
+
+    // Verify we have both compute meshes and switches
+    EXPECT_GT(compute_mesh_ids.size(), 0u);
+    EXPECT_GT(switch_ids.size(), 0u);
+
+    // Verify adjacency map includes all meshes (compute + switches)
+    EXPECT_EQ(adjacency_map.size(), all_mesh_ids.size());
+
+    // Verify each mesh (including switches) has a valid adjacency graph
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        const auto& nodes = adj_graph.get_nodes();
+        EXPECT_GT(nodes.size(), 0u) << "Mesh " << mesh_id.get() << " should have nodes";
+
+        // Verify that nodes belong to the correct mesh
+        for (const auto& node : nodes) {
+            EXPECT_EQ(node.mesh_id, mesh_id) << "Node should belong to mesh " << mesh_id.get();
+
+            // Verify we can query neighbors
+            const auto& neighbors = adj_graph.get_neighbors(node);
+            for (const auto& neighbor : neighbors) {
+                EXPECT_EQ(neighbor.mesh_id, mesh_id) << "Neighbor should belong to the same mesh " << mesh_id.get();
+            }
+        }
+
+        // Verify switch meshes have correct connectivity
+        if (mesh_graph.is_switch_mesh(mesh_id)) {
+            // Switches should have intra-switch connectivity (devices within the switch)
+            // For a 2x2 switch, we expect 4 devices with mesh connectivity
+            EXPECT_EQ(nodes.size(), 4u) << "2x2 switch should have 4 devices";
+
+            // Verify each device in the switch has neighbors (intra-switch connections)
+            for (const auto& node : nodes) {
+                const auto& neighbors = adj_graph.get_neighbors(node);
+                // In a 2x2 mesh, each device should have 2-4 neighbors depending on position
+                EXPECT_GT(neighbors.size(), 0u) << "Switch device should have neighbors";
+                EXPECT_LE(neighbors.size(), 4u) << "Switch device should have at most 4 neighbors";
+            }
+        }
+    }
+
+    // Verify we can distinguish between compute meshes and switches
+    for (const auto& mesh_id : compute_mesh_ids) {
+        EXPECT_FALSE(mesh_graph.is_switch_mesh(mesh_id)) << "Mesh " << mesh_id.get() << " should be a compute mesh";
+    }
+
+    for (const auto& switch_id : switch_ids) {
+        MeshId switch_mesh_id(*switch_id);
+        EXPECT_TRUE(mesh_graph.is_switch_mesh(switch_mesh_id))
+            << "Mesh " << switch_mesh_id.get() << " should be a switch mesh";
+    }
 }
 
 }  // namespace tt::tt_fabric

@@ -11,6 +11,7 @@
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <cstdlib>
 #include <cstring>
+#include <sys/mman.h>
 
 namespace tt::tt_metal::distributed {
 
@@ -18,12 +19,19 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
     uint32_t pcie_alignment) {
-    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc): aligned_alloc required for dynamic alignment
-    void* aligned_ptr = std::aligned_alloc(pcie_alignment, sizeof(uint32_t));
-    TT_FATAL(aligned_ptr != nullptr, "Failed to allocate aligned memory for host data buffer.");
+    // Use mmap to ensure page-aligned allocation that won't share pages with other PinnedMemory objects.
+    // This prevents failures when multiple sockets try to pin overlapping page regions to the NOC, since
+    // the driver does not allow this.
+    size_t page_size = sysconf(_SC_PAGESIZE);  // OS Specified Page Size
+    // Allocate a single page for the bytes_acked buffer, since its only 4 bytes.
+    void* aligned_ptr = mmap(nullptr, page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    TT_FATAL(aligned_ptr != MAP_FAILED, "Failed to allocate page-aligned memory for bytes_acked buffer.");
+    TT_FATAL(
+        reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
+        "System Memory Allocation Error: Bytes_acked buffer must be aligned to the PCIe alignment.");
     std::memset(aligned_ptr, 0, sizeof(uint32_t));
     host_buffer_ = std::shared_ptr<uint32_t[]>(
-        static_cast<uint32_t*>(aligned_ptr), [](uint32_t* p) { std::free(p); });  // NOLINT(cppcoreguidelines-no-malloc)
+        static_cast<uint32_t*>(aligned_ptr), [page_size](uint32_t* p) { munmap(p, page_size); });
     tt::tt_metal::HostBuffer bytes_acked_buffer_view(
         tt::stl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
@@ -45,16 +53,22 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
     uint32_t pcie_alignment) {
-    // Allocate 1 extra word at the end to store the bytes_acked value, which will be udpated by the
-    // receiver core.
+    // Use mmap to ensure page-aligned allocation that won't share pages with other PinnedMemory objects.
+    // This prevents failures when multiple sockets try to pin overlapping page regions to the NOC, since
+    // the driver does not allow this.
     uint32_t host_buffer_size_bytes = fifo_size_ + sizeof(uint32_t);
     uint32_t host_buffer_size_words = host_buffer_size_bytes / sizeof(uint32_t);
-    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc): aligned_alloc required for dynamic alignment
-    void* aligned_ptr = std::aligned_alloc(pcie_alignment, host_buffer_size_bytes);
-    TT_FATAL(aligned_ptr != nullptr, "Failed to allocate aligned memory for host data buffer.");
+    size_t page_size = sysconf(_SC_PAGESIZE);  // OS Specified Page Size
+    // Round up to page boundary
+    size_t alloc_size = align(host_buffer_size_bytes, page_size);
+    void* aligned_ptr = mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    TT_FATAL(aligned_ptr != MAP_FAILED, "Failed to allocate page-aligned memory for host data buffer.");
+    TT_FATAL(
+        reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
+        "System Memory Allocation Error: Host data buffer must be aligned to the PCIe alignment.");
     std::memset(aligned_ptr, 0, host_buffer_size_bytes);
     host_buffer_ = std::shared_ptr<uint32_t[]>(
-        static_cast<uint32_t*>(aligned_ptr), [](uint32_t* p) { std::free(p); });  // NOLINT(cppcoreguidelines-no-malloc)
+        static_cast<uint32_t*>(aligned_ptr), [alloc_size](uint32_t* p) { munmap(p, alloc_size); });
 
     tt::tt_metal::HostBuffer host_buffer_view(
         tt::stl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
@@ -222,6 +236,7 @@ H2DSocket::~H2DSocket() noexcept {
     // Realistically a hang should not be seen here since most user workloads
     // synchronize with the device before the application exits and destructors are called.
     barrier(1000);
+    pinned_memory_.reset();
 }
 
 void H2DSocket::reserve_bytes(uint32_t num_bytes) {

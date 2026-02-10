@@ -117,7 +117,7 @@ When you encounter issues that require escalation, use the following contacts an
 
 **Analyzing validation logs:**
 
-After running `run_validation_*.sh`, use the analysis script:
+After running `run_validation.sh`, use the analysis script:
 ```bash
 python3 tools/scaleout/exabox/analyze_validation_results.py validation_output/
 ```

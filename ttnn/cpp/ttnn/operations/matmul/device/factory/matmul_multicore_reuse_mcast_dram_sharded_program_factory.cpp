@@ -72,6 +72,8 @@ create_program_dram_sharded(
 
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+    TT_FATAL(
+        in1_buffer->shard_spec().orientation() == ShardOrientation::ROW_MAJOR, "Only ROW_MAJOR sharding is supported");
 
     tt_metal::Program program{};
 
@@ -113,6 +115,37 @@ create_program_dram_sharded(
 
     uint32_t per_core_N_compute = (N + num_dram_banks - 1) / num_dram_banks;
     uint32_t per_core_N_in1_sender = per_core_N_compute;
+
+    // Remove cores assigned to padding-only DRAM banks from the workers category
+    uint32_t in1_shard_width_tiles = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
+    uint32_t in1_tensor_padded_width_tiles = in1_shard_width_tiles * num_dram_banks;
+
+    if (in1_tensor_padded_width_tiles > N) {
+        uint32_t padding_width_tiles = in1_tensor_padded_width_tiles - N;
+        uint32_t only_padding_banks = padding_width_tiles / in1_shard_width_tiles;
+        TT_FATAL(
+            only_padding_banks < all_worker_cores_ordered.size(),
+            "Padding banks count {} must be less than workers count {}",
+            only_padding_banks,
+            all_worker_cores_ordered.size());
+        // Padding is stored in the high DRAM banks
+        for (uint32_t i = 0; i < only_padding_banks; ++i) {
+            all_worker_cores_ordered.pop_back();
+        }
+        // Create new workers CoreRangeSet from the trimmed list
+        std::set<CoreRange> new_workers_set;
+        for (const auto& worker_core : all_worker_cores_ordered) {
+            new_workers_set.insert(CoreRange(worker_core));
+        }
+        all_worker_cores = CoreRangeSet(new_workers_set);
+
+        // Update num_dram_bank to reflect updated workers set
+        num_dram_banks = all_worker_cores_ordered.size();
+    }
+
+    per_core_N_compute = div_up(N, num_dram_banks);
+    per_core_N_in1_sender = per_core_N_compute;
+
     auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
         per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
     auto out_subblock_h = std::get<0>(subblock_hw);
@@ -712,57 +745,57 @@ create_program_dram_sharded(
         bank_id = (bank_id + 1) % num_dram_banks;
 
         if (per_core_N_in1_sender < per_core_N_storage) {
-            if (curr_storage_core_idx < num_cores_written_back) {
-                uint32_t remaining_per_core_N_storage = (per_core_N_storage - per_core_N_storage_curr_stride);
-                uint32_t per_core_N_reshard_1 = (remaining_per_core_N_storage > per_core_N_in1_sender)
-                                                    ? per_core_N_in1_sender
-                                                    : remaining_per_core_N_storage;
-                uint32_t per_core_N_reshard_2 = per_core_N_in1_sender - per_core_N_reshard_1;
+            TT_FATAL(curr_storage_core_idx < num_cores_written_back, "Worker {} has no storage area assigned", core);
 
-                if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
-                    mm_in1_sender_writer_args.push_back(2);
-                } else {
-                    mm_in1_sender_writer_args.push_back(1);
-                }
+            uint32_t remaining_per_core_N_storage = (per_core_N_storage - per_core_N_storage_curr_stride);
+            uint32_t per_core_N_reshard_1 = (remaining_per_core_N_storage > per_core_N_in1_sender)
+                                                ? per_core_N_in1_sender
+                                                : remaining_per_core_N_storage;
+            uint32_t per_core_N_reshard_2 = per_core_N_in1_sender - per_core_N_reshard_1;
 
+            if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
+                mm_in1_sender_writer_args.push_back(2);
+            } else {
+                mm_in1_sender_writer_args.push_back(1);
+            }
+
+            log_debug(
+                tt::LogOp,
+                "curr worker core: {}, send back: {} tiles to storage core: {}, coord: {}",
+                i,
+                per_core_N_reshard_1,
+                curr_storage_core_idx,
+                output_coords[curr_storage_core_idx]);
+
+            mm_in1_sender_writer_args.push_back(
+                per_core_N_storage_curr_stride * output_single_tile_size);  // reshard_tensor_start_offset
+            mm_in1_sender_writer_args.push_back(
+                per_core_N_reshard_1 * output_single_tile_size);                       // per_core_N_reshard_bytes_1
+            mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core_idx]);  // output_noc_x
+            mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core_idx]);  // output_noc_y
+
+            total_tensor_width_written_back += per_core_N_reshard_1;
+
+            if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
                 log_debug(
                     tt::LogOp,
                     "curr worker core: {}, send back: {} tiles to storage core: {}, coord: {}",
                     i,
-                    per_core_N_reshard_1,
-                    curr_storage_core_idx,
-                    output_coords[curr_storage_core_idx]);
+                    per_core_N_reshard_2,
+                    curr_storage_core_idx + 1,
+                    output_coords[curr_storage_core_idx + 1]);
 
                 mm_in1_sender_writer_args.push_back(
-                    per_core_N_storage_curr_stride * output_single_tile_size);  // reshard_tensor_start_offset
-                mm_in1_sender_writer_args.push_back(
-                    per_core_N_reshard_1 * output_single_tile_size);                       // per_core_N_reshard_bytes_1
-                mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core_idx]);  // output_noc_x
-                mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core_idx]);  // output_noc_y
+                    per_core_N_reshard_2 * output_single_tile_size);  // per_core_N_reshard_bytes_2
+                mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core_idx + 1]);  // output_noc_x
+                mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core_idx + 1]);  // output_noc_y
 
-                total_tensor_width_written_back += per_core_N_reshard_1;
-
-                if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
-                    log_debug(
-                        tt::LogOp,
-                        "curr worker core: {}, send back: {} tiles to storage core: {}, coord: {}",
-                        i,
-                        per_core_N_reshard_2,
-                        curr_storage_core_idx + 1,
-                        output_coords[curr_storage_core_idx + 1]);
-
-                    mm_in1_sender_writer_args.push_back(
-                        per_core_N_reshard_2 * output_single_tile_size);  // per_core_N_reshard_bytes_2
-                    mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core_idx + 1]);  // output_noc_x
-                    mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core_idx + 1]);  // output_noc_y
-
-                    total_tensor_width_written_back += per_core_N_reshard_2;
-                }
-
-                curr_storage_core_idx += (per_core_N_storage_curr_stride + per_core_N_in1_sender) / per_core_N_storage;
-                per_core_N_storage_curr_stride =
-                    (per_core_N_storage_curr_stride + per_core_N_in1_sender) % per_core_N_storage;
+                total_tensor_width_written_back += per_core_N_reshard_2;
             }
+
+            curr_storage_core_idx += (per_core_N_storage_curr_stride + per_core_N_in1_sender) / per_core_N_storage;
+            per_core_N_storage_curr_stride =
+                (per_core_N_storage_curr_stride + per_core_N_in1_sender) % per_core_N_storage;
         } else {
             uint32_t num_cores_write_back = 0;
 
@@ -833,6 +866,10 @@ create_program_dram_sharded(
 
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
+        TT_FATAL(
+            mm_in1_sender_writer_args.size() >= 10,
+            "Kernel requires at least 10 runtime args, got {}",
+            mm_in1_sender_writer_args.size());
     }
 
     TT_FATAL(

@@ -34,7 +34,7 @@ jobs:
           - name: CCL APC test
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
           - name: Socket tests
-            cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*H2DSocket*"
+            cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service

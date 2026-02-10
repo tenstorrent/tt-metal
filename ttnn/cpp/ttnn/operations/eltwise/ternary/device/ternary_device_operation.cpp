@@ -236,6 +236,19 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
         "Ternary operation requires input to be on Device. Input storage type: {}",
         static_cast<int>(input_a.storage_type()));
 
+    if (input_b.has_value()) {
+        TT_FATAL(
+            input_b->storage_type() == StorageType::DEVICE,
+            "Ternary operation requires input to be on Device. Input storage type: {}",
+            static_cast<int>(input_b->storage_type()));
+    }
+    if (input_c.has_value()) {
+        TT_FATAL(
+            input_c->storage_type() == StorageType::DEVICE,
+            "Ternary operation requires input to be on Device. Input storage type: {}",
+            static_cast<int>(input_c->storage_type()));
+    }
+
     TT_FATAL(
         input_a.buffer() != nullptr,
         "Operands to eltwise ternary operation need to be allocated in buffers on the device. Buffer is null.");
@@ -557,8 +570,9 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
 
     // This variant is only for operations that need a scalar parameter with TTT variant
     TT_FATAL(
-        op_type == ttnn::operations::ternary::TernaryOpType::ADDCMUL,
-        "This variant with scalar parameter is only supported for ADDCMUL operation");
+        op_type == ttnn::operations::ternary::TernaryOpType::ADDCMUL ||
+            op_type == ttnn::operations::ternary::TernaryOpType::ADDCDIV,
+        "This variant with scalar parameter is only supported for ADDCMUL and ADDCDIV operations");
 
     // Detect broadcast type for TTT variant
     ttnn::operations::ternary::TernaryBroadcastType broadcast_type = ttnn::operations::ternary::get_broadcast_type(
@@ -575,7 +589,7 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
-        .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL scalar value
+        .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL/ADDCDIV scalar value
         .scalar_input_b = std::nullopt,
     };
 
