@@ -327,20 +327,142 @@ TEST_F(NOCDebuggingFixture, ReadsWithBarrier) {
 }
 
 TEST_F(NOCDebuggingFixture, InterleavedReadsWritesNoBarrier) {
+    // Only run it on device 0 as it's taking too long
+    this->RunTestOnDevice<NOCDebuggingFixture>(
+        [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunInterleavedReadsWritesTest(fixture, mesh_device, false, false);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(NOCDebuggingFixture, InterleavedReadsWritesWithBarrier) {
+    // Only run it on device 0 as it's taking too long
+    this->RunTestOnDevice<NOCDebuggingFixture>(
+        [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunInterleavedReadsWritesTest(fixture, mesh_device, true, true);
+        },
+        this->devices_[0]);
+}
+
+void RunMcastTest(
+    NOCDebuggingFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    bool use_write_mcast_flush,
+    bool use_semaphore_mcast_flush) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+
+    CoreCoord sender_core = {0, 0};
+    CoreRange sender_range(sender_core, sender_core);
+
+    CoreCoord mcast_start = {0, 0};
+    CoreCoord mcast_end = {compute_grid_size.x - 1, compute_grid_size.y - 1};
+
+    auto mcast_start_virtual = mesh_device->worker_core_from_logical_core(mcast_start);
+    auto mcast_end_virtual = mesh_device->worker_core_from_logical_core(mcast_end);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    uint32_t num_dest_cores =
+        (mcast_end_virtual.x - mcast_start_virtual.x + 1) * (mcast_end_virtual.y - mcast_start_virtual.y + 1);
+
+    constexpr uint32_t buffer_page_size = 64;
+    constexpr uint32_t buffer_size = buffer_page_size;
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    std::map<std::string, std::string> defines = {
+        {"MCAST_START_X", std::to_string(mcast_start_virtual.x)},
+        {"MCAST_START_Y", std::to_string(mcast_start_virtual.y)},
+        {"MCAST_END_X", std::to_string(mcast_end_virtual.x)},
+        {"MCAST_END_Y", std::to_string(mcast_end_virtual.y)},
+        {"NUM_DEST_CORES", std::to_string(num_dest_cores)},
+        {"L1_BUFFER_ADDR", std::to_string(l1_buffer->address())},
+        {"WRITE_SIZE", std::to_string(buffer_page_size)},
+    };
+
+    if (use_write_mcast_flush) {
+        defines["USE_WRITE_MCAST_FLUSH"] = "1";
+    }
+    if (use_semaphore_mcast_flush) {
+        defines["USE_SEMAPHORE_MCAST_FLUSH"] = "1";
+    }
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_mcast_semaphore.cpp",
+        sender_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    auto* device = mesh_device->get_devices()[0];
+    auto device_id = device->id();
+    auto sender_core_virtual = mesh_device->worker_core_from_logical_core(sender_core);
+
+    bool has_write_mcast_issue =
+        fixture->has_unflushed_write_mcast_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID);
+
+    if (use_write_mcast_flush) {
+        EXPECT_FALSE(has_write_mcast_issue)
+            << "With write mcast barrier, should NOT have unflushed write mcast issue at device " << device_id
+            << " core " << sender_core_virtual.str();
+    } else {
+        EXPECT_TRUE(has_write_mcast_issue)
+            << "Without write mcast barrier, should have unflushed write mcast issue at device " << device_id
+            << " core " << sender_core_virtual.str();
+    }
+
+    bool has_semaphore_mcast_issue =
+        fixture->has_unflushed_semaphore_mcast_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID);
+
+    if (use_semaphore_mcast_flush) {
+        EXPECT_FALSE(has_semaphore_mcast_issue)
+            << "With semaphore mcast barrier, should NOT have unflushed semaphore mcast issue at device " << device_id
+            << " core " << sender_core_virtual.str();
+    } else {
+        EXPECT_TRUE(has_semaphore_mcast_issue)
+            << "Without semaphore mcast barrier, should have unflushed semaphore mcast issue at device " << device_id
+            << " core " << sender_core_virtual.str();
+    }
+}
+
+TEST_F(NOCDebuggingFixture, McastNoFlushes) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunInterleavedReadsWritesTest(fixture, mesh_device, false, false);
+                RunMcastTest(
+                    fixture, mesh_device, /*use_write_mcast_flush=*/false, /*use_semaphore_mcast_flush=*/false);
             },
             mesh_device);
     }
 }
 
-TEST_F(NOCDebuggingFixture, InterleavedReadsWritesWithBarrier) {
+TEST_F(NOCDebuggingFixture, McastOnlyWriteFlush) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunInterleavedReadsWritesTest(fixture, mesh_device, true, true);
+                RunMcastTest(fixture, mesh_device, /*use_write_mcast_flush=*/true, /*use_semaphore_mcast_flush=*/false);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, McastWithAllFlushes) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunMcastTest(fixture, mesh_device, /*use_write_mcast_flush=*/true, /*use_semaphore_mcast_flush=*/true);
             },
             mesh_device);
     }

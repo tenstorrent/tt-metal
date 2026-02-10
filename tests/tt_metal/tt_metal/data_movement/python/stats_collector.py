@@ -48,6 +48,8 @@ class StatsCollector:
         # Gather analysis stats
         # Statistics are recorded per core, but timeseries data is aggregated for all cores
         for core in cores:
+            if not "analysis" in stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]:
+                continue
             core_analysis = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]
 
             for risc in RISCV_PROCESSORS:

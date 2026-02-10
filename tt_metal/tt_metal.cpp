@@ -62,7 +62,6 @@
 #include "impl/buffers/circular_buffer.hpp"
 
 namespace tt::tt_metal {
-enum class FabricConfig : uint32_t;
 struct RuntimeArgsData;
 struct TraceDescriptor;
 
@@ -828,9 +827,12 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     program.impl().allocate_circular_buffers(device);
     program.impl().validate_circular_buffer_region(device);
+    program.impl().allocate_dataflow_buffers(device);
+    program.impl().validate_dataflow_buffer_region(device);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
+    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
@@ -840,7 +842,10 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
             ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
+                uint64_t kernel_config_base =
+                    hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
+                const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
                 if (!cbs_on_core.empty()) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
@@ -862,18 +867,39 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         }
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
-                                remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
-                                                       UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                                remote_offset_index +
+                                ((max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                             uint32_t config_address = circular_buffer->config_address();
                             circular_buffer_config_vec[base_index] = config_address;
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);
                         }
                     }  // PROF_END("CBS")
-                    uint64_t kernel_config_base =
-                        hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
                     MetalContext::instance().get_cluster().write_core(
                         device_id, physical_core, circular_buffer_config_vec, addr);
+                }
+
+                if (!dfbs_on_core.empty()) {
+                    log_info(tt::LogMetal, "DFB size: {}", program.impl().get_program_config(index).dfb_size);
+                    std::vector<uint8_t> dfb_config_vec(
+                        program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
+                    uint32_t offset = 0;
+                    for (const auto& dfb : dfbs_on_core) {
+                        auto serialized = dfb->serialize();
+                        std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
+                        offset += serialized.size();
+                    }
+                    uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
+                    log_info(
+                        tt::LogMetal,
+                        "Writing DFB config to core {} at addr 0x{:x} (kernel_config_base=0x{:x}, dfb_offset=0x{:x}) "
+                        "size: {}",
+                        physical_core.str(),
+                        addr,
+                        kernel_config_base,
+                        program.impl().get_program_config(index).dfb_offset,
+                        dfb_config_vec.size());
+                    MetalContext::instance().get_cluster().write_core(device_id, physical_core, dfb_config_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
@@ -1022,7 +1048,8 @@ IDevice* CreateDeviceMinimal(
     ZoneScoped;
     MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
     auto* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
-    MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
+    auto& control_plane = MetalContext::instance().get_control_plane();
+    MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
     return dev;
 }
 

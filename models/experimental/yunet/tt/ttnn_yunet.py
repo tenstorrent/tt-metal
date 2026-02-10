@@ -2,16 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Optimized TTNN YUNet Face Detection Model.
+TTNN YUNet Face Detection Model.
 
-Key optimizations:
-- NO reshape between consecutive convs in DPUnit (eliminates S2I/I2S)
-- Track dimensions separately instead of reshaping to get shape
-- Only reshape at boundaries (pooling, upsample, add)
-- bfloat8_b weights for memory bandwidth improvement
 """
 
 import ttnn
+from ttnn.device import Arch
 from typing import Tuple
 from models.tt_cnn.tt.builder import (
     Conv2dConfiguration,
@@ -192,6 +188,13 @@ class TTNNConv1x1:
         return x, h_w[0], h_w[1]
 
 
+def safe_reshape(x: ttnn.Tensor, shape, memory_config=ttnn.L1_MEMORY_CONFIG) -> ttnn.Tensor:
+    """Safely reshape tensor - converts sharded to interleaved first if needed."""
+    if x.memory_config().is_sharded():
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.reshape(x, shape, memory_config=memory_config)
+
+
 class TTNNMaxPool:
     """Optimized MaxPool2d - reshapes at boundary."""
 
@@ -199,6 +202,8 @@ class TTNNMaxPool:
         self.device = device
         self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
         self._pool_cache = {}
+        # Check if Wormhole - needs ROW_MAJOR workaround for max_pool2d
+        self._is_wormhole = device.arch() == Arch.WORMHOLE_B0
 
     def _get_pool(self, batch_size: int, h: int, w: int, c: int):
         key = (batch_size, h, w, c)
@@ -219,13 +224,29 @@ class TTNNMaxPool:
     def __call__(
         self, x: ttnn.Tensor, batch_size: int, height: int, width: int, channels: int
     ) -> Tuple[ttnn.Tensor, int, int]:
-        """Pool needs NHWC - reshape at boundary."""
-        x = ttnn.reshape(x, [batch_size, height, width, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
-        pool = self._get_pool(batch_size, height, width, channels)
-        x = pool(x)
+        """Pool needs NHWC. On Wormhole, requires ROW_MAJOR to avoid sharding hang."""
+        if self._is_wormhole:
+            # Wormhole workaround: convert to DRAM + ROW_MAJOR before pool
+            if x.memory_config().is_sharded():
+                x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.reshape(x, [batch_size, height, width, channels])
+            if x.layout == ttnn.TILE_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+            pool = self._get_pool(batch_size, height, width, channels)
+            x = pool(x)
+
+            if x.memory_config().is_sharded():
+                x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            # Blackhole: original fast path
+            x = safe_reshape(x, [batch_size, height, width, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
+            pool = self._get_pool(batch_size, height, width, channels)
+            x = pool(x)
+
         out_h = (height + 2 * self.padding - self.kernel_size) // self.stride + 1
         out_w = (width + 2 * self.padding - self.kernel_size) // self.stride + 1
-        x = ttnn.reshape(x, [batch_size, out_h, out_w, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.reshape(x, [batch_size, out_h, out_w, channels])
         return x, out_h, out_w
 
 
@@ -238,15 +259,27 @@ class TTNNUpsample:
     def __call__(
         self, x: ttnn.Tensor, batch_size: int, height: int, width: int, channels: int
     ) -> Tuple[ttnn.Tensor, int, int]:
-        x = ttnn.reshape(x, [batch_size, height, width, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = safe_reshape(x, [batch_size, height, width, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.upsample(x, scale_factor=self.scale_factor, mode="nearest")
         return x, height * self.scale_factor, width * self.scale_factor
 
 
-def to_nhwc(x: ttnn.Tensor, batch_size: int, height: int, width: int, channels: int) -> ttnn.Tensor:
-    """Reshape to NHWC."""
-    return ttnn.reshape(x, [batch_size, height, width, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
+def to_nhwc(
+    x: ttnn.Tensor, batch_size: int, height: int, width: int, channels: int, to_dram: bool = False
+) -> ttnn.Tensor:
+    """Reshape to NHWC. If to_dram=True, prepare for to_torch() by converting to DRAM + ROW_MAJOR."""
+    x = safe_reshape(x, [batch_size, height, width, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
+    if to_dram:
+        # Convert sharded to DRAM interleaved
+        if x.memory_config().is_sharded():
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # Convert TILE to ROW_MAJOR - required for to_torch() on tensors with small last dim
+        if x.layout == ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    return x
 
 
 class TtYUNet:
@@ -403,10 +436,11 @@ class TtYUNet:
             obj, _, _ = self.head_obj[i](feat, batch_size, fh, fw)
             kpt, _, _ = self.head_kpt[i](feat, batch_size, fh, fw)
 
-            cls_out.append(to_nhwc(cls, batch_size, fh, fw, 1))
-            box_out.append(to_nhwc(box, batch_size, fh, fw, 4))
-            obj_out.append(to_nhwc(obj, batch_size, fh, fw, 1))
-            kpt_out.append(to_nhwc(kpt, batch_size, fh, fw, 10))
+            # Use to_dram=True for outputs - converts to DRAM + ROW_MAJOR for safe to_torch()
+            cls_out.append(to_nhwc(cls, batch_size, fh, fw, 1, to_dram=True))
+            box_out.append(to_nhwc(box, batch_size, fh, fw, 4, to_dram=True))
+            obj_out.append(to_nhwc(obj, batch_size, fh, fw, 1, to_dram=True))
+            kpt_out.append(to_nhwc(kpt, batch_size, fh, fw, 10, to_dram=True))
 
         return cls_out, box_out, obj_out, kpt_out
 

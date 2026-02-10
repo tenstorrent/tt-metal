@@ -18,17 +18,18 @@ template <
     bool is_fp32_dest_acc_en,
     int num_rows,
     int ITERATIONS = 8,
-    DataLayout layout = DataLayout::TILE>
-inline void calculate_max_pool_with_indices(uint values_tile_idx, uint indices_tile_idx, uint tile_idx) {
+    DataLayout layout = DataLayout::TILE,
+    bool accumulate = false>
+inline void calculate_max_pool_with_indices(uint values_tile_idx, uint indices_tile_idx, uint chunk) {
     if constexpr (num_rows <= 9) {
-        _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, layout>(
-            values_tile_idx, indices_tile_idx, tile_idx);
+        _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, layout, accumulate>(
+            values_tile_idx, indices_tile_idx, chunk);
     } else {
         static_assert(num_rows <= 32, "num_rows must be <= 32");
         static_assert(
             layout == DataLayout::ROW_MAJOR, "generic max pool with indices is only implemented for ROW_MAJOR layout");
-        _calculate_max_pool_with_indices_generic_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(
-            values_tile_idx, indices_tile_idx, tile_idx);
+        _calculate_max_pool_with_indices_generic_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, accumulate>(
+            values_tile_idx, indices_tile_idx, chunk);
     }
 }
 

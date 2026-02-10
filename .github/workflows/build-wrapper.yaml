@@ -2,13 +2,107 @@ name: "Build TT-Metalium across all configs"
 
 on:
   workflow_call:
+    inputs:
+      # Pre-built Docker image tags (optional - if provided, skips docker build)
+      ubuntu-2204-ci-build-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2204-dev-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2204-manylinux-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2404-ci-build-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2404-dev-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2404-manylinux-tag:
+        required: false
+        type: string
+        default: ""
+      # Single-platform build options (alternative to matrix build with docker tags)
+      platform:
+        required: false
+        type: string
+        default: ""
+        description: "Platform to target (Ubuntu 22.04, Ubuntu 24.04). If set, runs single-platform build instead of matrix."
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to target"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 permissions:
   packages: write
 
 jobs:
+  # =============================================================================
+  # NOTE: This workflow has two modes:
+  # 1. workflow_dispatch: Single platform build via build-dispatch job
+  # 2. workflow_call: Matrix build across multiple configs via build job
+  #
+  # Platform parsing is handled by build-artifact.yaml internally.
+  # =============================================================================
+
+  # build-dispatch is for direct workflow_dispatch calls only
+  build-dispatch:
+    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      publish-artifact: false
+      publish-package: false
+      skip-tt-train: true
+      tracy: false
+
+  # build job runs the matrix - either when called from merge-gate with pre-built tags,
+  # or when called via workflow_call without the platform dropdown
   build:
+    if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -17,28 +111,39 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - version: "22.04"
+          - platform: "Ubuntu 22.04"
             toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Debug"
-          - version: "22.04"
+          - platform: "Ubuntu 22.04"
             toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
             build-type: "Release"
-          - version: "22.04"
+          - platform: "Ubuntu 22.04"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
-          - version: "24.04"
+          - platform: "Ubuntu 24.04"
             toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Release"
             enable-lto: true
-          - version: "24.04"
+          - platform: "Ubuntu 24.04"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
     with:
-      version: ${{ matrix.config.version }}
+      platform: ${{ matrix.config.platform }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
+      # Enable LTO only when explicitly set in the matrix config
       enable-lto: ${{ matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
       skip-tt-train: true
       tracy: false
+      # Pass pre-built docker image tags based on platform
+      ci-build-docker-image: ${{
+        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-ci-build-tag) ||
+        inputs.ubuntu-2204-ci-build-tag }}
+      dev-docker-image: ${{
+        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-dev-tag) ||
+        inputs.ubuntu-2204-dev-tag }}
+      manylinux-docker-image: ${{
+        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-manylinux-tag) ||
+        inputs.ubuntu-2204-manylinux-tag }}

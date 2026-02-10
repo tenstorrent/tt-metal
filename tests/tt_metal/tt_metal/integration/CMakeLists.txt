@@ -1,15 +1,5 @@
-set(UNIT_TESTS_INTEGRATION_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_basic_pipeline.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_flatten.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_sfpu_compute.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_large_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_multi_core_multi_dram_inX_mcast.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_multi_core_X_dram.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_X_tile.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vecadd/test_vecadd_multi_core.cpp
-)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_executable(unit_tests_integration ${UNIT_TESTS_INTEGRATION_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_integration)

@@ -21,7 +21,6 @@ from tests.scripts.common import (
     get_git_home_dir_str,
     filter_empty,
     void_for_whb0,
-    void_for_gs,
     void_for_bh,
 )
 from tests.scripts.cmdline_args import (
@@ -42,8 +41,6 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     ),
     TestEntry("tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
     TestEntry("tt_eager/tests/tensors/test_raw_host_memory_pointer", "tensors/test_raw_host_memory_pointer"),
-    # Integration tests
-    # void_for_whb0(TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert")),
 )
 
 TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (

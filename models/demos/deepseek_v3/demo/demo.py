@@ -16,6 +16,10 @@ from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekG
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
@@ -269,15 +273,25 @@ def run_demo(
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
-
-    fabric_config = ttnn.FabricConfig.FABRIC_1D
+    fabric_config = optimal_topology
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
-        trace_region_size = 4880384 + int(0.20 * 4880384)  # 20% additional
+        # NOTE:
+        # The base trace region size below (~36.3 MiB) was empirically determined from
+        # vLLM decode workloads to be sufficient to keep the trace buffer from
+        # overflowing under typical DeepSeek-V3 demo settings (batch size, sequence
+        # length, and mesh configuration). We add 20% headroom as a conservative
+        # safety margin to accommodate variability across models / prompts without
+        # repeatedly re-tuning this value.
+        #
+        # If you are optimizing memory usage, this can be reduced after verifying
+        # that tracing completes without buffer exhaustion for your target workload.
+        BASE_TRACE_REGION_BYTES = 38_070_272
+        trace_region_size = BASE_TRACE_REGION_BYTES + int(0.20 * BASE_TRACE_REGION_BYTES)
         logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:

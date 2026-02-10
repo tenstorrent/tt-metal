@@ -2,6 +2,22 @@ name: "[internal] Produce data for external analysis"
 
 on:
   workflow_call:
+    inputs:
+      test_workflow_run_id:
+        description: "Unique GitHub workflow run ID to use for data"
+        required: false
+        type: number
+        default: 0
+      test_workflow_run_attempt:
+        description: "Run attempt of the workflow run"
+        required: false
+        type: number
+        default: 1
+      upload_data:
+        description: "Upload data to datastore cluster for our dashboard"
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       test_workflow_run_id:
@@ -55,9 +71,9 @@ on:
       - "Multi-Host Deployment (Physical)"
       - "(Galaxy) Multi-user Isolation Tests"
       - "(Galaxy) demo tests"
-      - "(Galaxy) frequent tests"
-      - "(Galaxy) model perf tests"
-      - "(Galaxy) nightly tests"
+      - "(Galaxy) integration tests"
+      - "(Galaxy) perf tests"
+      - "(Galaxy) e2e tests"
       - "(Galaxy) profiler tests"
       - "(Galaxy) Stress"
       - "(Galaxy) unit tests"
@@ -88,6 +104,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            infra
+          sparse-checkout-cone-mode: true
       - name: Output (safe) pipeline values
         run: |
           echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
@@ -197,6 +218,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            infra
+          sparse-checkout-cone-mode: true
       - uses: actions/setup-python@v5.0.0
         with:
           python-version: '3.10'

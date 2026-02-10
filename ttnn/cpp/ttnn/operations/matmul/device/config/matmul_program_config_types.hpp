@@ -60,6 +60,13 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
 };
 
+struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
+    std::size_t in0_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+};
+
 struct MatmulMultiCoreProgramConfig {};
 
 using MatmulProgramConfig = std::variant<
@@ -67,6 +74,7 @@ using MatmulProgramConfig = std::variant<
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
-    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>;
+    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>;
 
 }  // namespace ttnn::operations::matmul

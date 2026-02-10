@@ -385,7 +385,6 @@ ResultWithOptions result_to_result_with_options(
 
 class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
-    using RefTensor = std::reference_wrapper<ttnn::Tensor>;
 
     Conv2dConfig auto_slice_conv_config;
     uint32_t batch_size;

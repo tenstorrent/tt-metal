@@ -19,8 +19,8 @@ class YunetPerformanceRunnerInfra:
         self,
         device,
         batch_size=1,
-        input_height=320,
-        input_width=320,
+        input_height=640,
+        input_width=640,
         act_dtype=ttnn.bfloat16,
         torch_input_tensor=None,
     ):

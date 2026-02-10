@@ -21,7 +21,9 @@ void directed_ideal_test(
     bool loopback = true,
     NOC noc_id = NOC::NOC_0,
     uint32_t multicast_scheme_type = 0,
-    bool use_2_0_api = false);
+    bool use_2_0_api = false,
+    bool use_semaphore = false,
+    uint32_t pages_override_factor = 1);
 }
 
 #endif  // TEST_ONE_TO_ALL_HPP

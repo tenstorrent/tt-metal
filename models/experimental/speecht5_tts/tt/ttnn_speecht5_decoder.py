@@ -39,7 +39,7 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, encoder_seq_len):
     """
     Initialize KV cache for decoder self-attention and cross-attention.
 
-    Following Whisper pattern from models/demos/whisper/tt/ttnn_optimized_functional_whisper.py
+    Following Whisper pattern from models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py
 
     Args:
         config: TTNNDecoderConfig

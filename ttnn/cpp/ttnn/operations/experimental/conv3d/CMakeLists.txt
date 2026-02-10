@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_conv3d ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Conv3d ALIAS ttnn_op_experimental_conv3d)
 
-target_precompile_headers(ttnn_op_experimental_conv3d REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_conv3d REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_conv3d)
 
 set_target_properties(

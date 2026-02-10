@@ -1,7 +1,7 @@
 add_library(ttnn_op_matmul ${LIB_TYPE})
 add_library(TTNN::Ops::Matmul ALIAS ttnn_op_matmul)
 
-target_precompile_headers(ttnn_op_matmul REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_matmul REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_matmul)
 set_target_properties(
     ttnn_op_matmul
@@ -39,6 +39,7 @@ target_sources(
         device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp
         device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
         device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
+        device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.cpp
         device/factory/matmul_multicore_reuse_optimized_program_factory.cpp
         # sparse
         device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp

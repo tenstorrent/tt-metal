@@ -134,11 +134,11 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     CircularBufferConfig cb_src0_config = CircularBufferConfig(2 * single_tile_size, {{src0_cb_index, cb_data_format}})
                                               .set_page_size(src0_cb_index, single_tile_size);
     CreateCircularBuffer(program, total_cores, cb_src0_config);
-
+    auto max_padding_write = face_shape[0] * face_shape[1];
     if (needs_padding) {
         CircularBufferConfig cb_src1_config =
-            CircularBufferConfig(face_shape[1] * input_tensor.element_size(), {{padding_cb_index, cb_data_format}})
-                .set_page_size(padding_cb_index, face_shape[1] * input_tensor.element_size());
+            CircularBufferConfig(max_padding_write * input_tensor.element_size(), {{padding_cb_index, cb_data_format}})
+                .set_page_size(padding_cb_index, max_padding_write * input_tensor.element_size());
         CreateCircularBuffer(program, total_cores, cb_src1_config);
     }
 
@@ -150,7 +150,7 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
 
     if (C % tile_shape[1] != 0) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
-        num_writes = face_shape[1] / num_packed_values;
+        num_writes = max_padding_write / num_packed_values;
         switch (input_tensor.dtype()) {
             case DataType::INT32:
             case DataType::UINT32: padding_val_packed = pad_value; break;

@@ -7,14 +7,14 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #define EXP_APPROX_MODE false
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
@@ -89,8 +89,6 @@ inline OutputCBs reduce_fct(
     return {cb_l1_temp, cb_s1_temp, cb_m_temp};
 }
 
-namespace NAMESPACE {
-
 constexpr uint32_t cb_out_o = get_compile_time_arg_val(0);                // l (output)
 constexpr uint32_t cb_out_accumulate_im_2 = get_compile_time_arg_val(1);  // l2 (input)
 constexpr uint32_t cb_out_accumulate_im = get_compile_time_arg_val(2);    // l1 (input)
@@ -116,7 +114,7 @@ constexpr uint32_t int_l_cb = get_compile_time_arg_val(21);
 constexpr uint32_t int_s_cb = get_compile_time_arg_val(22);
 constexpr uint32_t int_m_cb = get_compile_time_arg_val(23);
 
-void MAIN {
+void kernel_main() {
     // this kernel receives l, m, s tensors from the reader and perform the following computations
     // - inputs: l1, s1, m1 and l2, s2, m2; output: l, s, m
     //----> m = max(m1, m2)
@@ -213,5 +211,3 @@ void MAIN {
         cb_pop_front(int_s_cb, Sq_chunk_t);
     }
 }
-
-}  // namespace NAMESPACE

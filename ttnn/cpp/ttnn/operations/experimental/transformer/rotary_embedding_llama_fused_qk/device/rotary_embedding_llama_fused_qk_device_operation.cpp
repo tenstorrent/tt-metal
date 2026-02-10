@@ -70,8 +70,7 @@ void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
         "Q input tensor and K input tensor must have same head dimensions");
     uint32_t head_dim = q_input_tensor.logical_shape()[-1];
     TT_FATAL(
-        head_dim <= 128 ||
-            std::get<ttnn::WormholeComputeKernelConfig>(args.compute_kernel_config).fp32_dest_acc_en == false,
+        head_dim <= 128 || args.compute_kernel_config.fp32_dest_acc_en == false,
         "If head_dim is > 128, fp32_dest_acc_en must be False");
 
     if (args.row_major_QK) {

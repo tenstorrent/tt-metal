@@ -95,11 +95,14 @@ public:
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
     std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
 
+    // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
     RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
     std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
     std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
     void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
+
+    // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& common_runtime_args();
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
@@ -188,6 +191,8 @@ protected:
     CoreCoord core_with_max_runtime_args_;   // For validation
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.
+    const bool watcher_assert_enabled_;
+    const uint32_t watcher_count_word_offset_;
     std::set<CoreCoord> logical_cores_;
 
     // Build key -> binaries (moved from KernelImpl)
@@ -368,6 +373,8 @@ public:
     std::string_view get_compiler_opt_level() const override;
 
     std::string_view get_linker_opt_level() const override;
+
+    const std::vector<DataMovementProcessor>& get_dm_processors() const { return this->dm_cores_; }
 
 private:
     const QuasarDataMovementConfig config_;
