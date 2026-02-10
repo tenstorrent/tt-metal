@@ -58,7 +58,7 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
-          enable-watcher: ${{ inputs.enable-watcher }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
