@@ -999,7 +999,9 @@ class DeepseekGenerator(DecodeWarmupMixin):
                 signpost(header="decode_execute_trace")
             return logits.squeeze(0).squeeze(0)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
+    def warmup_model_prefill(
+        self, kv_cache, enable_trace, sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size
+    ) -> None:
         logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
         logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator")
 
