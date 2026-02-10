@@ -144,7 +144,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     }
 }
 
-TEST(PhysicalDiscovery, Generate2x4SliceToPCIeDeviceMapping) {
+TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -199,7 +199,7 @@ TEST(PhysicalDiscovery, Generate2x4SliceToPCIeDeviceMapping) {
     }
 }
 
-TEST(PhysicalDiscovery, GenerateTrayToPCIeDeviceMapping) {
+TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
