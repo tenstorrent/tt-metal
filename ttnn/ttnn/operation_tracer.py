@@ -147,17 +147,14 @@ def _serialize_ttnn_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]
 
     # Check if tensor is distributed and get logical shape
     if hasattr(value, "logical_shape"):
-        try:
-            logical_shape = value.logical_shape()
-            if logical_shape != value.shape:
-                tensor_data["logical_shape"] = list(logical_shape)
-        except Exception as exc:
-            logger.debug(f"Failed to get logical_shape during tracing: {exc}")
+        logical_shape = value.logical_shape()
+        if logical_shape != value.shape:
+            tensor_data["logical_shape"] = list(logical_shape)
     # Get tensor topology and placement information for distributed tensors
     if hasattr(value, "tensor_topology"):
-        try:
-            topology = value.tensor_topology()
-            # Get placements
+        topology = value.tensor_topology()
+        # Get placements
+        if hasattr(topology, "placements"):
             placements = topology.placements()
             if placements:
                 placement_strs = []
@@ -171,50 +168,33 @@ def _serialize_ttnn_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]
                     if "mesh_device" not in tensor_data:
                         tensor_data["mesh_device"] = {}
                     tensor_data["mesh_device"]["placements"] = placement_strs
-            # Get distribution shape
-            if hasattr(topology, "distribution_shape"):
-                try:
-                    dist_shape = topology.distribution_shape()
-                    if "mesh_device" not in tensor_data:
-                        tensor_data["mesh_device"] = {}
-                    tensor_data["mesh_device"]["distribution_shape"] = list(dist_shape)
-                except Exception as exc:
-                    logger.debug(f"Failed to serialize distribution_shape during tracing: {exc}")
-
-        except Exception as exc:
-            logger.debug(f"Failed to serialize tensor_topology during tracing: {exc}")
+        # Get distribution shape
+        if hasattr(topology, "distribution_shape"):
+            dist_shape = topology.distribution_shape()
+            if "mesh_device" not in tensor_data:
+                tensor_data["mesh_device"] = {}
+            tensor_data["mesh_device"]["distribution_shape"] = list(dist_shape)
     # Check if tensor is on a mesh device and capture mesh information
     if hasattr(value, "device") and value.device is not None:
-        try:
-            device = value.device()
-            # Initialize mesh_device dict if it's a mesh device
-            is_mesh_device = type(device).__name__ == "MeshDevice" or hasattr(device, "get_device_ids")
-            if is_mesh_device:
-                if "mesh_device" not in tensor_data:
-                    tensor_data["mesh_device"] = {}
-                # Check if device is a MeshDevice and get shape (it's a property, not a method)
-                if hasattr(device, "shape"):
-                    try:
-                        mesh_shape = device.shape
-                        # MeshShape is indexable, convert to list
-                        tensor_data["mesh_device"]["shape"] = list(mesh_shape)
-                    except Exception as exc:
-                        # Fallback to string representation
-                        logger.debug(f"Failed to convert mesh_shape to list, trying string: {exc}")
-                        try:
-                            tensor_data["mesh_device"]["shape"] = str(mesh_shape)
-                        except Exception as exc2:
-                            logger.debug(f"Failed to serialize mesh_shape during tracing: {exc2}")
+        device = value.device()
+        # Initialize mesh_device dict if it's a mesh device
+        is_mesh_device = type(device).__name__ == "MeshDevice" or hasattr(device, "get_device_ids")
+        if is_mesh_device:
+            if "mesh_device" not in tensor_data:
+                tensor_data["mesh_device"] = {}
+            # Check if device is a MeshDevice and get shape (it's a property, not a method)
+            if hasattr(device, "shape"):
+                mesh_shape = device.shape
+                # Try to convert to list, fallback to string if not iterable
+                if hasattr(mesh_shape, "__iter__"):
+                    tensor_data["mesh_device"]["shape"] = list(mesh_shape)
+                else:
+                    tensor_data["mesh_device"]["shape"] = str(mesh_shape)
 
-                # Try to get device IDs if available
-                if hasattr(device, "get_device_ids"):
-                    try:
-                        device_ids = device.get_device_ids()
-                        tensor_data["mesh_device"]["device_ids"] = list(device_ids) if device_ids else None
-                    except Exception as exc:
-                        logger.debug(f"Failed to get device_ids during tracing: {exc}")
-        except Exception as exc:
-            logger.debug(f"Failed to serialize device/mesh information during tracing: {exc}")
+            # Get device IDs if available
+            if hasattr(device, "get_device_ids"):
+                device_ids = device.get_device_ids()
+                tensor_data["mesh_device"]["device_ids"] = list(device_ids) if device_ids else None
 
     if serialize_values:
         # Move tensor to CPU and convert to numpy for human-readable format
@@ -259,23 +239,20 @@ def _serialize_ttnn_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]
 
     # Get memory config if available (it's a method)
     if hasattr(value, "memory_config"):
-        try:
-            memory_config_value = value.memory_config()
-            if memory_config_value is not None:
-                # Try to use tensor_utils serializer first
-                serializers = _get_tensor_utils_serializers()
-                if serializers and "memory_config_to_dict" in serializers:
-                    try:
-                        tensor_data["memory_config"] = serializers["memory_config_to_dict"](memory_config_value)
-                    except Exception as exc:
-                        # Fallback to repr if serializer fails
-                        logger.debug(f"memory_config_to_dict serializer failed, using repr: {exc}")
-                        tensor_data["memory_config"] = repr(memory_config_value)
-                else:
-                    # No serializer available, use repr
+        memory_config_value = value.memory_config()
+        if memory_config_value is not None:
+            # Try to use tensor_utils serializer first
+            serializers = _get_tensor_utils_serializers()
+            if serializers and "memory_config_to_dict" in serializers:
+                try:
+                    tensor_data["memory_config"] = serializers["memory_config_to_dict"](memory_config_value)
+                except Exception as exc:
+                    # Fallback to repr if serializer fails
+                    logger.debug(f"memory_config_to_dict serializer failed, using repr: {exc}")
                     tensor_data["memory_config"] = repr(memory_config_value)
-        except Exception as exc:
-            logger.debug(f"Failed to serialize memory_config during tracing: {exc}")
+            else:
+                # No serializer available, use repr
+                tensor_data["memory_config"] = repr(memory_config_value)
     return tensor_data
 
 
@@ -384,25 +361,17 @@ def serialize_operation_parameters(
                     }
                     # Try to get mesh shape (it's a property, not a method)
                     if hasattr(value, "shape"):
-                        try:
-                            mesh_shape = value.shape
-                            # MeshShape is indexable, convert to list
+                        mesh_shape = value.shape
+                        # Try to convert to list, fallback to string if not iterable
+                        if hasattr(mesh_shape, "__iter__"):
                             mesh_data["shape"] = list(mesh_shape)
-                        except Exception as exc:
-                            # Fallback to string representation
-                            logger.debug(f"Failed to convert MeshDevice shape to list, trying string: {exc}")
-                            try:
-                                mesh_data["shape"] = str(mesh_shape)
-                            except Exception as exc2:
-                                logger.debug(f"Failed to serialize MeshDevice shape during tracing: {exc2}")
+                        else:
+                            mesh_data["shape"] = str(mesh_shape)
 
                     # Try to get device IDs
                     if hasattr(value, "get_device_ids"):
-                        try:
-                            device_ids = value.get_device_ids()
-                            mesh_data["device_ids"] = list(device_ids) if device_ids else None
-                        except Exception as exc:
-                            logger.debug(f"Failed to get MeshDevice device_ids during tracing: {exc}")
+                        device_ids = value.get_device_ids()
+                        mesh_data["device_ids"] = list(device_ids) if device_ids else None
                     return mesh_data
                 # For other types, try specialized serializers
                 type_name = type(value).__name__
