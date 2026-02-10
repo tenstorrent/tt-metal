@@ -445,8 +445,9 @@ def test_ds_all_gather_embedding_device_perf(mode, seq_len):
     step_name = f"ds_all_gather_embedding_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_all_gather_embedding.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
-    command = f'pytest {test_path}::test_ds_all_gather_embedding -k "{expr}"'
+    # Use substring matching in-k filter to select the right test variant
+    # This matches test IDs like: test_name[prefill-128-...-program_cache-eager]
+    command = f'pytest {test_path}::test_ds_all_gather_embedding -k "{mode}-{seq_len}"'
 
     perf_profiler.start("run")
     perf_profiler.start(step_name)

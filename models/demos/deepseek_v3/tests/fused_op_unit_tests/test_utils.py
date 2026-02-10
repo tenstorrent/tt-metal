@@ -20,7 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, profiler
-from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
+from tools.tracy.process_model_log import get_profiler_folder
 
 
 def get_int_env(name: str, default: int) -> int:
@@ -238,13 +238,17 @@ def merge_device_rows_for_perf(df: pd.DataFrame) -> pd.DataFrame:
     """
     block_by_device = defaultdict(list)
 
-    for _, row in df.iterrows():
-        op_name = row["OP CODE"]
-        op_type = row["OP TYPE"]
+    # Device profiling CSV uses "OP NAME" instead of "OP CODE" and has no "OP TYPE"
+    op_col = "OP NAME" if "OP NAME" in df.columns else "OP CODE"
 
-        if op_type == "tt_dnn_device":
-            device_id = int(row["DEVICE ID"])
-            block_by_device[device_id].append((op_name, row.to_dict()))
+    for _, row in df.iterrows():
+        op_name = row[op_col]
+        # Skip rows with NaN op names
+        if pd.isna(op_name):
+            continue
+        op_name = str(op_name)  # Ensure it's a string
+        device_id = int(row["DEVICE ID"])
+        block_by_device[device_id].append((op_name, row.to_dict()))
 
     device_ids = sorted(block_by_device.keys())
     merged_blocks = []
@@ -296,6 +300,64 @@ def merge_device_rows_for_perf(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(merged_blocks)
 
 
+def run_device_profiler_local(
+    command: str,
+    subdir: str,
+    device_analysis_types: list[str],
+    op_support_count: int = 10000,
+) -> None:
+    """Run device profiler with proper environment setup (self-contained version).
+
+    This is a simplified version of tools.tracy.process_model_log.run_device_profiler
+    that includes the environment variable fix for device profiling without -r flag.
+
+    Args:
+        command: The pytest command to profile.
+        subdir: Subdirectory for profiler output.
+        device_analysis_types: List of analysis types (e.g., ["device_kernel_duration"]).
+        op_support_count: Maximum number of ops to profile.
+    """
+    import shlex
+    import subprocess
+    from pathlib import Path
+
+    profiler_dir = Path(get_profiler_folder(subdir))
+
+    # Build Tracy command arguments
+    tracy_args = ["python3", "-m", "tracy", "-p"]  # -p only, no -r to avoid quote issues
+    tracy_args.extend(["-o", str(profiler_dir)])
+    tracy_args.append("--check-exit-code")
+
+    for analysis in device_analysis_types:
+        tracy_args.extend(["-a", analysis])
+
+    tracy_args.extend(["--op-support-count", str(op_support_count)])
+    tracy_args.extend(["-t", "5000", "-m"])
+
+    # Parse command to extract pytest arguments
+    cmd_parts = shlex.split(command)
+    tracy_args.extend(cmd_parts)
+
+    # Set environment variables for device profiling
+    # These are normally set by Tracy's -r flag, but we set them manually
+    # to avoid nested invocation quote issues
+    env = os.environ.copy()
+    env["TT_METAL_DEVICE_PROFILER"] = "1"
+    env["TTNN_OP_PROFILER"] = "1"
+    env["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
+
+    profiler_cmd = " ".join(shlex.quote(arg) for arg in tracy_args)
+    logger.info(f"Running device profiler: {profiler_cmd}")
+
+    result = subprocess.run(tracy_args, check=False, capture_output=True, text=True, env=env)
+
+    if result.returncode != 0:
+        logger.error(f"Tracy profiler failed with return code {result.returncode}")
+        logger.error(f"STDOUT: {result.stdout}")
+        logger.error(f"STDERR: {result.stderr}")
+        raise subprocess.CalledProcessError(result.returncode, profiler_cmd, result.stdout, result.stderr)
+
+
 def collect_device_perf(
     command: str,
     subdir: str,
@@ -316,54 +378,81 @@ def collect_device_perf(
             - total_kernel_ns: Total kernel duration in nanoseconds.
             - total_op_to_op_ns: Total op-to-op latency in nanoseconds.
     """
+    # Use local device profiler with environment fix
     device_analysis_types = ["device_kernel_duration"]
-    run_device_profiler(
+    run_device_profiler_local(
         command,
         subdir,
         device_analysis_types=device_analysis_types,
         op_support_count=10000,
     )
-    filename = get_latest_ops_log_filename(subdir)
+
+    # Read from cpp_device_perf_report.csv in .logs
+    from pathlib import Path
+
+    profiler_dir = Path(get_profiler_folder(subdir))
+    filename = profiler_dir / ".logs" / "cpp_device_perf_report.csv"
+
+    if not filename.exists():
+        raise FileNotFoundError(f"Device perf CSV not found at {filename}")
+
+    logger.info(f"Using CSV from .logs/: {filename}")
     df = pd.read_csv(filename)
 
-    if use_signposts:
-        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
-        assert not markers.empty, "No signposts found in device perf log."
-        start_indices = markers[markers == "start"].index
-        stop_indices = markers[markers == "stop"].index
-        assert not start_indices.empty, "Missing signpost 'start' in device perf log."
-        assert not stop_indices.empty, "Missing signpost 'stop' in device perf log."
-        start_idx = start_indices[0]
-        stop_idx = stop_indices[-1]
-        assert start_idx < stop_idx, "Signpost 'stop' must come after 'start'."
-        df = df.iloc[start_idx + 1 : stop_idx]
-
-    df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
-    df = merge_device_rows_for_perf(df)
-
-    required_cols = ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]
+    # Check if we have OP NAME populated (from -r mode) or if it's empty (from -p only mode)
+    required_cols = ["DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]
     missing_cols = [col for col in required_cols if col not in df.columns]
     assert not missing_cols, f"Missing device perf columns: {missing_cols}"
 
     df["DEVICE KERNEL DURATION [ns]"] = pd.to_numeric(df["DEVICE KERNEL DURATION [ns]"], errors="coerce").fillna(0.0)
     df["OP TO OP LATENCY [ns]"] = pd.to_numeric(df["OP TO OP LATENCY [ns]"], errors="coerce").fillna(0.0)
 
+    # Check if OP NAME has any valid (non-NaN) values
+    has_op_names = False
+    if "OP NAME" in df.columns:
+        has_op_names = df["OP NAME"].notna().any()
+
     op_stats: dict[str, dict[str, float]] = {}
-    for op_code, group in df.groupby("OP CODE"):
-        kernel_vals = group["DEVICE KERNEL DURATION [ns]"].tolist()
-        op_to_op_vals = group["OP TO OP LATENCY [ns]"].tolist()
-        if warmup_iters > 0:
-            kernel_vals = kernel_vals[warmup_iters:]
-            op_to_op_vals = op_to_op_vals[warmup_iters:]
-        assert kernel_vals, f"No kernel duration samples for op {op_code}"
-        assert op_to_op_vals, f"No op-to-op latency samples for op {op_code}"
-        op_stats[op_code] = {
-            "avg_kernel_duration_ns": sum(kernel_vals) / len(kernel_vals),
-            "avg_op_to_op_latency_ns": sum(op_to_op_vals) / len(op_to_op_vals),
+
+    if has_op_names:
+        # We have operation names - provide per-op breakdown
+        logger.info("Device perf CSV contains operation names - providing per-op breakdown")
+        df = merge_device_rows_for_perf(df)
+
+        for op_name, group in df.groupby("OP NAME"):
+            if pd.isna(op_name):
+                continue
+            op_name = str(op_name)
+            kernel_vals = group["DEVICE KERNEL DURATION [ns]"].tolist()
+            op_to_op_vals = group["OP TO OP LATENCY [ns]"].tolist()
+            if warmup_iters > 0:
+                kernel_vals = kernel_vals[warmup_iters:]
+                op_to_op_vals = op_to_op_vals[warmup_iters:]
+            if kernel_vals and op_to_op_vals:
+                op_stats[op_name] = {
+                    "avg_kernel_duration_ns": sum(kernel_vals) / len(kernel_vals),
+                    "avg_op_to_op_latency_ns": sum(op_to_op_vals) / len(op_to_op_vals),
+                }
+
+        total_kernel_ns = sum(entry["avg_kernel_duration_ns"] for entry in op_stats.values())
+        total_op_to_op_ns = sum(entry["avg_op_to_op_latency_ns"] for entry in op_stats.values())
+    else:
+        # No operation names - can only provide aggregate totals
+        logger.warning("Device perf CSV does not contain operation names - providing aggregate totals only")
+
+        # Apply warmup filtering to the entire dataframe
+        if warmup_iters > 0 and len(df) > warmup_iters:
+            df = df.iloc[warmup_iters:]
+
+        total_kernel_ns = float(df["DEVICE KERNEL DURATION [ns]"].sum())
+        total_op_to_op_ns = float(df["OP TO OP LATENCY [ns]"].sum())
+
+        # Create a single aggregate entry (convert to Python float for JSON serialization)
+        op_stats["<all_ops_aggregate>"] = {
+            "avg_kernel_duration_ns": total_kernel_ns,
+            "avg_op_to_op_latency_ns": total_op_to_op_ns,
         }
 
-    total_kernel_ns = sum(entry["avg_kernel_duration_ns"] for entry in op_stats.values())
-    total_op_to_op_ns = sum(entry["avg_op_to_op_latency_ns"] for entry in op_stats.values())
     return op_stats, total_kernel_ns, total_op_to_op_ns
 
 

@@ -11,7 +11,7 @@ on:
           - all
           - unit
           - module
-          - op
+          - final-op-unit
         default: 'all'
       platform:
         required: false
