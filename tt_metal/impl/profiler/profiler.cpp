@@ -1358,6 +1358,8 @@ void DeviceProfiler::resetControlBuffers(
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
         writeToCoreControlBuffer(mesh_device, device, virtual_core, control_buffer_reset, force_slow_dispatch);
     }
+
+    this->resetActiveDramBufferIndices();
 }
 
 void DeviceProfiler::readProfilerBuffer(
@@ -2044,6 +2046,19 @@ uint32_t DeviceProfiler::getProfileBufferBankSizeBytes() const { return this->pr
 void DeviceProfiler::setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_dram_banks) {
     this->profile_buffer_bank_size_bytes = size;
     this->profile_buffer.resize(size * num_dram_banks / sizeof(uint32_t));
+}
+
+void DeviceProfiler::clearStateForDeviceReinit() {
+    this->core_control_buffers.clear();
+    this->core_l1_data_buffers.clear();
+    this->active_dram_buffer_per_core_risc_map.clear();
+    this->device_markers_per_core_risc_map.clear();
+}
+
+void DeviceProfiler::resetActiveDramBufferIndices() {
+    // Reset all active DRAM buffer indices to 0 for all cores and RISCs
+    // This keeps host state in sync when device-side profiler buffers are cleared
+    this->active_dram_buffer_per_core_risc_map.clear();
 }
 
 DeviceAddr DeviceProfiler::getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const {

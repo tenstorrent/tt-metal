@@ -224,7 +224,7 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> logical_graphs =
 
 // Build physical graphs from PhysicalSystemDescriptor
 std::map<MeshId, AdjacencyGraph<AsicID>> physical_graphs =
-    build_adjacency_graph_physical(psd, asic_id_to_mesh_rank);
+    build_adjacency_map_physical(cluster_type, psd, asic_id_to_mesh_rank);
 ```
 
 ## Architecture

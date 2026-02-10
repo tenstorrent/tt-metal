@@ -5,8 +5,8 @@
 #include <cstdint>
 
 #include "compute_kernel_api/tilize_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
 
 inline void tilize_activation(
     uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb) {

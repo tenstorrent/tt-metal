@@ -33,6 +33,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
             TT_OP_ELWADD(0, acc_to_dest, broadcast_type, ADDR_MOD_0, 0),
             TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
         tmp.set_last_inner_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     } else if constexpr (eltwise_binary_type == ELWSUB) {
         ckernel_template tmp(
@@ -41,6 +42,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
             TT_OP_ELWSUB(0, acc_to_dest, broadcast_type, ADDR_MOD_0, 0),
             TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
         tmp.set_last_inner_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         if constexpr (high_fidelity) {
@@ -59,6 +61,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
                 TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_0, 0),
                 TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_2, 0));
             tmp.set_last_inner_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
+            tmp.set_last_outer_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
             tmp.program();
         }
     }
@@ -100,7 +103,6 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(uint src_index, uint dst_
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         // Row and no broadcasted behaves similarly
         if constexpr (high_fidelity) {
-#pragma GCC unroll 0
             for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num++) {
                 ckernel_template::run();
             }
@@ -110,8 +112,6 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(uint src_index, uint dst_
     }
     // Manually clear B once mop is done for scaler bcast
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
-
-    math::clear_dst_reg_addr();
 }
 
 template <EltwiseBinaryType eltwise_binary_type, int NUM_FIDELITY_PHASES, std::uint32_t FIDELITY_INCREMENT>

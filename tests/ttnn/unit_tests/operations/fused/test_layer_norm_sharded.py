@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_watcher_enabled
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
@@ -51,6 +52,27 @@ def test_layer_norm_sharded_single_stage(
 def test_layer_norm_sharded_two_stage(
     device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, use_welford, two_stage, tensor_type, dtype
 ):
+    if is_watcher_enabled() and two_stage and use_welford:
+        if (
+            h == 128
+            and w == 256
+            and num_cores_h == 4
+            and num_cores_w == 2
+            and block_ht == 4
+            and block_wt == 1
+            and subblock_wt == 1
+        ):
+            pytest.skip("Skipping the test with watcher enabled due to failure, see github issue #37171")
+        if (
+            h == 256
+            and w == 512
+            and num_cores_h == 2
+            and num_cores_w == 4
+            and block_ht == 8
+            and block_wt == 2
+            and subblock_wt == 1
+        ):
+            pytest.skip("Skipping the test with watcher enabled due to hang, see github issue #37172")
     layernorm_test_main(
         device,
         h,
@@ -72,6 +94,8 @@ def test_layer_norm_sharded_two_stage(
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_residual(device, use_welford, two_stage, tensor_type, dtype):
+    if is_watcher_enabled() and two_stage and use_welford:
+        pytest.skip("Skipping the test with watcher enabled due to hang, see github issue #37172")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)
@@ -99,6 +123,11 @@ def test_layer_norm_sharded_with_residual(device, use_welford, two_stage, tensor
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage, tensor_type, dtype):
+    if is_watcher_enabled() and (
+        (two_stage and use_welford)
+        or (dtype == torch.bfloat16 and tensor_type == "random_normal" and not two_stage and not use_welford)
+    ):
+        pytest.skip("Skipping the test with watcher enabled due to hang, see github issue #37172")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     weight = generate_input_tensor(1, w, "random", dtype)
@@ -127,6 +156,8 @@ def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage,
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, two_stage, tensor_type, dtype):
+    if is_watcher_enabled() and not two_stage:
+        pytest.skip("Skipping the test with watcher enabled due to failure, see github issue #37171")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = 64, 32, 2, 1, 1, 1, 1
 
     weight = generate_input_tensor(1, w, "random", dtype)
@@ -156,6 +187,8 @@ def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, 
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welford, two_stage, tensor_type, dtype):
+    if is_watcher_enabled() and two_stage and use_welford:
+        pytest.skip("Skipping the test with watcher enabled due to hang, see github issue #37172")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)
