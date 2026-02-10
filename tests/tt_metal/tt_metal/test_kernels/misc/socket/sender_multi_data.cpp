@@ -47,7 +47,10 @@ void kernel_main() {
             // Issuing the write requires the wptr from the socket itself
             // The user can get the wptr directly from the sender_socket, or
             // we can add wrappers issue the write itself
-            noc_async_write(data_addr, data_noc_coord_addrs[i] | sender_socket.write_ptr, page_size);
+            noc_async_write(
+                data_addr,
+                data_noc_coord_addrs[i] | (sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
+                page_size);
             data_addr += page_size;
         }
         outstanding_data_size -= page_size;

@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
@@ -280,7 +280,7 @@ def test_model_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            model_args.get_residual_mem_config(Mode.DECODE, None),
         )
 
         # Get cos/sin matrices for the current position of each user
@@ -291,7 +291,7 @@ def test_model_inference(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
-            mode="decode",
+            mode=Mode.DECODE,
             page_table=page_table_tt,
         )
 

@@ -7,12 +7,12 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/eltwise_binary.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_moe_gate.h"
 
 void kernel_main() {

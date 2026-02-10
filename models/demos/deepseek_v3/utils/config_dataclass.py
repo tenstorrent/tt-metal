@@ -8,11 +8,7 @@ from typing import Any, Union
 
 import ttnn
 
-optimal_topology = (
-    ttnn.Topology.Ring
-    if ((os.getenv("MESH_DEVICE") == "QUAD") or (os.getenv("USE_TORUS_MODE") is not None))
-    else ttnn.Topology.Linear
-)
+optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.Topology.Linear
 
 # Union type for all possible program configs used with ttnn.linear
 ProgramConfig = Union[

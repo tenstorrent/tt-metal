@@ -17,9 +17,7 @@ from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 optimal_topology = (
-    ttnn.FabricConfig.FABRIC_1D_RING
-    if ((os.getenv("MESH_DEVICE") == "QUAD") or (os.getenv("USE_TORUS_MODE") is not None))
-    else ttnn.FabricConfig.FABRIC_1D
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
 )
 
 
