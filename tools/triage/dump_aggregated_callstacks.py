@@ -30,7 +30,7 @@ Owner:
 import os
 from dataclasses import dataclass
 
-from triage import ScriptConfig, run_script, triage_field, collection_serializer
+from triage import ScriptConfig, log_check_risc, run_script, triage_field, collection_serializer
 from callstack_provider import (
     KernelCallstackWithMessage,
     format_callstack_with_message,
@@ -41,6 +41,7 @@ from callstack_provider import (
 from run_checks import run as get_run_checks, device_description_serializer
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     depends=["run_checks", "callstack_provider"],
@@ -100,14 +101,24 @@ def _collect_aggregated(
     """Collect callstacks and aggregate by (kernel_id, normalized_pc, op_id)."""
 
     def per_core(location: OnChipCoordinate, risc_name: str) -> CallstacksData | None:
-        # Filter DONE cores, like dump_callstacks.py does
-        if not show_all_cores:
-            d = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
-            if d.go_message == "DONE":
-                return None
+        try:
+            # Filter DONE cores, like dump_callstacks.py does
+            if not show_all_cores:
+                d = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
+                if d.go_message == "DONE":
+                    return None
 
-        # This will use the new caching in CallstackProvider
-        return callstack_provider.get_callstacks(location, risc_name)
+            return callstack_provider.get_callstacks(location, risc_name)
+        except TimeoutDeviceRegisterError:
+            raise
+        except Exception as e:
+            log_check_risc(
+                risc_name,
+                location,
+                False,
+                f"[warning]Failed to dump callstacks: {e}[/]",
+            )
+            return None
 
     results = run_checks.run_per_core_check(
         per_core,
@@ -124,35 +135,29 @@ def _collect_aggregated(
         if check_result.result is None:
             continue
 
-        try:
-            cs_data: CallstacksData = check_result.result
-            d = cs_data.dispatcher_core_data
+        cs_data: CallstacksData = check_result.result
+        d = cs_data.dispatcher_core_data
 
-            op_id = d.host_assigned_id
-            pc = cs_data.pc
+        op_id = d.host_assigned_id
+        pc = cs_data.pc
 
-            # Normalize PC into kernel space when kernel_offset is available
-            if d.kernel_offset is not None and pc is not None:
-                normalized_pc = pc - d.kernel_offset
-            else:
-                normalized_pc = pc
+        # Normalize PC into kernel space when kernel_offset is available
+        if d.kernel_offset is not None and pc is not None:
+            normalized_pc = pc - d.kernel_offset
+        else:
+            normalized_pc = pc
 
-            key = (d.watcher_kernel_id, normalized_pc, op_id)
-            bucket = buckets.get(key)
-            if bucket is None:
-                bucket = AggregationBucket(cs_data)
-                # Store the safe op_id value
-                bucket.op_id = op_id
-                buckets[key] = bucket
+        key = (d.watcher_kernel_id, normalized_pc, op_id)
+        bucket = buckets.get(key)
+        if bucket is None:
+            bucket = AggregationBucket(cs_data)
+            # Store the safe op_id value
+            bucket.op_id = op_id
+            buckets[key] = bucket
 
-            # Get device label from device description
-            device_label = device_description_serializer(check_result.device_description)
-            bucket.add_core(device_label, check_result.location, check_result.risc_name)
-
-        except Exception as e:
-            # If ANY error occurs processing this core, skip it and continue
-            # This prevents one bad core from crashing the entire aggregation
-            continue
+        # Get device label from device description
+        device_label = device_description_serializer(check_result.device_description)
+        bucket.add_core(device_label, check_result.location, check_result.risc_name)
 
     # Sort descending by # of cores
     sorted_buckets = sorted(buckets.values(), key=lambda b: len(b.core_locations), reverse=True)

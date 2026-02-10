@@ -370,23 +370,10 @@ class TestTriage:
         self.run_triage_script("dump_risc_debug_signals.py")
 
     def test_dump_aggregated_callstacks(self):
-        # Enable aggregated callstacks for this test
         os.environ["TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS"] = "1"
         try:
-            # Don't assert failure checks since mailbox corruption warnings are expected
-            result = self.run_triage_script("dump_aggregated_callstacks.py", assert_failure_checks=False)
-
-            # Script should run without crashing (result can be None or empty list if hang app has issues)
-            # Just verify the basic contract is met
-            if result is None or len(result) == 0:
-                # No data due to test environment issues - that's okay, at least it didn't crash
-                return
-
-            # Basic structure validation - ensure data makes sense if present
-            for row in result:
-                assert row.core_count >= 1, f"Expected core_count >= 1, got {row.core_count}"
-                assert len(row.risc_names) > 0, "Expected at least one RISC name"
-                assert len(row.locations) > 0, "Expected at least one location"
+            result = self.run_triage_script("dump_aggregated_callstacks.py")
+            assert result is not None, "Expected non-None result from dump_aggregated_callstacks.py"
 
             # If we have valid kernel names, validate against expected results
             valid_rows = [row for row in result if row.kernel_name is not None]
@@ -417,7 +404,6 @@ class TestTriage:
                                     print(f"Warning: Expected file '{expected_file}' not found in callstack")
 
         finally:
-            # Clean up environment variable
             os.environ.pop("TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS", None)
 
     # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
