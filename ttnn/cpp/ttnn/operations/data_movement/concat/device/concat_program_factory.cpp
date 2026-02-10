@@ -68,9 +68,8 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             if (num_output_pages % core_id == 0) {
                 ncores = core_id;
                 break;
-            } else {
-                ncores--;
             }
+            ncores--;
         }
         TT_FATAL(
             (num_output_pages % ncores == 0),
