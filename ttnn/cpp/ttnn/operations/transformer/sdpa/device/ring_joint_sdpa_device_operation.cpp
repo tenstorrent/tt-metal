@@ -159,6 +159,57 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.logical_n,
         N_global);
 
+    // DEBUG: Add detailed logging to understand the validation issue
+    log_info(tt::LogOp, "RING JOINT SDPA VALIDATION DEBUG:");
+    log_info(tt::LogOp, "  Q shape: [{}, {}, {}, {}]", q_shape[0], q_shape[1], q_shape[2], q_shape[3]);
+    log_info(tt::LogOp, "  K shape: [{}, {}, {}, {}]", k_shape[0], k_shape[1], k_shape[2], k_shape[3]);
+    log_info(tt::LogOp, "  N_local (from Q): {}", N_local);
+    log_info(tt::LogOp, "  N_global (from K): {}", N_global);
+    log_info(tt::LogOp, "  logical_n (from args): {}", args.logical_n);
+    log_info(tt::LogOp, "  ring_size (from args): {}", args.ring_size);
+    log_info(tt::LogOp, "  Delta (N_global - logical_n): {}", N_global - args.logical_n);
+    log_info(
+        tt::LogOp,
+        "  Constraint check: {} < {} = {}",
+        N_global - args.logical_n,
+        N_local,
+        (N_global - args.logical_n) < N_local);
+
+    // Check if tensors have different logical vs padded shapes
+    const auto& q_logical_shape = input_tensor_q.logical_shape();
+    const auto& q_padded_shape = input_tensor_q.padded_shape();
+    const auto& k_logical_shape = gathered_input_tensor_k.logical_shape();
+    const auto& k_padded_shape = gathered_input_tensor_k.padded_shape();
+
+    log_info(
+        tt::LogOp,
+        "  Q logical shape: [{}, {}, {}, {}]",
+        q_logical_shape[0],
+        q_logical_shape[1],
+        q_logical_shape[2],
+        q_logical_shape[3]);
+    log_info(
+        tt::LogOp,
+        "  Q padded shape: [{}, {}, {}, {}]",
+        q_padded_shape[0],
+        q_padded_shape[1],
+        q_padded_shape[2],
+        q_padded_shape[3]);
+    log_info(
+        tt::LogOp,
+        "  K logical shape: [{}, {}, {}, {}]",
+        k_logical_shape[0],
+        k_logical_shape[1],
+        k_logical_shape[2],
+        k_logical_shape[3]);
+    log_info(
+        tt::LogOp,
+        "  K padded shape: [{}, {}, {}, {}]",
+        k_padded_shape[0],
+        k_padded_shape[1],
+        k_padded_shape[2],
+        k_padded_shape[3]);
+
     TT_FATAL(
         (N_global - args.logical_n) < N_local,
         "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
