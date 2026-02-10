@@ -227,6 +227,24 @@ void read_ternary_blocks_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+    cb_reserve_back(ternary_b_cb, N_block_tiles);
+    uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
+    for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
+        if (n_tile_id >= shape.logical_d1) {
+            // Do not move tile data into CB if tile is outside ternary/output tensor.
+            // This can happen when ternary/output tensor shape is not a multiple of block sizes:
+            // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
+            // N_block_tiles=4)
+            break;
+        }
+
+        noc_async_read_tile(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
+        ternary_b_write_ptr += tile_size_bytes;
+    }
+    noc_async_read_barrier();
+
+    cb_push_back(ternary_b_cb, N_block_tiles);
+
     uint32_t m_id = 0;
     uint32_t i = d0_start;
     for (; i < d0_end; i++, m_id++) {
@@ -255,24 +273,6 @@ void read_ternary_blocks_sync(
         cb_reserve_back(ternary_a_cb, N_block_tiles);
         cb_push_back(ternary_a_cb, N_block_tiles);
     }
-
-    cb_reserve_back(ternary_b_cb, N_block_tiles);
-    uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
-    for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
-        if (n_tile_id >= shape.logical_d1) {
-            // Do not move tile data into CB if tile is outside ternary/output tensor.
-            // This can happen when ternary/output tensor shape is not a multiple of block sizes:
-            // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
-            // N_block_tiles=4)
-            break;
-        }
-
-        noc_async_read_tile(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
-        ternary_b_write_ptr += tile_size_bytes;
-    }
-    noc_async_read_barrier();
-
-    cb_push_back(ternary_b_cb, N_block_tiles);
 }
 
 /**
