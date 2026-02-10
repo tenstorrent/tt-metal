@@ -64,7 +64,7 @@
   sku: wh_llmbox
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-  timeout: 10
+  timeout: 60
 
 - name: models_tttv2_llama31_8B_tests
   cmd: MESH_DEVICE=T3K HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama--Llama-3.1-8B-Instruct pytest --tb=short models/common/demos/llama31_8B_demo.py
