@@ -1884,13 +1884,13 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
         (11008, 256, 2048),
     ],
 )
-@pytest.mark.parametrize("transpose_a", [True])  # "False, " makes torch.matmul() too slow
-@pytest.mark.parametrize("transpose_b", [False])  # ", True" makes ttnn.matmul() too slow for now
-def test_matmul_transpose_with_core_grid(device, m, k, n, transpose_a, transpose_b):
+def test_matmul_transpose_a_with_core_grid(device, m, k, n):
     torch.manual_seed(0)
 
-    shape_a = (k, m) if transpose_a == True else (m, k)
-    shape_b = (n, k) if transpose_b == True else (k, n)
+    # transpose a to test corner case for CB size estimate
+    transpose_a = True
+    shape_a = (k, m)
+    shape_b = (k, n)
 
     input_tensor_a = ttnn.rand(
         shape_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=42
@@ -1908,7 +1908,6 @@ def test_matmul_transpose_with_core_grid(device, m, k, n, transpose_a, transpose
         input_tensor_a,
         input_tensor_b,
         transpose_a=transpose_a,
-        transpose_b=transpose_b,
         core_grid=core_grid,
     )
     output_tensor = ttnn.to_torch(output_tensor_c)
@@ -1916,10 +1915,7 @@ def test_matmul_transpose_with_core_grid(device, m, k, n, transpose_a, transpose
     # torch equivalent: transpose A then matmul
     torch_a = ttnn.to_torch(input_tensor_a)
     torch_b = ttnn.to_torch(input_tensor_b)
-    torch_output_tensor = torch.matmul(
-        torch_a.transpose(-1, -2) if transpose_a == True else torch_a,
-        torch_b.transpose(-1, -2) if transpose_b == True else torch_b,
-    )
+    torch_output_tensor = torch.matmul(torch_a.transpose(-1, -2), torch_b)
 
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
