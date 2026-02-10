@@ -5,7 +5,7 @@
 #include "distributed_mla_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 
 namespace ttnn::operations::transformer::sdpa_prefill {
@@ -58,7 +58,7 @@ DistributedMLADeviceOperation::DistributedMLAProgram::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = tensor_args.input_tensor.device();
+    // auto* mesh_device = tensor_args.input_tensor.device();
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
@@ -74,7 +74,7 @@ DistributedMLADeviceOperation::DistributedMLAProgram::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     tt::tt_metal::Program program{};
 
     // Get device index using the CCL common function - this is the key part!
@@ -98,7 +98,7 @@ DistributedMLADeviceOperation::DistributedMLAProgram::create_at(
 }
 
 void DistributedMLADeviceOperation::DistributedMLAProgram::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+    cached_mesh_workload_t& /*cached_workload*/,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/) {
