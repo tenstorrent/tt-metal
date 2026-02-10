@@ -315,7 +315,7 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"),
             nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt,
+            nb::arg("core_range_set") = nb::none(),
             R"doc(
             Creates a program descriptor for layer norm multi-core operation.
 
