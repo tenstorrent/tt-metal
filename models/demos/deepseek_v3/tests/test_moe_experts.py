@@ -189,6 +189,7 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
 @pytest.mark.parametrize(
     "use_synthetic_weights",
     [True, False],  # Test both synthetic and real weights
+    ids=["synthetic", "real"],
 )
 @pytest.mark.parametrize(
     "module_path",

@@ -126,10 +126,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         return {
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
-                "num_links": 1,
+                "num_links": 4,
             },
             "all_to_all_combine": {
-                "num_links": 1,
+                "num_links": 4,
             },
             "ccl": ccl,
         }

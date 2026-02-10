@@ -195,6 +195,7 @@ def generate_synthetic_moe_weights(
 @pytest.mark.parametrize(
     "use_synthetic_weights",
     [True, False],  # Test both synthetic and downloaded weights
+    ids=["synthetic", "real"],
 )
 def test_forward_pass(
     mode,
