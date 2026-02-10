@@ -750,38 +750,54 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         // Use calculator to compute command sequence size
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_packed_large_unicast(write_sub_cmds.size());
+        void* cmd_region = sysmem_manager.issue_queue_reserve(calculator.write_offset_bytes(), dispatch_params.cq_id);
+        HugepageDeviceCommand command_sequence(cmd_region, calculator.write_offset_bytes());
+
+        // Add write packed large unicast command
+        command_sequence.add_dispatch_write_packed_large_unicast(
+            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, l1_alignment, write_sub_cmds.size(), write_sub_cmds);
+
+        TT_ASSERT(
+            command_sequence.write_offset_bytes() == calculator.write_offset_bytes(),
+            "Command sequence size mismatch, calculator: {}, command sequence: {}",
+            calculator.write_offset_bytes(),
+            command_sequence.write_offset_bytes());
+
+        sysmem_manager.issue_queue_push_back(calculator.write_offset_bytes(), dispatch_params.cq_id);
+        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+        sysmem_manager.fetch_queue_write(calculator.write_offset_bytes(), dispatch_params.cq_id);
+
+        calculator.clear();
+
+        // Put the CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H into its own fetch queue entry so prefetch_h knows to process
+        // it.
         if (dispatch_params.remote_chip) {
             calculator.add_prefetch_relay_linear_packed_h(relay_sub_cmds.size());
         } else {
             calculator.add_prefetch_relay_linear_packed(relay_sub_cmds.size());
         }
 
-        const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-        void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
-        HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-
-        // Add write packed large unicast command
-        command_sequence.add_dispatch_write_packed_large_unicast(
-            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, l1_alignment, write_sub_cmds.size(), write_sub_cmds);
+        cmd_region = sysmem_manager.issue_queue_reserve(calculator.write_offset_bytes(), dispatch_params.cq_id);
+        HugepageDeviceCommand prefetch_command_sequence(cmd_region, calculator.write_offset_bytes());
 
         // Add relay linear packed command
         if (dispatch_params.remote_chip) {
-            command_sequence.add_prefetch_relay_linear_packed_h(
+            prefetch_command_sequence.add_prefetch_relay_linear_packed_h(
                 pinned_src_noc_xy, total_relay_length, relay_sub_cmds, relay_sub_cmds.size(), 0);
         } else {
-            command_sequence.add_prefetch_relay_linear_packed(
+            prefetch_command_sequence.add_prefetch_relay_linear_packed(
                 pinned_src_noc_xy, total_relay_length, relay_sub_cmds, relay_sub_cmds.size(), 0);
         }
 
         TT_ASSERT(
-            command_sequence.write_offset_bytes() == cmd_sequence_sizeB,
+            prefetch_command_sequence.write_offset_bytes() == calculator.write_offset_bytes(),
             "Command sequence size mismatch, calculator: {}, command sequence: {}",
-            cmd_sequence_sizeB,
-            command_sequence.write_offset_bytes());
+            calculator.write_offset_bytes(),
+            prefetch_command_sequence.write_offset_bytes());
 
-        sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
+        sysmem_manager.issue_queue_push_back(calculator.write_offset_bytes(), dispatch_params.cq_id);
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-        sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+        sysmem_manager.fetch_queue_write(calculator.write_offset_bytes(), dispatch_params.cq_id);
 
         // Clear for next batch
         write_sub_cmds.clear();
