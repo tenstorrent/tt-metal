@@ -27,7 +27,7 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(
