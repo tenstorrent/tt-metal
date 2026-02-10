@@ -106,7 +106,7 @@ void sub_exp_block_bcast_cols_inplace_2x4(
                 }
                 for (uint32_t j = 0; j < tiles_per_column; ++j) {
                     // Pack to local_row's position in reduce_cb (0 or 1 within this pair)
-                    pack_tile<true>(dst_index++, reduce_cb, global_col_base + i);
+                    pack_tile<true>(dst_index++, reduce_cb, global_row_base + i);
                     if (global_col_base == 0 && j == 0) {
                         // If this was the first tile of a row, start accumulating
                         PACK((llk_pack_reconfig_l1_acc(1)));
