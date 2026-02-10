@@ -40,10 +40,6 @@ void JitBuildCache::build_once(size_t hash, const std::function<void()>& build_f
 
     {
         std::lock_guard<std::mutex> guard(mutex_);
-        // Re-insert as Built. If clear() was called while we were building,
-        // the entry was erased. We still mark it Built so that concurrent
-        // waiters (who will re-check after clear's notify) see the completed
-        // build rather than re-triggering it for the same in-flight work.
         entries_[hash] = State::Built;
     }
     cv_.notify_all();
@@ -52,11 +48,11 @@ void JitBuildCache::build_once(size_t hash, const std::function<void()>& build_f
 void JitBuildCache::clear() {
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        entries_.clear();
+        // Only erase Built entries. In-flight builds (Building) are preserved so
+        // that waiters continue to wait for the current builder rather than
+        // starting a duplicate build for the same hash.
+        std::erase_if(entries_, [](const auto& p) { return p.second == State::Built; });
     }
-    // Wake up any threads waiting in build_once(); they will re-check
-    // and either find the entry gone (become a new builder) or find
-    // it re-inserted as Built by the completing builder thread.
     cv_.notify_all();
 }
 

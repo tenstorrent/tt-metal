@@ -32,8 +32,8 @@ public:
     // If build_fn throws, the entry is removed so subsequent callers can retry.
     void build_once(size_t hash, const std::function<void()>& build_fn);
 
-    // Clear all entries. After clear(), the next build_once() for any hash will
-    // re-execute the build function. Safe to call concurrently with build_once().
+    // Clear completed entries. After clear(), the next build_once() for any hash
+    // will re-execute the build function.
     void clear();
 
 private:
