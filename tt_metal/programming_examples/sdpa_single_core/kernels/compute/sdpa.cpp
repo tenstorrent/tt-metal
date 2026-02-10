@@ -25,6 +25,250 @@
 
 #include <tools/profiler/kernel_profiler.hpp>
 
+using std::uint32_t;
+
+#ifdef TRISC_PACK
+
+constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
+constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
+constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
+
+#ifdef ARCH_WORMHOLE
+#define ADDR_MOD_X ADDR_MOD_3
+#else
+#define ADDR_MOD_X ADDR_MOD_7
+#endif
+
+ALWI void INSERT_SFPNOP() {
+#ifdef ARCH_WORMHOLE
+    TTI_SFPNOP;
+#endif
+}
+
+template <bool USE_SFPARECIP_INSTR, int POLY_DEGREE>
+constexpr bool can_preload_ln2_constants() {
+#ifdef ARCH_WORMHOLE
+    return false;
+#else
+    return (USE_SFPARECIP_INSTR || POLY_DEGREE == 1 || POLY_DEGREE == 2);
+#endif
+}
+
+/**
+ * Computes exp(x) using polynomial approximation after range reduction.
+ *
+ * Scales by configured factor, then reduces to exp(r) * 2^k
+ * where r = x - k*ln(2). Uses either SFPARECIP instruction or multi-term polynomial (degree 1-4)
+ * to compute exp(r), then reconstructs full result via exponent manipulation,
+ * clamping the exponent to handle large positive or negative inputs.
+ *
+ * @tparam USE_SFPARECIP_INSTR Use hardware SFPARECIP instruction (true) or polynomial evaluation (false). Only
+ * supported on Blackhole.
+ * @tparam SCALE_EN Apply scaling factor from LREG to input values
+ * @tparam ITERATIONS Number of 32-element vectors to process per tile
+ * @tparam POLY_DEGREE Polynomial degree (1-4) when USE_SFPARECIP_INSTR=false; higher improves accuracy
+ * @tparam IS_FP32_DEST_ACC_EN Float32 accumulation to dest register enabled.
+ * @tparam SCALE_BF16 Bfloat16 scale factor represented as uint16_t.
+ */
+template <
+    bool SCALE_EN,
+    int ITERATIONS,
+    bool USE_SFPARECIP_INSTR,
+    int POLY_DEGREE,
+    bool IS_FP32_DEST_ACC_EN,
+    uint16_t SCALE_BF16>
+void calculate_exponential_polynomial() {
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+
+    constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
+    constexpr float M_LN2 = -0.69314718055994530942f;     // -ln(2)
+
+    if (!USE_SFPARECIP_INSTR) {
+        ASSERT(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
+
+        // Evaluate polynomial f(x) = c0 + c1 * x + c2 * x^2 + ... using Horner's method.
+        constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
+                             : (POLY_DEGREE == 2) ? 0.999848792924395313327307061545061386175496934006f
+                             : (POLY_DEGREE == 3) ? 0.99992449655091231753798502608929170703152709521188f
+                                                  : 1.0000001510806179002040134468008959160576106495165f;
+        constexpr float c1 = (POLY_DEGREE == 1)   ? 1.0201394465967894800285756834161653337107187804001f
+                             : (POLY_DEGREE == 2) ? 1.01508760098521056684783640695492761469306929535975f
+                             : (POLY_DEGREE == 3) ? 0.99993960415029750534472970577402987498389428593233f
+                                                  : 0.99996228117047652035114096488703457970402030983204f;
+        constexpr float c2 = (POLY_DEGREE == 2)   ? 0.50628367056745568861842335616023694454759126020461f
+                             : (POLY_DEGREE == 3) ? 0.50502329058055065591138054839814880512001604099324f
+                                                  : 0.49998365704615426417337683145647067790385638465486f;
+        constexpr float c3 = (POLY_DEGREE == 3) ? 0.16817330195731531429790827442800245470170482723302f
+                                                : 0.16792157982882225102649214918047336097544632172075f;
+        constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
+
+        switch (POLY_DEGREE) {
+            case 4:
+                TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
+                TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
+                [[fallthrough]];
+            case 3:
+                TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
+                TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
+                [[fallthrough]];
+            case 2:
+                TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
+                TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
+                [[fallthrough]];
+            case 1:
+                TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
+                TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
+                TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
+                TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
+            default: break;
+        }
+    }
+
+    if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
+        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(M_LN2));
+        TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(M_LN2));
+    }
+
+    for (int d = 0; d < ITERATIONS; d++) {
+        // Load the input.
+        constexpr uint8_t input_type = IS_FP32_DEST_ACC_EN ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
+        TTI_SFPLOAD(p_sfpu::LREG2, input_type, ADDR_MOD_X, 0);
+
+        if constexpr (SCALE_EN) {
+            TTI_SFPLOADI(p_sfpu::LREG0, 0, SCALE_BF16);
+            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+            INSERT_SFPNOP();
+        }
+
+        // Multiply by 1/ln(2) and round.
+        if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
+            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        } else {
+            TTI_SFPLOADI(p_sfpu::LREG1, 0xA, lo16(LN2_RECIP));
+            TTI_SFPLOADI(p_sfpu::LREG1, 0x8, hi16(LN2_RECIP));
+            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        }
+        INSERT_SFPNOP();
+        TTI_SFP_STOCH_RND(
+            0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);  // Clamp to [-127,+127].
+        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
+
+        if constexpr (USE_SFPARECIP_INSTR) {
+#ifdef ARCH_BLACKHOLE
+            // Calculate floor(x) by setting v=v-1 if v>u.
+            TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);                                    // SFPGT_MOD1_SET_CC
+            TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 2);  // SFPMAD_MOD1_NEGATE_VC
+            TTI_SFPENCC(0, 0, 0, 0);
+
+            // Calculate exp(x - k*ln2).
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
+#else
+            ASSERT(false);  // TTI_SFPARECIP instruction only supported on Blackhole".
+#endif
+        } else {
+            if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            } else {
+                TTI_SFPLOADI(p_sfpu::LREG0, 0xA, lo16(M_LN2));
+                TTI_SFPLOADI(p_sfpu::LREG0, 0x8, hi16(M_LN2));
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            }
+            INSERT_SFPNOP();
+
+            // Calculate polynomial.
+            if constexpr (POLY_DEGREE == 1) {
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+            } else if constexpr (POLY_DEGREE == 2) {
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+                INSERT_SFPNOP();
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+            } else if constexpr (POLY_DEGREE == 3) {
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+                INSERT_SFPNOP();
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+                INSERT_SFPNOP();
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+            } else {  // degree 4.
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG2, 0);
+                INSERT_SFPNOP();
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+                INSERT_SFPNOP();
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+                INSERT_SFPNOP();
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+            }
+            INSERT_SFPNOP();
+        }
+
+        // Multiply by 2^k.
+        TT_SFPADDI(0x42fe, p_sfpu::LREG1, 0);  // Add 127.
+        INSERT_SFPNOP();
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
+        TTI_SFPSETEXP(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+        INSERT_SFPNOP();
+
+        // Handle underflow: if k == 0, exp(x) = 0 (fixes -inf case).
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 6);  // Set LaneFlags = (LREG1 == 0) and enable CC.
+        TTI_SFPLOADI(p_sfpu::LREG2, 0, 0);     // LREG2 = 0 ONLY for lanes where LREG1 == 0.
+        TTI_SFPENCC(0, 0, 0, 0);               // Disable CC and clear LaneFlags - ALL lanes active again.
+
+        // Store the result.
+        if constexpr (!IS_FP32_DEST_ACC_EN) {
+            // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it
+            // so convert to bfloat16 using round-to-nearest-even.
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        }
+        TTI_SFPSTORE(p_sfpu::LREG2, input_type, ADDR_MOD_X, 0);
+        TTI_INCRWC(0, 4, 0, 0);  // Skip odd columns.
+    }
+}
+
+/**
+ * exp_tile on only the columns 0:8 of a face
+ */
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+void calculate_exponential_first_column() {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    if constexpr (SDPA_EXP_APPROX_MODE) {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat result = ckernel::sfpu::
+                _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                    val, scale_bf16);
+            sfpi::dst_reg[0] = result;
+
+            // Stride by 2 to skip columns 8:16 of the face
+            sfpi::dst_reg += 2;
+        }
+    } else {
+        constexpr int polynomial_degree = DST_ACCUM_MODE ? 4 : 2;
+        calculate_exponential_polynomial<
+            true,
+            ITERATIONS_HALF_FACE,
+            false,
+            polynomial_degree,
+            DST_ACCUM_MODE,
+            scale_bf16>();
+    }
+}
+
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+void exp_tile_first_column(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
+}
+
+#endif
+
 // Define this macro to enable high-granularity DeviceZoneScopedN profiling in sdpa_inner_loop_8x4x16
 #define SDPA_HIGH_GRANULARITY_PROFILING
 
@@ -34,7 +278,139 @@
 #define SDPA_DeviceZoneScopedN(name)
 #endif
 
-using std::uint32_t;
+/**
+ * out_cb = exp((in0_cb - in1_cb) * scale_fp32)
+ * only at 2*q_subblock and 2*q_subblock+1 elements
+ */
+template <uint32_t scale_fp32>
+void sub_exp_first_col_blocks_2x1(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock) {
+    constexpr uint32_t tiles_per_row = 2;
+    const uint32_t global_row_base = q_subblock * tiles_per_row;
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+
+    sub_tiles_init(in0_cb, in1_cb);
+    exp_packthread_tile_init<EXP_APPROX_MODE, false>();
+
+    cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
+    cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
+
+    {
+        SDPA_DeviceZoneScopedN("SUB_m");
+        tile_regs_acquire();
+        uint32_t dst_index = 0;
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            uint32_t tile_index = global_row_base + i;
+            sub_tiles(in0_cb, in1_cb, tile_index, tile_index, i /*dst_index*/);
+        }
+        tile_regs_commit();
+    }
+
+    {
+        SDPA_DeviceZoneScopedN("EXP_m");
+        tile_regs_wait();
+        for (uint32_t dst_index = 0; dst_index < tiles_per_row; dst_index++) {
+            PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(dst_index)));
+        }
+        PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
+    }
+
+    cb_reserve_back(out_cb, tiles_per_row);
+    {
+        SDPA_DeviceZoneScopedN("EXP_PACK_m");
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            uint32_t tile_index = global_row_base + i;
+            pack_tile<true>(i /*dst_index*/, out_cb, tile_index);
+        }
+    }
+    cb_push_back(out_cb, tiles_per_row);
+
+    tile_regs_release();
+}
+
+/**
+ * in0_cb += in1_cb
+ */
+template <bool pop_in1 = true>
+void add_block_2x1_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t q_subblock) {
+    SDPA_DeviceZoneScopedN("ADD_INPLACE");
+    constexpr uint32_t tiles_per_row = 2;
+    const uint32_t global_row_base = q_subblock * tiles_per_row;
+
+    add_tiles_init(in0_cb, in1_cb);
+    cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
+    cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
+
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        uint32_t src_tile_index = global_row_base + i;
+        add_tiles(in0_cb, in1_cb, src_tile_index, src_tile_index, i /*dst_index*/);
+    }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        pack_tile<true>(i, in0_cb, global_row_base + i);  // Pack back to original position in in0_cb
+    }
+    tile_regs_release();
+}
+
+void mul_tiles_bcast_cols_2x1_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t q_subblock) {
+    /**
+     * Given in0_cb and in1_cb, multiply each tile of in0_cb by the corresponding tile of in1_cb
+     * and bcast cols of in1_cb.
+     */
+    SDPA_DeviceZoneScopedN("MUL_BCAST_COLS_INPLACE");
+    constexpr uint32_t tiles_per_row = 2;
+    const uint32_t global_row_base = q_subblock * tiles_per_row;
+    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
+    cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
+
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        uint32_t src_tile_index = global_row_base + i;
+        mul_tiles_bcast_cols(in0_cb, in1_cb, src_tile_index, src_tile_index, i /*dst_index*/);
+    }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        pack_tile<true>(i, in0_cb, global_row_base + i);  // Pack back to original position in in0_cb
+    }
+    tile_regs_release();
+}
+
+void mul_block_bcast_cols_acc_2x4(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock) {
+    static const uint32_t tiles_per_row = 2;
+    static const uint32_t tiles_per_column = 4;
+    const uint32_t global_row_base = q_subblock * tiles_per_row;
+    mul_bcast_cols_init_short(in0_cb, in1_cb);
+
+    cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
+    cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
+
+    PACK((llk_pack_reconfig_l1_acc(1 /*pack accumulate*/)));
+    tile_regs_acquire();
+    uint32_t dst_index = 0;
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        for (uint32_t j = 0; j < tiles_per_column; j++) {
+            uint32_t in0_tile_index = (global_row_base + i) * tiles_per_column + j;  // Absolute tile index for in0_cb
+            mul_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index++);
+        }
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    dst_index = 0;
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        for (uint32_t j = 0; j < tiles_per_column; j++) {
+            uint32_t out_tile_index = (global_row_base + i) * tiles_per_column + j;  // Absolute tile index for in0_cb
+            pack_tile<true>(dst_index++, out_cb, out_tile_index);  // Pack to original position in out_cb
+        }
+    }
+    tile_regs_release();
+    PACK((llk_pack_reconfig_l1_acc(false)));
+}
+
 template <uint32_t in0_cb, uint32_t scale_fp32, bool do_reduce = true, int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace_2x4(
     uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols, uint32_t q_subblock, uint32_t kt_subblock) {
@@ -363,6 +739,12 @@ void sdpa_inner_loop_8x4x16(
             constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * head_dim_t;
             constexpr uint32_t qktv_in0_subblock_num_tiles = qktv_subblock_h * qktv_in0_block_w;
 
+            MATH(
+                DPRINT << "qktv_in0_block_w=" << qktv_in0_block_w << " qktv_q_num_subblocks=" << qktv_q_num_subblocks
+                       << " qktv_v_num_subblocks=" << qktv_v_num_subblocks
+                       << " qktv_output_num_tiles=" << qktv_output_num_tiles
+                       << " qktv_in0_subblock_num_tiles=" << qktv_in0_subblock_num_tiles << ENDL());
+
             uint32_t qktv_in0_index_offset = 0;
             uint32_t qktv_in0_wait_tiles = qktv_in0_subblock_num_tiles;
 
@@ -377,20 +759,13 @@ void sdpa_inner_loop_8x4x16(
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
                 // Drain: interleave sub_exp for last Q@KT row with first QKT@V matmul
-                // if (q_subblock == 0)
-                {
-                    MATH(
-                        DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << "][" << q_subblock
-                               << "] during QKT@V" << ENDL());
-                    // for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-                    //  Gradually drain the last Q@KT subblock's sub_exp across all 4 QKT@V subblocks, to best overlap
-                    //  exp computation with matmul.
-                    sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
-                        alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, q_subblock);
-                    //}
-                    // Reconfigure for matmul after sub_exp changed pack/unpack config
-                    // pack_reconfig_data_format(cb_out);
-                    // reconfig_data_format(cb_v_in, cb_qkt_im);
+                if (q_subblock == 0) {
+                    MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << ENDL());
+                    for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                        sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
+                            alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
+                    }
+                    cb_push_back(alias_cur_sum, Sq_chunk_t);
                 }
 
                 {
@@ -453,12 +828,36 @@ void sdpa_inner_loop_8x4x16(
                     v_index_offset += qktv_subblock_w;
                 }
 
-                qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
-                qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
+                {
+                    // SALAD: cb_exp_max_diff = slowexp((cb_prev_max - cb_cur_max) * scale)
+                    MATH(DPRINT << "SUB_EXP_m for Q[" << q_subblock << "]" << ENDL());
+                    sub_exp_first_col_blocks_2x1<scale_fp32>(
+                        alias_prev_max, alias_cur_max, cb_exp_max_diff, q_subblock);
+                    // todo: don't need these rows of prev_max anymore, so pop to free up buffer space now.
+                }
+
+                {
+                    // SALAD: cb_prev_sum *= cb_exp_max_diff
+                    MATH(DPRINT << "Mul tiles bcast cols for Q[" << q_subblock << "]" << ENDL());
+                    mul_tiles_bcast_cols_2x1_inplace(alias_prev_sum, cb_exp_max_diff, q_subblock);
+                }
+
+                {
+                    // SALAD:cb_prev_sum += cb_cur_sum
+                    MATH(DPRINT << "Add tiles inplace for Q[" << q_subblock << "]" << ENDL());
+                    add_block_2x1_inplace(alias_cur_sum, alias_prev_sum, q_subblock);
+                }
+                {
+                    mul_block_bcast_cols_acc_2x4(alias_prev_out, cb_exp_max_diff, alias_cur_out, q_subblock);
+                }
+
                 MATH(
                     DPRINT << "Pushing " << qktv_subblock_h * head_dim_t << " tiles to alias_cur_out for Q_subblock "
                            << q_subblock << ENDL());
                 cb_push_back(alias_cur_out, qktv_subblock_h * head_dim_t);
+
+                qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
+                qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
             }
 
             MATH(DPRINT << "Popping cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
@@ -467,9 +866,7 @@ void sdpa_inner_loop_8x4x16(
             cb_pop_front(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
         }
 
-        // Publish cur_sum (cur_max already published by reduce_c_row_pair,
-        // cur_out already published by V loop)
-        cb_push_back(alias_cur_sum, Sq_chunk_t);
+        cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
 
         // Pop prev buffers — frees them for reuse as "cur" in the next iteration.
         // [FUTURE: rescale/accumulate step would go here, BEFORE these pops,
@@ -480,16 +877,9 @@ void sdpa_inner_loop_8x4x16(
 
         if (iter < num_iter - 1) {
             // Swap: cur becomes prev for next iteration
-            uint32_t tmp;
-            tmp = alias_prev_max;
-            alias_prev_max = alias_cur_max;
-            alias_cur_max = tmp;
-            tmp = alias_prev_sum;
-            alias_prev_sum = alias_cur_sum;
-            alias_cur_sum = tmp;
-            tmp = alias_prev_out;
-            alias_prev_out = alias_cur_out;
-            alias_cur_out = tmp;
+            std::swap(alias_prev_max, alias_cur_max);
+            std::swap(alias_prev_sum, alias_cur_sum);
+            std::swap(alias_prev_out, alias_cur_out);
         } else {
             // Last iteration: consume final cur buffers
             cb_pop_front(alias_cur_max, Sq_chunk_t);
