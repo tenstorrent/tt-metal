@@ -1,0 +1,48 @@
+# Source files for tt_metal fabric library
+# Module owners should update this file when adding/removing/renaming source files
+
+set(FABRIC_SOURCES
+    control_plane.cpp
+    mesh_graph_descriptor.cpp
+    routing_table_generator.cpp
+    mesh_graph.cpp
+    erisc_datamover_builder.cpp
+    fabric_router_channel_mapping.cpp
+    fabric_router_builder.cpp
+    compute_mesh_router_builder.cpp
+    fabric_builder.cpp
+    builder/fabric_builder_config.cpp
+    builder/fabric_builder_helpers.cpp
+    builder/fabric_core_placement.cpp
+    builder/fabric_channel_allocator.cpp
+    builder/fabric_static_sized_channels_allocator.cpp
+    builder/fabric_remote_channels_allocator.cpp
+    builder/static_sized_channel_connection_writer_adapter.cpp
+    builder/fabric_router_recipe.cpp
+    builder/channel_to_pool_mapping.cpp
+    builder/multi_pool_channel_allocator.cpp
+    builder/connection_registry.cpp
+    builder/router_connection_mapping.cpp
+    fabric.cpp
+    fabric_init.cpp
+    fabric_host_utils.cpp
+    fabric_switch_manager.cpp
+    fabric_telemetry_reader.cpp
+    fabric_context.cpp
+    fabric_builder_context.cpp
+    fabric_mux_config.cpp
+    fabric_tensix_builder.cpp
+    fabric_tensix_builder_impl.cpp
+    fabric_types.cpp
+    compressed_direction_table.cpp
+    compressed_routing_path.cpp
+    serialization/router_port_directions.cpp
+    serialization/physical_system_descriptor_serialization.cpp
+    serialization/intermesh_connections_serialization.cpp
+    serialization/port_descriptor_serialization.cpp
+    ccl/ccl_common.cpp
+    physical_system_descriptor.cpp
+    topology_mapper.cpp
+    topology_mapper_utils.cpp
+    topology_solver.cpp
+)

@@ -1,17 +1,7 @@
 # Provide unique architecture specific translation units and include paths for each ARCH
 
-set(LLRT_SRC
-    llrt.cpp
-    core_descriptor.cpp
-    rtoptions.cpp
-    tlb_config.cpp
-    tt_cluster.cpp
-    tt_elffile.cpp
-    tt_memory.cpp
-    hal.cpp
-    tunnels_from_mmio_device.cpp
-    metal_soc_descriptor.cpp
-)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_library(llrt OBJECT ${LLRT_SRC})
 add_library(Metalium::Metal::LLRT ALIAS llrt)

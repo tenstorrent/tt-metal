@@ -1,4 +1,5 @@
-set(DETAIL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/reports/memory_reporter.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_library(detail OBJECT ${DETAIL_SRC})
 target_link_libraries(

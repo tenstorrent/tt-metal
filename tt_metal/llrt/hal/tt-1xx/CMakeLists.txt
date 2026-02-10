@@ -1,5 +1,8 @@
 # HAL_1xx - Hardware Abstraction Layer for Wormhole and Blackhole
 
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
 # FIXME: Don't want to be reaching above to project dir
 # Prefer a library target to be explicit about the dependency in CMake
 set(HAL_INCLUDE_DIRS
@@ -11,14 +14,7 @@ set(HAL_INCLUDE_DIRS
 
 add_library(wh_hal OBJECT)
 add_dependencies(wh_hal hal_generate_dev_msgs_header)
-target_sources(
-    wh_hal
-    PRIVATE
-        wormhole/wh_hal.cpp
-        wormhole/wh_hal_tensix.cpp
-        wormhole/wh_hal_active_eth.cpp
-        wormhole/wh_hal_idle_eth.cpp
-)
+target_sources(wh_hal PRIVATE ${WH_HAL_SOURCES})
 target_include_directories(wh_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
 target_include_directories(
     wh_hal
@@ -38,16 +34,9 @@ target_link_libraries(
         tt-logger::tt-logger
 )
 
-add_library(bh_hal OBJECT ${BH_HAL_SRC})
+add_library(bh_hal OBJECT)
 add_dependencies(bh_hal hal_generate_dev_msgs_header)
-target_sources(
-    bh_hal
-    PRIVATE
-        blackhole/bh_hal.cpp
-        blackhole/bh_hal_tensix.cpp
-        blackhole/bh_hal_active_eth.cpp
-        blackhole/bh_hal_idle_eth.cpp
-)
+target_sources(bh_hal PRIVATE ${BH_HAL_SOURCES})
 target_include_directories(bh_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
 target_include_directories(bh_hal SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/blackhole)
 target_link_libraries(
@@ -63,7 +52,7 @@ target_link_libraries(
 
 add_library(hal_1xx STATIC)
 add_library(HAL::1xx ALIAS hal_1xx)
-target_sources(hal_1xx PRIVATE hal_1xx_common.cpp)
+target_sources(hal_1xx PRIVATE ${HAL_1XX_SOURCES})
 target_include_directories(hal_1xx BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
 target_link_libraries(
     hal_1xx
