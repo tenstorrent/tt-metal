@@ -73,8 +73,7 @@ def _normalize_tensor(tensor):
     if isinstance(tensor, ttnn.Tensor):
         tensor = ttnn.to_torch(tensor)
 
-    if is_unsigned_tensor(tensor):
-        tensor = _post_to_torch_conversion(tensor)
+    tensor = _post_to_torch_conversion(tensor)
 
     return tensor
 
@@ -440,11 +439,13 @@ def is_unsigned_tensor(py_tensor):
     return py_tensor.dtype in TORCH_INTEGER_DTYPES
 
 
-def match_type_post_conversion(roundtrip_tensor, py_tensor):
+def align_tensor_dtype(roundtrip_tensor, dtype):
     if isinstance(roundtrip_tensor, torch.Tensor):
-        return roundtrip_tensor.to(py_tensor.dtype)
+        return roundtrip_tensor.to(dtype)
+
     elif isinstance(roundtrip_tensor, np.ndarray):
-        return roundtrip_tensor.astype(py_tensor.dtype)
+        return roundtrip_tensor.astype(dtype)
+
     else:
         raise ValueError(f"Expected torch.Tensor or np.ndarray, got {type(roundtrip_tensor)}")
 

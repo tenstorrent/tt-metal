@@ -476,11 +476,11 @@ def test_torch_conversion_unsigned_edge_cases_random(device, shape, ttnn_dtype, 
 )
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("with_device", [True, False])
-def test_torch_conversion_unsigned_edge_cases_fixed(
+def test_torch_conversion_unsigned_edge_cases(
     device, tensor_data, ttnn_dtype, torch_input_type, ttnn_layout, with_device
 ):
     torch_input_tensor = torch.tensor(tensor_data, dtype=torch_input_type)
-    ttnn_input_tensor = ttnn.from_torch(
+    ttnn_input_tensor = ttnn.Tensor(
         torch_input_tensor,
         dtype=ttnn_dtype,
         layout=ttnn_layout,

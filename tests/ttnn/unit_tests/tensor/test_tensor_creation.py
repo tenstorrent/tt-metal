@@ -12,7 +12,7 @@ import numpy as np
 
 import ttnn
 from tests.ttnn.utils_for_testing import (
-    match_type_post_conversion,
+    align_tensor_dtype,
     tt_dtype_to_torch_dtype,
     TORCH_INTEGER_DTYPES,
 )
@@ -59,7 +59,7 @@ def test_tensor_creation(shape, tt_dtype, layout, device):
     tt_tensor = tt_tensor.cpu()
 
     py_tensor_after_round_trip = tt_tensor.to_torch()
-    py_tensor_after_round_trip = match_type_post_conversion(py_tensor_after_round_trip, py_tensor)
+    py_tensor_after_round_trip = align_tensor_dtype(py_tensor_after_round_trip, py_tensor.dtype)
 
     assert py_tensor.dtype == py_tensor_after_round_trip.dtype
     assert py_tensor.shape == py_tensor_after_round_trip.shape
