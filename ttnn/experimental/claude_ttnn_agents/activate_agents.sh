@@ -42,6 +42,16 @@ if [ -d "$SCRIPT_DIR/scripts/logging" ]; then
     echo "  - logging/"
 fi
 
+# Copy standalone utility scripts
+echo "Installing utility scripts..."
+for script in "$SCRIPT_DIR/scripts/"*.sh; do
+    if [ -f "$script" ]; then
+        cp "$script" "$REPO_ROOT/.claude/scripts/"
+        chmod +x "$REPO_ROOT/.claude/scripts/$(basename "$script")"
+        echo "  - $(basename "$script")"
+    fi
+done
+
 # Copy reference documents
 echo "Installing reference documents..."
 mkdir -p "$REPO_ROOT/.claude/references"

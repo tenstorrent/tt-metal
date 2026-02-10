@@ -68,17 +68,22 @@ Proceed with analysis, or suggest different references?"
 
 ### Step 6: Post-Agent Log Review (If Logging Enabled)
 
-Agent logging is **OPTIONAL**. To enable logging for an operation, run BEFORE invoking agents:
+Agent logging is **OPTIONAL**. It is controlled by the presence of `.claude/active_logging`:
+
 ```bash
-.claude/scripts/logging/set_logging_config.sh {operation_path} --enable
+# Check status:
+ls .claude/active_logging 2>/dev/null && echo "Logging ON" || echo "Logging OFF"
+
+# Enable (persists across runs):
+touch .claude/active_logging
+
+# Disable:
+rm -f .claude/active_logging
 ```
 
-To disable:
-```bash
-.claude/scripts/logging/set_logging_config.sh {operation_path} --disable
-```
+A `SubagentStart` hook (`inject-logging-context.sh`) automatically detects this file and injects breadcrumb instructions into every agent's context. No prompt text needed — agents receive logging instructions via the hook infrastructure. See `.claude/references/logging-mechanism.md` for details.
 
-Agents automatically detect logging status via `check_logging_enabled.sh`.
+See `.claude/references/logging-mechanism.md` for full documentation.
 
 **If logging was enabled**, after each agent completes:
 

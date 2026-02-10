@@ -4,11 +4,6 @@ description: Use this agent to design a new TTNN operation. Supports two modes:\
 model: opus
 color: green
 hooks:
-  PostToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: ".claude/scripts/track_agent_file.sh"
   Stop:
     - hooks:
         - type: command
@@ -455,11 +450,6 @@ EOF
 
 ## Breadcrumbs (Conditional)
 
-Check if logging is enabled at startup:
-```bash
-.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
-```
-
-**If DISABLED**: Skip breadcrumb steps. Git commits still required.
+If the caller includes **"enable detailed logging"**, **"with execution logging"**, or **"enable logging"** in the prompt, enable breadcrumbs. Otherwise skip breadcrumb steps (git commits still required).
 
 **If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/planner.md` for logging protocol.
