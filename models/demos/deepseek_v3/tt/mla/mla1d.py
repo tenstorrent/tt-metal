@@ -1144,7 +1144,7 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
-        # TODO: remoe the to memory config after illia's pr is merged
+        # TODO: remove the to memory config after illia's pr is merged
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,32,1,64 4x8 [32,64]
         tt_kv_rope = ttnn.transpose(
@@ -1229,7 +1229,7 @@ class MLA1D(AbstractModule):
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, bsz, kv_lora_rank]
         # 1,16,32,512 L1 interleaved
         tt_q_nope = ttnn.transpose(tt_q_nope, 1, 2)  # [1, bsz, num_heads_local, qk_nope_head_dim]
-        # 1,132,16,512 L1 interleaved
+        # 1,32,16,512 L1 interleaved
 
         # Q RoPE
         # 1,32,16,64 height sharded 8x4 [32,64]
