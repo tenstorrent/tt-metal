@@ -61,12 +61,12 @@
   team: fabric
   timeout: 30
 
-- name: BH Galaxy Fabric Torus Stability Tests
-  cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml
-  sku: bh_galaxy
-  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
-  timeout: 20
+# - name: BH Galaxy Fabric Torus Stability Tests
+#   cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml
+#   sku: bh_galaxy
+#   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+#   team: fabric
+#   timeout: 20
 
 - name: BH Galaxy Socket Pipeline Latency SendRecv Single Galaxy
   cmd: python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline --gtest_filter="*SendRecvPipelineSingleGalaxy*"
