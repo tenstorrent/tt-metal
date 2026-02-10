@@ -5,23 +5,24 @@
 TTTv2-style LM Head module for 1D-topology devices: N150 (1x1), N300 (1x2), T3K (1x8).
 
 Computes logits over the vocabulary by splitting the output projection into
-weight chunks that fit in L1, running linear ops per chunk, concatenating,
-and then all-reducing across devices.
+weight chunks that fit in L1, running linear ops per chunk, and concatenating.
+
+Each device holds the correct logits for its vocab shard (column-parallel linear,
+no partial sums). The caller handles all_gather for multi-device argmax.
 
 Execution path:
   for each (weight, pc): linear(x, weight) → sharded_to_interleaved → append
-  → concat → reduce_scatter (1D)
+  → concat
 """
 
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE
 
 # =============================================================================
@@ -43,11 +44,8 @@ class LMHead1DConfig:
     # Required: output projection weights (already split for L1 fit)
     output_weights: List[LazyWeight]
 
-    # Optional: device and collectives
+    # Optional: device
     mesh_device: ttnn.MeshDevice | None = None
-    tt_ccl: TT_CCL | None = None
-    topology: Optional[ttnn.Topology] = None
-    num_reduce_scatter_links: int = 1
 
     # Optional: derived from weights if None
     dim: int | None = None
@@ -60,16 +58,15 @@ class LMHead1DConfig:
     compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
     lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b
     output_memcfg: ttnn.MemoryConfig | None = None
-    ccl_dtype: ttnn.DataType = ttnn.bfloat8_b
+
+    # Input memory config (None = DRAM interleaved for simple API, width-sharded for from_model_args)
+    input_memcfg: ttnn.MemoryConfig | None = None
 
     # Weight memory configs (None = auto-compute)
     weights_memcfgs: List[ttnn.MemoryConfig] | None = None
 
     def is_resolved(self) -> bool:
-        optional = set()
-        if self.mesh_device and self.mesh_device.get_num_devices() == 1:
-            optional.add("topology")
-        return all(getattr(self, f) is not None for f in self.__dataclass_fields__ if f not in optional)
+        return all(getattr(self, f) is not None for f in self.__dataclass_fields__)
 
 
 # =============================================================================
@@ -82,7 +79,8 @@ class LMHead1D(LightweightModule):
     LM Head for non-TG (1D) devices.
 
     Splits vocabulary projection into L1-sized chunks, runs linear per chunk,
-    concatenates, and reduces across devices.
+    and concatenates. Each device holds correct logits for its vocab shard;
+    caller handles all_gather for multi-device argmax.
 
     Simple API:
         lm_head = LMHead1D(output_weights=[w1, w2])
@@ -92,8 +90,7 @@ class LMHead1D(LightweightModule):
         lm_head = LMHead1D.from_config(config)
 
     Execution path:
-      for each (w, pc): linear(x, w) → sharded_to_interleaved
-      → concat → reduce_scatter
+      for each (w, pc): linear(x, w) → sharded_to_interleaved → concat
     """
 
     def __init__(self, output_weights: List[LazyWeight]):
@@ -123,7 +120,7 @@ class LMHead1D(LightweightModule):
             x: Input hidden states, shape [1, 1, batch_rows, dim].
 
         Returns:
-            Logits tensor, shape [1, 1, batch_rows, vocab_size / num_devices].
+            Logits tensor, shape [1, 1, batch_rows, padded_vocab / num_devices] per device.
         """
         self.load_device_weights()
         x = _load_input_device_tensor(x, self.config)
@@ -156,43 +153,7 @@ class LMHead1D(LightweightModule):
         # Concatenate splits
         output = ttnn.concat(outputs, dim=-1, memory_config=cfg.output_memcfg)
 
-        # All-reduce across devices (1D: reduce_scatter, dim=0)
-        output = self._all_reduce(output)
-
         return output
-
-    def _all_reduce(self, output: ttnn.Tensor) -> ttnn.Tensor:
-        cfg = self.config
-        if cfg.mesh_device.get_num_devices() == 1:
-            return output
-
-        original_shape = output.shape
-        if original_shape[0] != 1 or original_shape[1] != 1:
-            output = ttnn.reshape(
-                output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-            )
-
-        if output.is_sharded():
-            output_sharded = output
-            output = ttnn.sharded_to_interleaved(output_sharded, ttnn.L1_MEMORY_CONFIG)
-            output_sharded.deallocate(True)
-
-        reduced = ttnn.experimental.reduce_scatter_minimal_async(
-            output,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=cfg.num_reduce_scatter_links,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=cfg.topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
-        )
-        output.deallocate(True)
-        return reduced
 
     # [INFO] this is the entry point for TTTv1 model_config.py and will retire with TTTv1
     @classmethod
@@ -208,7 +169,11 @@ class LMHead1D(LightweightModule):
         dtype=None,
         model_config=None,
     ):
-        """Factory method for backward compatibility with ModelArgs."""
+        """Factory method for backward compatibility with ModelArgs.
+
+        Note: tt_ccl is accepted for signature compatibility with TTTv1 LMHead
+        but is not used -- 1D LMHead does not need CCL (column-parallel, no partial sums).
+        """
         if args.is_galaxy:
             raise ValueError("LMHead1D cannot be used for Galaxy devices.")
 
@@ -293,21 +258,21 @@ class LMHead1D(LightweightModule):
             for ss in split_sizes
         ]
 
-        ccl_topology = args.ccl_topology()
-        ccl_dtype = getattr(args, "ccl_dtype", ttnn.bfloat8_b)
+        # Get input memory config from model_config (width-sharded for DRAM-sharded matmul)
+        if model_config is None:
+            model_config = args.get_model_config()
+        input_memcfg = model_config.get("LM_HEAD_INPUT_MEMCFG", ttnn.DRAM_MEMORY_CONFIG)
 
         config = LMHead1DConfig(
             output_weights=output_weights,
             mesh_device=mesh_device,
-            tt_ccl=tt_ccl,
-            topology=ccl_topology,
             dim=dim,
             max_batch_size=args.max_batch_size,
             program_configs=program_configs,
             compute_kernel_config=_compute_kernel_config_hifi2(),
             lm_head_dtype=getattr(args, "lm_head_dtype", ttnn.bfloat8_b),
             output_memcfg=ttnn.L1_MEMORY_CONFIG,
-            ccl_dtype=ccl_dtype,
+            input_memcfg=input_memcfg,
             weights_memcfgs=weights_memcfgs,
         )
         return cls.from_config(config)
@@ -333,14 +298,6 @@ def _resolve_lm_head_1d_config(config: LMHead1DConfig) -> LMHead1DConfig:
 
     assert mesh_device is not None
 
-    # TT_CCL
-    if config.tt_ccl is None:
-        to_set["tt_ccl"] = get_tt_ccl(mesh_device)
-
-    # Topology
-    if config.topology is None:
-        to_set["topology"] = _default_topology(mesh_device)
-
     # Dim
     dim = config.dim
     if dim is None:
@@ -354,6 +311,10 @@ def _resolve_lm_head_1d_config(config: LMHead1DConfig) -> LMHead1DConfig:
     # Output memcfg
     if config.output_memcfg is None:
         to_set["output_memcfg"] = ttnn.L1_MEMORY_CONFIG
+
+    # Input memcfg
+    if config.input_memcfg is None:
+        to_set["input_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
 
     # Program configs
     num_devices = mesh_device.get_num_devices()
@@ -399,12 +360,12 @@ def _resolve_lm_head_1d_config(config: LMHead1DConfig) -> LMHead1DConfig:
 
 
 def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: LMHead1DConfig) -> ttnn.Tensor:
-    """Resolve input tensor."""
+    """Resolve input tensor using config's input_memcfg."""
     if isinstance(x, LazyWeight):
         resolved_x = resolve_lazy_weight(
             x,
             device=config.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=config.input_memcfg,
             mesh_mapper_config=None,
             layout=ttnn.TILE_LAYOUT,
         )
@@ -433,15 +394,3 @@ def _create_dram_sharded_mem_config(
     padded_size = math.ceil(n / (tile_size * dram_cores)) * (tile_size * dram_cores)
     shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-
-
-def _default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
-        return ttnn.Topology.Ring
-    elif num_devices > 1:
-        return ttnn.Topology.Linear
-    return None

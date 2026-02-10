@@ -48,14 +48,16 @@ def test_lm_head_1d_config_defaults():
 
     config = LMHead1DConfig(output_weights=[MagicMock()])
     assert config.mesh_device is None
-    assert config.topology is None
     assert config.program_configs is None
     assert config.compute_kernel_config is None
-    assert config.ccl_dtype == ttnn.bfloat8_b
+    assert config.lm_head_dtype == ttnn.bfloat8_b
+    assert config.output_memcfg is None
+    assert config.input_memcfg is None
+    assert config.weights_memcfgs is None
 
 
-def test_lm_head_1d_config_is_resolved_single_device():
-    """Test is_resolved() treats topology as optional for single-device mesh."""
+def test_lm_head_1d_config_is_resolved_all_fields():
+    """Test is_resolved() when all fields are set."""
     from unittest.mock import MagicMock
 
     mock_device = MagicMock()
@@ -64,36 +66,14 @@ def test_lm_head_1d_config_is_resolved_single_device():
     config = LMHead1DConfig(
         output_weights=[MagicMock()],
         mesh_device=mock_device,
-        tt_ccl=MagicMock(),
-        topology=None,  # None is OK for single device
         dim=4096,
         program_configs=[None],
         compute_kernel_config=MagicMock(),
         output_memcfg=MagicMock(),
+        input_memcfg=MagicMock(),
         weights_memcfgs=[MagicMock()],
     )
     assert config.is_resolved()
-
-
-def test_lm_head_1d_config_is_resolved_multi_device_needs_topology():
-    """Test is_resolved() requires topology for multi-device mesh."""
-    from unittest.mock import MagicMock
-
-    mock_device = MagicMock()
-    mock_device.get_num_devices.return_value = 8
-
-    config = LMHead1DConfig(
-        output_weights=[MagicMock()],
-        mesh_device=mock_device,
-        tt_ccl=MagicMock(),
-        topology=None,  # Missing! Multi-device needs this
-        dim=4096,
-        program_configs=[None],
-        compute_kernel_config=MagicMock(),
-        output_memcfg=MagicMock(),
-        weights_memcfgs=[MagicMock()],
-    )
-    assert not config.is_resolved()
 
 
 def test_compute_kernel_config_hifi2():
@@ -115,23 +95,6 @@ def test_create_dram_sharded_mem_config():
     assert mc.is_sharded()
     assert mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
     assert mc.buffer_type == ttnn.BufferType.DRAM
-
-
-def test_default_topology():
-    """Test _default_topology returns correct topology."""
-    from unittest.mock import MagicMock
-
-    from models.common.modules.lm_head.lm_head_1d import _default_topology
-
-    # Single device -> None
-    mock_single = MagicMock()
-    mock_single.get_num_devices.return_value = 1
-    assert _default_topology(mock_single) is None
-
-    # 2 devices -> Linear
-    mock_n300 = MagicMock()
-    mock_n300.get_num_devices.return_value = 2
-    assert _default_topology(mock_n300) == ttnn.Topology.Linear
 
 
 def test_from_model_args_rejects_galaxy():
@@ -224,49 +187,49 @@ def _list_test_cases() -> list[pytest.param]:
     return [
         # === Fast tests ===
         # 1x1 Llama-3.1-8B: 3 splits (dim=4096, padded_vocab=128256)
-        pytest.param((1, 1), 4096, 128256, 42752, LLAMA_8B, 0.98, id="1x1-8B"),
+        pytest.param((1, 1), 4096, 128256, 42752, LLAMA_8B, 0.999, id="1x1-8B"),
         # 1x2 Llama-3.1-8B: 2 splits
-        pytest.param((1, 2), 4096, 128256, 42752, LLAMA_8B, 0.98, id="1x2-8B"),
+        pytest.param((1, 2), 4096, 128256, 42752, LLAMA_8B, 0.999, id="1x2-8B"),
         # 1x8 Llama-3.1-8B: 1 split
-        pytest.param((1, 8), 4096, 128256, 16032, LLAMA_8B, 0.98, id="1x8-8B"),
+        pytest.param((1, 8), 4096, 128256, 16032, LLAMA_8B, 0.999, id="1x8-8B"),
         # 1x8 Llama-3.3-70B: 1 split (dim=8192)
-        pytest.param((1, 8), 8192, 128256, 16032, LLAMA_70B, 0.98, id="1x8-70B"),
+        pytest.param((1, 8), 8192, 128256, 16032, LLAMA_70B, 0.999, id="1x8-70B"),
 
         # === Slow tests ===
         # 1x1 Llama-3.2-1B: 3 splits (dim=2048)
-        pytest.param((1, 1), 2048, 128256, 42752, LLAMA_1B, 0.98, id="1x1-1B", marks=_slow),
+        pytest.param((1, 1), 2048, 128256, 42752, LLAMA_1B, 0.999, id="1x1-1B", marks=_slow),
         # 1x1 Llama-3.2-3B: 4 splits (dim=3072)
-        pytest.param((1, 1), 3072, 128256, 32064, LLAMA_3B, 0.98, id="1x1-3B", marks=_slow),
+        pytest.param((1, 1), 3072, 128256, 32064, LLAMA_3B, 0.999, id="1x1-3B", marks=_slow),
         # 1x1 Mistral-7B: 1 split (dim=4096, vocab=32768)
-        pytest.param((1, 1), 4096, 32768, 32768, MISTRAL_7B, 0.98, id="1x1-Mistral-7B", marks=_slow),
+        pytest.param((1, 1), 4096, 32768, 32768, MISTRAL_7B, 0.999, id="1x1-Mistral-7B", marks=_slow),
         # 1x2 Llama-3.2-1B: 2 splits
-        pytest.param((1, 2), 2048, 128256, 42752, LLAMA_1B, 0.98, id="1x2-1B", marks=_slow),
+        pytest.param((1, 2), 2048, 128256, 42752, LLAMA_1B, 0.999, id="1x2-1B", marks=_slow),
         # 1x2 Llama-3.2-3B: 2 splits
-        pytest.param((1, 2), 3072, 128256, 32064, LLAMA_3B, 0.98, id="1x2-3B", marks=_slow),
+        pytest.param((1, 2), 3072, 128256, 32064, LLAMA_3B, 0.999, id="1x2-3B", marks=_slow),
         # 1x2 Llama-3.2-11B: 2 splits
-        pytest.param((1, 2), 4096, 128256, 42752, LLAMA_11B, 0.98, id="1x2-11B", marks=_slow),
+        pytest.param((1, 2), 4096, 128256, 42752, LLAMA_11B, 0.999, id="1x2-11B", marks=_slow),
         # 1x2 Mistral-7B: 1 split
-        pytest.param((1, 2), 4096, 32768, 16384, MISTRAL_7B, 0.98, id="1x2-Mistral-7B", marks=_slow),
+        pytest.param((1, 2), 4096, 32768, 16384, MISTRAL_7B, 0.999, id="1x2-Mistral-7B", marks=_slow),
         # 1x2 Qwen2-7B: 3 splits (dim=3584, vocab=152064)
-        pytest.param((1, 2), 3584, 152064, 37408, QWEN2_7B, 0.98, id="1x2-Qwen2-7B", marks=_slow),
+        pytest.param((1, 2), 3584, 152064, 37408, QWEN2_7B, 0.999, id="1x2-Qwen2-7B", marks=_slow),
         # 1x2 DeepSeek-R1-14B: 3 splits (dim=5120, vocab=152064)
-        pytest.param((1, 2), 5120, 152064, 26720, DEEPSEEK_R1_14B, 0.98, id="1x2-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 5120, 152064, 26720, DEEPSEEK_R1_14B, 0.999, id="1x2-DeepSeek-R1-14B", marks=_slow),
         # 1x2 Qwen2.5-7B: 3 splits
-        pytest.param((1, 2), 3584, 152064, 37408, QWEN25_7B, 0.98, id="1x2-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 3584, 152064, 37408, QWEN25_7B, 0.999, id="1x2-Qwen2.5-7B", marks=_slow),
         # 1x8 Llama-3.2-1B: 1 split
-        pytest.param((1, 8), 2048, 128256, 16032, LLAMA_1B, 0.98, id="1x8-1B", marks=_slow),
+        pytest.param((1, 8), 2048, 128256, 16032, LLAMA_1B, 0.999, id="1x8-1B", marks=_slow),
         # 1x8 Llama-3.2-3B: 1 split
-        pytest.param((1, 8), 3072, 128256, 16032, LLAMA_3B, 0.98, id="1x8-3B", marks=_slow),
+        pytest.param((1, 8), 3072, 128256, 16032, LLAMA_3B, 0.999, id="1x8-3B", marks=_slow),
         # 1x8 Llama-3.2-11B: 1 split
-        pytest.param((1, 8), 4096, 128256, 16032, LLAMA_11B, 0.98, id="1x8-11B", marks=_slow),
+        pytest.param((1, 8), 4096, 128256, 16032, LLAMA_11B, 0.999, id="1x8-11B", marks=_slow),
         # 1x8 Qwen2.5-72B: 1 split (dim=8192, vocab=152064)
-        pytest.param((1, 8), 8192, 152064, 19008, QWEN25_72B, 0.98, id="1x8-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 8192, 152064, 19008, QWEN25_72B, 0.999, id="1x8-Qwen2.5-72B", marks=_slow),
         # 1x8 Qwen2.5-Coder-32B: 1 split (dim=5120)
-        pytest.param((1, 8), 5120, 152064, 19008, QWEN25_CODER_32B, 0.98, id="1x8-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 5120, 152064, 19008, QWEN25_CODER_32B, 0.999, id="1x8-Qwen2.5-Coder-32B", marks=_slow),
         # 1x8 Qwen3-32B: 1 split (dim=5120, vocab=151936)
-        pytest.param((1, 8), 5120, 151936, 18992, QWEN3_32B, 0.98, id="1x8-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 5120, 151936, 18992, QWEN3_32B, 0.999, id="1x8-Qwen3-32B", marks=_slow),
         # 1x8 Mistral-7B: 1 split
-        pytest.param((1, 8), 4096, 32768, 4096, MISTRAL_7B, 0.98, id="1x8-Mistral-7B", marks=_slow),
+        pytest.param((1, 8), 4096, 32768, 4096, MISTRAL_7B, 0.999, id="1x8-Mistral-7B", marks=_slow),
     ]
     # fmt: on
 
@@ -332,36 +295,25 @@ def test_lm_head_1d_vs_reference(
     tt_output_torch = to_torch_auto_compose(tt_output)
     ttnn.SetDefaultDevice(None)
 
-    # Shape check: output should be [1, 1, batch_rows, padded_vocab/num_devices]
-    assert tt_output_torch.shape[-2] == batch_rows
-
-    # Trim padding and extra columns for PCC comparison
+    # auto_compose concatenates per-device vocab shards on dim=-1, giving full padded vocab.
+    # For single-device: output is already full vocab.
     padded_vocab = math.ceil(vocab_size / 32) * 32
-    expected_cols = padded_vocab // num_devices
-    tt_trimmed = tt_output_torch[..., :expected_cols]
 
-    # Build per-device reference by manually splitting the full output
-    ref_flat = ref_output[..., :padded_vocab]  # trim to padded vocab
-    # For 1D reduce_scatter, each device gets vocab/N columns
-    # The TT output is already reduced, so compare against sum of device-local slices
-    # For num_devices=1, it's just the full output
-    if num_devices == 1:
-        ref_trimmed = ref_flat[..., :expected_cols]
-    else:
-        # reduce_scatter sums across devices and each gets 1/N of the result
-        # We need to sum all devices' local computation to match
-        # This is complex to replicate exactly, so just check shape + non-zero
-        logger.info(f"Multi-device ({num_devices}): checking shape and non-zero output")
-        assert tt_trimmed.shape[-1] > 0
-        assert tt_trimmed.abs().sum() > 0
-        logger.info(f"LMHead1D: PASSED (shape+nonzero) for {hf_model_name}")
-        return
+    # Shape checks
+    assert tt_output_torch.shape[-2] == batch_rows, f"Expected batch_rows={batch_rows}, got {tt_output_torch.shape[-2]}"
+    assert tt_output_torch.shape[-1] >= vocab_size, (
+        f"Expected vocab cols>={vocab_size}, got {tt_output_torch.shape[-1]}. " f"num_devices={num_devices}"
+    )
+
+    # PCC against torch reference (trim to actual vocab_size, ignore padding zeros)
+    ref_trimmed = ref_output[..., :vocab_size]
+    tt_trimmed = tt_output_torch[..., :vocab_size]
 
     passing, pcc_message = comp_pcc(ref_trimmed, tt_trimmed, pcc)
     logger.info(comp_allclose(ref_trimmed, tt_trimmed))
     logger.info(f"LMHead1D vs reference: {pcc_message}")
     assert passing, f"LMHead1D output does not meet PCC {pcc}: {pcc_message}."
-    logger.info(f"LMHead1D: PASSED for {hf_model_name}")
+    logger.info(f"LMHead1D: PASSED for {hf_model_name} (mesh={mesh_shape}, devices={num_devices})")
 
 
 # ============================================================================
@@ -426,8 +378,27 @@ def test_lm_head_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     tt_output = tt_model.forward(tt_input)
     tt_output_torch = to_torch_auto_compose(tt_output)
 
-    # Basic checks
-    assert tt_output_torch.shape[-2] == batch_rows
-    assert tt_output_torch.abs().sum() > 0
+    # Shape checks
+    num_devices = ttnn_mesh_device.get_num_devices()
+    padded_vocab = math.ceil(model_args.vocab_size / 32) * 32
+    assert tt_output_torch.shape[-2] == batch_rows, f"Expected batch_rows={batch_rows}, got {tt_output_torch.shape[-2]}"
+    assert tt_output_torch.shape[-1] >= model_args.vocab_size, (
+        f"Expected vocab cols>={model_args.vocab_size}, got {tt_output_torch.shape[-1]}. " f"num_devices={num_devices}"
+    )
 
+    # PCC against torch reference
+    ref_weight = state_dict[f"{state_dict_prefix}output.weight"]
+    ref_linear = torch.nn.Linear(model_args.dim, model_args.vocab_size, bias=False, dtype=torch.bfloat16)
+    with torch.no_grad():
+        ref_linear.weight.copy_(ref_weight.to(torch.bfloat16))
+        ref_output = ref_linear(torch_input)
+
+    ref_trimmed = ref_output[..., : model_args.vocab_size]
+    tt_trimmed = tt_output_torch[..., : model_args.vocab_size]
+
+    pcc_required = 0.999
+    passing, pcc_message = comp_pcc(ref_trimmed, tt_trimmed, pcc_required)
+    logger.info(comp_allclose(ref_trimmed, tt_trimmed))
+    logger.info(f"LMHead1D (from_model_args) vs reference: {pcc_message}")
+    assert passing, f"LMHead1D from_model_args PCC {pcc_required} not met: {pcc_message}."
     logger.info(f"LMHead1D.from_model_args: PASSED for {model_args.model_name}")
