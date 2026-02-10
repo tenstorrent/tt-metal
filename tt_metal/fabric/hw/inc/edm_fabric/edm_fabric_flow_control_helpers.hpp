@@ -236,7 +236,6 @@ struct OutboundReceiverChannelPointers {
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct ReceiverChannelPointers {
-    static constexpr uint8_t NUM_BUFFERS = RECEIVER_NUM_BUFFERS;
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;

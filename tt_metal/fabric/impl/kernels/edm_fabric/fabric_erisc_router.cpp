@@ -1649,8 +1649,7 @@ FORCE_INLINE
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
-        // Safety clamp: if a duplicate completion arrives (from two-phase retry race),
-        // prevent num_free_slots from exceeding the actual buffer count.
+        // Safety clamp: prevent num_free_slots from exceeding the actual buffer count.
         if (outbound_to_receiver_channel_pointers.num_free_slots > ReceiverPointersT::MAX_FREE_SLOTS) {
             outbound_to_receiver_channel_pointers.num_free_slots = ReceiverPointersT::MAX_FREE_SLOTS;
         }
@@ -1781,11 +1780,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 // sender channel so we don't dynamically fetch it off the packet header
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
             } else {
-                auto ack_buf_idx = ack_counter.get_buffer_index();
-                tt_l1_ptr PACKET_HEADER_TYPE* ack_pkt_hdr = const_cast<PACKET_HEADER_TYPE*>(
-                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(ack_buf_idx));
-                receiver_channel_pointers.set_src_chan_id(ack_buf_idx, ack_pkt_hdr->src_ch_id);
-                src_ch_id = receiver_channel_pointers.get_src_chan_id(ack_buf_idx);
+                auto receiver_buffer_index = ack_counter.get_buffer_index();
+                tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
+                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
 
             receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
@@ -2185,7 +2184,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         // notification once. The retry is one-shot: once fired, no further retries
         // until a completion arrives (num_free_slots becomes > 0), which prevents
         // duplicate credits from causing stale-data forwarding.
-        constexpr uint32_t CREDIT_RESEND_STALL_THRESHOLD = 1024;
+        // The threshold must be large enough that normal back-pressure congestion
+        // (e.g., multi-hop ring topologies) always resolves before the retry fires.
+        // 65536 outer loops * 32 inner iterations ≈ 400ms — well beyond normal
+        // congestion but safely before the 5-second device timeout.
+        constexpr uint32_t CREDIT_RESEND_STALL_THRESHOLD = 65536;
         uint32_t ch0_stall_counter = 0;
         bool ch0_retry_pending = false;
 
