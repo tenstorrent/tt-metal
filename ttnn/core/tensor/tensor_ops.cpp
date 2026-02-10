@@ -201,6 +201,13 @@ Tensor unpad(
 
 Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
+    Tensor output = Tensor(pad_to_tile(input_tensor.host_tensor(), pad_value));
+    output = tt::tt_metal::set_tensor_id(output);
+    GraphTracker::instance().track_function_end(output);
+    return output;
+}
+
+HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value) {
     uint32_t height = input_tensor.padded_shape()[-2];
     uint32_t width = input_tensor.padded_shape()[-1];
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
@@ -219,16 +226,22 @@ Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
     input_tensor_start.push_back(0);
     input_tensor_start.push_back(0);
 
-    auto output = input_tensor.pad(
-        tt::tt_metal::Shape(std::move(padded_shape)), tt::tt_metal::Shape{std::move(input_tensor_start)}, pad_value);
+    return tensor_impl::pad(
+        input_tensor,
+        tt::tt_metal::Shape(std::move(padded_shape)),
+        tt::tt_metal::Shape{std::move(input_tensor_start)},
+        pad_value);
+}
+
+Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
+    GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
+    Tensor output = Tensor(unpad_from_tile(input_tensor.host_tensor(), output_tensor_shape));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
 
-Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
-    GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
-
+HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
     for (auto index = -3; index >= -static_cast<int>(input_tensor.padded_shape().rank()); index--) {
         TT_ASSERT(
             input_tensor.logical_shape()[index] == output_tensor_shape[index],
@@ -247,10 +260,7 @@ Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& ou
     for (int index = -1; index >= -static_cast<int>(output_tensor_shape.rank()); index--) {
         output_tensor_end[index] = output_tensor_shape[index];
     }
-    auto output = input_tensor.unpad(output_tensor_start, output_tensor_end);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+    return tensor_impl::unpad(input_tensor, output_tensor_start, output_tensor_end);
 }
 
 // ======================================================================================

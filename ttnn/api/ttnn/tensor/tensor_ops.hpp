@@ -75,7 +75,13 @@ Tensor unpad(
 
 Tensor pad_to_tile(const Tensor& input_tensor, float pad_value);
 
+// TODO: Move this to tt_metal
+HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value);
+
 Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
+
+// TODO: Move this to tt_metal
+HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
 
 Tensor reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor reshape(
