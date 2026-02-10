@@ -144,7 +144,62 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     }
 }
 
-TEST(PhysicalDiscovery, GenerateTrayToPCIeDeviceMapping) {
+TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        GTEST_SKIP() << "Splitting a Galaxy into 2x4 Cross-Tray slices is only supported for Blackhole Galaxy Systems.";
+    }
+    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+    if (*distributed_context->rank() == 0) {
+        // A Slice is defined as a 2x4 Grid that spans 2 Trays. Each tray contributes a 2x2 Grid to the slice.
+        // Note that this definition corresponds to the tray layout for BH Galaxy Rev A & B
+        const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>> devices_per_slice = {
+            {0,
+             {{TrayID{1}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+              {TrayID{3}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
+            {1,
+             {{TrayID{1}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+              {TrayID{3}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+            {2,
+             {{TrayID{2}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+              {TrayID{4}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+            {3,
+             {{TrayID{2}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+              {TrayID{4}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}}};
+        const auto& pcie_id_to_asic_location = physical_system_desc.get_pcie_id_to_asic_location();
+        const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
+
+        YAML::Node slice_to_pcie_device_mapping;
+        YAML::Node device_mapping;
+
+        for (const auto& hostname : physical_system_desc.get_all_hostnames()) {
+            device_mapping[hostname] = YAML::Node();
+            for (const auto& [slice_id, tray_to_asic_location] : devices_per_slice) {
+                for (const auto& [tray_id, asic_locations] : tray_to_asic_location) {
+                    const auto& pcie_devices = pcie_devices_per_tray.at(hostname).at(*tray_id);
+                    for (const auto& pcie_device : pcie_devices) {
+                        const auto& asic_location = pcie_id_to_asic_location.at(hostname).at(pcie_device);
+                        if (std::find(asic_locations.begin(), asic_locations.end(), asic_location) !=
+                            asic_locations.end()) {
+                            device_mapping[hostname][slice_id].push_back(pcie_device);
+                        }
+                    }
+                }
+            }
+        }
+        slice_to_pcie_device_mapping["device_mapping"] = device_mapping;
+        slice_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());
+        std::ofstream outfile("slice_to_pcie_device_mapping.yaml");
+        outfile << slice_to_pcie_device_mapping;
+        outfile.close();
+    }
+}
+
+TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -153,11 +208,11 @@ TEST(PhysicalDiscovery, GenerateTrayToPCIeDeviceMapping) {
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
         cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
     const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
-
+    auto my_host = physical_system_desc.my_host_name();
     // Generate a YAML File with the tray to pcie device mapping
     YAML::Node tray_to_pcie_device_mapping;
     YAML::Node device_mapping;  // Create a separate node for the device mapping
-    for (const auto& [tray_id, pcie_devices] : pcie_devices_per_tray) {
+    for (const auto& [tray_id, pcie_devices] : pcie_devices_per_tray.at(my_host)) {
         // Convert unordered_set to vector for YAML serialization
         std::vector<uint32_t> pcie_devices_vec(pcie_devices.begin(), pcie_devices.end());
         device_mapping[tray_id] = pcie_devices_vec;
