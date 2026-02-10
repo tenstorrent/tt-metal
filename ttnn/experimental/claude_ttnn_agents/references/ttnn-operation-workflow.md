@@ -68,17 +68,25 @@ Proceed with analysis, or suggest different references?"
 
 ### Step 6: Post-Agent Log Review (If Logging Enabled)
 
-Agent logging is **OPTIONAL**. To enable logging for an operation, run BEFORE invoking agents:
+Agent logging is **OPTIONAL**. To enable logging for a pipeline run, the orchestrator MUST create the signal file **before launching any agents**:
+
 ```bash
-.claude/scripts/logging/set_logging_config.sh {operation_path} --enable
+mkdir -p .claude && echo '{"operation_path": "{operation_path}"}' > .claude/active_logging.json
 ```
 
-To disable:
+Example:
 ```bash
-.claude/scripts/logging/set_logging_config.sh {operation_path} --disable
+mkdir -p .claude && echo '{"operation_path": "ttnn/ttnn/operations/layer_norm_rm"}' > .claude/active_logging.json
 ```
 
-Agents automatically detect logging status via `check_logging_enabled.sh`.
+A `SubagentStart` hook (`inject-logging-context.sh`) automatically detects this file and injects breadcrumb instructions into every agent's context. No prompt text needed — agents receive logging instructions via the hook infrastructure.
+
+After the pipeline completes, clean up the signal file:
+```bash
+rm -f .claude/active_logging.json
+```
+
+See `.claude/references/logging-mechanism.md` for full documentation.
 
 **If logging was enabled**, after each agent completes:
 

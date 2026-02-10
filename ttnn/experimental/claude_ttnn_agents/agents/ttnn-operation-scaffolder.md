@@ -656,11 +656,6 @@ EOF
 
 ## Breadcrumbs (Conditional)
 
-Check if logging is enabled at startup:
-```bash
-.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
-```
-
-**If DISABLED**: Skip breadcrumb steps. Git commits still required.
+If the caller includes **"enable detailed logging"**, **"with execution logging"**, or **"enable logging"** in the prompt, enable breadcrumbs. Otherwise skip breadcrumb steps (git commits still required).
 
 **If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/scaffolder.md` for logging protocol.

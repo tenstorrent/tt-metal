@@ -94,13 +94,9 @@ compute_kernel_lib::reduce<...>(cb_tilized, cb_scaler, cb_reduced, ...);
 
 ## Implementation Process
 
-### Step 0: Check Logging Status (DO THIS FIRST)
+### Step 0: Initialize Breadcrumbs (DO THIS FIRST)
 
-```bash
-.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
-```
-
-**If LOGGING_ENABLED**: Read `.claude/references/logging/kernel-writer.md` and initialize breadcrumbs before proceeding.
+If the caller includes **"enable detailed logging"**, **"with execution logging"**, or **"enable logging"** in the prompt, initialize breadcrumbs before proceeding. Read `.claude/references/logging/kernel-writer.md` for the full protocol.
 
 ### Step 1: Read the Design Document
 ```
@@ -349,12 +345,7 @@ tests: {results}
 
 ## Breadcrumbs (Conditional)
 
-Check if logging is enabled at startup (Step 0):
-```bash
-.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
-```
-
-**If DISABLED**: Skip breadcrumb steps. Git commits still required.
+If the caller includes **"enable detailed logging"**, **"with execution logging"**, or **"enable logging"** in the prompt, enable breadcrumbs. Otherwise skip breadcrumb steps (git commits still required).
 
 **If ENABLED**: Read `.claude/references/logging/kernel-writer.md` for full protocol. Key requirements:
 
