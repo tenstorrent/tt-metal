@@ -118,6 +118,13 @@ def _parse_math_fidelity(value: str, *, default: ttnn.MathFidelity) -> ttnn.Math
     return table.get(raw, default)
 
 
+def _env_bool(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw not in {"0", "false", "no", "off"}
+
+
 @torch.no_grad()
 def prepare_decode_rope_and_positions_tt(
     *,
@@ -592,7 +599,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         math_fidelity=mla_fidelity,
         math_approx_mode=mla_approx,
         fp32_dest_acc_en=mla_fp32_acc,
-        packer_l1_acc=False,
+        packer_l1_acc=_env_bool("GLM4_MOE_LITE_PACKER_L1_ACC", default=False),
     )
 
     # Prefer direct KVPE cache usage when supported by the kernel to avoid per-step
