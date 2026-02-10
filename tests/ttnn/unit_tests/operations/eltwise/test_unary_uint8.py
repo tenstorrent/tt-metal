@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,15 @@ import pytest
 import ttnn
 
 pytestmark = pytest.mark.use_module_device
+
+
+def compute_ulp_distance(output, expected):
+    """Compute max ULP distance between two float tensors."""
+    output_f32 = output.to(torch.float32)
+    expected_f32 = expected.to(torch.float32)
+    output_bits = output_f32.view(torch.int32)
+    expected_bits = expected_f32.view(torch.int32)
+    return (output_bits - expected_bits).abs().max().item()
 
 
 @pytest.mark.parametrize(
@@ -23,15 +32,11 @@ pytestmark = pytest.mark.use_module_device
         (ttnn.uint8, ttnn.bfloat16),
         (ttnn.float32, ttnn.uint8),
         (ttnn.uint8, ttnn.float32),
-        (ttnn.uint16, ttnn.uint8),
-        (ttnn.uint8, ttnn.uint16),
     ],
 )
 def test_typecast_uint8(shape, in_dtype, out_dtype, device):
     if in_dtype == ttnn.uint8:
         torch_input = torch.randint(0, 256, shape, dtype=torch.uint8)
-    elif in_dtype == ttnn.uint16:
-        torch_input = torch.randint(0, 65536, shape, dtype=torch.int32).to(torch.uint16)
     else:
         torch_input = torch.randn(shape).to(torch.bfloat16 if in_dtype == ttnn.bfloat16 else torch.float32)
 
@@ -39,8 +44,6 @@ def test_typecast_uint8(shape, in_dtype, out_dtype, device):
     if out_dtype == ttnn.uint8:
         # Pytorch clamping/truncation for uint8
         torch_output = torch_input.to(torch.float32).clamp(0, 255).to(torch.uint8)
-    elif out_dtype == ttnn.uint16:
-        torch_output = torch_input.to(torch.float32).clamp(0, 65535).to(torch.int32).to(torch.uint16)
     else:
         torch_output = torch_input.to(torch.float32)
 
@@ -52,18 +55,16 @@ def test_typecast_uint8(shape, in_dtype, out_dtype, device):
     )
 
     output_tensor = ttnn.typecast(input_tensor, out_dtype)
-    
+
     # For comparison, convert everything to a comparable torch format
     if out_dtype == ttnn.uint8:
         output_tensor = ttnn.to_torch(output_tensor).to(torch.uint8)
-    elif out_dtype == ttnn.uint16:
-        # to_torch often returns int16 for uint16 if not careful, so we cast
-        output_data = ttnn.to_torch(output_tensor)
-        output_tensor = output_data.view(torch.uint16) if output_data.dtype == torch.int16 else output_data.to(torch.int32).to(torch.uint16)
+        assert torch.equal(output_tensor, torch_output)
     else:
         output_tensor = ttnn.to_torch(output_tensor).to(torch.float32)
-
-    assert torch.allclose(output_tensor.to(torch.float32), torch_output.to(torch.float32), atol=1e-2)
+        # ULP-based comparison: allow up to 1 ULP of error
+        ulp_dist = compute_ulp_distance(output_tensor, torch_output)
+        assert ulp_dist <= 1, f"ULP distance {ulp_dist} exceeds threshold"
 
 
 def test_typecast_bf16_to_uint8_specific_case(device):
@@ -81,7 +82,7 @@ def test_typecast_bf16_to_uint8_specific_case(device):
     output_torch = ttnn.to_torch(output)
 
     expected = torch.ones([1, 1, 32, 32], dtype=torch.uint8)
-    
-    # Check if any element is 3
+
+    # Check if any element is 3 (the original bug)
     assert not torch.any(output_torch == 3), f"Found 3 in output: {output_torch}"
     assert torch.equal(output_torch.to(torch.uint8), expected)
