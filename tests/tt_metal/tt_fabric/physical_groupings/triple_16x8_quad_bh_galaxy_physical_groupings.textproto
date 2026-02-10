@@ -28,6 +28,43 @@ groupings {
 groupings {
   name: "meshes"
   items: [
+    { grouping_ref { grouping_name: "trays" count: 2 } } # Each mesh = 2 trays, 16 ASICs
+  ]
+}
+
+groupings {
+  name: "meshes"
+  items: [
     { grouping_ref { grouping_name: "trays" count: 1 } }  # Each mesh contains 1 tray, 8 ASICs
+  ]
+}
+
+groupings {
+  name: "meshes"
+  items: [
+    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host, 32 ASICs
+  ]
+}
+
+groupings {
+  name: "meshes"
+  items: [
+    { grouping_ref { grouping_name: "hosts" count: 4 } }  # Each mesh = 4 hosts, 128 ASICs
+  ]
+}
+
+# Higher-level groupings for graph instances in test MGDs
+# These are needed for tests that use MGDs with graph instances
+groupings {
+  name: "fabric"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Fabric with 2 meshes (for dual_4x4 and dual_8x2)
+  ]
+}
+
+groupings {
+  name: "fabric"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 48 } }  # Fabric with 48 meshes (for bh_glx_split_4x2)
   ]
 }

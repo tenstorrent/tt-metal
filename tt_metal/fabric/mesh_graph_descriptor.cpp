@@ -179,6 +179,42 @@ uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
     return proto_->mesh_descriptors(0).channels().count();
 }
 
+uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
+    const auto& instance = get_instance(mesh_instance_id);
+    return get_chip_count(instance);
+}
+
+uint32_t MeshGraphDescriptor::get_chip_count(const InstanceData& mesh_instance) const {
+    TT_FATAL(is_mesh(mesh_instance), "get_chip_count() can only be called on mesh instances");
+
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
+    TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for instance {}", mesh_instance.global_id);
+
+    uint32_t chip_count = 1;
+    for (const auto& dim : mesh_desc->device_topology().dims()) {
+        chip_count *= dim;
+    }
+
+    return chip_count;
+}
+
+std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_by_type(
+    const std::vector<std::string>& types) const {
+    std::unordered_map<std::string, uint32_t> counts;
+
+    for (const auto& type : types) {
+        // Check if this type exists in instances_by_type_
+        auto it = instances_by_type_.find(type);
+        if (it != instances_by_type_.end()) {
+            counts[type] = static_cast<uint32_t>(it->second.size());
+        } else {
+            counts[type] = 0;
+        }
+    }
+
+    return counts;
+}
+
 FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
     const auto& dim_types = mesh_desc->device_topology().dim_types();
     if (dim_types.size() < 2) {
