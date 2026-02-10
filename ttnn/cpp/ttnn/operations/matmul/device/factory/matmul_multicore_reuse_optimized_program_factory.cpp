@@ -646,6 +646,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // Separate output and intermediate CBs
         program_descriptor.cbs.push_back(make_cb_descriptor(
+
             out_CB_size,
             tt::CBIndex::c_4,
             output_data_format,
