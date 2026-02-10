@@ -68,7 +68,9 @@ def _render_device_for_bucket(
     # Find all functional workers and determine max dimensions
     functional_workers = set()
     max_x, max_y = 0, 0
-    for block_loc in device.get_block_locations("functional_workers"):
+    locs_to_check = device.get_block_locations("functional_workers")
+    locs_to_check.extend(device.get_block_locations("eth"))
+    for block_loc in locs_to_check:
         x, y = block_loc._noc0_coord
         functional_workers.add((x, y))
         max_x = max(max_x, x)
