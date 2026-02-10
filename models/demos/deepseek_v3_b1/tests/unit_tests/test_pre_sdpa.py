@@ -39,7 +39,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("mesh_rows, mesh_cols, skip_ccl", [(4, 2, False), (1, 1, True)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
@@ -62,13 +62,15 @@ def test_pre_sdpa(
     use_fp32,
     cluster_axis,
     secondary_cluster_axis,
-    skip_ccl,
     num_iters,
     num_warmup_iter,
 ):
     """Test TTNN pre-SDPA fused operation with CCL broadcast and full Qnope/Qrope pipeline"""
 
     num_devices = mesh_rows * mesh_cols
+    skip_ccl = False
+    if num_devices == 1:
+        skip_ccl = True
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
