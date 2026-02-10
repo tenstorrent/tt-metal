@@ -1242,7 +1242,6 @@ class TestParallelChainsExecution:
         assert passing_a, f"Chain A PCC: {pcc_a}"
         assert passing_b, f"Chain B PCC: {pcc_b}"
 
-    @pytest.mark.skip(reason="Fused kernel source generated but needs device compilation testing")
     def test_four_parallel_chains(self, device, test_tensors):
         """
         Test running 4 parallel chains on 4 different cores.
@@ -1251,6 +1250,8 @@ class TestParallelChainsExecution:
         from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
         # 4 non-overlapping core ranges
         core_ranges = [
@@ -1266,19 +1267,23 @@ class TestParallelChainsExecution:
             for t in torch_inputs
         ]
 
-        # Create 4 chains
+        # Create 4 chains (RMS needs compute_kernel_config to match LN's fp32 setting)
         chains = []
         for i in range(4):
             ln_i = layer_norm.layer_norm(
                 tt_inputs[i], core_range_set=core_ranges[i], weight=test_tensors["tt_weight1"], epsilon=1e-5
             )
             rms_i = rms_norm.rms_norm(
-                ln_i.output_tensors[0], core_range_set=core_ranges[i], weight=test_tensors["tt_weight2"], epsilon=1e-5
+                ln_i.output_tensors[0],
+                core_range_set=core_ranges[i],
+                weight=test_tensors["tt_weight2"],
+                epsilon=1e-5,
+                compute_kernel_config=ln_compute_config,
             )
             chains.append([ln_i, rms_i])
 
         # Fuse and execute
-        fused = create_parallel_chain_descriptors(chains)
+        fused = create_parallel_chain_descriptors(chains, device)
         outputs = composite.launch(fused)
 
         assert len(outputs) == 4
@@ -1633,3 +1638,551 @@ class TestMatmulDescriptor:
                 assert "cb_out" in cb_names, "Should have cb_out"
 
         assert found_named_args, "At least one kernel should have named compile-time args"
+
+
+# =============================================================================
+# Stress Tests
+# =============================================================================
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+class TestStressInfrastructure:
+    """Stress tests to exercise edge cases in sequential kernel chaining."""
+
+    def test_six_parallel_two_phase_chains(self, device, test_tensors):
+        """6 independent LN->RMS chains on cores (0,0)-(5,0) in parallel."""
+        from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+        n_chains = 6
+
+        core_ranges = [
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(i, 0), ttnn.CoreCoord(i, 0))}) for i in range(n_chains)
+        ]
+
+        torch_inputs = [torch.randn_like(test_tensors["torch_input"]) for _ in range(n_chains)]
+        tt_inputs = [
+            ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            for t in torch_inputs
+        ]
+
+        chains = []
+        for i in range(n_chains):
+            ln = layer_norm.layer_norm(
+                tt_inputs[i],
+                core_range_set=core_ranges[i],
+                weight=test_tensors["tt_weight1"],
+                epsilon=1e-5,
+            )
+            rms = rms_norm.rms_norm(
+                ln.output_tensors[0],
+                core_range_set=core_ranges[i],
+                weight=test_tensors["tt_weight2"],
+                epsilon=1e-5,
+                compute_kernel_config=ln_compute_config,
+            )
+            chains.append([ln, rms])
+
+        fused = create_parallel_chain_descriptors(chains, device)
+        outputs = composite.launch(fused)
+        assert len(outputs) == n_chains
+
+        for i in range(n_chains):
+            golden = torch_rms_norm(
+                torch_layer_norm(torch_inputs[i], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+            )
+            out = ttnn.to_torch(outputs[i][0])
+            passing, pcc = comp_pcc(golden, out, pcc=0.98)
+            assert passing, f"Chain {i} on core ({i},0) PCC: {pcc}"
+
+    @pytest.mark.parametrize("core_x", [0, 3, 5, 7])
+    def test_three_phase_chain_on_various_cores(self, device, test_tensors, core_x):
+        """LN->RMS->LN chain on different single-core positions."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(core_x, 0), ttnn.CoreCoord(core_x, 0))})
+
+        ln1 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        rms1 = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms1.output_tensors[0],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight3"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+
+        fused = chain_descriptors([ln1, rms1, ln2], device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        temp = torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"])
+        temp = torch_rms_norm(temp, test_tensors["torch_weight2"])
+        golden = torch_layer_norm(temp, test_tensors["torch_weight3"], test_tensors["torch_bias2"])
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"3-phase chain on core ({core_x},0) PCC: {pcc:.6f}")
+        assert passing, f"Core ({core_x},0) PCC: {pcc}"
+
+    def test_four_phase_all_rms_non_zero_core(self, device, test_tensors):
+        """4-phase all-RMS chain on core (5,0)."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0))})
+
+        torch_weight4 = torch.ones_like(test_tensors["torch_weight1"])
+        tt_weight4 = ttnn.from_torch(
+            torch_weight4,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        weights = [test_tensors["tt_weight1"], test_tensors["tt_weight2"], test_tensors["tt_weight3"], tt_weight4]
+        torch_weights = [
+            test_tensors["torch_weight1"],
+            test_tensors["torch_weight2"],
+            test_tensors["torch_weight3"],
+            torch_weight4,
+        ]
+
+        descs = []
+        prev_input = test_tensors["tt_input"]
+        for w in weights:
+            d = rms_norm.rms_norm(prev_input, core_range_set=cores, weight=w, epsilon=1e-5)
+            descs.append(d)
+            prev_input = d.output_tensors[0]
+
+        fused = chain_descriptors(descs, device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        golden = test_tensors["torch_input"]
+        for tw in torch_weights:
+            golden = torch_rms_norm(golden, tw)
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"4-phase all-RMS on core (5,0) PCC: {pcc:.6f}")
+        assert passing, f"4-phase all-RMS PCC: {pcc}"
+
+    def test_matmul_plus_two_norm_chains(self, device, test_tensors, matmul_tensors):
+        """1 matmul + 2 independent fused norm chains in parallel."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Matmul on default core (0,0)
+        mm = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
+
+        # Chain A on core (4,0): LN->RMS
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0))})
+        ln_a = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores_a,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+        )
+        rms_a = rms_norm.rms_norm(
+            ln_a.output_tensors[0],
+            core_range_set=cores_a,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        fused_a = chain_descriptors([ln_a, rms_a], device)
+
+        # Chain B on core (5,0): RMS->LN (different order)
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0))})
+        torch_input2 = torch.randn_like(test_tensors["torch_input"])
+        tt_input2 = ttnn.from_torch(
+            torch_input2,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        rms_b = rms_norm.rms_norm(
+            tt_input2,
+            core_range_set=cores_b,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        ln_b = layer_norm.layer_norm(
+            rms_b.output_tensors[0],
+            core_range_set=cores_b,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+        )
+        fused_b = chain_descriptors([rms_b, ln_b], device)
+
+        # Launch all 3 in parallel
+        outputs = composite.launch([mm, fused_a, fused_b])
+        assert len(outputs) == 3
+
+        # Verify matmul
+        golden_mm = matmul_tensors["torch_a"] @ matmul_tensors["torch_b"]
+        passing_mm, pcc_mm = comp_pcc(golden_mm, ttnn.to_torch(outputs[0][0]), pcc=0.99)
+        assert passing_mm, f"Matmul PCC: {pcc_mm}"
+
+        # Verify chain A (LN->RMS)
+        golden_a = torch_rms_norm(
+            torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+        passing_a, pcc_a = comp_pcc(golden_a, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing_a, f"Chain A PCC: {pcc_a}"
+
+        # Verify chain B (RMS->LN)
+        golden_b = torch_layer_norm(
+            torch_rms_norm(torch_input2, test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+        passing_b, pcc_b = comp_pcc(golden_b, ttnn.to_torch(outputs[2][0]), pcc=0.98)
+        assert passing_b, f"Chain B PCC: {pcc_b}"
+
+        print(f"Matmul PCC: {pcc_mm:.6f}, Chain A PCC: {pcc_a:.6f}, Chain B PCC: {pcc_b:.6f}")
+
+    def test_matmul_plus_three_phase_chain(self, device, test_tensors, matmul_tensors):
+        """1 matmul + 1 three-phase LN->RMS->LN fused chain in parallel."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        mm = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
+
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0))})
+        ln1 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        rms1 = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms1.output_tensors[0],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight3"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+        fused = chain_descriptors([ln1, rms1, ln2], device)
+
+        outputs = composite.launch([mm, fused])
+        assert len(outputs) == 2
+
+        # Verify matmul
+        golden_mm = matmul_tensors["torch_a"] @ matmul_tensors["torch_b"]
+        passing_mm, pcc_mm = comp_pcc(golden_mm, ttnn.to_torch(outputs[0][0]), pcc=0.99)
+        assert passing_mm, f"Matmul PCC: {pcc_mm}"
+
+        # Verify 3-phase chain
+        temp = torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"])
+        temp = torch_rms_norm(temp, test_tensors["torch_weight2"])
+        golden_norm = torch_layer_norm(temp, test_tensors["torch_weight3"], test_tensors["torch_bias2"])
+        passing_norm, pcc_norm = comp_pcc(golden_norm, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing_norm, f"Norm chain PCC: {pcc_norm}"
+
+        print(f"Matmul PCC: {pcc_mm:.6f}, 3-phase chain PCC: {pcc_norm:.6f}")
+
+    def test_mixed_chain_lengths_parallel(self, device, test_tensors):
+        """2-phase chain + 3-phase chain running in parallel."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Chain A: 2-phase LN->RMS on core (0,0)
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        ln_a = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores_a,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+        )
+        rms_a = rms_norm.rms_norm(
+            ln_a.output_tensors[0],
+            core_range_set=cores_a,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        fused_a = chain_descriptors([ln_a, rms_a], device)
+
+        # Chain B: 3-phase LN->RMS->LN on core (1,0)
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
+        torch_input2 = torch.randn_like(test_tensors["torch_input"])
+        tt_input2 = ttnn.from_torch(
+            torch_input2,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ln_b1 = layer_norm.layer_norm(
+            tt_input2,
+            core_range_set=cores_b,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        rms_b = rms_norm.rms_norm(
+            ln_b1.output_tensors[0],
+            core_range_set=cores_b,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        ln_b2 = layer_norm.layer_norm(
+            rms_b.output_tensors[0],
+            core_range_set=cores_b,
+            weight=test_tensors["tt_weight3"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+        fused_b = chain_descriptors([ln_b1, rms_b, ln_b2], device)
+
+        outputs = composite.launch([fused_a, fused_b])
+        assert len(outputs) == 2
+
+        # Verify 2-phase chain
+        golden_a = torch_rms_norm(
+            torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+        passing_a, pcc_a = comp_pcc(golden_a, ttnn.to_torch(outputs[0][0]), pcc=0.98)
+        assert passing_a, f"2-phase chain PCC: {pcc_a}"
+
+        # Verify 3-phase chain
+        temp = torch_layer_norm(torch_input2, test_tensors["torch_weight1"], test_tensors["torch_bias1"])
+        temp = torch_rms_norm(temp, test_tensors["torch_weight2"])
+        golden_b = torch_layer_norm(temp, test_tensors["torch_weight3"], test_tensors["torch_bias2"])
+        passing_b, pcc_b = comp_pcc(golden_b, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing_b, f"3-phase chain PCC: {pcc_b}"
+
+        print(f"2-phase PCC: {pcc_a:.6f}, 3-phase PCC: {pcc_b:.6f}")
+
+    def test_repeated_chain_execution(self, device, test_tensors):
+        """Run chain 3 times with fresh descriptors each time to check for state leaks."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0))})
+
+        golden_temp = torch_layer_norm(
+            test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"]
+        )
+        golden = torch_rms_norm(golden_temp, test_tensors["torch_weight2"])
+
+        pccs = []
+        for iteration in range(3):
+            ln1 = layer_norm.layer_norm(
+                test_tensors["tt_input"],
+                core_range_set=cores,
+                weight=test_tensors["tt_weight1"],
+                bias=test_tensors["tt_bias1"],
+                epsilon=1e-5,
+            )
+            rms1 = rms_norm.rms_norm(
+                ln1.output_tensors[0],
+                core_range_set=cores,
+                weight=test_tensors["tt_weight2"],
+                epsilon=1e-5,
+                compute_kernel_config=ln_compute_config,
+            )
+            fused = chain_descriptors([ln1, rms1], device)
+            outputs = composite.launch([fused])
+            result = ttnn.to_torch(outputs[0][0])
+
+            passing, pcc = comp_pcc(golden, result, pcc=0.98)
+            pccs.append(pcc)
+            assert passing, f"Iteration {iteration} PCC: {pcc}"
+
+        print(f"Repeated execution PCCs: {[f'{p:.6f}' for p in pccs]}")
+
+    def test_larger_tensor_chain(self, device):
+        """2-phase LN->RMS chain with larger tensors (128x256)."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(123)
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Larger tensor: 128 rows x 256 cols (4x standard tile count)
+        torch_input = torch.randn(1, 1, 128, 256, dtype=torch.bfloat16)
+        weight_shape = (1, 1, 1, 256)
+        torch_w1 = torch.ones(weight_shape, dtype=torch.bfloat16)
+        torch_w2 = torch.ones(weight_shape, dtype=torch.bfloat16)
+        torch_b1 = torch.zeros(weight_shape, dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_w1 = ttnn.from_torch(
+            torch_w1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_w2 = ttnn.from_torch(
+            torch_w2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_b1 = ttnn.from_torch(
+            torch_b1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0))})
+        ln1 = layer_norm.layer_norm(tt_input, core_range_set=cores, weight=tt_w1, bias=tt_b1, epsilon=1e-5)
+        rms1 = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            core_range_set=cores,
+            weight=tt_w2,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        fused = chain_descriptors([ln1, rms1], device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        golden = torch_rms_norm(torch_layer_norm(torch_input, torch_w1, torch_b1), torch_w2)
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"Larger tensor (128x256) chain PCC: {pcc:.6f}")
+        assert passing, f"Larger tensor chain PCC: {pcc}"
+
+    def test_all_ln_three_phase_chain(self, device, test_tensors):
+        """LN->LN->LN chain (all same op type, with biases)."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors import composite
+
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0))})
+
+        ln1 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        ln2 = layer_norm.layer_norm(
+            ln1.output_tensors[0],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight2"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+        ln3 = layer_norm.layer_norm(
+            ln2.output_tensors[0],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight3"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+
+        fused = chain_descriptors([ln1, ln2, ln3], device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        temp = torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"])
+        temp = torch_layer_norm(temp, test_tensors["torch_weight2"], test_tensors["torch_bias2"])
+        golden = torch_layer_norm(temp, test_tensors["torch_weight3"], test_tensors["torch_bias1"])
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"All-LN 3-phase chain on core (6,0) PCC: {pcc:.6f}")
+        assert passing, f"All-LN chain PCC: {pcc}"
+
+    def test_three_chains_plus_matmul(self, device, test_tensors, matmul_tensors):
+        """1 matmul + 3 independent fused norm chains in parallel (4 total ops)."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Matmul on default core (0,0)
+        mm = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
+
+        # 3 norm chains on cores 4, 5, 6
+        torch_inputs = [torch.randn_like(test_tensors["torch_input"]) for _ in range(3)]
+        tt_inputs = [
+            ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            for t in torch_inputs
+        ]
+
+        fused_chains = []
+        for i, core_x in enumerate([4, 5, 6]):
+            cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(core_x, 0), ttnn.CoreCoord(core_x, 0))})
+            ln = layer_norm.layer_norm(
+                tt_inputs[i],
+                core_range_set=cores,
+                weight=test_tensors["tt_weight1"],
+                epsilon=1e-5,
+            )
+            rms = rms_norm.rms_norm(
+                ln.output_tensors[0],
+                core_range_set=cores,
+                weight=test_tensors["tt_weight2"],
+                epsilon=1e-5,
+                compute_kernel_config=ln_compute_config,
+            )
+            fused_chains.append(chain_descriptors([ln, rms], device))
+
+        outputs = composite.launch([mm] + fused_chains)
+        assert len(outputs) == 4
+
+        # Verify matmul
+        golden_mm = matmul_tensors["torch_a"] @ matmul_tensors["torch_b"]
+        passing_mm, pcc_mm = comp_pcc(golden_mm, ttnn.to_torch(outputs[0][0]), pcc=0.99)
+        assert passing_mm, f"Matmul PCC: {pcc_mm}"
+
+        # Verify each chain
+        for i in range(3):
+            golden = torch_rms_norm(
+                torch_layer_norm(torch_inputs[i], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+            )
+            out = ttnn.to_torch(outputs[i + 1][0])
+            passing, pcc = comp_pcc(golden, out, pcc=0.98)
+            assert passing, f"Chain {i} PCC: {pcc}"
+
+        print(f"Matmul + 3 chains: mm={pcc_mm:.6f}")
