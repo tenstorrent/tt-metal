@@ -15,7 +15,6 @@
 
 #define NEW_DPRINT_STRINGS_SECTION_NAME ".dprint_strings"
 #define NEW_DPRINT_STRINGS_INFO_SECTION_NAME ".dprint_strings_info"
-#define NEW_DPRINT_MAX_ARGUMENTS 100
 
 #ifdef UCK_CHLKC_UNPACK
 #define NEW_DPRINT_UNPACK(format, ...) NEW_DPRINT(format, __VA_ARGS__)
@@ -92,8 +91,7 @@
         /* For indexed placeholders, validate all arguments are referenced */                                        \
         static_assert(                                                                                               \
             !dprint_detail::checks::has_indexed_placeholders(format) ||                                              \
-                dprint_detail::checks::all_arguments_referenced(                                                     \
-                    format, dprint_detail::helpers::count_arguments(__VA_ARGS__)),                                   \
+                dprint_detail::checks::all_arguments_referenced(format, __VA_ARGS__),                                \
             "All arguments must be referenced when using indexed placeholders");                                     \
         /* For non-indexed placeholders, count must match argument count */                                          \
         static_assert(                                                                                               \
@@ -481,24 +479,26 @@ constexpr uint32_t get_max_index(const char (&format)[N]) {
     return max_index;
 }
 
+template <typename T>
+constexpr bool init_to_false() {
+    return false;
+}
+
 // Helper to validate that all arguments are referenced in indexed format
 // Returns true if all argument indices from 0 to arg_count-1 are used at least once
-template <std::size_t N>
-constexpr bool all_arguments_referenced(const char (&format)[N], std::size_t arg_count) {
-    if (arg_count == 0) {
+template <std::size_t N, typename... Args>
+constexpr bool all_arguments_referenced(const char (&format)[N], const Args&... args) {
+    if (sizeof...(args) == 0) {
         return true;
     }
 
-    // Track which arguments are referenced (up to NEW_DPRINT_MAX_ARGUMENTS arguments)
-    bool referenced[NEW_DPRINT_MAX_ARGUMENTS] = {};
-    if (arg_count > NEW_DPRINT_MAX_ARGUMENTS) {
-        return false;  // Limit for simplicity
-    }
+    // Track which arguments are referenced
+    bool referenced[] = {init_to_false<Args>()...};
 
     for (std::size_t i = 0; i < N - 1;) {
         parsing::FormatToken token = parsing::parse_format_token(format, i);
         if (token.type == parsing::TokenType::Placeholder && token.is_indexed()) {
-            if (static_cast<std::size_t>(token.index.value()) < arg_count) {
+            if (static_cast<std::size_t>(token.index.value()) < sizeof...(args)) {
                 referenced[token.index.value()] = true;
             }
         }
@@ -506,7 +506,7 @@ constexpr bool all_arguments_referenced(const char (&format)[N], std::size_t arg
     }
 
     // Check that all arguments from 0 to arg_count-1 are referenced
-    for (std::size_t i = 0; i < arg_count; ++i) {
+    for (std::size_t i = 0; i < sizeof...(args); ++i) {
         if (!referenced[i]) {
             return false;
         }
