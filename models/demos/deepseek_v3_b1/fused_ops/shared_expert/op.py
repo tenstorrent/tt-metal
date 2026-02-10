@@ -142,6 +142,7 @@ class _SharedExpertContext:
     bg_noc1_receiver_semaphore_id: int
     act_mcast_sender_semaphore_id: int
     act_mcast_receiver_semaphore_id: int
+    num_semaphores: int
 
     # Addresses & tensors
     gather_receiver_data_addr: int
@@ -347,8 +348,8 @@ class SharedExpertOp:
         bg_receiver_semaphore_id = 5
         ag_noc1_receiver_semaphore_id = 6
         bg_noc1_receiver_semaphore_id = 7
-        act_mcast_sender_semaphore_id = 8
-        act_mcast_receiver_semaphore_id = 9
+        act_mcast_receiver_semaphore_id = 8
+        num_semaphores = 9
 
         # Buffer addresses
         gather_receiver_data_addr = output_tensor.buffer_address()
@@ -463,8 +464,9 @@ class SharedExpertOp:
             bg_receiver_semaphore_id=bg_receiver_semaphore_id,
             ag_noc1_receiver_semaphore_id=ag_noc1_receiver_semaphore_id,
             bg_noc1_receiver_semaphore_id=bg_noc1_receiver_semaphore_id,
-            act_mcast_sender_semaphore_id=act_mcast_sender_semaphore_id,
+            act_mcast_sender_semaphore_id=mcast_data_sender_semaphore_id,
             act_mcast_receiver_semaphore_id=act_mcast_receiver_semaphore_id,
+            num_semaphores=num_semaphores,
             gather_receiver_data_addr=gather_receiver_data_addr,
             ag_dummy_tensor=ag_dummy_tensor,
             bg_dummy_tensor=bg_dummy_tensor,
@@ -930,7 +932,8 @@ class SharedExpertOp:
 
         # Semaphore descriptors
         semaphore_descriptors = [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=ctx.full_device_grid, initial_value=0) for i in range(10)
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=ctx.full_device_grid, initial_value=0)
+            for i in range(ctx.num_semaphores)
         ]
 
         # Kernel descriptor

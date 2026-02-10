@@ -258,6 +258,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
 @pytest.mark.parametrize("m", [1])
 @pytest.mark.parametrize("num_experts", [256])
 @pytest.mark.parametrize("fused_activation", ["silu"])
+@pytest.mark.skip_post_commit
 def test_dram_streaming_matmul_indexed(device, k, n, m, num_experts, fused_activation):
     """Test DRAM streaming matmul with expert indexing.
 
