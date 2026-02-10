@@ -109,6 +109,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
+  - tests/ttnn/unit_tests/operations/fused/test_composite.py
 
   # Transformers tests
   - tests/ttnn/unit_tests/operations/transformers/test_transformer.py
