@@ -100,14 +100,16 @@ HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
 // ======================================================================================
 //                                  .pad() and .unpad()
 // ======================================================================================
-Tensor pad(
-    const Tensor& tensor,
+HostTensor pad(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
-Tensor unpad(
-    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
+HostTensor unpad(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& output_tensor_start,
+    const tt::tt_metal::Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print
