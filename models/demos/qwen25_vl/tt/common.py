@@ -78,22 +78,25 @@ def preprocess_inputs_prefill(
 
         # Prefill size: round up to nearest multiple of 2048 (chunk size) instead of power of 2
         # This is more memory-efficient and compatible with chunked prefill, which processes in 2048-token chunks.
-        # When the rounded length exceeds max_prefill_chunk_size, pad only to max_prefill_chunk_size and let
-        # chunked prefill handle the rest. This avoids allocating unnecessarily large buffers upfront.
+        # For sequences that round to >32k, we still pad to the full rounded length, but chunked prefill will be
+        # enabled to process them in chunks, avoiding OOM in inference server when max_model_len=128k causes
+        # aggressive buffer pre-allocation.
         # Minimum is 128 to ensure proper alignment.
         CHUNK_SIZE = 2048
+
         if len(input_embed) <= 128:
             prefill_seq_len = 128
         else:
             # Round up to nearest multiple of CHUNK_SIZE
             rounded_len = math.ceil(len(input_embed) / CHUNK_SIZE) * CHUNK_SIZE
+
             # If rounded length exceeds max_prefill_chunk_size, cap at max_prefill_chunk_size.
-            # Chunked prefill will handle sequences larger than max_prefill_chunk_size by processing in chunks,
-            # so we don't need to allocate buffers for the full rounded length upfront.
+            # Chunked prefill will handle sequences larger than max_prefill_chunk_size by processing in chunks.
             if hasattr(model_args, "max_prefill_chunk_size") and rounded_len > model_args.max_prefill_chunk_size:
                 # Pad to max_prefill_chunk_size (must be multiple of CHUNK_SIZE)
                 prefill_seq_len = min(max_prefill_len, model_args.max_prefill_chunk_size)
             else:
+                # Pad to full rounded length - chunked prefill will process in chunks if seq_len > 32k
                 prefill_seq_len = min(max_prefill_len, rounded_len)
 
         # Initialize prefill tensors full of pad tokens
@@ -130,17 +133,22 @@ def multimodal_rope_from_hf(
 
     # Round up to nearest multiple of 2048 (chunk size) instead of power of 2 for memory efficiency
     # This matches the rounding strategy in preprocess_inputs_prefill and is compatible with chunked prefill.
-    # Always cap at max_prefill_chunk_size when available to avoid allocating RoPE matrices larger than needed.
+    # When rounded length > 32k, cap RoPE matrices at 32k to prevent OOM. Chunked prefill will slice
+    # the RoPE matrices as needed (via start_pos) to handle the full sequence.
     CHUNK_SIZE = 2048
+    SAFE_PREFILL_THRESHOLD = 32768  # 32k tokens - cap RoPE matrices at this to prevent OOM
+
     input_len = inputs.input_ids.shape[-1]
     if input_len <= 128:
         max_seq_len = 128
     else:
         # Round up to nearest multiple of CHUNK_SIZE
         rounded_seq_len = math.ceil(input_len / CHUNK_SIZE) * CHUNK_SIZE
-        # Cap at max_prefill_chunk_size to avoid allocating unnecessarily large RoPE matrices.
-        # Chunked prefill can handle sequences larger than max_prefill_chunk_size.
-        if hasattr(model_args, "max_prefill_chunk_size"):
+        # Cap at safe threshold (32k) to prevent OOM when max_model_len=128k causes aggressive buffer pre-allocation.
+        # Chunked prefill will handle sequences > 32k by slicing RoPE matrices via start_pos.
+        if rounded_seq_len > SAFE_PREFILL_THRESHOLD:
+            max_seq_len = min(model_args.max_seq_len, SAFE_PREFILL_THRESHOLD)
+        elif hasattr(model_args, "max_prefill_chunk_size"):
             max_seq_len = min(model_args.max_seq_len, rounded_seq_len, model_args.max_prefill_chunk_size)
         else:
             max_seq_len = min(model_args.max_seq_len, rounded_seq_len)
