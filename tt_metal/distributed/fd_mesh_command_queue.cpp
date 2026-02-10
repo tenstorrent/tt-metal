@@ -570,7 +570,7 @@ void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids)
     distributed_context->barrier();
 }
 
-void FDMeshCommandQueue::write_shard_to_device(
+bool FDMeshCommandQueue::write_shard_to_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
     const void* src,
@@ -578,14 +578,14 @@ void FDMeshCommandQueue::write_shard_to_device(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     std::shared_ptr<experimental::PinnedMemory> pinned_memory) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return;
+        return false;
     }
     if (!mesh_device_->impl().is_local(device_coord)) {
-        return;
+        return false;
     }
 
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
-        return;
+        return false;
     }
 
     in_use_ = true;
@@ -595,7 +595,7 @@ void FDMeshCommandQueue::write_shard_to_device(
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-    buffer_dispatch::write_to_device_buffer(
+    return buffer_dispatch::write_to_device_buffer(
         src,
         *shard_view,
         id_,
