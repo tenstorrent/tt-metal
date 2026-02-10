@@ -15,7 +15,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "dispatch_query_manager.hpp"
-#include <impl/dispatch/dispatch_query_manager.hpp>
+#include "device_command.hpp"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
