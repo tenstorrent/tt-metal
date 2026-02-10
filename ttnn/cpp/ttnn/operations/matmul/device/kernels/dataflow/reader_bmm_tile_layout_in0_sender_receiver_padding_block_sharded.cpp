@@ -267,12 +267,6 @@ void kernel_main() {
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                         // same vc even though cmd bufs are different Also, this only works because we are setting VCs
                         // statically (using NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency
-                        // which means data could be changed before
-                        //  write is issued.
-                        noc_async_writes_flushed();
-#endif
 
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
                         uint64_t in0_mcast_sender_semaphore_noc_addr = remote_sender_noc_addrs[block_id];

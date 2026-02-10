@@ -218,10 +218,6 @@ void kernel_main() {
                         in1_start_address += full_N_tiles_bytes;
                     }
 
-#ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
-#endif
-
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
             }

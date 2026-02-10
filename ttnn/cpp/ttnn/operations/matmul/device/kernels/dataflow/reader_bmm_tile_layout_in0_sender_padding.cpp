@@ -298,12 +298,6 @@ void kernel_main() {
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
                         // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
                         // NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
-                        // latency which means data could be changed before write is issued.
-                        noc_async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
                         // We should also multicast the flag to destinations
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc_semaphore_set_multicast(
