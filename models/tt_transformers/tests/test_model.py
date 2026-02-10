@@ -98,6 +98,8 @@ def test_model_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
 
+    use_hf_rope = request.config.getoption("--use_hf_rope")
+    logger.info("Using HF style rope")
     test_id = request.node.callspec.id
     mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
@@ -123,7 +125,7 @@ def test_model_inference(
         max_batch_size=batch_size,
         cache_hf=True,
         prefetcher=prefetcher,
-        use_hf_rope=False,
+        use_hf_rope=use_hf_rope,
     )
 
     # Define minimum PCC for each iteration
