@@ -115,6 +115,14 @@ jobs:
         run: |
           rm -f /work/coverage/*.profraw || true
 
+      - name: Set up env vars for watcher
+        if: ${{ inputs.enable-watcher == true }}
+        run: |
+          echo "Enabling TT Metal Watcher"
+          echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+
       - name: Run a test
         id: test
         timeout-minutes: 15
@@ -122,9 +130,6 @@ jobs:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
-          TT_METAL_WATCHER: ${{ inputs.enable-watcher && '2' || '' }}
-          TT_METAL_WATCHER_APPEND: ${{ inputs.enable-watcher && '1' || '' }}
-          TT_METAL_WATCHER_NOINLINE: ${{ inputs.enable-watcher && '1' || '' }}
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
           /usr/bin/${{ inputs.product }}-validation-smoke
