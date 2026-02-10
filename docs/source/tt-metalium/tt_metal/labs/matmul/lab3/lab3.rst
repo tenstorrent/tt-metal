@@ -137,37 +137,6 @@ The host reads back all receiver outputs and verifies that the output matches ex
 which is a tensor that contains three copies of the original tensor, stacked vertically.
 Note that number of tiles in Figure 3 is symbolic and doesn't accurately represent the number of tiles in the actual program.
 
-Logical vs. Device Coordinates
-==============================
-
-The first new thing in the example program not previously seen in Labs 1 and 2 is the use of **device coordinates**.
-So far, we have been using logical coordinates to describe how you want to assign work to cores in a program.
-Logical coordinates make a simplifying assumption that the physical layout of Tensix cores on the device is the same as the logical layout.
-However, a typical Tensix device also contains multiple DRAM controllers, multiple Ethernet cores and a PCIe interface.
-Since NOC interconnects these components, it needs to know the actual coordinates of each component on the device
-to send the data to the correct destination.
-
-Tenstorrent architecture actually defines more than two different coordinate systems, but
-for the purpose of TT-Metalium programming, we only need to consider logical and device coordinates.
-Note that device coordinates are also referred to as *virtual coordinates* in the Tenstorrent architecture documentation.
-
-The host code always uses logical coordinates (e.g. when creating kernels and CBs), and the compiler takes care of converting
-them to device coordinates when needed, making the program easier to write and understand.
-However, to maximize performance, we want to avoid performing such conversions in device kernels as much as possible.
-Therefore, device kernels performing NOC operations must use device coordinates to generate the correct NOC addresses.
-To facilitate this, TT-Metalium provides the ``worker_core_from_logical_core`` function that is called on the host to
-convert logical coordinates to device coordinates before passing them to the device kernels as either compile-time or runtime arguments.
-For example, to convert the logical coordinates of the sender core to device coordinates, you can use the following code:
-to device coordinates, you can use the following code:
-
-.. code-block:: cpp
-
-   CoreCoord sender_core_device =
-       mesh_device->worker_core_from_logical_core(sender_core_logical);
-
-This conversion lets you write host code in a device independent way, while still supplying correct NOC addresses to the kernels,
-which use device coordinates to generate the correct NOC addresses.
-
 Synchronization with Semaphores
 ===============================
 
@@ -221,7 +190,7 @@ Before looking at code in more detail, it is helpful to describe the multicast p
 
 .. figure:: images/multicast_protocol.png
    :alt: Multicast Protocol
-   :width: 1200
+   :width: 1500
    :align: center
 
    Figure 4: Multicast Protocol
@@ -270,51 +239,83 @@ ready for the next tile to be multicast.
 While this high-level protocol description is helpful to understand the overall flow of the multicast operation,
 there are some API details worth exploring in more depth, which is described in the following sections.
 
-* The source address of the tile in the sender's on-chip SRAM.
-* The destination address of the tile in the receiver's on-chip SRAM.
-* The size of the tile in bytes.
-* The number of receivers to multicast to.
+Logical vs. Device Coordinates
+==============================
 
-This is shown in Figure 4(c).
-Note that this multicast operation requires a NOC transaction to be sent to all receiver cores.
+The first new thing in the example program not previously seen in Labs 1 and 2 is the use of **device coordinates**.
+So far, we have been using logical coordinates to describe how you want to assign work to cores in a program.
+Logical coordinates make a simplifying assumption that the physical layout of Tensix cores on the device is the same as the logical layout.
+However, a typical Tensix device also contains multiple DRAM controllers, multiple Ethernet cores and a PCIe interface.
+Since NOC interconnects these components, it needs to know the actual coordinates of each component on the device
+to send the data to the correct destination.
 
- then waits until all receivers signal that they are ready for the tile.
-Note that the protocol is the same for all tiles, so the same code is executed for each tile.
+Tenstorrent architecture actually defines more than two different coordinate systems, but
+for the purpose of TT-Metalium programming, we only need to consider logical and device coordinates.
+Note that device coordinates are also referred to as *virtual coordinates* in the Tenstorrent architecture documentation.
 
-The sender core reads a tile from DRAM into its input CB, then waits until all receivers signal that they are ready for the tile.
-Once all receivers are ready, the sender core multicasts the tile to all receiver cores.
-The sender core then flushes the NOC writes to ensure the multicast command has been sent.
-The sender core then multicasts a semaphore update to tell receivers that the tile has been sent.
-The sender core then waits for the multicast to complete before freeing the CB slot.
-The sender core then pops the tile from the CB (free the slot for a future tile).
+The host code always uses logical coordinates (e.g. when creating kernels and CBs), and the compiler takes care of converting
+them to device coordinates when needed, making the program easier to write and understand.
+However, to maximize performance, we want to avoid performing such conversions in device kernels as much as possible.
+Therefore, device kernels performing NOC operations must use device coordinates to generate the correct NOC addresses.
+To facilitate this, TT-Metalium provides the ``worker_core_from_logical_core`` function that is called on the host to
+convert logical coordinates to device coordinates before passing them to the device kernels as either compile-time or runtime arguments.
+For example, to convert the logical coordinates of the sender core to device coordinates, you can use the following code:
+to device coordinates, you can use the following code:
 
-Sender core (per tile):
+.. code-block:: cpp
 
-.. code-block:: text
+   CoreCoord sender_core_device =
+       mesh_device->worker_core_from_logical_core(sender_core_logical);
 
-   for each tile index t:
-       1. Reserve an input CB slot.
-       2. Read tile t from DRAM into that slot.
-       3. Mark the tile as available in the CB (push_back).
-       4. Wait until all receivers signal that they are ready for tile t.
-       5. Multicast the tile from the CB slot to all receiver cores.
-       6. Flush NOC writes to ensure the multicast command has been sent.
-       7. Multicast a semaphore update to tell receivers that tile t has been sent.
-       8. Wait for the multicast to complete before freeing the CB slot.
-       9. Pop the tile from the CB (free the slot for a future tile).
+This conversion allows TT-Metalium programmers to write host code in a device independent way, while still
+supplying correct NOC addresses to the kernels, which use device coordinates internally to generate the correct NOC addresses.
+More specifically, host code must pass logical coordinates to all host APIs, such as ``CreateKernel``, ``CreateCircularBuffer``,
+``SetRuntimeArgs``, etc.
+On the other hand, device kernels must use device coordinates when calling NOC APIs that address other cores (e.g., multicast).
 
-Receiver cores (per tile):
+``get_noc_multicast_addr`` and CB Address Synchronization
+=========================================================
 
-.. code-block:: text
+To multicast data, the sender needs to know **where** in each receiver's on-chip SRAM to write the tile.
+This is the job of ``get_noc_multicast_addr``:
 
-   for each tile index t:
-       1. Reserve an input CB slot for the incoming tile.
-       2. Reset local "tile_sent" semaphore to INVALID.
-       3. Increment the sender's "receivers_ready" semaphore to say:
-          "this receiver is ready for the next tile".
-       4. Wait for the sender to multicast "tile_sent" semaphore to VALID.
-       5. At this point, the tile has arrived in the CB slot.
-       6. Push the tile in the CB so the compute kernel can consume it.
+.. code-block:: cpp
+
+   uint64_t tile_mcast_addr =
+       get_noc_multicast_addr(receiver_start_x, receiver_start_y,
+                              receiver_end_x, receiver_end_y,
+                              l1_read_addr);
+
+The last argument passed to ``get_noc_multicast_addr`` is a **memory address at the destination**. In this example:
+
+* Sender and receivers use the same CB index (e.g., input CB).
+* All cores reserve CB slots and push/pop tiles in the **same pattern**.
+* For each tile index:
+  * The write pointer in the sender CB points to the **same offset** within the corresponding CB as the write pointer in the receivers.
+  * Therefore, using the sender's local CB address as the "destination address" in ``get_noc_multicast_addr`` is correct.
+
+You can think of the return value of ``get_noc_multicast_addr`` as a packed 64 bit encoding of:
+
+* The destination core rectangle: ``(x_start, y_start, x_end, y_end)``.
+* The destination on-chip SRAM address.
+
+In general, there is no direct way for receivers to "tell" the sender which exact memory address they are using for a CB slot.
+Instead, the design ensures that **all cores run the same CB protocol**:
+
+* Each core executes the same sequence of:
+  * ``cb_reserve_back``
+  * ``get_write_ptr``
+  * ``cb_push_back``
+  * ``cb_wait_front``
+  * ``get_read_ptr``
+  * ``cb_pop_front``
+* Because CB sizes and page sizes are identical, the CB write pointer for a given tile index is the same on the sender and all receivers.
+* This makes it possible for the sender to use its own CB write pointer as the destination address in ``get_noc_multicast_addr``.
+
+TODO: Example code still has variables like sender_sem_ptr, receiver_sem_ptr, and receiver_sem_mcast_addr, rather than referenceing receivers_ready and tile_sent semaphore names.
+
+
+
 
 Compute kernel (per tile):
 
@@ -390,66 +391,7 @@ You will see this pattern in the standalone multicast example first, then reuse 
 
 
 
-Core Roles in the Basic Multicast Example
------------------------------------------
 
-
-
-
-New Concepts and APIs in the Multicast Example
-==============================================
-
-This section focuses on **new constructs** that were not needed in Labs 1 and 2. You should refer to the example code as you read.
-
-Device Coordinates and ``worker_core_from_logical_core``
---------------------------------------------------------
-
-Host code uses logical coordinates to create kernels and CBs:
-
-.. code-block:: cpp
-
-   CoreRange all_cores_logical({0, 0}, {3, 0});
-   CoreCoord sender_core_logical = {0, 0};
-   CoreRange receiver_cores_logical({1, 0}, {3, 0});
-
-To perform NOC operations in device kernels, you need **device coordinates**. The host converts logical coordinates to device coordinates:
-
-.. code-block:: cpp
-
-   CoreCoord sender_core_device =
-       mesh_device->worker_core_from_logical_core(sender_core_logical);
-
-   CoreRange receiver_cores_device(
-       mesh_device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
-       mesh_device->worker_core_from_logical_core(receiver_cores_logical.end_coord));
-
-The sender's runtime arguments then include the device coordinates of the receiver range:
-
-.. code-block:: cpp
-
-   SetRuntimeArgs(
-       program,
-       mcast_sender_id,
-       sender_core_logical,
-       {
-           static_cast<uint32_t>(receiver_cores_device.start_coord.x),
-           static_cast<uint32_t>(receiver_cores_device.start_coord.y),
-           static_cast<uint32_t>(receiver_cores_device.end_coord.x),
-           static_cast<uint32_t>(receiver_cores_device.end_coord.y),
-           receivers_ready_semaphore,
-           tile_sent_semaphore,
-           src_mesh_buffer->address(),
-           n_tiles,
-           num_dests
-       });
-
-Key points:
-
-* On the host:
-  * You always pass **logical coordinates** to ``CreateKernel``, ``CreateCircularBuffer``, and ``SetRuntimeArgs``.
-* In device kernels:
-  * You must use **device coordinates** when calling NOC APIs that address other cores (e.g., multicast).
-  * Device coordinates are passed into kernels through runtime arguments that the host constructs using ``worker_core_from_logical_core``.
 
 ``tt_l1_ptr`` Macro
 -------------------
@@ -470,17 +412,6 @@ In the sender and receiver kernels, semaphore pointers are declared using the ``
 You should use ``tt_l1_ptr`` for pointers to on-chip (L1) memory that are accessed from kernels. The macro does not change program semantics, but it enables better compiler optimizations.
 
 
-TODO: Explain that semaphores don't need to be created on all cores, but it is common to do so because overhead is minimal.
-Having said that, number of sempahores on each core is lmited, so may need to create it on a subset of cores if there are many semaphores.
-
-Semaphores are used for coordination between cores. The sender and receivers share two semaphores:
-
-* ``receivers_ready_semaphore``:
-  * Stored in the sender's on-chip SRAM (but accessible over NOC).
-  * Receivers increment it to indicate they are ready for the next tile.
-* ``tile_sent_semaphore``:
-  * Also stored in the sender's on-chip SRAM.
-  * The sender multicasts its value to receivers to indicate that a tile has been sent.
 
 In the sender kernel:
 
@@ -621,46 +552,6 @@ TODO: Explain that this is a simplified view of the reality and that for optimal
 Also, NOC is customizable and may behave differently if customizations are made.
 
 
-``get_noc_multicast_addr`` and CB Address Synchronization
----------------------------------------------------------
-
-To multicast data, the sender needs to know **where** in each receiver's on-chip SRAM to write the tile.
-This is the job of ``get_noc_multicast_addr``:
-
-.. code-block:: cpp
-
-   uint64_t tile_mcast_addr =
-       get_noc_multicast_addr(receiver_start_x, receiver_start_y,
-                              receiver_end_x, receiver_end_y,
-                              l1_read_addr);
-
-The last argument passed to ``get_noc_multicast_addr`` is a **memory address at the destination**. In this example:
-
-* Sender and receivers use the same CB index (e.g., input CB).
-* All cores reserve CB slots and push/pop tiles in the **same pattern**.
-* For each tile index:
-  * The write pointer in the sender CB points to the **same offset** within the corresponding CB as the write pointer in the receivers.
-  * Therefore, using the sender's local CB address as the "destination address" in ``get_noc_multicast_addr`` is correct.
-
-You can think of the return value of ``get_noc_multicast_addr`` as a packed 64 bit encoding of:
-
-* The destination core rectangle: ``(x_start, y_start, x_end, y_end)``.
-* The destination on-chip SRAM address.
-
-In general, there is no direct way for receivers to "tell" the sender which exact memory address they are using for a CB slot.
-Instead, the design ensures that **all cores run the same CB protocol**:
-
-* Each core executes the same sequence of:
-  * ``cb_reserve_back``
-  * ``get_write_ptr``
-  * ``cb_push_back``
-  * ``cb_wait_front``
-  * ``get_read_ptr``
-  * ``cb_pop_front``
-* Because CB sizes and page sizes are identical, the CB write pointer for a given tile index is the same on the sender and all receivers.
-* This makes it possible for the sender to use its own CB write pointer as the destination address in ``get_noc_multicast_addr``.
-
-TODO: Example code still has variables like sender_sem_ptr, receiver_sem_ptr, and receiver_sem_mcast_addr, rather than referenceing receivers_ready and tile_sent semaphore names.
 
 
 Exercise 1: Extending the Standalone Multicast Example
