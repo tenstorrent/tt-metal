@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --partition=bh_pod_4x32_2
+#SBATCH --partition=bh_pod_8x16_C34
 #SBATCH --nodes=4
-#SBATCH --nodelist=bh-glx-b08u02,bh-glx-b08u08,bh-glx-b09u08,bh-glx-b09u02
+#SBATCH --nodelist=bh-glx-c03u02,bh-glx-c04u02,bh-glx-c04u08,bh-glx-c03u08
 #SBATCH --job-name=pipeline_parallel_training
 #SBATCH --output=pipeline_parallel_training_%j.out
 #SBATCH --error=pipeline_parallel_training_%j.err
@@ -13,7 +13,7 @@ source ${TT_METAL_HOME}/python_env/bin/activate
 export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
 
 #srun tt-smi -r
-#srun tt-smi -glx_reset
+srun tt-smi -glx_reset
 
 HOSTFILE="/tmp/hostfile_${SLURM_JOB_ID}"
 scontrol show hostnames $SLURM_JOB_NODELIST | while read host; do

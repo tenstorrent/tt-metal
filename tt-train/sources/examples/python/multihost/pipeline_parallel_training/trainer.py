@@ -131,6 +131,7 @@ def train(
 
             # Transfer targets from first stage to final stage
             # Only the final stage computes loss, so it needs the correct targets
+            # ttnn.distributed_context_barrier()
             if is_first_stage:
                 socket_manager.send(tt_y, distributed_ctx, world_size - 1)
                 print("!!!!!!!!!!!!! Sent from first stage!")
@@ -141,16 +142,23 @@ def train(
             # Forward and backward pass
             # Pipeline model automatically handles inter-stage communication
             logits = model(tt_x, tt_mask)
+            # ttnn.distributed_context_barrier()
 
             if is_final_stage:
+                print(f"logits calculated as {logits}")
                 # Only final stage computes loss
                 loss = loss_fn(logits, tt_y, reduce)
+                # ttnn.synchronize_device()
+                print(f"loss calculated as {loss}")
 
                 # Scale loss by accumulation steps for proper gradient averaging
                 if cfg.gradient_accumulation_steps > 1:
                     loss = loss * (1.0 / cfg.gradient_accumulation_steps)
 
+                # ttnn.synchronize_device()
+                print(f"scaled loss is {loss}")
                 loss.backward(False)
+                print("loss backward done for final stage")
 
                 # Convert loss to numpy for logging
                 loss_numpy = loss.to_numpy(composer=composer)
@@ -158,8 +166,10 @@ def train(
                 accum_loss += train_loss
             else:
                 # Non-final stages only propagate gradients backward
+                print(f"about to loss backward from rank {rank}")
                 logits.backward(False)
-
+            # ttnn.distributed_context_barrier()
+            print("resetting computation graph")
             # Reset computation graph after each micro-batch
             autograd_ctx.reset_graph()
 

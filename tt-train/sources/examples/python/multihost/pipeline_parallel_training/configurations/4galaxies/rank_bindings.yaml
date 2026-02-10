@@ -30,14 +30,14 @@ rank_bindings:
       TT_METAL_LOGGER_LEVEL: "DEBUG"
 
   - rank: 2
-    mesh_id: 3
+    mesh_id: 2
     mesh_host_rank: 0
     env_overrides:
       TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_receiver_2"
       TT_METAL_LOGGER_LEVEL: "DEBUG"
 
   - rank: 3
-    mesh_id: 2
+    mesh_id: 3
     mesh_host_rank: 0
     env_overrides:
       TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_receiver_3"

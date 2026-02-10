@@ -198,6 +198,9 @@ uint32_t PipelineParallelLlama::get_blocks_to_load() const {
 }
 
 autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int rank = *distributed_ctx->rank();
+
     auto out = x;
     if (is_first_rank()) {
         out = (*tok_emb)(out);
@@ -222,10 +225,13 @@ autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr&
             out = (*block)(out, mask);
         }
     }
+    fmt::println("Rank: {} completed all blocks", rank);
 
     if (is_last_rank()) {
         out = (*ln_fc)(out);
+        fmt::println("Last rank gives out of size: {}", out->get_shape());
         out = (*fc)(out);
+        fmt::println("Last rank gives final out of size: {}", out->get_shape());
     } else {
         auto distributed_ctx = autograd::ctx().get_distributed_context();
         int rank = *distributed_ctx->rank();
