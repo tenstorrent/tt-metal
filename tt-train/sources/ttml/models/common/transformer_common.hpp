@@ -29,51 +29,10 @@ enum class WeightTyingType {
     Enabled,
 };
 
-namespace detail {
-
-template <typename F>
-autograd::TensorPtr call_forward_impl(
-    F& f, const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) {
-    constexpr bool has_input = requires { f(input); };
-    constexpr bool has_mask_value = requires { f(input, mask.value()); };
-    constexpr bool has_mask_optional = requires { f(input, mask); };
-
-    static_assert(
-        has_input || has_mask_value || has_mask_optional,
-        "forward_impl must be callable as forward_impl(input), forward_impl(input, mask), "
-        "or forward_impl(input, optional_mask)");
-
-    if (mask.has_value()) {
-        if constexpr (has_mask_value) {
-            return f(input, mask.value());
-        } else if constexpr (has_mask_optional) {
-            return f(input, mask);
-        } else {
-            return f(input);
-        }
-    } else {
-        if constexpr (has_input) {
-            return f(input);
-        } else if constexpr (has_mask_optional) {
-            return f(input, mask);
-        } else {
-            throw std::invalid_argument(
-                "mask is empty but forward_impl has neither forward_impl(input) "
-                "nor forward_impl(input, optional_mask) overload");
-        }
-    }
-}
-
-}  // namespace detail
-
-template <typename F>
 autograd::TensorPtr memory_efficient_runner(
-    F&& forward_impl, const autograd::TensorPtr& input, std::optional<autograd::TensorPtr> mask) {
-    using Fd = std::decay_t<F>;
-    Fd f = std::forward<F>(forward_impl);
-
+    auto&& forward_impl, const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
     if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
-        return detail::call_forward_impl(f, input, mask);
+        return forward_impl(input, mask);
     }
 
     // make a copy of a generator before running forward pass
@@ -85,11 +44,11 @@ autograd::TensorPtr memory_efficient_runner(
         auto scoped = ttml::core::Scoped(
             []() { autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED); },
             []() { autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED); });
-        out = detail::call_forward_impl(f, input, mask);
+        out = forward_impl(input, mask);
     }
 
     // define grad function and copy generator (in the state before forward pass)
-    autograd::GradFunction grad = [input, mask, out, f = std::move(f), generator]() mutable {
+    autograd::GradFunction grad = [input, mask, out, forward_impl, generator]() mutable {
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
         // run forward pass again
@@ -100,7 +59,7 @@ autograd::TensorPtr memory_efficient_runner(
             auto scoped = ttml::core::Scoped(
                 [&generator]() { autograd::ctx().set_generator(generator); },
                 [generator = autograd::ctx().get_generator()]() { autograd::ctx().set_generator(generator); });
-            output = detail::call_forward_impl(f, input_detached, mask);
+            output = forward_impl(input_detached, mask);
         }
         // use gradients from new output
         output->set_grad(out->get_grad());
