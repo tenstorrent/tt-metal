@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // run-time args
@@ -14,6 +15,9 @@ void kernel_main() {
     const uint32_t num_unpadded_cols_per_input_block = get_arg_val<uint32_t>(3);
     const uint32_t width_wise_output_block_start_index = get_arg_val<uint32_t>(4);
     const uint32_t num_cols_already_processed_in_first_output_block = get_arg_val<uint32_t>(5);
+    DPRINT << "width_wise_output_block_start_index: " << width_wise_output_block_start_index << ENDL();
+    DPRINT << "num_cols_already_processed_in_first_output_block: " << num_cols_already_processed_in_first_output_block
+           << ENDL();
 
     // compile-time args
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
@@ -24,6 +28,16 @@ void kernel_main() {
     constexpr uint32_t output_element_size = get_compile_time_arg_val(5);
     constexpr uint32_t num_cols_per_input_block = get_compile_time_arg_val(6);
     constexpr uint32_t num_cols_per_output_block = get_compile_time_arg_val(7);
+    DPRINT << "output_stick_size: " << output_stick_size << ENDL();
+    DPRINT << "num_cols_per_output_block: " << num_cols_per_output_block << ENDL();
+    DPRINT << "num_output_blocks_across_width: " << num_output_blocks_across_width << ENDL();
+    DPRINT << "output_element_size: " << output_element_size << ENDL();
+    // DPRINT << "num_cols_per_input_block: " << num_cols_per_input_block << ENDL();
+    // DPRINT << "num_tiles_per_input_block: " << num_tiles_per_input_block << ENDL();
+    // DPRINT << "tile_height: " << tile_height << ENDL();
+    // DPRINT << "cb_id_out0: " << cb_id_out0 << ENDL();
+    // DPRINT << "dst_addr: " << dst_addr << ENDL();
+    // DPRINT << "num_input_blocks_to_process: " << num_input_blocks_to_process << ENDL();
     constexpr auto dst_args = TensorAccessorArgs<8>();
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
 
