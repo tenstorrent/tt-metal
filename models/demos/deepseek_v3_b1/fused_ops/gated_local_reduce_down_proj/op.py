@@ -127,6 +127,7 @@ class _GatedReduceDownProjContext:
     ig_g2_noc1_receiver_semaphore_id: int
     mcast2_data_sender_semaphore_id: int
     mcast2_data_receiver_semaphore_id: int
+    num_semaphores: int
 
     # Addresses
     gather_receiver_data_addr: int
@@ -298,8 +299,8 @@ class GatedLocalReduceDownProjOp:
         ig_g2_receiver_semaphore_id = 5
         ig_g1_noc1_receiver_semaphore_id = 6
         ig_g2_noc1_receiver_semaphore_id = 7
-        mcast2_data_sender_semaphore_id = 8
-        mcast2_data_receiver_semaphore_id = 9
+        mcast2_data_receiver_semaphore_id = 8
+        num_semaphores = 9
 
         # Buffer addresses
         gather_receiver_data_addr = output_tensor.buffer_address()
@@ -381,8 +382,9 @@ class GatedLocalReduceDownProjOp:
             ig_g2_receiver_semaphore_id=ig_g2_receiver_semaphore_id,
             ig_g1_noc1_receiver_semaphore_id=ig_g1_noc1_receiver_semaphore_id,
             ig_g2_noc1_receiver_semaphore_id=ig_g2_noc1_receiver_semaphore_id,
-            mcast2_data_sender_semaphore_id=mcast2_data_sender_semaphore_id,
+            mcast2_data_sender_semaphore_id=mcast_data_sender_semaphore_id,
             mcast2_data_receiver_semaphore_id=mcast2_data_receiver_semaphore_id,
+            num_semaphores=num_semaphores,
             gather_receiver_data_addr=gather_receiver_data_addr,
             ig_g1_receiver_data_addr=ig_g1_receiver_data_addr,
             ig_g2_receiver_data_addr=ig_g2_receiver_data_addr,
@@ -792,7 +794,8 @@ class GatedLocalReduceDownProjOp:
 
         # Semaphore descriptors
         semaphore_descriptors = [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=ctx.full_device_grid, initial_value=0) for i in range(10)
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=ctx.full_device_grid, initial_value=0)
+            for i in range(ctx.num_semaphores)
         ]
 
         # Kernel descriptor

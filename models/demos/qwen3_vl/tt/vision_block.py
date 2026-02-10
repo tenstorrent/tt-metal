@@ -6,6 +6,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_vl.tt.vision_attention import VisionAttention
 from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm
 from models.demos.qwen3_vl.tt.vision_mlp import MLP
+from models.tt_transformers.tt.common import Mode
 
 
 class VisionBlock(LightweightModule):
@@ -99,7 +100,7 @@ class VisionBlock(LightweightModule):
         # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h)
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in, mode="prefill")
+        ff_out = self.feed_forward.forward(ff_in, mode=Mode.PREFILL)
         ttnn.deallocate(ff_in)
         # ff_out and h are both fractured across devices
         out = ttnn.add(
