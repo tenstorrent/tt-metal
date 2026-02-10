@@ -36,9 +36,23 @@ Both **bfloat16** and **float32** data types must be supported (but you should w
 
 1. **Gamma/Beta handling**: Read gamma and beta **once** from DRAM, **tilize them inside the compute kernel**, and reuse the tilized versions across all rows. Tilize and untilize are NOT in-place operations — they require separate source and destination CBs.
 2. **Input tilization**: The row-major input must be tilized before compute operations.
-3. **Output untilization**: The result must be untilized back to row-major before writing to DRAM.
+3. **Output untilization**: The result must be untilized back to row-major inside the compute kernel. After untilize, the data is already in row-major stick order — the **writer should write sticks directly to DRAM** (based on the work unit) with no additional untilization step.
 4. **Epsilon**: Must be a configurable operation parameter, not hardcoded. Default: `1e-5`.
 5. **Single-core**: All computation runs on a single Tensix core.
+6. **Reduce scalar CB**: The circular buffer used for the reduce scaler must be in **bfloat16 format regardless of the input tensor's data type**. The reduce hardware expects bfloat16 scalers even when the operation runs in float32 mode.
+
+## Kernel Writer: Incremental Implementation Strategy
+
+The kernel writer **must NOT** implement the full layer norm computation in one shot. Instead, it must follow an **incremental, test-driven approach**, building up the operation step by step. At each step, run the test to verify correctness (or at minimum, no hangs) before moving on. Debug and fix any hangs or issues at the current step before adding more complexity.
+
+The recommended progression is:
+
+1. **Step 1 — Passthrough (tilize → untilize)**: Read input from DRAM, tilize it in the compute kernel, immediately untilize it back, write to output. Verify the output matches the input exactly. This validates the full reader → compute → writer data path and CB synchronization.
+2. **Step 2 — Row-wise mean + subtraction**: Add the row reduction to compute the mean, and subtract it from each element. Verify against `X - mean(X, dim=-1, keepdim=True)`.
+3. **Step 3 — Variance + inverse std**: Add the variance computation and `rstd = 1/sqrt(var + eps)`. Verify the standardized output `(X - μ) * rstd` against PyTorch.
+4. **Step 4 — Gamma/Beta affine transform**: Add gamma and beta reading, tilization, and the final affine transform. Verify against full `torch.nn.functional.layer_norm`.
+
+At **each step**, run the test on at least the minimal shape (`[1, 1, 32, 32]`). Fix any hangs, CB mismatches, or correctness issues before proceeding to the next step. This incremental approach makes it far easier to isolate which stage caused a problem.
 
 ## Test Shapes
 
