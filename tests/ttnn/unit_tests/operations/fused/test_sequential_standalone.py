@@ -678,31 +678,52 @@ class TestComputeRuntimeArgOffsets:
     """Tests for runtime arg offset computation."""
 
     @staticmethod
+    def _make_core_ranges():
+        """Create a mock CoreRangeSet with one core at (0,0)."""
+        core_range = MagicMock()
+        core_range.start.x = 0
+        core_range.start.y = 0
+        core_range.end.x = 0
+        core_range.end.y = 0
+        core_range_set = MagicMock()
+        core_range_set.ranges.return_value = [core_range]
+        return core_range_set
+
+    @staticmethod
     def _make_runtime_args_view(args_per_core):
-        """Create a mock RuntimeArgsView.
+        """Create a mock RuntimeArgsView with coordinate-based 2D indexing.
 
         args_per_core: list of lists, one per core.
-        rv[col_idx] -> col_proxy, col_proxy[0] -> VectorUInt32
+        rv[x][y] -> VectorUInt32 of args for CoreCoord(x, y).
+        Mock uses a function-based getitem to handle MagicMock keys
+        (MagicMock.__index__() returns 1, not 0, causing IndexError with lists).
         """
         view = MagicMock()
         view.__len__ = MagicMock(return_value=len(args_per_core))
-        cols = []
-        for args in args_per_core:
+
+        def get_col(_x):
+            """Return a col proxy for any x coordinate."""
             col = MagicMock()
-            col.__getitem__ = MagicMock(return_value=args)
-            cols.append(col)
-        view.__getitem__ = MagicMock(side_effect=lambda i: cols[i])
+            # Single-core mock: always return the first core's args
+            col.__getitem__ = MagicMock(return_value=args_per_core[0])
+            return col
+
+        view.__getitem__ = MagicMock(side_effect=get_col)
         return view
 
     def test_basic_offsets(self):
         """Test basic runtime arg offset computation."""
         from models.experimental.ops.descriptors.sequential import _compute_runtime_arg_offsets
 
+        core_ranges = self._make_core_ranges()
+
         kernel0 = MagicMock()
         kernel0.runtime_args = self._make_runtime_args_view([[1, 2, 3, 4, 5]])
+        kernel0.core_ranges = core_ranges
 
         kernel1 = MagicMock()
         kernel1.runtime_args = self._make_runtime_args_view([[10, 20, 30]])
+        kernel1.core_ranges = core_ranges
 
         phase_kernels = [
             {"reader": kernel0},
@@ -717,8 +738,11 @@ class TestComputeRuntimeArgOffsets:
         """Test offsets when a phase has no kernel of that type."""
         from models.experimental.ops.descriptors.sequential import _compute_runtime_arg_offsets
 
+        core_ranges = self._make_core_ranges()
+
         kernel0 = MagicMock()
         kernel0.runtime_args = self._make_runtime_args_view([[1, 2, 3]])
+        kernel0.core_ranges = core_ranges
 
         phase_kernels = [
             {"reader": kernel0},
@@ -735,15 +759,21 @@ class TestConcatenateRuntimeArgs:
 
     @staticmethod
     def _make_runtime_args_view(args_per_core):
-        """Create a mock RuntimeArgsView."""
+        """Create a mock RuntimeArgsView with coordinate-based 2D indexing.
+
+        Mock uses a function-based getitem to handle MagicMock keys
+        (MagicMock.__index__() returns 1, not 0, causing IndexError with lists).
+        """
         view = MagicMock()
         view.__len__ = MagicMock(return_value=len(args_per_core))
-        cols = []
-        for args in args_per_core:
+
+        def get_col(_x):
+            """Return a col proxy for any x coordinate."""
             col = MagicMock()
-            col.__getitem__ = MagicMock(return_value=args)
-            cols.append(col)
-        view.__getitem__ = MagicMock(side_effect=lambda i: cols[i])
+            col.__getitem__ = MagicMock(return_value=args_per_core[0])
+            return col
+
+        view.__getitem__ = MagicMock(side_effect=get_col)
         return view
 
     @staticmethod

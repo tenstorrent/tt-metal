@@ -992,15 +992,16 @@ def _compute_runtime_arg_offsets(
         if kernel is None:
             continue
 
-        # Count runtime args for this phase (max across cores)
+        # Count runtime args for this phase (max across cores).
+        # RuntimeArgsView uses coordinate-based 2D indexing: [x][y] -> CoreCoord(x,y).
         max_args = 0
-        try:
-            for col_idx in range(len(kernel.runtime_args)):
-                col = kernel.runtime_args[col_idx]
-                args = col[0]  # VectorUInt32 of args for this core
+        core_coords = _get_core_coords_from_ranges(kernel.core_ranges)
+        for core in core_coords:
+            try:
+                args = kernel.runtime_args[core.x][core.y]
                 max_args = max(max_args, len(args))
-        except Exception:
-            pass
+            except (IndexError, KeyError):
+                pass
 
         cumulative += max_args
 
@@ -1025,9 +1026,9 @@ def _concatenate_runtime_args(
 
     Returns list of (CoreCoord, concatenated_args) pairs.
 
-    RuntimeArgsView API: runtime_args[col_idx] -> RuntimeArgsColProxy,
-    runtime_args[col_idx][0] -> VectorUInt32 of args for that core.
-    Column order matches the core order in core_ranges.
+    RuntimeArgsView uses coordinate-based 2D indexing: runtime_args[x][y]
+    maps to CoreCoord(x, y). We must use actual core coordinates, not
+    sequential indices.
     """
     # Find core_ranges from first available kernel
     core_coords = None
@@ -1046,13 +1047,12 @@ def _concatenate_runtime_args(
         kernel = pk.get(kernel_type)
         if kernel is None:
             continue
-        try:
-            for col_idx in range(min(len(kernel.runtime_args), num_cols)):
-                col = kernel.runtime_args[col_idx]
-                args = col[0]  # VectorUInt32 of args for this core
+        for col_idx, core in enumerate(core_coords):
+            try:
+                args = kernel.runtime_args[core.x][core.y]
                 col_args[col_idx].extend(list(args))
-        except Exception:
-            pass
+            except (IndexError, KeyError):
+                pass
 
     return [(core_coords[i], col_args[i]) for i in range(num_cols) if col_args[i]]
 
