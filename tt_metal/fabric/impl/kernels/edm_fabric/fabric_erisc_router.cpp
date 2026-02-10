@@ -1771,12 +1771,15 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
 
             // Credit retry safety: check if this buffer slot was already consumed.
-            // If payload_size_bytes is 0, this is a stale credit from a sender retry -
-            // the credit has been decremented above, so just skip the ACK.
+            // If payload_size_bytes is 0xFFFF (our consumed sentinel), this is a stale credit
+            // from a sender retry - the credit has been decremented above, so just skip the ACK.
+            // Note: 0xFFFF is used instead of 0 because legitimate zero-payload packets exist
+            // (e.g. NOC_UNICAST_ATOMIC_INC barrier signals have payload_size_bytes == 0).
+            constexpr uint16_t CONSUMED_SLOT_SENTINEL = 0xFFFF;
             auto ack_buf_idx = ack_counter.get_buffer_index();
             tt_l1_ptr PACKET_HEADER_TYPE* ack_pkt_hdr = const_cast<PACKET_HEADER_TYPE*>(
                 local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(ack_buf_idx));
-            if (ack_pkt_hdr->payload_size_bytes != 0) {
+            if (ack_pkt_hdr->payload_size_bytes != CONSUMED_SLOT_SENTINEL) {
                 uint8_t src_ch_id;
                 if constexpr (skip_src_ch_id_update) {
                     // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
@@ -1852,7 +1855,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         }
         // Credit retry safety: prevent forwarding of consumed/stale slots
         if constexpr (!enable_first_level_ack) {
-            can_send_to_all_local_chip_receivers &= (packet_header->payload_size_bytes != 0);
+            constexpr uint16_t CONSUMED_SLOT_SENTINEL = 0xFFFF;
+            can_send_to_all_local_chip_receivers &= (packet_header->payload_size_bytes != CONSUMED_SLOT_SENTINEL);
         }
         if (can_send_to_all_local_chip_receivers) {
             did_something = true;
@@ -1887,7 +1891,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         } else {
             // Credit retry safety: consume false credits for consumed/stale slots
             if constexpr (!enable_first_level_ack) {
-                if (packet_header->payload_size_bytes == 0) {
+                constexpr uint16_t CONSUMED_SLOT_SENTINEL = 0xFFFF;
+                if (packet_header->payload_size_bytes == CONSUMED_SLOT_SENTINEL) {
                     increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
                 }
             }
@@ -1907,9 +1912,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 wr_flush_counter.increment();
                 receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
                 // Credit retry safety: mark slot as consumed after DMA confirmed complete
+                constexpr uint16_t CONSUMED_SLOT_SENTINEL = 0xFFFF;
                 const_cast<PACKET_HEADER_TYPE*>(
                     local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index))
-                    ->payload_size_bytes = 0;
+                    ->payload_size_bytes = CONSUMED_SLOT_SENTINEL;
             }
         }
 
@@ -1949,9 +1955,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 receiver_channel_response_credit_sender, src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             // Credit retry safety: mark slot as consumed after DMA confirmed complete
+            constexpr uint16_t CONSUMED_SLOT_SENTINEL = 0xFFFF;
             const_cast<PACKET_HEADER_TYPE*>(
                 local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index))
-                ->payload_size_bytes = 0;
+                ->payload_size_bytes = CONSUMED_SLOT_SENTINEL;
             completion_counter.increment();
         }
     }
