@@ -4,11 +4,6 @@ description: Use this agent to design a new TTNN operation. Supports two modes:\
 model: opus
 color: green
 hooks:
-  PostToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: ".claude/scripts/track_agent_file.sh"
   Stop:
     - hooks:
         - type: command

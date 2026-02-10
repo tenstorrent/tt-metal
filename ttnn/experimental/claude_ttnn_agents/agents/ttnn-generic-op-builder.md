@@ -4,11 +4,6 @@ description: "Use this agent when implementing a new TTNN operation using the Py
 model: sonnet
 color: pink
 hooks:
-  PostToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: ".claude/scripts/track_agent_file.sh"
   Stop:
     - hooks:
         - type: command

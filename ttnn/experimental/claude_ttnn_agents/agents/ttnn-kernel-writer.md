@@ -5,11 +5,6 @@ model: opus
 color: green
 tools: Read, Write, Edit, Glob, Grep, Bash, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
 hooks:
-  PostToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: ".claude/scripts/track_agent_file.sh"
   Stop:
     - hooks:
         - type: command

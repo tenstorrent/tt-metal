@@ -4,11 +4,6 @@ description: Use this agent to scaffold a new TTNN operation through Stages 1-3 
 model: sonnet
 color: yellow
 hooks:
-  PostToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: ".claude/scripts/track_agent_file.sh"
   Stop:
     - hooks:
         - type: command
