@@ -364,7 +364,6 @@ class MoEGate(AbstractModule):
         # create full src tensor of ones
         src_tensor = cfg["scatter_top_expert_groups"]["src"]
         src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, scores.shape[2], 1)))
-        src_tensor = ttnn.to_layout(src_tensor, ttnn.TILE_LAYOUT)
 
         # scatter top-k expert groups indices to full expert_groups_mask
         active_groups_mask = ttnn.scatter(
@@ -374,6 +373,7 @@ class MoEGate(AbstractModule):
             dim=cfg["scatter_top_expert_groups"]["dim"],
         )
         ttnn.deallocate(topk_expert_groups_indices)
+        active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
         active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
 
         # expand active_groups_mask to all the experts
