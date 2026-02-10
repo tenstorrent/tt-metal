@@ -254,6 +254,8 @@ public:
         return create_tensor<T>(sharded_xtensor_views, layout, pad_value);
     }
 
+    const MeshMapperConfig& config() const { return config_; }
+
 private:
     template <typename T>
     Tensor create_tensor(
@@ -424,6 +426,7 @@ TensorToMesh::~TensorToMesh() = default;
 TensorToMesh::TensorToMesh(TensorToMesh&& other) noexcept = default;
 TensorToMesh& TensorToMesh::operator=(TensorToMesh&& other) noexcept = default;
 Tensor TensorToMesh::operator()(const Tensor& tensor) const { return (*impl_)(tensor); }
+const MeshMapperConfig& TensorToMesh::get_config() const { return impl_->config(); }
 
 template <typename T>
 Tensor TensorToMesh::operator()(
