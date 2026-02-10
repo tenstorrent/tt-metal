@@ -133,6 +133,13 @@ class WanAttentionBlock:
         """
         assert len(x_BTHWC.shape) == 5
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
+
+        # Attention layers (matmul, SDPA) can OOM in L1 with float32.
+        # Cast to bfloat16 for attention, then restore original dtype.
+        input_dtype = x_BTHWC.dtype
+        if input_dtype != ttnn.bfloat16:
+            x_BTHWC = ttnn.typecast(x_BTHWC, ttnn.bfloat16)
+
         residual_BTHWC = x_BTHWC
 
         # Gather height and width for replicated attention
@@ -214,7 +221,12 @@ class WanAttentionBlock:
                 out_BTHWC, dim=3, cluster_axis=self.parallel_config.width_parallel.mesh_axis
             )
 
-        return out_BTHWC + residual_BTHWC
+        result_BTHWC = out_BTHWC + residual_BTHWC
+
+        if input_dtype != ttnn.bfloat16:
+            result_BTHWC = ttnn.typecast(result_BTHWC, input_dtype)
+
+        return result_BTHWC
 
 
 class WanCausalConv3d:
@@ -228,7 +240,9 @@ class WanCausalConv3d:
         padding=0,
         ccl_manager=None,
         parallel_config=None,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
+        self.conv_dtype = conv_dtype
         self.unpadded_in_channels = in_channels
         self.unpadded_out_channels = out_channels
         self.TILE_WIDTH = 32
@@ -294,6 +308,7 @@ class WanCausalConv3d:
             padded_weight,
             padded_bias,
             self.conv_config,
+            dtype=self.conv_dtype,
         )
 
     def get_cached_mask(self, x_BTHWC, logical_h):
@@ -397,7 +412,7 @@ class WanCausalConv3d:
             stride=self.stride,
             padding=self.internal_padding,
             padding_mode="zeros",
-            dtype=ttnn.bfloat16,
+            dtype=self.conv_dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -418,6 +433,7 @@ class WanResidualBlock:
         mesh_device,
         ccl_manager=None,
         parallel_config=None,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -439,6 +455,7 @@ class WanResidualBlock:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
         self.norm2 = RMSNorm(
             embedding_dim=out_dim,
@@ -456,6 +473,7 @@ class WanResidualBlock:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
 
         if in_dim != out_dim:
@@ -530,17 +548,8 @@ class WanResidualBlock:
             if self.conv_shortcut is not None
             else x_tile_BTHWC
         )
-        x_norm_tile_BTHWC = self.norm1(
-            ttnn.typecast(x_tile_BTHWC, ttnn.float32), compute_kernel_config=self.hifi4_compute_kernel_config
-        )
-        x_silu_tile_BTHWC = ttnn.typecast(
-            ttnn.silu(x_norm_tile_BTHWC), ttnn.bfloat16
-        )  # NOTE: potential correctness issue
-        # x_norm_tile_BTHWC = self.norm1(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        # self._dump_resblock(ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r1_after_norm1", logical_h)
-        # x_silu_tile_BTHWC = ttnn.typecast(ttnn.silu(ttnn.typecast(x_norm_tile_BTHWC, ttnn.float32)), ttnn.bfloat16)  # NOTE: potential correctness issue
-        # x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)  # NOTE: potential correctness issue
-        # self._dump_resblock(ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r2_after_silu1", logical_h)
+        x_norm_tile_BTHWC = self.norm1(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
@@ -562,17 +571,8 @@ class WanResidualBlock:
         # self._dump_resblock(x_conv_BTHWC, "r3_after_conv1", logical_h)
 
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
-        x_norm_tile_BTHWC = self.norm2(
-            ttnn.typecast(x_tile_BTHWC, ttnn.float32), compute_kernel_config=self.hifi4_compute_kernel_config
-        )
-        x_silu_tile_BTHWC = ttnn.typecast(
-            ttnn.silu(x_norm_tile_BTHWC), ttnn.bfloat16
-        )  # NOTE: potential correctness issue
-        # x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        # self._dump_resblock(ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r4_after_norm2", logical_h)
-        # x_silu_tile_BTHWC = ttnn.typecast(ttnn.silu(ttnn.typecast(x_norm_tile_BTHWC, ttnn.float32)), ttnn.bfloat16)  # NOTE: potential correctness issue
-        # x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)  # NOTE: potential correctness issue
-        # self._dump_resblock(ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r5_after_silu2", logical_h)
+        x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
@@ -597,7 +597,6 @@ class WanResidualBlock:
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
         # self._dump_resblock(ttnn.to_layout(h_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r7_shortcut", logical_h)
         x_tile_BTHWC = ttnn.add(h_tile_BTHWC, x_tile_BTHWC)
-        # x_tile_BTHWC = ttnn.typecast(ttnn.add(ttnn.typecast(h_tile_BTHWC, ttnn.float32), ttnn.typecast(x_tile_BTHWC, ttnn.float32)), ttnn.bfloat16)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
         # self._dump_resblock(x_BTHWC, "r8_after_add", logical_h)
         return x_BTHWC
@@ -611,6 +610,7 @@ class WanMidBlock:
         ccl_manager=None,
         parallel_config=None,
         num_layers=1,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
         self.dim = dim
         self.mesh_device = mesh_device
@@ -624,6 +624,7 @@ class WanMidBlock:
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
+                conv_dtype=conv_dtype,
             )
         )
 
@@ -643,6 +644,7 @@ class WanMidBlock:
                     mesh_device=mesh_device,
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
+                    conv_dtype=conv_dtype,
                 )
             )
 
@@ -712,7 +714,9 @@ class WanConv2d:
         parallel_config=None,
         stride=1,
         padding=0,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
+        self.conv_dtype = conv_dtype
         self.in_channels = in_channels
         self.unpadded_out_channels = out_channels
         self.TILE_WIDTH = 32
@@ -772,6 +776,7 @@ class WanConv2d:
             reshaped_weight,
             state_dict["bias"],
             self.conv_config,
+            dtype=self.conv_dtype,
         )
 
     def get_cached_mask(self, x_BTHWC, logical_h):
@@ -856,7 +861,7 @@ class WanConv2d:
             stride=self.stride,
             padding=self.internal_padding,
             padding_mode="zeros",
-            dtype=ttnn.bfloat16,
+            dtype=self.conv_dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -878,6 +883,7 @@ class WanResample:
         ccl_manager=None,
         parallel_config=None,
         resample_out_dim=None,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
         self.dim = dim
         self.mode = mode
@@ -894,6 +900,7 @@ class WanResample:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
 
         self.is_upsample = "upsample" in mode
@@ -909,6 +916,7 @@ class WanResample:
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
+                conv_dtype=conv_dtype,
             )
 
     def load_state_dict(self, state_dict):
@@ -1001,6 +1009,7 @@ class WanUpBlock:
         ccl_manager=None,
         parallel_config=None,
         upsample_mode=None,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -1022,6 +1031,7 @@ class WanUpBlock:
                     mesh_device=mesh_device,
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
+                    conv_dtype=conv_dtype,
                 )
             )
             current_dim = out_dim
@@ -1035,6 +1045,7 @@ class WanUpBlock:
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
+                conv_dtype=conv_dtype,
             )
 
     def load_state_dict(self, state_dict):
@@ -1067,6 +1078,7 @@ class WanDecoder3d:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
         assert not is_residual, "is_residual is not supported"
         self.dim = dim
@@ -1091,11 +1103,17 @@ class WanDecoder3d:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
 
         # middle blocks
         self.mid_block = WanMidBlock(
-            dims[0], num_layers=1, mesh_device=mesh_device, ccl_manager=ccl_manager, parallel_config=parallel_config
+            dims[0],
+            num_layers=1,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
 
         # upsample blocks
@@ -1124,6 +1142,7 @@ class WanDecoder3d:
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
+                conv_dtype=conv_dtype,
             )
             self.up_blocks.append(up_block)
 
@@ -1144,6 +1163,7 @@ class WanDecoder3d:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
 
     def load_state_dict(self, state_dict):
@@ -1253,6 +1273,7 @@ class WanDecoder:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
         assert not is_residual, "is_residual is not supported"
         self.z_dim = z_dim
@@ -1283,6 +1304,7 @@ class WanDecoder:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
 
         self.cached_conv_count = count_convs(self.decoder)
@@ -1340,6 +1362,7 @@ class WanEncoder3D:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
         assert not is_residual, "is_residual is not supported"
         self.dim = dim
@@ -1365,6 +1388,7 @@ class WanEncoder3D:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
 
         # downsample blocks.
@@ -1378,6 +1402,7 @@ class WanEncoder3D:
                         mesh_device=mesh_device,
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
+                        conv_dtype=conv_dtype,
                     )
                 )
                 if scale in attn_scales:
@@ -1401,13 +1426,19 @@ class WanEncoder3D:
                         mesh_device=mesh_device,
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
+                        conv_dtype=conv_dtype,
                     )
                 )
                 scale /= 2.0
 
         # middle blocks
         self.mid_block = WanMidBlock(
-            dim=out_dim, num_layers=1, mesh_device=mesh_device, ccl_manager=ccl_manager, parallel_config=parallel_config
+            dim=out_dim,
+            num_layers=1,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
 
         # output blocks
@@ -1427,6 +1458,7 @@ class WanEncoder3D:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
 
     def load_state_dict(self, state_dict):
@@ -1502,6 +1534,7 @@ class WanEncoder:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
+        conv_dtype=ttnn.DataType.BFLOAT16,
     ):
         self.z_dim = z_dim
         self.out_channels = z_dim * 2  # Mean and logvar
@@ -1517,6 +1550,7 @@ class WanEncoder:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            conv_dtype=conv_dtype,
         )
         # Linear for quant_conv
         self.quant_conv = Linear(

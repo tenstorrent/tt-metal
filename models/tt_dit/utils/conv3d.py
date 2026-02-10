@@ -34,6 +34,7 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
         (384, 384, (3, 3, 3)): (128, 128, 1, 16, 2),
         (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
     }
+    config_to_blocking = {(in_channels, out_channels, kernel_size): (32, 32, 1, 1, 1)}
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
     if blocking is None:
@@ -156,7 +157,7 @@ def aligned_channels(channels):
     return channels
 
 
-def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALIGNMENT):
+def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALIGNMENT, dtype=ttnn.DataType.BFLOAT16):
     """Prepare weights and bias for TTNN."""
     C_in = weight.shape[1]
     w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
@@ -183,7 +184,7 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALI
         w,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.DataType.BFLOAT16,
+        dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
         pad_value=0,
@@ -194,7 +195,7 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALI
             bias.reshape(1, -1),
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.DataType.BFLOAT16,
+            dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             pad_value=0,
