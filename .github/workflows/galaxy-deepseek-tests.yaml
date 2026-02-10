@@ -11,6 +11,7 @@ on:
           - all
           - unit
           - module
+          - op
         default: 'all'
       platform:
         required: false
