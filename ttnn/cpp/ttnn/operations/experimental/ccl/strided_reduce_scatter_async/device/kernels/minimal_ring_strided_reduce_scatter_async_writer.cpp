@@ -451,17 +451,6 @@ void kernel_main() {
                             DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " done" << ENDL();
                         }
 
-                        // Signal ring cycle done only after all chunks in final iteration
-                        if (i == ring_size - 1) {
-                            uint64_t batch_ready_sem_noc_addr_in_pkt =
-                                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
-                            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                                &mux_connection_handle,
-                                pkt_hdr_mcastseminc,
-                                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-                            noc_async_writes_flushed();
-                        }
-
                         if (direction) {
                             slice_idx--;
                         } else {
@@ -469,14 +458,22 @@ void kernel_main() {
                         }
                         DPRINT << "ring iteration: " << i << " done" << ENDL();
                     }
-                    // Reset the global semaphore before the round
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
-                    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
                     DPRINT << "chunk_idx: " << chunk_idx << " done" << ENDL();
                 }
                 DPRINT << "m_block_iter: " << m_block_iter << " done" << ENDL();
             }
+
+            // Signal batch done and wait for all other chips to finish before next batch
+            uint64_t batch_ready_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                &mux_connection_handle,
+                pkt_hdr_mcastseminc,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+            noc_async_writes_flushed();
+
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
             DPRINT << "batch: " << b << " done" << ENDL();
         }
 
