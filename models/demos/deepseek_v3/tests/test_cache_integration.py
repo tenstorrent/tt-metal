@@ -195,7 +195,7 @@ def test_create_weight_spec_for_real_modules_with_device(state_dict, hf_config, 
     cache_storage = InMemoryCacheStorage()
     cache = TensorCache(state_dict, hf_config.to_dict(), cache_storage)
 
-    # Get the weight spec for the RMSNorm module
+    # Get the weight spec for the RMSNorm module (spec includes shard_dims; mesh mapper is derived per-tensor via get_mesh_mapper)
     context = WeightSpecContext(resolver=lambda key: state_dict[key])
     weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_shape, context.with_prefix(prefix))
     weight_config = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=mesh_device)
@@ -208,7 +208,9 @@ def test_create_weight_spec_for_real_modules_with_device(state_dict, hf_config, 
     assert isinstance(weight_config["weight"], ttnn.Tensor)
     assert weight_config["weight"].storage_type() == ttnn.StorageType.DEVICE, "Weight should be on the mesh device"
 
-    # Cache returns the same tensor on second request (cache hit)
+    # Cache returns the same tensor on second request (same spec => same derived mesh mapper config => cache hit)
     weight_config_2 = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=mesh_device)
-    assert weight_config["weight"] is weight_config_2["weight"], "Cache should return same tensor for same spec"
+    assert (
+        weight_config["weight"] is weight_config_2["weight"]
+    ), "Cache should return same tensor for same spec and mapper config"
     assert weight_config_2["weight"].storage_type() == ttnn.StorageType.DEVICE, "Weight should be on the mesh device"

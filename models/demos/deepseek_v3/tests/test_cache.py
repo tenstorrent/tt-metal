@@ -776,3 +776,89 @@ def test_tensor_cache_memory_config_validation(tensor_cache, monkeypatch, mesh_d
     assert_cache_miss(call_tracker)
     assert cached_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG
     assert cached_tensor.storage_type() == ttnn.StorageType.DEVICE
+
+
+def test_tensor_cache_mesh_mapper_different_entries(tensor_cache, monkeypatch, mesh_device):
+    """Verify that different mesh_mappers create different cache entries: same (device, memory_config)
+    with mapper A yields cache miss then hit; with mapper B yields another cache miss and a different
+    tensor."""
+    call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
+
+    mapper_a = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -1))
+    tensor_a1 = tensor_cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=mesh_device,
+        mesh_mapper=mapper_a,
+    )
+    assert_cache_miss(call_tracker)
+    assert tensor_a1 is not None
+
+    mapper_a2 = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -1))
+    tensor_a2 = tensor_cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=mesh_device,
+        mesh_mapper=mapper_a2,
+    )
+    assert tensor_a1 is tensor_a2
+    assert_cache_hit(call_tracker)
+
+    mapper_b = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(-1, 0))
+    tensor_b = tensor_cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=mesh_device,
+        mesh_mapper=mapper_b,
+    )
+    assert tensor_b is not tensor_a1
+    assert_cache_miss(call_tracker)
+
+
+def test_tensor_cache_replicate_mesh_mapper_same_entry(tensor_cache, monkeypatch, mesh_device):
+    """Verify that replicate mesh mappers share the same cache entry: two ReplicateTensorToMesh(mesh_device)
+    instances produce the same cache key, so the second request is a cache hit."""
+    call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
+
+    mapper_1 = ttnn.ReplicateTensorToMesh(mesh_device)
+    tensor_1 = tensor_cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=mesh_device,
+        mesh_mapper=mapper_1,
+    )
+    assert_cache_miss(call_tracker)
+    assert tensor_1 is not None
+
+    mapper_2 = ttnn.ReplicateTensorToMesh(mesh_device)
+    tensor_2 = tensor_cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=mesh_device,
+        mesh_mapper=mapper_2,
+    )
+    assert tensor_1 is tensor_2
+    assert_cache_hit(call_tracker)
+
+    # Different mapper (shard) => different cache entry and different tensor
+    shard_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -1))
+    tensor_shard = tensor_cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=mesh_device,
+        mesh_mapper=shard_mapper,
+    )
+    assert tensor_shard is not tensor_1
+    assert_cache_miss(call_tracker)

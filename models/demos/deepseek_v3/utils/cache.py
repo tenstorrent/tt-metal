@@ -8,6 +8,9 @@ import torch
 
 import ttnn
 
+# Type for mesh mapper: CppTensorToMesh (create_mesh_mapper / ShardTensor2dMesh) or ReplicateTensorToMeshWrapper
+MeshMapper = ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper
+
 
 def compute_func_fingerprint(func: Callable) -> str:
     """
@@ -32,12 +35,23 @@ def memory_config_to_dict(memory_config: ttnn.MemoryConfig) -> dict:
     }
 
 
+def mesh_mapper_to_dict(mesh_mapper: MeshMapper) -> dict:
+    config = mesh_mapper.get_config()
+    placements = [None if isinstance(p, ttnn.PlacementReplicate) else p.dim for p in config.placements]
+    mesh_shape_override_val = config.mesh_shape_override
+    mesh_shape_override = tuple(mesh_shape_override_val) if mesh_shape_override_val is not None else None
+    return {
+        "mesh_shape_override": mesh_shape_override,
+        "placements": placements,
+    }
+
+
 @dataclass
 class CacheManifest:
     """
     Holds all inputs that define a cache entry for a tensor.
     Does not use tensor content—only name (HF state dict key), dtype, layout,
-    memory_config, hf_config, and preprocessor/postprocessor fingerprints.
+    memory_config, mesh_mapper, hf_config, and preprocessor/postprocessor fingerprints.
     If the contents of the tensors in the state dict change, the cache must be busted explicitly.
     """
 
@@ -48,6 +62,7 @@ class CacheManifest:
     hf_config: dict
     preprocessor: Callable
     postprocessor: Callable
+    mesh_mapper: MeshMapper | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-friendly dict for fingerprinting."""
@@ -62,6 +77,7 @@ class CacheManifest:
             "dtype": self.dtype.__name__,
             "layout": self.layout.__name__,
             "memory_config": memory_config_to_dict(self.memory_config) if self.memory_config is not None else None,
+            "mesh_mapper": mesh_mapper_to_dict(self.mesh_mapper) if self.mesh_mapper is not None else None,
             "hf_config": json.dumps(self.hf_config, sort_keys=True),
             "preprocessor": compute_func_fingerprint(self.preprocessor),
             "postprocessor": compute_func_fingerprint(self.postprocessor),
@@ -76,6 +92,7 @@ def create_manifest(
     hf_config: dict,
     preprocessor: Callable,
     postprocessor: Callable,
+    mesh_mapper: MeshMapper | None = None,
 ) -> CacheManifest:
     """Build a CacheManifest for the given tensor request parameters."""
     return CacheManifest(
@@ -86,6 +103,7 @@ def create_manifest(
         hf_config=hf_config,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
+        mesh_mapper=mesh_mapper,
     )
 
 
@@ -123,8 +141,16 @@ def default_converter(
     layout: ttnn.Layout,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     device: Optional[ttnn.Device] = None,
+    mesh_mapper: MeshMapper | None = None,
 ) -> ttnn.Tensor:
-    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, memory_config=memory_config, device=device)
+    return ttnn.from_torch(
+        tensor,
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
+        device=device,
+        mesh_mapper=mesh_mapper,
+    )
 
 
 class TensorCache:
@@ -152,6 +178,7 @@ class TensorCache:
         postprocessor: Callable[[ttnn.Tensor], ttnn.Tensor] = lambda x: x,
         memory_config: Optional[ttnn.MemoryConfig] = ttnn.DRAM_MEMORY_CONFIG,
         device: Optional[ttnn.Device] = None,
+        mesh_mapper: MeshMapper | None = None,
     ) -> ttnn.Tensor:
         # Host tensors will have memory_config=ttnn.DRAM_MEMORY_CONFIG so we need to guard against non-DRAM memory configs here
         # In the future we should probably make host tensors have memory_config = None since it doesn't make sense to have a memory config for a host tensor
@@ -159,7 +186,9 @@ class TensorCache:
             raise ValueError("Invalid configuration: specified memory config requires a device")
 
         names = [name] if isinstance(name, str) else list(name)
-        manifest = create_manifest(names, dtype, layout, memory_config, self.hf_config, preprocessor, postprocessor)
+        manifest = create_manifest(
+            names, dtype, layout, memory_config, self.hf_config, preprocessor, postprocessor, mesh_mapper
+        )
         fingerprint = compute_fingerprint(manifest.to_dict())
 
         if not self.cache_entry_exists_for_fingerprint(fingerprint):
@@ -172,7 +201,7 @@ class TensorCache:
             ordered_names = sorted(names)
             source_tensors = [self.state_dict[n] for n in ordered_names]
             preprocess_source_tensor = preprocessor(*source_tensors)
-            tensor = self.converter(preprocess_source_tensor, dtype, layout, memory_config, device)
+            tensor = self.converter(preprocess_source_tensor, dtype, layout, memory_config, device, mesh_mapper)
             tensor = postprocessor(tensor)
             self.storage.set(fingerprint, tensor)
             return tensor
