@@ -152,6 +152,16 @@ public:
         }
     }
 
+    // Variant that allows specifying a different inline data size than pages * page_size
+    // Always accounts for inline data (no template parameter needed)
+    void add_dispatch_write_paged_with_custom_inline_size(
+        uint32_t /*page_size*/, uint32_t /*pages*/, uint32_t inline_data_sizeB) {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->add_data(inline_data_sizeB);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
     void add_prefetch_relay_paged() {
         this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     }
@@ -168,6 +178,14 @@ public:
         static_assert(sizeof(CQPrefetchRelayRingbufferSubCmd) % sizeof(uint32_t) == 0);
 
         uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayRingbufferSubCmd);
+        uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
+        this->cmd_write_offsetB += increment_sizeB;
+    }
+
+    void add_prefetch_relay_linear_packed(uint16_t num_sub_cmds) {
+        static_assert(sizeof(CQPrefetchRelayLinearPackedSubCmd) % sizeof(uint32_t) == 0);
+
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayLinearPackedSubCmd);
         uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
         this->cmd_write_offsetB += increment_sizeB;
     }
@@ -240,6 +258,21 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
+    void add_dispatch_write_packed_large_unicast(uint16_t num_sub_cmds) {
+        TT_ASSERT(
+            num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS,
+            "Cannot fit {} sub cmds in one CQDispatchWritePackedLargeUnicastCmd",
+            num_sub_cmds);
+        static_assert(sizeof(CQDispatchWritePackedLargeUnicastSubCmd) % sizeof(uint32_t) == 0);
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
+        uint32_t payload_size = tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
+        this->add_prefetch_relay_inline();
+        uint32_t payload_dst_size =
+            tt::align(sizeof(CQPrefetchCmd) + payload_size, this->pcie_alignment) - sizeof(CQPrefetchCmd);
+        this->cmd_write_offsetB += payload_dst_size;
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
     void add_dispatch_write_packed_large(uint16_t num_sub_cmds, uint32_t payload_sizeB) {
         TT_ASSERT(
             num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS,
@@ -247,6 +280,20 @@ public:
             num_sub_cmds);
         static_assert(sizeof(CQDispatchWritePackedLargeSubCmd) % sizeof(uint32_t) == 0);
         uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeSubCmd);
+        uint32_t payload_size = tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += payload_size;
+        this->cmd_write_offsetB += tt::align(payload_sizeB, this->l1_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_dispatch_write_packed_large_unicast(uint16_t num_sub_cmds, uint32_t payload_sizeB) {
+        TT_ASSERT(
+            num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS,
+            "Cannot fit {} sub cmds in one CQDispatchWritePackedLargeUnicastCmd",
+            num_sub_cmds);
+        static_assert(sizeof(CQDispatchWritePackedLargeUnicastSubCmd) % sizeof(uint32_t) == 0);
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
         uint32_t payload_size = tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += payload_size;

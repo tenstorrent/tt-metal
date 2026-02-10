@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <vector>
 
+#include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/fabric_telemetry_converter.hpp"
 
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
@@ -109,6 +110,10 @@ std::vector<FabricTelemetrySample> read_fabric_telemetry(const tt::tt_fabric::Fa
     }
 
     return samples;
+}
+
+[[nodiscard]] bool is_valid_fabric_telemetry_version(const FabricTelemetrySnapshot& snapshot) {
+    return snapshot.static_info.version == FABRIC_TELEMETRY_VERSION;
 }
 
 }  // namespace tt::tt_fabric
