@@ -676,7 +676,7 @@ def test_all_gather_wan(
     def capture_trace(n_iters):
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for i in range(n_iters):
-            tt_output = ttnn.all_gather(
+            _ = ttnn.all_gather(
                 tt_input,
                 dim=dim,
                 cluster_axis=cluster_axis,

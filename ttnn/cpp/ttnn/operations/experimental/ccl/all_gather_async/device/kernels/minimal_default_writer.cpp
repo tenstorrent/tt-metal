@@ -376,11 +376,10 @@ void kernel_main() {
                 // Backward worker: write second half of tiles in the packet
                 uint32_t start_tile = 0;
                 uint32_t end_tile = tiles_to_put_in_current_packet;
-                if (ring_size % 2 == 0 && ring_size > 2) {  // if ring size is even, we need to write the second half of
-                                                            // the tiles, otherwise we write the entire packet
-                    if (tiles_to_put_in_current_packet > 1) {
-                        start_tile = tiles_to_put_in_current_packet / 2;
-                    }
+                if (ring_size % 2 == 0 && ring_size > 2 &&
+                    tiles_to_put_in_current_packet > 1) {  // if ring size is even, we need to write the second half of
+                                                           // the tiles, otherwise we write the entire packet
+                    start_tile = tiles_to_put_in_current_packet / 2;
                 }
                 for (uint32_t i = start_tile; i < end_tile; i++) {
                     noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
@@ -406,13 +405,12 @@ void kernel_main() {
                     }
                 }
                 // Forward worker: write first half of tiles in the packet
-                if (ring_size % 2 == 0 && ring_size > 2) {  // if ring size is even, we need to write the first half of
-                                                            // the tiles, otherwise we write the entire packet
+                if (ring_size % 2 == 0 && ring_size > 2 &&
+                    tiles_to_put_in_current_packet > 1) {  // if ring size is even, we need to write the first half of
+                                                           // the tiles, otherwise we write the entire packet
                     uint32_t start_tile = 0;
-                    uint32_t end_tile = tiles_to_put_in_current_packet;
-                    if (tiles_to_put_in_current_packet > 1) {
-                        end_tile = tiles_to_put_in_current_packet / 2;
-                    }
+                    uint32_t end_tile = tiles_to_put_in_current_packet / 2;
+
                     for (uint32_t i = start_tile; i < end_tile; i++) {
                         noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
                     }
@@ -488,16 +486,14 @@ void kernel_main() {
     } else if constexpr (topology == Topology::Ring) {
         if (direction == 1) {
             writes_expected = num_targets_backward_direction - 1;
-            // For 4-device ring, enable split forwarding for backward worker
-            // if (ring_size == 4 && num_targets_backward_direction == 1) {
-            if (ring_size % 2 == 0) {
+            if (ring_size % 2 == 0 && ring_size > 2) {
                 writes_expected++;  // Backward worker will also forward 1 slice (but only half of it)
                 split_forwarding_enabled = true;
             }
         } else {
             writes_expected = num_targets_forward_direction - 1;
             // For 4-device ring, forward worker will only send half of last slice
-            if (ring_size % 2 == 0) {
+            if (ring_size % 2 == 0 && ring_size > 2) {
                 split_forwarding_enabled = true;
             }
         }
@@ -538,9 +534,6 @@ void kernel_main() {
         uint32_t slice_Wt = input_tensor_Wt;
         uint32_t stride_Wt = output_tensor_Wt;
 
-        // Split-forwarding logic for 4-device ring on last slice
-        uint32_t split_tile_offset = 0;
-        uint32_t split_tiles_to_skip = 0;
         if (split_forwarding_enabled && is_last_slice) {
             uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
             uint32_t first_half_tiles = total_tiles / 2;
@@ -550,7 +543,6 @@ void kernel_main() {
                 tiles_to_read = input_tile_id_start + first_half_tiles;
             } else {
                 // Backward worker: skip first half, forward second half
-                split_tiles_to_skip = first_half_tiles;
                 tiles_read = input_tile_id_start + first_half_tiles;
 
                 // Adjust starting position for tiles

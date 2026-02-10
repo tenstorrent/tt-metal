@@ -158,10 +158,10 @@ void kernel_main() {
         }
     }
 
-    // Split forwarding for 4-device rings: each direction handles only its half of the split slice
+    // Split forwarding for even-sized ring devices: each direction handles only its half of the split slice
     // This must match the writer's split-forwarding logic
     //
-    // For a 4-device ring: num_targets_forward=2, num_targets_backward=1
+    // Take a 4-device ring as an example: num_targets_forward=2, num_targets_backward=1
     // Without split-forwarding:
     //   - Forward receives 2 slices: device at -1 hop, device at -2 hops (opposite)
     //   - Backward receives 1 slice: device at +1 hop
