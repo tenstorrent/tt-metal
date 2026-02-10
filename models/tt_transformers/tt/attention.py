@@ -738,6 +738,10 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
+        batch_size = x_11SH.shape[-3]
+        if batch_size > 1:
+            x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -774,6 +778,9 @@ class Attention(LightweightModule):
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        if batch_size > 1:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
         ttnn.deallocate(x_11SH)
 
@@ -846,6 +853,10 @@ class Attention(LightweightModule):
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             v_fill = v_heads_1VSD_8b
+
+        if batch_size > 1:
+            k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
+            v_fill = ttnn.reshape(v_fill, [1, 1, seq_len, -1])
 
         if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
