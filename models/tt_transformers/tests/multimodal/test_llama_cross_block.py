@@ -14,6 +14,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 
@@ -120,8 +121,8 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
     """
     n_iter = 10
     for i in range(n_iter):
-        mode = "prefill" if i == 0 else "decode"
-        seq_len = text_seq_len if mode == "prefill" else 1
+        mode = Mode.PREFILL if i == 0 else Mode.DECODE
+        seq_len = text_seq_len if mode == Mode.PREFILL else 1
         pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
         tt_x = pt_x.clone()
 
@@ -165,7 +166,7 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
             0
         ]  # 0 element is the actual feature map/hidden state needed for comparison
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
             outputs = []
             for b in range(batch):
@@ -219,7 +220,7 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
         else:
             tt_x = model_args.prepare_residual_tensor_decode(
                 tt_x,
-                model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+                model_args.get_residual_mem_config(Mode.DECODE, None),
             )
             xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
             tt_xattn_mask = ttnn.from_torch(
@@ -283,7 +284,7 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
         logger.info(f"PCC: {pcc_message}")
         all_tests_pass = all_tests_pass and passing
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,

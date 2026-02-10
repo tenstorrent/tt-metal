@@ -84,7 +84,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
         .operation = [output_memory_config](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
-            return concat_impl(itensors, dim, groups, output_memory_config);
+            return concat_impl(itensors, dim, groups, output_memory_config, std::nullopt);
         }});
 }
 
@@ -132,7 +132,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
         .operation = [&output_memory_config](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
-            auto res = concat_impl(itensors, dim, groups, output_memory_config);
+            auto res = concat_impl(itensors, dim, groups, output_memory_config, std::nullopt);
             return res;
         }});
 }
@@ -176,7 +176,7 @@ MassagedConcat build_prepost_transpose_concat(const MemoryConfig& output_memory_
         .operation = [output_memory_config](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
-            return concat_impl(itensors, dim, groups, output_memory_config);
+            return concat_impl(itensors, dim, groups, output_memory_config, std::nullopt);
         }});
 }
 
@@ -248,7 +248,7 @@ MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(const MemoryConfig
         .operation = [output_memory_config](
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             const std::vector<ttnn::Tensor>& itensors(tensors);
-            return concat_impl(itensors, dim, groups, output_memory_config);
+            return concat_impl(itensors, dim, groups, output_memory_config, std::nullopt);
         }});
 }
 
@@ -258,7 +258,8 @@ ttnn::Tensor ConcatOperation::invoke(
     int dim,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    unsigned int groups) {
+    unsigned int groups,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!input_tensors.empty(), "ttnn.concat: expected a non-empty list of Tensors!");
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
     const auto mem_config =
@@ -320,6 +321,13 @@ ttnn::Tensor ConcatOperation::invoke(
     };
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
+
+    // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
+    // which don't currently support sub_core_grids
+    if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
+        (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
+        return concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
+    }
 
     auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(mem_config, logical_output_shape);
     auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, mem_config);

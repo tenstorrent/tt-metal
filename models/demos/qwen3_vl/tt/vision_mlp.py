@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import pad_to_size
+from models.tt_transformers.tt.common import Mode, pad_to_size
 
 
 class MLP(LightweightModule):
@@ -63,7 +63,7 @@ class MLP(LightweightModule):
         self.linear_fc1_bias = as_bias_tensor("linear_fc1", pad=True)
         self.linear_fc2_bias = as_bias_tensor("linear_fc2", pad=False)
 
-    def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
         HF reference: self.linear_fc2(self.act_fn(self.linear_fc1(hidden_state)))
         """
