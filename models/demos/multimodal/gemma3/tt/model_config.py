@@ -56,6 +56,7 @@ class ModelArgs(TTModelArgs):
         max_seq_len=1024 * 128,
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
+        prefetcher=None,
     ):
         super().__init__(
             mesh_device,
@@ -65,6 +66,7 @@ class ModelArgs(TTModelArgs):
             max_seq_len=max_seq_len,
             optimizations=optimizations,
             cache_hf=cache_hf,
+            prefetcher=prefetcher,
         )
 
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
@@ -312,13 +314,6 @@ class ModelArgs(TTModelArgs):
         layer = model.multi_modal_projector.mm_soft_emb_norm
         return layer
 
-    def reference_rms_norm(self, i=0):
-        model = self.reference_transformer(wrap=False)
-        layer = model.model.layers[i].self_attn.q_norm
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-        return layer
-
     def reference_rms_norm_text(self):
         model = self.reference_transformer(wrap=False)
         layer = model.model.norm
@@ -417,15 +412,15 @@ class ModelArgs(TTModelArgs):
         layer = model.vision_tower.vision_model.encoder
         return layer
 
-    def reference_decoder(self, i=0):
-        model = self.reference_transformer(wrap=False)
-        layer = model.model.layers[i]
-        rotary_emb = model.model.rotary_emb
+    # def reference_decoder(self, i=0):
+    #     model = self.reference_transformer(wrap=False)
+    #     layer = model.model.layers[i]
+    #     rotary_emb = model.model.rotary_emb
 
-        rotary_emb_local = model.model.rotary_emb_local
-        wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
+    #     rotary_emb_local = model.model.rotary_emb_local
+    #     wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
 
-        return wrapper
+    #     return wrapper
 
     def reference_decoder_text(self, i=0):
         model = self.reference_transformer(wrap=False)

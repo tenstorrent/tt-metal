@@ -13,10 +13,16 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.mlp import MLP
+from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
 @torch.no_grad()
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    ([False]),
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -35,12 +41,24 @@ from models.tt_transformers.tt.mlp import MLP
     (1,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
+def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc, use_prefetcher):
     dtype = ttnn.bfloat8_b
-    mode = "decode" if seq_len <= 32 else "prefill"
+    mode = Mode.DECODE if seq_len <= 32 else Mode.PREFILL
 
-    model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
+    # Setup prefetcher (FF1, FF2, FF3 weights are prefetched)
+    num_tensors = 3 if mode == Mode.DECODE else 0
+    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
 
+    if use_prefetcher:
+        prefetcher.init(mode)
+
+    model_args = Gemma3ModelArgs(
+        mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=128,
+        cache_hf=True,
+        prefetcher=prefetcher,
+    )
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -52,7 +70,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
 
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
-    if seq_len >= (32 * 1024):
+    if model_args.is_90b:
         # float32 ~3x faster than bfloat16.
         # bfloat16 fails on CI (32k and 64k seq_len) with "This test seems to have hung... Timing out test case"
         reference_model.to(torch.float32)
@@ -67,35 +85,31 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
         layer_num=0,
         dtype=dtype,
         model_config=model_args.get_model_config(),
+        prefetcher=prefetcher,
     )
+
+    # Run prefetcher if it is used
+    if prefetcher is not None and mode == Mode.DECODE:
+        prefetcher.prefetch()
+        prefetcher.run()
 
     torch_input = torch.randn(
         1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
     )
-
-    logger.info(f"Run reference...")
     reference_output = reference_model(torch_input)
-    logger.info(f"Run reference... done")
 
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
+            mesh_device,
+            dims=(None, 3) if model_args.is_galaxy else (None, None),
+            mesh_shape=model_args.cluster_shape,
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
-        memory_config=(
-            (
-                tt_model.model_config["MLP_ACT_MEMCFG"]
-                if model_args.is_galaxy
-                else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
-            )
-            if mode == "decode"
-            else ttnn.DRAM_MEMORY_CONFIG
-        ),
+        memory_config=model_args.get_mlp_input_mem_config(mode, prefetcher),
         layout=ttnn.TILE_LAYOUT,
     )
-
     logger.info("Run MLP")
     tt_output = tt_model(tt_input, mode)
 

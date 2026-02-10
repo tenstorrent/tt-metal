@@ -13,8 +13,9 @@ from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3Mo
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
+from models.tt_transformers.tt.prefetcher import Prefetcher
 from models.tt_transformers.tt.rope import get_rot_mats
 
 
@@ -50,6 +51,10 @@ from models.tt_transformers.tt.rope import get_rot_mats
         128,
     ),
 )
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    ([False]),
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
     max_seq_len,
@@ -58,18 +63,19 @@ def test_decoder_inference(
     mesh_device,
     reset_seeds,
     ensure_gc,
+    use_prefetcher,
 ):
-    model_name_env = os.getenv("HF_MODEL")
-    if max_seq_len > 256 and model_name_env and "Mistral-7B" in model_name_env:
-        pytest.skip(
-            "Mistral-7B models do not support max_seq_len > 256. See issue: https://github.com/tenstorrent/tt-metal/issues/19806"
-        )
-
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    num_tensors = 0
+    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
+    if use_prefetcher:
+        prefetcher.init(mode=Mode.PREFILL)
 
+    model_args = Gemma3ModelArgs(
+        mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, prefetcher=prefetcher
+    )
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -80,8 +86,7 @@ def test_decoder_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model = model_args.reference_decoder_text()
-
+    reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0
@@ -153,6 +158,7 @@ def test_decoder_inference(
         transformation_mats=transformation_mats,
         args=model_args,
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher,
     )
 
     for i in range(generation_length):
@@ -204,7 +210,7 @@ def test_decoder_inference(
             rot_mats_global=rot_mats,
             rot_mats_local=rot_mats_local,
             user_id=0,
-            mode="prefill",
+            mode=Mode.PREFILL,
             page_table=page_table_tt,
         )
         tt_out = ttnn.to_torch(

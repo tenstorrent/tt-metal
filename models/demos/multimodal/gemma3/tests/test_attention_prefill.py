@@ -14,7 +14,8 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import preco
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, get_rot_transformation_mat
+from models.tt_transformers.tt.prefetcher import Prefetcher
 from models.tt_transformers.tt.rope import get_rot_mats
 
 
@@ -52,6 +53,10 @@ from models.tt_transformers.tt.rope import get_rot_mats
         # 1024 * 64,
     ),
 )
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    ([False]),
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_inference(
     max_seq_len,
@@ -60,13 +65,19 @@ def test_attention_inference(
     mesh_device,
     reset_seeds,
     ensure_gc,
+    use_prefetcher,
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    # In prefill mode, we do not use prefetcher but we test the prefetcher interface for completeness and
+    num_tensors = 0
+    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
+    if use_prefetcher:
+        prefetcher.init(mode=Mode.PREFILL)
 
+    model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -138,6 +149,7 @@ def test_attention_inference(
         transformation_mats=transformation_mats,
         configuration=model_args,
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher,
     )
 
     pt_attention_input = (
@@ -157,7 +169,7 @@ def test_attention_inference(
         current_pos=None,
         rot_mats=rot_mats,
         user_id=0,
-        mode="prefill",
+        mode=Mode.PREFILL,
         page_table=page_table_tt,
     )
     tt_out = ttnn.to_torch(
