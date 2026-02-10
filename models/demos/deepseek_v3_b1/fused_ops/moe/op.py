@@ -385,6 +385,16 @@ class _MoeSharedExpertContext:
     residual_add_total_in1_tiles: int
     residual_add_out_cb_descriptor: Any
 
+    # Output Gather (112 matmul cores → sender)
+    output_gather_dst_cb: int
+    output_gather_data_size_bytes: int
+    output_gather_src_num_pages: int
+    output_gather_dst_num_pages: int
+    output_gather_noc0_receiver_semaphore_id: int
+    output_gather_noc1_receiver_semaphore_id: int
+    output_gather_dst_cb_descriptor: Any
+    output_gather_dst_dummy_tensor: Any  # keep-alive for tensor backing the CB
+
 
 class MoeRoutedExpertOp:
     """
@@ -1286,6 +1296,7 @@ class MoeSharedExpertOp:
         shared_residual_mcast_dst_tensor,
         shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
+        shared_output_tensor,
         num_tiles_k,
         tile_1x32_size,
         data_format,
@@ -1336,6 +1347,7 @@ class MoeSharedExpertOp:
         shared_down_matmul_in1_cb = 35  # down proj weights (112 matmul cores, tensor-backed)
         shared_down_matmul_out_cb = 36  # down proj matmul output (112 matmul cores, manual)
         shared_residual_add_out_cb = 37  # residual add output (112 matmul cores, manual)
+        shared_output_gather_dst_cb = 38  # output gather destination (sender core, tensor-backed)
 
         # ==================================================================
         # Dimensions
@@ -1385,6 +1397,8 @@ class MoeSharedExpertOp:
         residual_mcast_receiver_semaphore_id = 11
         down_mcast_sender_semaphore_id = 12
         down_mcast_receiver_semaphore_id = 13
+        output_gather_noc0_receiver_semaphore_id = 14
+        output_gather_noc1_receiver_semaphore_id = 15
 
         # ==================================================================
         # Core grids
@@ -1570,6 +1584,16 @@ class MoeSharedExpertOp:
         )
 
         # ==================================================================
+        # Output Gather (112 matmul cores → sender)
+        # ==================================================================
+        output_gather_data_size_bytes = down_matmul_out_w_per_core * tile_1x32_size
+        output_gather_src_num_pages = down_matmul_out_w_per_core
+        output_gather_dst_num_pages = DownProj.NUM_MATMUL_CORES * down_matmul_out_w_per_core
+        output_gather_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            shared_output_gather_dst_cb, shared_output_tensor
+        )
+
+        # ==================================================================
         # Per-core values
         # ==================================================================
         # K-offset for matmul
@@ -1672,6 +1696,15 @@ class MoeSharedExpertOp:
             residual_add_out_cb=shared_residual_add_out_cb,
             residual_add_total_in1_tiles=residual_add_total_in1_tiles,
             residual_add_out_cb_descriptor=residual_add_out_cb_descriptor,
+            # Output Gather
+            output_gather_dst_cb=shared_output_gather_dst_cb,
+            output_gather_data_size_bytes=output_gather_data_size_bytes,
+            output_gather_src_num_pages=output_gather_src_num_pages,
+            output_gather_dst_num_pages=output_gather_dst_num_pages,
+            output_gather_noc0_receiver_semaphore_id=output_gather_noc0_receiver_semaphore_id,
+            output_gather_noc1_receiver_semaphore_id=output_gather_noc1_receiver_semaphore_id,
+            output_gather_dst_cb_descriptor=output_gather_dst_cb_descriptor,
+            output_gather_dst_dummy_tensor=shared_output_tensor,
         )
 
     @staticmethod
@@ -1687,6 +1720,8 @@ class MoeSharedExpertOp:
         Returns:
             (ncrisc_args, brisc_args, trisc_args) - lists of named compile-time arg tuples
         """
+        from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
+
         ctx = shared_ctx
         ncrisc_args = [
             # Gate/Up weights setup
@@ -1723,6 +1758,14 @@ class MoeSharedExpertOp:
             ("shared_down_matmul_in1", ctx.down_matmul_in1_cb),
             ("shared_down_matmul_k_num_tiles", ctx.down_matmul_k_num_tiles),
             ("shared_down_matmul_out_w_per_core", ctx.down_matmul_out_w_per_core),
+            # Output gather sender (112 matmul cores → sender)
+            ("shared_og_dest_noc_x", ctx.gather_dest_noc_core.x),
+            ("shared_og_dest_noc_y", ctx.gather_dest_noc_core.y),
+            ("shared_og_data_size_bytes", ctx.output_gather_data_size_bytes),
+            ("shared_og_receiver_semaphore_id", ctx.output_gather_noc0_receiver_semaphore_id),
+            ("shared_og_src_cb", ctx.residual_add_out_cb),
+            ("shared_og_src_num_pages", ctx.output_gather_src_num_pages),
+            ("shared_og_receiver_data_addr", ctx.output_gather_dst_dummy_tensor.buffer_address()),
         ]
         brisc_args = [
             # Gate gather (A) receiver
@@ -1751,6 +1794,13 @@ class MoeSharedExpertOp:
             ("shared_down_mcast_src_cb", ctx.mcast_src_cb),  # gated reduce output (CB 31)
             ("shared_down_mcast_src_num_pages", ctx.down_mcast_src_num_pages),
             ("shared_down_mcast_dst_cb", ctx.down_mcast_dst_cb),
+            # Output gather receiver (sender core)
+            ("shared_og_noc0_num_senders", DownProj.NUM_MATMUL_CORES),
+            ("shared_og_noc1_num_senders", 0),
+            ("shared_og_noc0_receiver_semaphore_id", ctx.output_gather_noc0_receiver_semaphore_id),
+            ("shared_og_noc1_receiver_semaphore_id", ctx.output_gather_noc1_receiver_semaphore_id),
+            ("shared_og_dst_cb", ctx.output_gather_dst_cb),
+            ("shared_og_dst_num_pages", ctx.output_gather_dst_num_pages),
         ]
         trisc_args = [
             # Gate/Up matmul
@@ -1797,6 +1847,7 @@ class MoeSharedExpertOp:
             shared_ctx.down_matmul_in1_cb_descriptor,
             shared_ctx.down_matmul_out_cb_descriptor,
             shared_ctx.residual_add_out_cb_descriptor,
+            shared_ctx.output_gather_dst_cb_descriptor,
         ]
 
     @staticmethod
@@ -1915,6 +1966,7 @@ class MoeOp:
         shared_residual_mcast_dst_tensor,
         shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
+        shared_output_tensor,
         shared_k_parallel,
         shared_n_parallel,
         use_hardcoded_expert_index=False,
@@ -1973,6 +2025,7 @@ class MoeOp:
             shared_residual_mcast_dst_tensor=shared_residual_mcast_dst_tensor,
             shared_down_mcast_dst_tensor=shared_down_mcast_dst_tensor,
             shared_down_weights_tensor=shared_down_weights_tensor,
+            shared_output_tensor=shared_output_tensor,
             num_tiles_k=routed_ctx.num_tiles_k,
             tile_1x32_size=routed_ctx.tile_1x32_size,
             data_format=routed_ctx.data_format,
@@ -2080,6 +2133,17 @@ class MoeOp:
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
+            # Shared expert output gather semaphores
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.output_gather_noc0_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=shared_ctx.output_gather_noc1_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
         ]
 
         # ==================================================================
@@ -2121,6 +2185,7 @@ class MoeOp:
             shared_residual_mcast_dst_tensor,
             shared_down_mcast_dst_tensor,
             shared_down_weights_tensor,
+            shared_output_tensor,
         ]
 
         # ==================================================================

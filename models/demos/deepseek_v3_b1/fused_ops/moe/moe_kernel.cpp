@@ -24,10 +24,11 @@
 //   8.  Fused mul (routed, 8 DRAM cores)
 //   9.  down_proj Gather (routed, gate_proj → sender)
 //  10.  down_proj Mcast (routed, sender → gate_proj)
-// 10b.  Down Mcast (shared, sender → 112 cores): gated reduce output [1, K_down]
-// 10c.  Down Proj Matmul (shared, 112 cores): SRAM matmul [1,K_down] x [K_down,N_per_core]
-// 10d.  Residual Add (shared, 112 cores): matmul_out + shard(residual)
 //  11.  down_proj DRAM MM (routed, 8 DRAM cores)
+// 11b.  Down Mcast (shared, sender → 112 cores): gated reduce output [1, K_down]
+// 11c.  Down Proj Matmul (shared, 112 cores): SRAM matmul [1,K_down] x [K_down,N_per_core]
+// 11d.  Residual Add (shared, 112 cores): matmul_out + shard(residual)
+// 11e.  Output Gather (shared, 112 cores → sender): collect residual add results
 //  12.  Eltwise Add (routed, down_proj + fused_add)
 //
 // Optimizations:
@@ -282,6 +283,23 @@ void kernel_main() {
             // Residual Add — reader (no-op for NCRISC)
             using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::ReaderCTArgs;
             deepseek_b1_ops::ResidualAdd::ReaderArgs residual_add_args{};
+
+            // Output Gather — sender (112 matmul cores → sender core)
+            deepseek_b1_ops::Gather::SenderArgs og_args{
+                get_named_compile_time_arg_val("shared_og_dest_noc_x"),
+                get_named_compile_time_arg_val("shared_og_dest_noc_y"),
+                get_named_compile_time_arg_val("shared_og_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_og_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_og_src_cb"),
+                get_named_compile_time_arg_val("shared_og_src_num_pages"),
+                0,  // sender_grid_start_x (unused with UsePerCoreSenderIdx)
+                0,  // sender_grid_start_y
+                0,  // sender_grid_end_x
+                0,  // sender_grid_end_y
+                0,  // row_major (unused)
+                get_named_compile_time_arg_val("shared_og_receiver_data_addr"),
+                get_named_compile_time_arg_val("shared_residual_add_core_idx"),  // reuse matmul core index
+            };
         } shared;
     } moe;
 
@@ -516,6 +534,16 @@ void kernel_main() {
             // Residual Add — writer (no-op for BRISC)
             using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::WriterCTArgs;
             deepseek_b1_ops::ResidualAdd::WriterArgs residual_add_args{};
+
+            // Output Gather — receiver (sender core collects from 112 matmul cores)
+            deepseek_b1_ops::Gather::ReceiverArgs og_args{
+                get_named_compile_time_arg_val("shared_og_noc0_num_senders"),
+                get_named_compile_time_arg_val("shared_og_noc1_num_senders"),
+                get_named_compile_time_arg_val("shared_og_noc0_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_og_noc1_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_og_dst_cb"),
+                get_named_compile_time_arg_val("shared_og_dst_num_pages"),
+            };
         } shared;
     } moe;
 
@@ -683,6 +711,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_residual_add_total_in1_tiles"),
                 get_named_compile_time_arg_val("shared_residual_add_core_idx"),
             };
+
+            // Output Gather (compute — no-op)
+            deepseek_b1_ops::Gather::ComputeArgs og_args{};
         } shared;
     } moe;
 
@@ -852,7 +883,17 @@ void kernel_main() {
         down_proj_mcast(moe.routed.down_proj_mcast_args);
     }
 
-    // 10b. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
+    // 11. down_proj: DRAM Streaming Matmul
+    {
+        DeviceZoneScopedN("DOWN_PROJ");
+        constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
+        deepseek_b1_ops::DRAMStreamingMatmul::
+            Op<Moe::Routed::DownProjCTArgs, Core::Routed::is_gate_proj_core, true, true, down_proj_cb_in1_addr>
+                down_proj;
+        down_proj();
+    }
+
+    // 11b. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
     //      Source is mcast_src_cb (CB 31) filled by gated reduce, pop_src=true
     {
         DeviceZoneScopedN("SHARED_DOWN_MCAST");
@@ -866,7 +907,7 @@ void kernel_main() {
         shared_down_mcast(moe.shared.down_mcast_args);
     }
 
-    // 10c. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores
+    // 11c. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores
     {
         DeviceZoneScopedN("SHARED_DOWN_MATMUL");
         deepseek_b1_ops::Matmul::Op<
@@ -878,7 +919,7 @@ void kernel_main() {
         shared_down_matmul(moe.shared.down_matmul_args);
     }
 
-    // 10d. Shared: Residual Add — matmul_out + shard(residual) on 112 cores
+    // 11d. Shared: Residual Add — matmul_out + shard(residual) on 112 cores
     {
         DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
         deepseek_b1_ops::ResidualAdd::Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core>
@@ -886,14 +927,16 @@ void kernel_main() {
         shared_residual_add(moe.shared.residual_add_args);
     }
 
-    // 11. down_proj: DRAM Streaming Matmul
+    // 11e. Shared: Output Gather — 112 matmul cores → sender core
     {
-        DeviceZoneScopedN("DOWN_PROJ");
-        constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
-        deepseek_b1_ops::DRAMStreamingMatmul::
-            Op<Moe::Routed::DownProjCTArgs, Core::Routed::is_gate_proj_core, true, true, down_proj_cb_in1_addr>
-                down_proj;
-        down_proj();
+        DeviceZoneScopedN("SHARED_OUTPUT_GATHER");
+        deepseek_b1_ops::Gather::Op<
+            Core::Shared::is_mcast_receiver_core,  // IsSenderCore: 112 matmul cores
+            Core::is_sender_core,                  // IsReceiverCore: sender core
+            /*pop_src=*/true,
+            /*UsePerCoreSenderIdx=*/true>
+            shared_output_gather;
+        shared_output_gather(moe.shared.og_args);
     }
 
     // 12. Eltwise Add: down_proj + fused_add
