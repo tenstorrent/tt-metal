@@ -11,6 +11,7 @@
 #ifndef COMPILE_FOR_TRISC
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
 #include "internal/tt-2xx/quasar/overlay/remapper_api.hpp"
+#include "internal/tt-2xx/quasar/overlay/dataflow_buffer_isr.h"
 #endif
 
 #include "api/debug/dprint.h"
@@ -22,7 +23,27 @@ extern RemapperAPI g_remapper_configurator;
 namespace experimental {
 
 extern thread_local LocalDFBInterface g_dfb_interface[32];
-extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[MAX_TOTAL_TXN_IDS];
+
+FORCE_INLINE void setup_isr_csrs() {
+    uint64_t csr_reg;
+    uint64_t old_mtvec;
+    asm volatile("csrr %0, mtvec" : "=r"(old_mtvec));
+
+    // Setup mtvec
+    csr_reg = (uint64_t)dfb_implicit_sync_handler;
+
+    asm volatile("csrw mtvec, %0" : : "r"(csr_reg));
+
+    // Enable ROCC interrupts in mie
+    csr_reg = 1 << 13;
+    asm volatile("csrw mie, %0" : : "r"(csr_reg));
+
+    // Enable mie in mstatus
+    uint64_t other_csr_reg;
+    asm volatile("csrr %0, mstatus" : "=r"(other_csr_reg));
+    other_csr_reg |= 1 << 3;
+    asm volatile("csrw mstatus, %0" : : "r"(other_csr_reg));
+}
 
 FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t local_dfb_mask) {
     uint64_t hartid;
@@ -57,7 +78,10 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             DPRINT << "risc_index: " << static_cast<uint32_t>(risc_index) << ENDL();
 
             // Copy per-risc fields
-            for (uint8_t i = 0; i < 4; i++) {
+            dfb_interface.num_tcs_to_rr = per_risc_ptr->num_tcs_to_rr;
+            uint8_t tile_counters[MAX_NUM_TILE_COUNTERS_TO_RR];
+            DPRINT << "num_tcs_to_rr: " << static_cast<uint32_t>(dfb_interface.num_tcs_to_rr) << ENDL();
+            for (uint8_t i = 0; i < per_risc_ptr->num_tcs_to_rr; i++) {
                 dfb_interface.base_addr[i] = per_risc_ptr->base_addr[i] >> cb_addr_shift;
                 DPRINT << "base_addr[" << static_cast<uint32_t>(i) << "]: " << dfb_interface.base_addr[i] << ENDL();
                 dfb_interface.limit[i] = per_risc_ptr->limit[i] >> cb_addr_shift;
@@ -69,25 +93,56 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 dfb_interface.packed_tile_counter[i] = per_risc_ptr->packed_tile_counter[i];
                 DPRINT << "packed_tile_counter[" << static_cast<uint32_t>(i)
                        << "]: " << (uint32_t)dfb_interface.packed_tile_counter[i] << ENDL();
+                tile_counters[i] = per_risc_ptr->packed_tile_counter[i];
             }
-            dfb_interface.num_tcs_to_rr = per_risc_ptr->num_tcs_to_rr;
-            DPRINT << "num_tcs_to_rr: " << static_cast<uint32_t>(dfb_interface.num_tcs_to_rr) << ENDL();
+
             dfb_interface.entry_size = init_ptr->entry_size;
             DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
             dfb_interface.stride_size = init_ptr->stride_size;
             DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
 
-            dfb_interface.num_txn_ids = per_risc_ptr->num_txn_ids;
-            for (uint8_t i = 0; i < per_risc_ptr->num_txn_ids; i++) {
-                dfb_interface.txn_ids[i] = per_risc_ptr->txn_ids[i];
-            }
-            dfb_interface.num_entries_per_txn_id = per_risc_ptr->num_entries_per_txn_id;
-            dfb_interface.num_entries_per_txn_id_per_tc = per_risc_ptr->num_entries_per_txn_id_per_tc;
-
             dfb_interface.remapper_pair_index = per_risc_ptr->flags.remapper_pair_index;
             DPRINT << "remapper_pair_index: " << static_cast<uint32_t>(dfb_interface.remapper_pair_index) << ENDL();
 
 #ifndef COMPILE_FOR_TRISC
+            if (per_risc_ptr->init_txn_id_descriptor != 0) {
+                dfb_interface.num_txn_ids = per_risc_ptr->num_txn_ids;
+                // This descriptor is used by the ISR to understand which tile counters need to update which credits
+                // (post/ack)
+                TxnDFBDescriptor txn_dfb_descriptor{
+                    .num_counters = per_risc_ptr->num_tcs_to_rr,
+                    .tile_counters = tile_counters,
+                };
+                if (per_risc_ptr->flags.should_init_tc) {  // producer
+                    txn_dfb_descriptor.tiles_to_post = init_ptr->num_entries_to_process_threshold_producer;
+                } else {
+                    txn_dfb_descriptor.tiles_to_ack = init_ptr->num_entries_to_process_threshold_consumer;
+                }
+                uint32_t txn_id_mask = 0;
+                for (uint8_t i = 0; i < per_risc_ptr->num_txn_ids; i++) {
+                    uint8_t txn_id = per_risc_ptr->txn_ids[i];
+                    dfb_interface.txn_ids[i] = txn_id;
+                    g_txn_dfb_descriptor[txn_id] = txn_dfb_descriptor;
+                    if (per_risc_ptr->flags.should_init_tc) {
+                        SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, txn_dfb_descriptor.tiles_to_post);
+                    } else {
+                        SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, txn_dfb_descriptor.tiles_to_ack);
+                    }
+                    txn_id_mask |= (1u << txn_id);
+                }
+                if (per_risc_ptr->flags.should_init_tc) {
+                    per_trid_tiles_to_process_set_interrupt_enable_cmdbuf_0(txn_id_mask);
+                } else {
+                    per_trid_wr_tiles_to_process_set_interrupt_enable_cmdbuf_0(txn_id_mask);
+                }
+                dfb_interface.num_entries_per_txn_id = per_risc_ptr->num_entries_per_txn_id;
+                dfb_interface.num_entries_per_txn_id_per_tc = per_risc_ptr->num_entries_per_txn_id_per_tc;
+
+                if (hartid == 0) {  // TODO: should specify only 1 risc does this but not necessarily DM0
+                    setup_isr_csrs();
+                }
+            }
+
             // Configure remapper if needed (must be done before TC init)
             if (per_risc_ptr->flags.should_init_tc && per_risc_ptr->flags.remapper_en) {
                 if (risc_index == 0) {  // update this
