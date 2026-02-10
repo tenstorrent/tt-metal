@@ -47,6 +47,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     sfpi::vFloat div_result = a * recip;
 
     // Compute trunc(a/b)
+    // Input in LReg0, output in LReg1. LReg2/LReg3 are clobbered by _trunc_body_(),
+    // so we must read them to inform the SFPI register allocator they are not immediately available.
     sfpi::l_reg[sfpi::LRegs::LReg0] = div_result;
     _trunc_body_();
     sfpi::vFloat trunc_div = sfpi::l_reg[sfpi::LRegs::LReg1];

@@ -476,7 +476,7 @@ def test_fmod_ttnn(input_shapes, device):
         golden_function = ttnn.get_golden_function(ttnn.fmod)
         golden_tensor = golden_function(in_data1, scalar, device=device)
 
-        comp_pass = assert_with_ulp(output_tensor, golden_tensor, 1)
+        comp_pass = assert_with_ulp(golden_tensor, output_tensor, 1)
         assert comp_pass, f"Failed for scalar={scalar}"
 
 
