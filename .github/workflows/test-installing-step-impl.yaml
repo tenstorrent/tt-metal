@@ -7,7 +7,7 @@ on:
 
 jobs:
   install-and-run-mnist:
-    name: Install deps and run MNIST MLP
+    name: TT-Installer and run MNIST MLP
     runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'N150') }}
     timeout-minutes: 30
     steps:
@@ -40,8 +40,8 @@ jobs:
           tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
 
   install-and-run-falcon7b:
-    name: Install deps and run Falcon7b Demo
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    name: TT-Installer and run Falcon7b Demo
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'N150') }}
     timeout-minutes: 90
     steps:
       - name: Prepare system
@@ -77,7 +77,7 @@ jobs:
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"
 
   install-and-run-llama70b:
-    name: Install deps and run Llama 70B Demo
+    name: TT-Installer and run Llama 70B Demo
     runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'TG') }}
     timeout-minutes: 120
     steps:
