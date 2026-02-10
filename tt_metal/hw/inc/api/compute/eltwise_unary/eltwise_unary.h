@@ -43,7 +43,9 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
 }
 
 ALWI void init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
     unary_op_init_common(icb, ocb, call_line);
+#endif  // TODO: AM; add Quasar implementation
 }
 
 }  // namespace ckernel
