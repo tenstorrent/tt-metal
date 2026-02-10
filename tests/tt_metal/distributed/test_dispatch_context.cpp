@@ -97,6 +97,12 @@ TEST(DispatchContext, TestWritesAndWorkloads) {
 }
 
 // After SD -> enable FD -> disable FD, verify NOC/L1 bank tables by using an L1 buffer across the mesh.
+// Test validates SD→FD→SD dispatch mode transitions with L1 buffer operations
+// Verifies that buffers remain accessible and new buffers can be created across mode transitions:
+// - Slow Dispatch (SD): Uses expanded grid by reclaiming dispatch column (11 cols → 12 cols on BH)
+// - Fast Dispatch (FD): Uses standard grid with reserved dispatch column (11 cols)
+// - Sharded L1 buffers verify dispatch kernels correctly write to L1 memory across transitions
+// This tests the full flow: initialize in SD → enable FD → load weights → disable FD → use SD
 TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     const auto& rt_options = MetalContext::instance().rtoptions();
     if (rt_options.get_fast_dispatch()) {
@@ -114,7 +120,8 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     const uint32_t num_tiles = 64;
 
-    // Enable Fast Dispatch and create sharded L1 buffer
+    // Phase 1: SD→FD transition - Enable Fast Dispatch and create sharded L1 buffer
+    // Sharded buffers validate that dispatch kernels correctly write to L1 memory
     experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
 
     CoreRangeSet shard_grid(CoreRange({0, 0}, {1, 1}));
@@ -138,17 +145,19 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
     Finish(mesh_device_->mesh_command_queue());
 
-    // Verify sharded buffer readback in FD mode
+    // Verify sharded buffer works correctly in FD mode
     std::vector<uint32_t> fd_dst_vec = {};
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         ReadShard(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, coord);
         EXPECT_EQ(fd_dst_vec, fd_src_vec) << "Sharded buffer readback failed in FD mode";
     }
 
-    // Transition from FD to SD
+    // Phase 2: FD→SD transition - Return to Slow Dispatch mode
+    // The grid re-expands (11 cols → 12 cols) when returning to SD
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
 
-    // Verify sharded buffer still works after FD->SD transition
+    // Verify the sharded buffer created in FD mode remains accessible after transition to SD
+    // This confirms buffer mappings persist correctly across grid reconfigurations
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         std::vector<uint32_t> fd_buf_readback_in_sd = {};
         ReadShard(mesh_device_->mesh_command_queue(), fd_buf_readback_in_sd, fd_buf, coord);
@@ -156,7 +165,8 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
             << "Sharded buffer data mismatch after FD->SD transition";
     }
 
-    // Write and verify interleaved L1 buffer in SD mode
+    // Phase 3: Create and verify new buffer operations in SD mode
+    // Validates that new buffers can be created using the expanded grid with reclaimed dispatch cores
     DeviceLocalBufferConfig sd_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
     ReplicatedBufferConfig sd_global_config{.size = num_tiles * single_tile_size};

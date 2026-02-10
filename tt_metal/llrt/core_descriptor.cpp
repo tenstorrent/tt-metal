@@ -230,7 +230,9 @@ const core_descriptor_t& get_core_descriptor_config(
     size_t start_y = compute_with_storage_start[1].as<size_t>();
     // When slow dispatch is on, expand compute grid by reclaiming the dispatch column/row
     // The YAML already accounts for harvesting, so we just expand by 1 in the dispatch axis
-    if (!fast_dispatch) {
+    // Only expand on Blackhole real hardware (not Wormhole, not simulation)
+    if (!fast_dispatch && arch == tt::ARCH::BLACKHOLE &&
+        !tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         if (dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::COL) {
             // Expand by 1 column (reclaim dispatch column)
             end_x += 1;
