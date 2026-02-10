@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+# Constants for limiting output verbosity
 MAX_ERROR_LINES = 30
 MAX_SKIP_REASONS = 5
 
@@ -50,7 +51,31 @@ class LogAnalysis:
     skip_reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     critical_errors: list[str] = field(default_factory=list)
-    has_failures: bool = False
+
+    @property
+    def num_failed(self) -> int:
+        """Number of failed tests."""
+        return len(self.tests_failed)
+
+    @property
+    def num_passed(self) -> int:
+        """Number of passed tests."""
+        return len(self.tests_passed)
+
+    @property
+    def has_failures(self) -> bool:
+        """Whether any tests failed."""
+        return len(self.tests_failed) > 0
+
+    @property
+    def has_critical(self) -> bool:
+        """Whether critical errors were detected."""
+        return len(self.critical_errors) > 0
+
+    @property
+    def has_warnings(self) -> bool:
+        """Whether warnings were detected."""
+        return len(self.warnings) > 0
 
 
 def analyze_log_file(filepath: str) -> LogAnalysis:
@@ -60,7 +85,7 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
     try:
         with open(filepath, encoding="utf-8", errors="replace") as f:
             result.content = f.read()
-    except (OSError, IOError, PermissionError) as e:
+    except (OSError, PermissionError) as e:
         print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
         return result
 
@@ -92,8 +117,6 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
         # Filter out summary lines
         if not re.match(r"\d+ tests?", test_name):
             result.tests_skipped.add(test_name)
-
-    result.has_failures = len(result.tests_failed) > 0
 
     # Extract failure details (lines around FAILED markers)
     in_failure = False
@@ -223,61 +246,50 @@ def print_test_details(analysis: LogAnalysis) -> None:
         print()
 
 
+def deduplicate_and_count_messages(messages: list[str]) -> dict[str, int]:
+    """Deduplicate messages by normalizing timestamps and MPI rank prefixes."""
+    message_counts = defaultdict(int)
+    for message in messages:
+        # Remove timestamp patterns and MPI rank prefixes to group similar messages
+        normalized = re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+", "<timestamp>", message)
+        normalized = re.sub(r"\[1,\d+\]<std(out|err)>:", "", normalized)
+        message_counts[normalized.strip()] += 1
+    return message_counts
+
+
+def print_message_section(messages: list[str], header: str, color: str, max_items: int = 10) -> None:
+    """Print a section of deduplicated messages with counts."""
+    print(f"{color}{header}{Colors.NC}")
+
+    message_counts = deduplicate_and_count_messages(messages)
+    items_to_show = list(sorted(message_counts.items(), key=lambda x: -x[1]))[:max_items]
+
+    for message, count in items_to_show:
+        if count > 1:
+            print(f"  [{count}x] {message}")
+        else:
+            print(f"  {message}")
+
+    if len(message_counts) > max_items:
+        print(f"  ... ({len(message_counts) - max_items} more unique types)")
+    print()
+
+
 def print_warnings_and_errors(analysis: LogAnalysis) -> None:
     """Print warnings and critical errors section."""
-    has_warnings = len(analysis.warnings) > 0
-    has_critical = len(analysis.critical_errors) > 0
 
-    if not has_warnings and not has_critical:
+    if not analysis.has_warnings and not analysis.has_critical:
         return
 
     print("-" * 50)
     print("WARNINGS & CRITICAL ERRORS")
     print("-" * 50)
 
-    if has_critical:
-        print(f"{Colors.RED}⚠️  CRITICAL ERRORS DETECTED:{Colors.NC}")
-        # Deduplicate critical errors by removing timestamps
-        error_counts = defaultdict(int)
-        for error in analysis.critical_errors:
-            # Remove timestamp patterns and MPI rank prefixes to group similar errors
-            normalized = re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+", "<timestamp>", error)
-            normalized = re.sub(r"\[1,\d+\]<std(out|err)>:", "", normalized)
-            error_counts[normalized.strip()] += 1
+    if analysis.has_critical:
+        print_message_section(analysis.critical_errors, "⚠️  CRITICAL ERRORS DETECTED:", Colors.RED)
 
-        items_to_show = list(sorted(error_counts.items(), key=lambda x: -x[1]))[:10]
-
-        for error, count in items_to_show:
-            if count > 1:
-                print(f"  [{count}x] {error}")
-            else:
-                print(f"  {error}")
-
-        if len(error_counts) > 10:
-            print(f"  ... ({len(error_counts) - 10} more unique error types)")
-        print()
-
-    if has_warnings:
-        print(f"{Colors.YELLOW}⚠️  RUNTIME WARNINGS DETECTED:{Colors.NC}")
-        # Deduplicate warnings by removing timestamps
-        warning_counts = defaultdict(int)
-        for warning in analysis.warnings:
-            # Remove timestamp patterns and MPI rank prefixes to group similar warnings
-            normalized = re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+", "<timestamp>", warning)
-            normalized = re.sub(r"\[1,\d+\]<std(out|err)>:", "", normalized)
-            warning_counts[normalized.strip()] += 1
-
-        items_to_show = list(sorted(warning_counts.items(), key=lambda x: -x[1]))[:10]
-
-        for warning, count in items_to_show:
-            if count > 1:
-                print(f"  [{count}x] {warning}")
-            else:
-                print(f"  {warning}")
-
-        if len(warning_counts) > 10:
-            print(f"  ... ({len(warning_counts) - 10} more unique warning types)")
-        print()
+    if analysis.has_warnings:
+        print_message_section(analysis.warnings, "⚠️  RUNTIME WARNINGS DETECTED:", Colors.YELLOW)
 
     print("Note: These are runtime issues that occurred during test execution.")
     print("      They may or may not affect test results.")
@@ -286,10 +298,6 @@ def print_warnings_and_errors(analysis: LogAnalysis) -> None:
 
 def print_recommendations(analysis: LogAnalysis) -> None:
     """Print actionable recommendations."""
-    num_failed = len(analysis.tests_failed)
-    num_passed = len(analysis.tests_passed)
-    has_critical = len(analysis.critical_errors) > 0
-    has_warnings = len(analysis.warnings) > 0
 
     print("=" * 50)
     print("Recommendations")
@@ -297,22 +305,24 @@ def print_recommendations(analysis: LogAnalysis) -> None:
 
     recs = []
 
-    if num_failed > 0:
+    if analysis.num_failed > 0:
         recs.append(
-            f"• {num_failed} test(s) failed. Review failure details above and "
+            f"• {analysis.num_failed} test(s) failed. Review failure details above and "
             "check for device communication or timing issues."
         )
+        recs.append("• If issues persist, report to SYSENG and SCALEOUT teams.")
 
-    if has_critical:
+    if analysis.has_critical:
         recs.append(
             "• Critical errors detected (segmentation faults, core dumps). " "Investigate hardware or driver issues."
         )
+        recs.append("• Escalate to SYSENG team for hardware diagnostics.")
 
-    if has_warnings:
+    if analysis.has_warnings:
         recs.append("• Runtime warnings detected. Review timeout messages and ARC core failures.")
 
-    if num_failed == 0 and num_passed > 0:
-        if has_critical or has_warnings:
+    if analysis.num_failed == 0 and analysis.num_passed > 0:
+        if analysis.has_critical or analysis.has_warnings:
             recs.append(f"{Colors.YELLOW}✓ All tests passed, but runtime warnings/errors were detected.{Colors.NC}")
             recs.append("  Review the WARNINGS & CRITICAL ERRORS section above.")
         else:
@@ -320,7 +330,7 @@ def print_recommendations(analysis: LogAnalysis) -> None:
                 f"{Colors.GREEN}✓ All dispatch tests passed successfully. "
                 f"System is functioning correctly.{Colors.NC}"
             )
-    elif num_passed == 0:
+    elif analysis.num_passed == 0:
         recs.append(
             f"{Colors.RED}• No tests passed. Check if tests executed properly and "
             f"review log for initialization errors.{Colors.NC}"
@@ -355,6 +365,28 @@ def output_json(analysis: LogAnalysis):
     print(json.dumps(result, indent=2))
 
 
+def output_text(analysis: LogAnalysis):
+    print_summary(analysis)
+    print_test_details(analysis)
+    print_warnings_and_errors(analysis)
+    print_recommendations(analysis)
+
+    # Final result
+    print("-" * 50)
+    print("FINAL TEST RESULT")
+    print("-" * 50)
+
+    if analysis.num_failed > 0:
+        print(f"STATUS: {Colors.RED}FAILED{Colors.NC}")
+        print("Some tests failed. See details above.")
+    elif analysis.num_passed == 0:
+        print(f"STATUS: {Colors.RED}FAILED (NO TESTS PASSED){Colors.NC}")
+        print("No tests were successfully executed.")
+    else:
+        print(f"STATUS: {Colors.GREEN}PASSED{Colors.NC}")
+        print("All tests passed successfully.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Analyze dispatch test logs and generate summary.",
@@ -382,33 +414,14 @@ def main():
     if args.json:
         output_json(analysis)
     else:
-        print_summary(analysis)
-        print_test_details(analysis)
-        print_warnings_and_errors(analysis)
-        print_recommendations(analysis)
+        output_text(analysis)
 
-        # Final result
-        print("-" * 50)
-        print("FINAL TEST RESULT")
-        print("-" * 50)
-
-        num_failed = len(analysis.tests_failed)
-        num_passed = len(analysis.tests_passed)
-
-        if num_failed > 0:
-            print(f"STATUS: {Colors.RED}FAILED{Colors.NC}")
-            print("Some tests failed. See details above.")
-            sys.exit(1)
-        elif num_passed == 0:
-            print(f"STATUS: {Colors.RED}FAILED (NO TESTS PASSED){Colors.NC}")
-            print("No tests were successfully executed.")
-            sys.exit(1)
-        else:
-            print(f"STATUS: {Colors.GREEN}PASSED{Colors.NC}")
-            print("All tests passed successfully.")
-            sys.exit(0)
-
-    sys.exit(0)
+    if analysis.num_failed > 0:
+        sys.exit(1)
+    elif analysis.num_passed == 0:
+        sys.exit(1)
+    else:
+        sys.exit(0)
 
 
 if __name__ == "__main__":

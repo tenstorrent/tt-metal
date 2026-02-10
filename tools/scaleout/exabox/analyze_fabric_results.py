@@ -15,6 +15,11 @@ from datetime import datetime
 from pathlib import Path
 
 
+# Constants for limiting output
+MAX_WARNINGS = 10
+MAX_ERRORS = 10
+
+
 class Colors:
     GREEN = "\033[0;32m"
     RED = "\033[0;31m"
@@ -49,7 +54,7 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
     try:
         with open(filepath, encoding="utf-8", errors="replace") as f:
             result.content = f.read()
-    except (OSError, IOError, PermissionError) as e:
+    except (OSError, PermissionError) as e:
         print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
         return result
 
@@ -105,12 +110,12 @@ def print_warnings_and_errors(analysis: LogAnalysis) -> None:
 
     if analysis.critical_errors:
         print(f"\n{Colors.RED}-- Critical Errors --{Colors.NC}")
-        for entry in analysis.critical_errors[:20]:  # Limit output
+        for entry in analysis.critical_errors[:MAX_ERRORS]:  # Limit output
             print(f"  {entry}")
 
     if analysis.warnings:
         print(f"\n{Colors.YELLOW}-- Warnings/Runtime Errors --{Colors.NC}")
-        for entry in analysis.warnings[:20]:  # Limit output
+        for entry in analysis.warnings[:MAX_WARNINGS]:  # Limit output
             print(f"  {entry}")
 
     print("=" * 50 + "\n")
@@ -127,12 +132,14 @@ def print_recommendations(analysis: LogAnalysis) -> None:
     if not analysis.all_passed:
         recs.append("• Fabric test failed. Review logs for connectivity or hardware issues.")
         recs.append("• Check cable connections, port status, and fabric topology.")
+        recs.append("• If issues persist, report to SYSENG and SCALEOUT teams.")
 
     if analysis.critical_errors:
         recs.append(
             "• Critical errors detected (TT_FATAL, segmentation faults). "
             "Check for driver issues or hardware failures."
         )
+        recs.append("• Escalate to SYSENG team for hardware diagnostics.")
 
     if analysis.warnings:
         recs.append("• Runtime warnings detected. Review timeout or failed operation messages.")
@@ -155,6 +162,23 @@ def output_json(analysis: LogAnalysis, input_path: str):
         "critical_errors_count": len(analysis.critical_errors),
     }
     print(json.dumps(result, indent=2))
+
+
+def output_text(analysis: LogAnalysis, input_path: str):
+    """Output text results."""
+    print_summary(analysis, input_path)
+    print_warnings_and_errors(analysis)
+    print_recommendations(analysis)
+
+    # Final result
+    print("-" * 50)
+    print("FINAL TEST RESULT")
+    print("-" * 50)
+
+    if analysis.all_passed:
+        print(f"{Colors.GREEN}✓ All fabric tests PASSED{Colors.NC}")
+    else:
+        print(f"{Colors.RED}✗ Fabric tests FAILED{Colors.NC}")
 
 
 def main():
@@ -184,23 +208,11 @@ def main():
     if args.json:
         output_json(analysis, args.path)
     else:
-        print_summary(analysis, args.path)
-        print_warnings_and_errors(analysis)
-        print_recommendations(analysis)
-
-        # Final result
-        print("-" * 50)
-        print("FINAL TEST RESULT")
-        print("-" * 50)
-
-        if analysis.all_passed:
-            print(f"{Colors.GREEN}✓ All fabric tests PASSED{Colors.NC}")
-            sys.exit(0)
-        else:
-            print(f"{Colors.RED}✗ Fabric tests FAILED{Colors.NC}")
-            sys.exit(1)
-
-    sys.exit(0)
+        output_text(analysis, args.path)
+    if analysis.all_passed:
+        exit(0)
+    else:
+        exit(1)
 
 
 if __name__ == "__main__":
