@@ -50,7 +50,9 @@ jobs:
             timeout: 15
             test-type: fast
           - name: Sockets fast unit test
-            cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
+            cmd: |
+              ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
+              TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
             timeout: 10
             test-type: fast
           - name: cpp fast unit tests (eth, single erisc)

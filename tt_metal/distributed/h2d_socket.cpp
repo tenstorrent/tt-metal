@@ -321,4 +321,10 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
     this->notify_receiver();
 }
 
+std::vector<MeshCoreCoord> H2DSocket::get_active_cores() const { return {recv_core_}; }
+
+MeshDevice* H2DSocket::get_mesh_device() const { return config_buffer_->device(); }
+
+H2DMode H2DSocket::get_h2d_mode() const { return h2d_mode_; }
+
 }  // namespace tt::tt_metal::distributed
