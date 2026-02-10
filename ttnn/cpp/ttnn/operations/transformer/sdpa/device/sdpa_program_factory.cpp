@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -289,18 +290,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t qk_in0_block_w = DHt;
-    // max of Sk_chunk_t and dst_size
-    uint32_t qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
-    // If qk_out_subblock_w is full row of output, scale subblock_h so volume = dst_size. Otherwise it's 1 to maintain
-    // row-major intermediate buffer.
-    uint32_t qk_out_subblock_h =
-        (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
 
-    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0 && Sq_chunk_t % 2 == 0) {
-        // Hacky, try to get 2x4 output subblock if possible to optimize matmul util.
-        qk_out_subblock_w = qk_out_subblock_w / 2;
-        qk_out_subblock_h = 2;
-    }
+    auto [qk_out_subblock_h, qk_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
@@ -308,9 +300,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
-    const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == vDHt) ? (std::min(Sq_chunk_t, dst_size / out_out_subblock_w)) : 1;
+
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -332,60 +323,19 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
-    const uint32_t stats_granularity = std::min(Sq_chunk_t, dst_size);
-    // Find log2 of stats_granularity using std
-    const uint32_t log2_stats_granularity = std::log2(stats_granularity);
-    // Assert that this is a power of 2
-    TT_FATAL(
-        stats_granularity == (1 << log2_stats_granularity),
-        "stats_granularity must be a power of 2. Got {}.",
-        stats_granularity);
-
-    const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
-    const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-    TT_FATAL(
-        sub_exp_granularity == (1 << log2_sub_exp_granularity),
-        "sub_exp_granularity must be a power of 2. Got {}.",
-        sub_exp_granularity);
-
-    const uint32_t mul_bcast_granularity = std::min(Sq_chunk_t * Sk_chunk_t, dst_size);
-    const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-    TT_FATAL(
-        mul_bcast_granularity == (1 << log2_mul_bcast_granularity),
-        "mul_bcast_granularity must be a power of 2. Got {}.",
-        mul_bcast_granularity);
-
-    uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = std::log2(dht_granularity);
-    // Sometimes DHt is not a power of 2, so granularity should be 1
-    if (dht_granularity != (1 << log2_dht_granularity)) {
-        dht_granularity = 1;
-        log2_dht_granularity = 0;
-    }
-    TT_FATAL(
-        dht_granularity == (1 << log2_dht_granularity),
-        "dht_granularity must be a power of 2. Got {}.",
-        dht_granularity);
-
-    // Reduce ops can use granularity of dst_size/2
-    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
-    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
-    TT_FATAL(
-        reduce_granularity == (1 << log2_reduce_granularity),
-        "reduce_granularity must be a power of 2. Got {}.",
-        reduce_granularity);
+    // Each granularity must evenly divide its tile count to avoid dropping tiles
+    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
+    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
+    const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
+    const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
+    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
     log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
     log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
-    log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
     log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
-    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -527,15 +477,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
     defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel =
         (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
