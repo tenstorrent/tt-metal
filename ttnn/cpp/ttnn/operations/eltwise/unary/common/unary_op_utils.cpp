@@ -110,18 +110,35 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     float param0 = static_cast<float>(params[0]);
     switch (op_type) {
         case UnaryOpType::FILL:
-            // NOLINTNEXTLINE(bugprone-branch-clone)
-            if (input_dtype == DataType::INT32) {
-                return {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
-            } else if (input_dtype == DataType::UINT32) {
-                // TODO: Use uint32_t tile API here once implemented
-                return {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
-            } else {
-                // Note: bit casted to int float is used to properly pass nan/+-inf
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32 || input_dtype == DataType::UINT16) {
+                // Validate and convert fill value
+                std::uint32_t fill_val;
+                if (input_dtype == DataType::UINT16) {
+                    const auto as_int = static_cast<std::int32_t>(param0_raw);
+                    TT_FATAL(
+                        as_int >= 0 && as_int <= std::numeric_limits<std::uint16_t>::max(),
+                        "FILL value {} out of range for UInt16",
+                        as_int);
+                    fill_val = static_cast<std::uint32_t>(as_int);
+                } else {
+                    fill_val = static_cast<std::uint32_t>(param0_raw);
+                }
+                // select data format based on input dtype
+                const char* data_format;
+                if (input_dtype == DataType::INT32) {
+                    data_format = "Int32";
+                } else if (input_dtype == DataType::UINT32) {
+                    data_format = "UInt32";
+                } else {
+                    data_format = "UInt16";
+                }
                 return {
                     "fill_tile_init();",
-                    fmt::format("fill_tile_bitcast({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                    fmt::format("fill_tile_int<DataFormat::{}>({}, {:#x}u);", data_format, idst, fill_val)};
             }
+            return {
+                "fill_tile_init();",
+                fmt::format("fill_tile_bitcast({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::ROUND:
             return {"rounding_op_tile_init();", fmt::format("round_tile({}, {});", idst, (int)params[0])};
         case UnaryOpType::RELU_MAX:

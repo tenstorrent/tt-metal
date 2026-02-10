@@ -5,14 +5,19 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
+from models.tt_transformers.tt.common import Mode
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, TG=False, ag_config_key=None):
+    def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
+        self.prefetcher = prefetcher
         self.ag_config_key = ag_config_key
+
+        # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)
+        self.enable_all_gather = enable_all_gather
 
         if TG:
             core_grid_ln = (
@@ -46,10 +51,13 @@ class DistributedNorm(LightweightModule):
             )
         self.TG = TG
 
-    def forward(self, x, mode):
+    def forward(self, x, mode: Mode, norm_config=None):
         """Apply a norm, possibly gathering inputs if required."""
+
+        sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
+
         if self.TG:
-            if mode == "decode":
+            if mode == Mode.DECODE:
                 return tt_sharded_distributed_rmsnorm(
                     x,
                     epsilon=self.norm.eps,
@@ -70,7 +78,7 @@ class DistributedNorm(LightweightModule):
                     compute_kernel_config=self.ln_cfg,
                 )
 
-        input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
@@ -92,14 +100,17 @@ class DistributedNorm(LightweightModule):
                 if self.ag_config_key and mode == "decode"
                 else 2,
                 num_buffers_per_channel=2,
+                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
-        x = self.norm(x, mode=mode, in_sharded=(mode == "decode"), out_sharded=(mode == "decode"))
+        x = self.norm(
+            x, mode=mode, in_sharded=(mode == Mode.DECODE), out_sharded=(mode == Mode.DECODE), norm_config=norm_config
+        )
 
         # Distributed norm requires a gather
-        if self.args.is_distributed_norm(mode):
+        if self.args.is_distributed_norm(mode) and self.enable_all_gather:
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
