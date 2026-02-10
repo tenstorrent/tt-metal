@@ -11,6 +11,8 @@ This test suite verifies:
 """
 
 import math
+import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -281,11 +283,14 @@ def test_lm_head_1d_vs_reference(
     # Split weights for TT model
     weight_splits = _prepare_lm_head_weights(full_weight, vocab_size, dim, num_devices, max_col_per_dev)
 
-    # Create LazyWeights
+    # Create LazyWeights (cache-backed for faster repeated runs)
     ttnn.SetDefaultDevice(ttnn_mesh_device)
+    cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/lm_head_1d"))
     lazy_weights = []
     for i, split in enumerate(weight_splits):
-        lazy_weights.append(LazyWeight(source=split, dtype=ttnn.bfloat8_b))
+        lazy_weights.append(
+            LazyWeight(source=split, dtype=ttnn.bfloat8_b, cache_dir_weight_name=(cache_dir, f"w_split_{i}"))
+        )
 
     tt_model = LMHead1D(output_weights=lazy_weights)
 
