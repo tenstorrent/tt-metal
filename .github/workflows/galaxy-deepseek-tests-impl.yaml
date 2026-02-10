@@ -24,6 +24,11 @@ on:
         required: false
         type: string
         default: "all"
+      enable-tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Whether Tracy profiling is enabled in the build"
 
 jobs:
   generate-matrix:
@@ -78,9 +83,11 @@ jobs:
         DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
         MESH_DEVICE: TG
-        # ADDED: Required for BenchmarkData to save to Superset
+        # Required for BenchmarkData to save to Superset
         CI: true
         GITHUB_ACTIONS: true
+        # Indicate if Tracy profiling is available in this build
+        TT_METAL_TRACY_BUILD: ${{ inputs.enable-tracy && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -225,8 +232,34 @@ jobs:
           echo "All op functional tests completed!"
           echo "=============================================="
 
-      - name: Run DeepSeek op unit tests (Device Performance)
+      # ============================================
+      # Device Performance Status Check
+      # ============================================
+      - name: Check device performance test availability
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
+        run: |
+          if [ "${{ inputs.enable-tracy }}" = "true" ]; then
+            echo "✓ Tracy profiling ENABLED - Device perf tests will run"
+            echo "  Build includes Tracy support for device-level metrics"
+          else
+            echo "⚠️  Tracy profiling DISABLED - Device perf tests skipped"
+            echo "  To enable: Set enable-tracy: true in workflow dispatch"
+            echo "  Note: Requires build with Tracy support (see build-artifact workflow)"
+          fi
+
+      # ============================================
+      # Device Performance Tests (Tracy-enabled builds only)
+      # ============================================
+      # Device perf tests require a Tracy-enabled build of tt-metal.
+      # Enable by setting enable-tracy: true in workflow dispatch.
+      #
+      # When enabled:
+      #   - Collects kernel duration and op-to-op latency metrics
+      #   - Runs 10 ops × 2 configs (decode trace, prefill eager)
+      #   - Logs device-level metrics to Superset
+      # ============================================
+      - name: Run DeepSeek op unit tests (Device Performance)
+        if: ${{ matrix.test-group.test-type == 'final-op-unit' && inputs.enable-tracy }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           # ============================================
