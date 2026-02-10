@@ -13,6 +13,8 @@ jobs:
 
       - name: Count and compare tests
         run: |
+          set -euo pipefail
+
           # Define directory paths to check test counts
           declare -A DIRS=(
             ["eltwise"]="tests/ttnn/unit_tests/operations/eltwise"

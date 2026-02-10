@@ -522,6 +522,7 @@ jobs:
       - clang-tidy-light
       - model-charts-sync
       - build-docs
+      - APC-test-count-check
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
