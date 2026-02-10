@@ -9,5 +9,3 @@ jobs:
   test-installing-step:
     uses: ./.github/workflows/test-installing-step-impl.yaml
     secrets: inherit
-    with:
-      runner-label: ${{ inputs.runner-label || 'N150' }}
