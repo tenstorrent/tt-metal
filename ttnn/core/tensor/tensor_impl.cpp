@@ -74,8 +74,8 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
-Tensor pad_bfloat8_b(
-    const Tensor& tensor,
+HostTensor pad_bfloat8_b(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
@@ -83,82 +83,85 @@ Tensor pad_bfloat8_b(
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and pad
-    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor.get_host_buffer());
     auto input_float_data =
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
 
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
-    auto float_tensor = Tensor(
-                            std::move(input_float_buffer),
-                            TensorSpec(
-                                tensor.logical_shape(),
-                                TensorLayout::fromPaddedShape(
-                                    DataType::FLOAT32,
-                                    PageConfig(tensor.layout(), tile),
-                                    MemoryConfig{},
-                                    tensor.logical_shape(),
-                                    tensor.padded_shape())))
-                            .pad(output_padded_shape, input_tensor_start, pad_value);
+    auto float_host_tensor = HostTensor(
+        std::move(input_float_buffer),
+        TensorSpec(
+            tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::FLOAT32,
+                PageConfig(tensor.layout(), tile),
+                MemoryConfig{},
+                tensor.logical_shape(),
+                tensor.padded_shape())),
+        TensorTopology{});
+    auto padded_float_tensor = tensor_impl::pad(float_host_tensor, output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT8_B
-    auto output_float_data = host_buffer::get_as<const float>(float_tensor);
+    auto output_float_data = host_buffer::get_as<const float>(padded_float_tensor.get_host_buffer());
     auto output_packed_data =
         pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
     TensorSpec output_spec(
-        float_tensor.logical_shape(),
+        padded_float_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             DataType::BFLOAT8_B,
             tensor.tensor_spec().page_config(),
             MemoryConfig{},
-            float_tensor.logical_shape(),
-            float_tensor.padded_shape()));
-    return Tensor(std::move(output_uint32_buffer), output_spec);
+            padded_float_tensor.logical_shape(),
+            padded_float_tensor.padded_shape()));
+    return HostTensor(std::move(output_uint32_buffer), output_spec, TensorTopology{});
 }
 
-Tensor unpad_bfloat8_b(
-    const Tensor& tensor,
+HostTensor unpad_bfloat8_b(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     auto tile = tensor.tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and unpad
-    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor.get_host_buffer());
     auto input_float_data =
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
-    auto float_tensor = Tensor(
-                            std::move(input_float_buffer),
-                            TensorSpec(
-                                tensor.logical_shape(),
-                                TensorLayout::fromPaddedShape(
-                                    DataType::FLOAT32,
-                                    PageConfig(tensor.layout(), tile),
-                                    MemoryConfig{},
-                                    tensor.logical_shape(),
-                                    tensor.padded_shape())))
-                            .unpad(output_tensor_start, output_tensor_end);
+    auto float_host_tensor = HostTensor(
+        std::move(input_float_buffer),
+        TensorSpec(
+            tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::FLOAT32,
+                PageConfig(tensor.layout(), tile),
+                MemoryConfig{},
+                tensor.logical_shape(),
+                tensor.padded_shape())),
+        TensorTopology{});
+    auto unpadded_float_tensor = unpad(float_host_tensor, output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT8_B
-    auto output_float_data = host_buffer::get_as<const float>(float_tensor);
+    auto output_float_data = host_buffer::get_as<const float>(unpadded_float_tensor.get_host_buffer());
     auto output_packed_data =
         pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
-    return Tensor(
+    return HostTensor(
         std::move(output_uint32_buffer),
         TensorSpec(
-            float_tensor.logical_shape(),
+            unpadded_float_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 DataType::BFLOAT8_B,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
-                float_tensor.logical_shape(),
-                float_tensor.padded_shape())));
+                unpadded_float_tensor.logical_shape(),
+                unpadded_float_tensor.padded_shape())),
+        TensorTopology{});
 }
 
-Tensor pad_bfloat4_b(
-    const Tensor& tensor,
+HostTensor pad_bfloat4_b(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
@@ -166,77 +169,80 @@ Tensor pad_bfloat4_b(
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and pad
-    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor.get_host_buffer());
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
-    auto float_tensor = Tensor(
-                            std::move(input_float_buffer),
-                            TensorSpec(
-                                tensor.logical_shape(),
-                                TensorLayout::fromPaddedShape(
-                                    DataType::FLOAT32,
-                                    PageConfig(tensor.layout(), tile),
-                                    MemoryConfig{},
-                                    tensor.logical_shape(),
-                                    tensor.logical_shape())))
-                            .pad(output_padded_shape, input_tensor_start, pad_value);
+    auto float_host_tensor = HostTensor(
+        std::move(input_float_buffer),
+        TensorSpec(
+            tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::FLOAT32,
+                PageConfig(tensor.layout(), tile),
+                MemoryConfig{},
+                tensor.logical_shape(),
+                tensor.logical_shape())),
+        TensorTopology{});
+    auto padded_float_tensor = tensor_impl::pad(float_host_tensor, output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT4_B
-    auto output_float_data = host_buffer::get_as<const float>(float_tensor);
+    auto output_float_data = host_buffer::get_as<const float>(padded_float_tensor.get_host_buffer());
     auto output_packed_data =
         pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
     TensorSpec output_spec(
-        float_tensor.logical_shape(),
+        padded_float_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             DataType::BFLOAT4_B,
             tensor.tensor_spec().page_config(),
             MemoryConfig{},
-            float_tensor.logical_shape(),
-            float_tensor.padded_shape()));
-    return Tensor(std::move(output_uint32_buffer), output_spec);
+            padded_float_tensor.logical_shape(),
+            padded_float_tensor.padded_shape()));
+    return HostTensor(std::move(output_uint32_buffer), output_spec, TensorTopology{});
 }
 
-Tensor unpad_bfloat4_b(
-    const Tensor& tensor,
+HostTensor unpad_bfloat4_b(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     auto tile = tensor.tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and unpad
-    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor.get_host_buffer());
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
-    auto float_tensor = Tensor(
-                            std::move(input_float_buffer),
-                            TensorSpec(
-                                tensor.logical_shape(),
-                                TensorLayout::fromPaddedShape(
-                                    DataType::FLOAT32,
-                                    PageConfig(tensor.layout(), tile),
-                                    MemoryConfig{},
-                                    tensor.logical_shape(),
-                                    tensor.padded_shape())))
-                            .unpad(output_tensor_start, output_tensor_end);
+    auto float_host_tensor = HostTensor(
+        std::move(input_float_buffer),
+        TensorSpec(
+            tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::FLOAT32,
+                PageConfig(tensor.layout(), tile),
+                MemoryConfig{},
+                tensor.logical_shape(),
+                tensor.padded_shape())),
+        TensorTopology{});
+    auto unpadded_float_tensor = unpad(float_host_tensor, output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT4_B
-    auto output_float_data = host_buffer::get_as<const float>(float_tensor);
+    auto output_float_data = host_buffer::get_as<const float>(unpadded_float_tensor.get_host_buffer());
     auto output_packed_data =
         pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
-    return Tensor(
+    return HostTensor(
         std::move(output_uint32_buffer),
         TensorSpec(
-            float_tensor.logical_shape(),
+            unpadded_float_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 DataType::BFLOAT4_B,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
-                float_tensor.logical_shape(),
-                float_tensor.padded_shape())));
+                unpadded_float_tensor.logical_shape(),
+                unpadded_float_tensor.padded_shape())),
+        TensorTopology{});
 }
 
 // ======================================================================================
@@ -1141,13 +1147,11 @@ HostTensor to_layout(const HostTensor& tensor, Layout target_layout) {
 // ======================================================================================
 
 template <typename T>
-Tensor pad_impl(
-    const Tensor& tensor,
+HostTensor pad_impl(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
-    TT_FATAL(!is_device_tensor(tensor), "pad only supports host tensors");
-
     auto pad_value_ = static_cast<T>(pad_value);
     auto input_padded_shape = tensor.padded_shape();
     if (input_padded_shape.rank() < 2) {
@@ -1219,8 +1223,8 @@ Tensor pad_impl(
         return output_buffer;
     };
 
-    return Tensor(
-        tensor.host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
+    return HostTensor(
+        tensor.get_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -1233,8 +1237,8 @@ Tensor pad_impl(
 }
 
 template <>
-Tensor pad_impl<bfloat8_b>(
-    const Tensor& tensor,
+HostTensor pad_impl<bfloat8_b>(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
@@ -1242,16 +1246,16 @@ Tensor pad_impl<bfloat8_b>(
 }
 
 template <>
-Tensor pad_impl<bfloat4_b>(
-    const Tensor& tensor,
+HostTensor pad_impl<bfloat4_b>(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
     return pad_bfloat4_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
-Tensor pad(
-    const Tensor& tensor,
+HostTensor pad(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
@@ -1261,12 +1265,10 @@ Tensor pad(
 }
 
 template <typename T>
-Tensor unpad_impl(
-    const Tensor& tensor,
+HostTensor unpad_impl(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
-    TT_FATAL(!is_device_tensor(tensor), "unpad only supports host tensors");
-
     const auto& input_shape = tensor.padded_shape();
     const auto input_strides = compute_strides(input_shape);
 
@@ -1306,8 +1308,8 @@ Tensor unpad_impl(
         return output_buffer;
     };
 
-    return Tensor(
-        tensor.host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); }),
+    return HostTensor(
+        tensor.get_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); }),
         TensorSpec(
             tt::tt_metal::Shape(output_shape),
             tt::tt_metal::TensorLayout(
@@ -1318,23 +1320,23 @@ Tensor unpad_impl(
 }
 
 template <>
-Tensor unpad_impl<bfloat8_b>(
-    const Tensor& tensor,
+HostTensor unpad_impl<bfloat8_b>(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     return unpad_bfloat8_b(tensor, output_tensor_start, output_tensor_end);
 }
 
 template <>
-Tensor unpad_impl<bfloat4_b>(
-    const Tensor& tensor,
+HostTensor unpad_impl<bfloat4_b>(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
 }
 
-Tensor unpad(
-    const Tensor& tensor,
+HostTensor unpad(
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     return dispatch(
