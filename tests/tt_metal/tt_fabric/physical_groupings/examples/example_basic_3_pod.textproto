@@ -1,0 +1,52 @@
+# Example: Basic 3-Pod 16x8 Blackhole Galaxy Cluster
+# This file shows a standard 3-pod configuration
+
+
+groupings {
+  name: "trays"
+  items: [
+    { asic_location: ASIC_LOCATION_1 },
+    { asic_location: ASIC_LOCATION_2 },
+    { asic_location: ASIC_LOCATION_3 },
+    { asic_location: ASIC_LOCATION_4 },
+    { asic_location: ASIC_LOCATION_5 },
+    { asic_location: ASIC_LOCATION_6 },
+    { asic_location: ASIC_LOCATION_7 },
+    { asic_location: ASIC_LOCATION_8 }
+  ]
+}
+
+groupings {
+  name: "hosts"
+  items: [
+    { grouping_ref { grouping_name: "trays" count: 4 } }
+  ]
+}
+
+groupings {
+  name: "meshes"
+  items: [
+    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host (meshes can have 1 item)
+  ]
+}
+
+groupings {
+  name: "pods"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Each pod = 2 meshes
+  ]
+}
+
+groupings {
+  name: "superpods"
+  items: [
+    { grouping_ref { grouping_name: "pods" count: 3 } }  # Each superpod = 3 pods
+  ]
+}
+
+groupings {
+  name: "clusters"
+  items: [
+    { grouping_ref { grouping_name: "superpods" count: 2 } }  # Each cluster = 2 superpods
+  ]
+}
