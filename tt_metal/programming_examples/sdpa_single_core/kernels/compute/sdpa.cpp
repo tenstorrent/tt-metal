@@ -162,7 +162,7 @@ void reduce_c_row_pair(uint32_t out_cb, uint32_t prev_cb, uint32_t row_pair_inde
     // Wait for input tiles up to and including this row pair
     cb_wait_front(in0_cb, cumulative_input_tiles);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     if (do_eltwise_max) {
         cb_wait_front(prev_cb, cumulative_prev_tiles);
@@ -188,6 +188,9 @@ void reduce_c_row_pair(uint32_t out_cb, uint32_t prev_cb, uint32_t row_pair_inde
     }
     reduce_block_max_row_uninit(in0_cb);
 
+    tile_regs_commit();
+    tile_regs_wait();
+
     // Pack results to output at the correct positions
     cb_reserve_back(out_cb, PAIR_SIZE);
     for (uint32_t i = 0; i < PAIR_SIZE; i++) {
@@ -196,7 +199,7 @@ void reduce_c_row_pair(uint32_t out_cb, uint32_t prev_cb, uint32_t row_pair_inde
     }
     cb_push_back(out_cb, PAIR_SIZE);
 
-    release_dst();
+    tile_regs_release();
 }
 
 template <
@@ -217,7 +220,8 @@ void sdpa_inner_loop_8x4x16(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
     const uint32_t cb_out_A,
-    const uint32_t cb_out_B) {
+    const uint32_t cb_out_B,
+    const uint32_t num_iter) {
     DeviceZoneScopedN("sdpa_inner_loop_8x4x16");
     // Set up ping pong buffers
     // To be used (and swapped) later on, when we loop over Q chunks.
@@ -236,238 +240,265 @@ void sdpa_inner_loop_8x4x16(
     const uint32_t kt_num_subblocks = 4;
 
     const uint32_t q_subblock_num_tiles = subblock_h * in0_block_w;
-    uint32_t q_wait_tiles = q_subblock_num_tiles;
     const uint32_t output_num_tiles_per_row = Sq_chunk_t * subblock_h;
 
-    uint32_t q_index_offset = 0;
-    uint32_t kt_index_offset = 0;
+    for (uint32_t iter = 0; iter < num_iter; iter++) {
+        // Reset per-iteration state
+        MATH(DPRINT << "******************ITERATION " << iter << " ******************" << ENDL());
+        uint32_t q_wait_tiles = q_subblock_num_tiles;
+        uint32_t q_index_offset = 0;
+        uint32_t kt_index_offset = 0;
 
-    exp_packthread_tile_init<true, true, scale_fp32>();  // todo: move outside.
-    pack_reconfig_data_format(cb_qkt_im);
-    reconfig_data_format(cb_kt_in, cb_q_in);
-    cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
+        exp_packthread_tile_init<true, true, scale_fp32>();
+        pack_reconfig_data_format(cb_qkt_im);
+        reconfig_data_format(cb_kt_in, cb_q_in);
+        cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
 
-    cb_wait_front(cb_kt_in, head_dim_t * Sk_chunk_t);
-    cb_reserve_back(alias_cur_sum, Sq_chunk_t);
-    for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
-        SDPA_DeviceZoneScopedN("Softmax(Q@KT) 2x4x16");
-        cb_wait_front(cb_q_in, q_wait_tiles);
-        kt_index_offset = 0;
+        cb_wait_front(cb_kt_in, head_dim_t * Sk_chunk_t);
+        cb_reserve_back(alias_cur_sum, Sq_chunk_t);
+        for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
+            SDPA_DeviceZoneScopedN("Softmax(Q@KT) 2x4x16");
+            cb_wait_front(cb_q_in, q_wait_tiles);
+            kt_index_offset = 0;
 
-        for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-            if (q_subblock > 0) {
-                uint32_t prev_q_subblock = q_subblock - 1;
-                MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
-                sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
-                    alias_cur_max, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
-            }
-
-            {
-                {
-                    SDPA_DeviceZoneScopedN("matmul_blocks 2x4 init");
-                    mm_block_init_short(
-                        cb_q_in,
-                        cb_kt_in,
-                        true /*transpose*/,
-                        subblock_w /*ct_dim*/,
-                        subblock_h /*rt_dim*/,
-                        in0_block_w /*kt_dim*/);
+            for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                if (q_subblock > 0) {
+                    uint32_t prev_q_subblock = q_subblock - 1;
+                    MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
+                    sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
+                        alias_cur_max, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
                 }
-                MATH(DPRINT << "Matmul for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
 
                 {
-                    SDPA_DeviceZoneScopedN("matmul_blocks 2x4");
-
-                    tile_regs_acquire();
-                    uint32_t dst_index = 0;
-                    uint32_t q_index = q_index_offset;
-                    uint32_t kt_index = kt_index_offset;
-                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                        matmul_block(
+                    {
+                        SDPA_DeviceZoneScopedN("matmul_blocks 2x4 init");
+                        mm_block_init_short(
                             cb_q_in,
                             cb_kt_in,
-                            q_index,
-                            kt_index,
-                            dst_index,
                             true /*transpose*/,
-                            subblock_w,
-                            subblock_h,
-                            in0_block_w);
-                        q_index++;
-                        kt_index += Sk_chunk_t;
+                            subblock_w /*ct_dim*/,
+                            subblock_h /*rt_dim*/,
+                            in0_block_w /*kt_dim*/);
                     }
-                    // tensix_sync();
-                    tile_regs_commit();
-                }
-            }
-            {
-                SDPA_DeviceZoneScopedN("Pack 2x4");
-                // Pack the subblock
-                tile_regs_wait();
-                PACK(DPRINT << "Pack for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
-                uint32_t dst_idx = 0;
-                uint32_t out_col_offset = kt_subblock * subblock_w;
-                for (uint32_t r = 0; r < subblock_h; r++) {
-                    uint32_t out_row_offset = (r + q_subblock * subblock_h) * Sk_chunk_t;
-                    for (uint32_t c = 0; c < subblock_w; c++) {
-                        pack_tile<true>(dst_idx, cb_qkt_im, out_row_offset + out_col_offset + c);
-                        dst_idx++;
+                    MATH(DPRINT << "Matmul for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
+
+                    {
+                        SDPA_DeviceZoneScopedN("matmul_blocks 2x4");
+
+                        tile_regs_acquire();
+                        uint32_t dst_index = 0;
+                        uint32_t q_index = q_index_offset;
+                        uint32_t kt_index = kt_index_offset;
+                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                            matmul_block(
+                                cb_q_in,
+                                cb_kt_in,
+                                q_index,
+                                kt_index,
+                                dst_index,
+                                true /*transpose*/,
+                                subblock_w,
+                                subblock_h,
+                                in0_block_w);
+                            q_index++;
+                            kt_index += Sk_chunk_t;
+                        }
+                        // tensix_sync();
+                        tile_regs_commit();
                     }
                 }
-                tile_regs_release();
-                MATH(
-                    DPRINT << "Packing " << subblock_h * subblock_w << " tiles to cb_qkt_im for Q[" << q_subblock
-                           << "] Kt[" << kt_subblock << "]" << ENDL());
-            }
-            kt_index_offset += subblock_w;
-        }
-        cb_push_back(cb_qkt_im, subblock_h * Sk_chunk_t);
-
-        // Max reduce
-        MATH(DPRINT << "Max reduce for Q[" << q_subblock << ", :]" << ENDL());
-        //  JUST TO ENSURE THE WORST-CASE IS MEASURED, DO THE ELTWISE MAX EVERY TIME
-        static_assert(subblock_h == 2, "subblock_h must be 2");
-        {
-            SDPA_DeviceZoneScopedN("Reduce max 2x16");
-            reduce_c_row_pair<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qkt_im, cb_identity_scale_in, Sk_chunk_t>(
-                alias_cur_max, alias_prev_max, q_subblock, true /*do_eltwise_max*/);
-        }
-
-        q_index_offset += subblock_h * in0_block_w;
-        q_wait_tiles += q_subblock_num_tiles;
-    }
-
-    cb_pop_front(cb_q_in, head_dim_t * Sq_chunk_t);
-    cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
-
-    // QKT @ V: compute attention output
-    // in0 = cb_qkt_im: Sq_chunk_t × Sk_chunk_t (M × K) — already produced
-    // in1 = cb_v_in:   Sv_chunk_t × head_dim_t  (K × N)
-    // out = cb_out:     Sq_chunk_t × head_dim_t  (M × N)
-    // Drain sub_exp for the last Q@KT row is interleaved with the first QKT@V q_subblock.
-    // sub_exp uses SFPU for exp, matmul uses FPU — they overlap on different hardware units.
-    MATH(DPRINT << "Starting QKT @ V computation" << ENDL());
-    {
-        constexpr uint32_t qktv_subblock_h = 2;
-        constexpr uint32_t qktv_subblock_w = 4;
-        constexpr uint32_t qktv_in0_block_w = Sv_chunk_t;
-        constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_subblock_h;
-        constexpr uint32_t qktv_v_num_subblocks = head_dim_t / qktv_subblock_w;
-        constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * head_dim_t;
-        constexpr uint32_t qktv_in0_subblock_num_tiles = qktv_subblock_h * qktv_in0_block_w;
-
-        uint32_t qktv_in0_index_offset = 0;
-        uint32_t qktv_in0_wait_tiles = qktv_in0_subblock_num_tiles;
-
-        MATH(DPRINT << "Waiting for cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
-        cb_wait_front(cb_v_in, Sv_chunk_t * head_dim_t);
-        MATH(DPRINT << "Reserving alias_cur_out: " << qktv_output_num_tiles << " tiles" << ENDL());
-        cb_reserve_back(alias_cur_out, qktv_output_num_tiles);
-
-        for (uint32_t q_subblock = 0; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
-            MATH(DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ENDL());
-            SDPA_DeviceZoneScopedN("Softmax(Q@KT)@V 2x16x4");
-            cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-
-            // Drain: interleave sub_exp for last Q@KT row with first QKT@V matmul
-            // if (q_subblock == 0)
-            {
-                MATH(
-                    DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << "] during QKT@V q_subblock 0"
-                           << ENDL());
-                // for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-                //  Gradually drain the last Q@KT subblock's sub_exp across all 4 QKT@V subblocks, to best overlap exp
-                //  computation with matmul.
-                sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
-                    alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, q_subblock);
-                //}
-                // Reconfigure for matmul after sub_exp changed pack/unpack config
-                // pack_reconfig_data_format(cb_out);
-                // reconfig_data_format(cb_v_in, cb_qkt_im);
-            }
-
-            {
-                mm_block_init_short(
-                    cb_qkt_im,
-                    cb_v_in,
-                    false /*transpose*/,
-                    qktv_subblock_w /*ct_dim*/,
-                    qktv_subblock_h /*rt_dim*/,
-                    qktv_in0_block_w /*kt_dim*/);
-            }
-
-            uint32_t v_index_offset = 0;
-            for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                MATH(DPRINT << "QKT@V Matmul for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
                 {
-                    SDPA_DeviceZoneScopedN("QKT@V matmul 2x4");
-                    tile_regs_acquire();
-
-                    uint32_t dst_index = 0;
-                    uint32_t in0_index = qktv_in0_index_offset;
-                    uint32_t in1_index = v_index_offset;
-
-                    for (uint32_t inner = 0; inner < qktv_in0_block_w; ++inner) {
-                        matmul_block(
-                            cb_qkt_im,
-                            cb_v_in,
-                            in0_index,
-                            in1_index,
-                            dst_index,
-                            false /*transpose*/,
-                            qktv_subblock_w,
-                            qktv_subblock_h,
-                            qktv_in0_block_w);
-                        in0_index++;
-                        in1_index += head_dim_t;
-                    }
-                    tile_regs_commit();
-                }
-
-                {
-                    SDPA_DeviceZoneScopedN("QKT@V pack 2x4");
+                    SDPA_DeviceZoneScopedN("Pack 2x4");
+                    // Pack the subblock
                     tile_regs_wait();
-                    PACK(DPRINT << "QKT@V Pack for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
+                    PACK(DPRINT << "Pack for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
                     uint32_t dst_idx = 0;
-                    uint32_t out_col_offset = v_subblock * qktv_subblock_w;
-                    for (uint32_t r = 0; r < qktv_subblock_h; r++) {
-                        uint32_t out_row_offset = (r + q_subblock * qktv_subblock_h) * head_dim_t;
-                        for (uint32_t c = 0; c < qktv_subblock_w; c++) {
-                            pack_tile<true>(dst_idx, alias_cur_out, out_row_offset + out_col_offset + c);
+                    uint32_t out_col_offset = kt_subblock * subblock_w;
+                    for (uint32_t r = 0; r < subblock_h; r++) {
+                        uint32_t out_row_offset = (r + q_subblock * subblock_h) * Sk_chunk_t;
+                        for (uint32_t c = 0; c < subblock_w; c++) {
+                            pack_tile<true>(dst_idx, cb_qkt_im, out_row_offset + out_col_offset + c);
                             dst_idx++;
                         }
                     }
                     tile_regs_release();
                     MATH(
-                        DPRINT << "Packed " << qktv_subblock_h * qktv_subblock_w << " tiles to alias_cur_out for Q["
-                               << q_subblock << "] V[" << v_subblock << "]" << ENDL());
+                        DPRINT << "Packing " << subblock_h * subblock_w << " tiles to cb_qkt_im for Q[" << q_subblock
+                               << "] Kt[" << kt_subblock << "]" << ENDL());
                 }
+                kt_index_offset += subblock_w;
+            }
+            cb_push_back(cb_qkt_im, subblock_h * Sk_chunk_t);
 
-                v_index_offset += qktv_subblock_w;
+            // Max reduce
+            MATH(DPRINT << "Max reduce for Q[" << q_subblock << ", :]" << ENDL());
+            //  JUST TO ENSURE THE WORST-CASE IS MEASURED, DO THE ELTWISE MAX EVERY TIME
+            static_assert(subblock_h == 2, "subblock_h must be 2");
+            {
+                SDPA_DeviceZoneScopedN("Reduce max 2x16");
+                reduce_c_row_pair<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qkt_im, cb_identity_scale_in, Sk_chunk_t>(
+                    alias_cur_max, alias_prev_max, q_subblock, true /*do_eltwise_max*/);
             }
 
-            qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
-            qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
-            MATH(
-                DPRINT << "Pushing " << qktv_subblock_h * head_dim_t << " tiles to alias_cur_out for Q_subblock "
-                       << q_subblock << ENDL());
-            cb_push_back(alias_cur_out, qktv_subblock_h * head_dim_t);
+            q_index_offset += subblock_h * in0_block_w;
+            q_wait_tiles += q_subblock_num_tiles;
         }
 
-        MATH(DPRINT << "Popping cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
-        cb_pop_front(cb_v_in, Sv_chunk_t * head_dim_t);
-        MATH(DPRINT << "Popping cb_qkt_im: " << Sq_chunk_t * Sk_chunk_t << " tiles" << ENDL());
-        cb_pop_front(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
-    }
+        cb_pop_front(cb_q_in, head_dim_t * Sq_chunk_t);
+        cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
 
-    cb_pop_front(alias_cur_max, Sq_chunk_t);
-    cb_push_back(alias_cur_sum, Sq_chunk_t);
-    cb_pop_front(alias_cur_sum, Sq_chunk_t);
+        // QKT @ V: compute attention output
+        // in0 = cb_qkt_im: Sq_chunk_t × Sk_chunk_t (M × K) — already produced
+        // in1 = cb_v_in:   Sv_chunk_t × head_dim_t  (K × N)
+        // out = cb_out:     Sq_chunk_t × head_dim_t  (M × N)
+        // Drain sub_exp for the last Q@KT row is interleaved with the first QKT@V q_subblock.
+        // sub_exp uses SFPU for exp, matmul uses FPU — they overlap on different hardware units.
+        MATH(DPRINT << "Starting QKT @ V computation" << ENDL());
+        {
+            constexpr uint32_t qktv_subblock_h = 2;
+            constexpr uint32_t qktv_subblock_w = 4;
+            constexpr uint32_t qktv_in0_block_w = Sv_chunk_t;
+            constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_subblock_h;
+            constexpr uint32_t qktv_v_num_subblocks = head_dim_t / qktv_subblock_w;
+            constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * head_dim_t;
+            constexpr uint32_t qktv_in0_subblock_num_tiles = qktv_subblock_h * qktv_in0_block_w;
 
-    cb_wait_front(alias_cur_out, Sq_chunk_t * head_dim_t);
-    cb_pop_front(alias_cur_out, Sq_chunk_t * head_dim_t);
-    MATH(DPRINT << "Finished QKT @ V computation" << ENDL());
-    // tensix_sync();
+            uint32_t qktv_in0_index_offset = 0;
+            uint32_t qktv_in0_wait_tiles = qktv_in0_subblock_num_tiles;
+
+            MATH(DPRINT << "Waiting for cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
+            cb_wait_front(cb_v_in, Sv_chunk_t * head_dim_t);
+            MATH(DPRINT << "Reserving alias_cur_out: " << qktv_output_num_tiles << " tiles" << ENDL());
+            cb_reserve_back(alias_cur_out, qktv_output_num_tiles);
+
+            for (uint32_t q_subblock = 0; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
+                MATH(DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ENDL());
+                SDPA_DeviceZoneScopedN("Softmax(Q@KT)@V 2x16x4");
+                cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
+
+                // Drain: interleave sub_exp for last Q@KT row with first QKT@V matmul
+                // if (q_subblock == 0)
+                {
+                    MATH(
+                        DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << "][" << q_subblock
+                               << "] during QKT@V" << ENDL());
+                    // for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                    //  Gradually drain the last Q@KT subblock's sub_exp across all 4 QKT@V subblocks, to best overlap
+                    //  exp computation with matmul.
+                    sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
+                        alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, q_subblock);
+                    //}
+                    // Reconfigure for matmul after sub_exp changed pack/unpack config
+                    // pack_reconfig_data_format(cb_out);
+                    // reconfig_data_format(cb_v_in, cb_qkt_im);
+                }
+
+                {
+                    mm_block_init_short(
+                        cb_qkt_im,
+                        cb_v_in,
+                        false /*transpose*/,
+                        qktv_subblock_w /*ct_dim*/,
+                        qktv_subblock_h /*rt_dim*/,
+                        qktv_in0_block_w /*kt_dim*/);
+                }
+
+                uint32_t v_index_offset = 0;
+                for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                    MATH(DPRINT << "QKT@V Matmul for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
+                    {
+                        SDPA_DeviceZoneScopedN("QKT@V matmul 2x4");
+                        tile_regs_acquire();
+
+                        uint32_t dst_index = 0;
+                        uint32_t in0_index = qktv_in0_index_offset;
+                        uint32_t in1_index = v_index_offset;
+
+                        for (uint32_t inner = 0; inner < qktv_in0_block_w; ++inner) {
+                            matmul_block(
+                                cb_qkt_im,
+                                cb_v_in,
+                                in0_index,
+                                in1_index,
+                                dst_index,
+                                false /*transpose*/,
+                                qktv_subblock_w,
+                                qktv_subblock_h,
+                                qktv_in0_block_w);
+                            in0_index++;
+                            in1_index += head_dim_t;
+                        }
+                        tile_regs_commit();
+                    }
+
+                    {
+                        SDPA_DeviceZoneScopedN("QKT@V pack 2x4");
+                        tile_regs_wait();
+                        PACK(DPRINT << "QKT@V Pack for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
+                        uint32_t dst_idx = 0;
+                        uint32_t out_col_offset = v_subblock * qktv_subblock_w;
+                        for (uint32_t r = 0; r < qktv_subblock_h; r++) {
+                            uint32_t out_row_offset = (r + q_subblock * qktv_subblock_h) * head_dim_t;
+                            for (uint32_t c = 0; c < qktv_subblock_w; c++) {
+                                pack_tile<true>(dst_idx, alias_cur_out, out_row_offset + out_col_offset + c);
+                                dst_idx++;
+                            }
+                        }
+                        tile_regs_release();
+                        MATH(
+                            DPRINT << "Packed " << qktv_subblock_h * qktv_subblock_w << " tiles to alias_cur_out for Q["
+                                   << q_subblock << "] V[" << v_subblock << "]" << ENDL());
+                    }
+
+                    v_index_offset += qktv_subblock_w;
+                }
+
+                qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
+                qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
+                MATH(
+                    DPRINT << "Pushing " << qktv_subblock_h * head_dim_t << " tiles to alias_cur_out for Q_subblock "
+                           << q_subblock << ENDL());
+                cb_push_back(alias_cur_out, qktv_subblock_h * head_dim_t);
+            }
+
+            MATH(DPRINT << "Popping cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
+            cb_pop_front(cb_v_in, Sv_chunk_t * head_dim_t);
+            MATH(DPRINT << "Popping cb_qkt_im: " << Sq_chunk_t * Sk_chunk_t << " tiles" << ENDL());
+            cb_pop_front(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
+        }
+
+        // Publish cur_sum (cur_max already published by reduce_c_row_pair,
+        // cur_out already published by V loop)
+        cb_push_back(alias_cur_sum, Sq_chunk_t);
+
+        // Pop prev buffers — frees them for reuse as "cur" in the next iteration.
+        // [FUTURE: rescale/accumulate step would go here, BEFORE these pops,
+        //  reading alias_prev_max/sum/out and accumulating into alias_cur_max/sum/out]
+        cb_pop_front(alias_prev_max, Sq_chunk_t);
+        cb_pop_front(alias_prev_sum, Sq_chunk_t);
+        cb_pop_front(alias_prev_out, Sq_chunk_t * head_dim_t);
+
+        if (iter < num_iter - 1) {
+            // Swap: cur becomes prev for next iteration
+            uint32_t tmp;
+            tmp = alias_prev_max;
+            alias_prev_max = alias_cur_max;
+            alias_cur_max = tmp;
+            tmp = alias_prev_sum;
+            alias_prev_sum = alias_cur_sum;
+            alias_cur_sum = tmp;
+            tmp = alias_prev_out;
+            alias_prev_out = alias_cur_out;
+            alias_cur_out = tmp;
+        } else {
+            // Last iteration: consume final cur buffers
+            cb_pop_front(alias_cur_max, Sq_chunk_t);
+            cb_pop_front(alias_cur_sum, Sq_chunk_t);
+            cb_wait_front(alias_cur_out, Sq_chunk_t * head_dim_t);
+            cb_pop_front(alias_cur_out, Sq_chunk_t * head_dim_t);
+        }
+        MATH(DPRINT << "Finished iteration " << iter << ENDL());
+    }  // end for (iter)
 }
 
 void kernel_main() {
@@ -494,21 +525,26 @@ void kernel_main() {
 
     mm_init(cb_q_in, cb_kt_in, cb_qkt_im);
 
-    for (uint32_t iter = 0; iter < num_iter; iter++) {
-        MATH(DPRINT << "Iteration " << iter << ENDL());
-        {
-            sdpa_inner_loop_8x4x16<
-                Sq_chunk_t,
-                Sk_chunk_t,
-                Sv_chunk_t,
-                head_dim_t,
-                cb_q_in,
-                cb_kt_in,
-                cb_v_in,
-                cb_qkt_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                scale_fp32>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B, cb_out_A, cb_out_B);
-        }
-    }
+    // Dummy pre-populate "prev" CBs.
+    cb_reserve_back(cb_max_A, Sq_chunk_t);
+    cb_push_back(cb_max_A, Sq_chunk_t);
+
+    cb_reserve_back(cb_sum_A, Sq_chunk_t);
+    cb_push_back(cb_sum_A, Sq_chunk_t);
+
+    cb_reserve_back(cb_out_A, Sq_chunk_t * head_dim_t);
+    cb_push_back(cb_out_A, Sq_chunk_t * head_dim_t);
+
+    sdpa_inner_loop_8x4x16<
+        Sq_chunk_t,
+        Sk_chunk_t,
+        Sv_chunk_t,
+        head_dim_t,
+        cb_q_in,
+        cb_kt_in,
+        cb_v_in,
+        cb_qkt_im,
+        cb_identity_scale_in,
+        cb_exp_max_diff,
+        scale_fp32>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B, cb_out_A, cb_out_B, num_iter);
 }
