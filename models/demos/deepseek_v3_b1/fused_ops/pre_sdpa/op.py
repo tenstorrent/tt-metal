@@ -520,7 +520,6 @@ class PreSDPA:
         matmul3_output_cb = 14  # Output CB for third matmul (Qnope final output)
         qrope_output_cb = 15  # Output CB for Qrope (RoPE output)
         create_q_heads_out_cb = 16  # Output CB for CreateQHeads (linked to output tensor on receiver cores)
-        create_q_heads_receiver_in_cb = 31  # Intermediate CB for CreateQHeads (row-major data before tilization)
         qrope_cos_cb = 17  # Cos CB for RoPE
         qrope_sin_cb = 18  # Sin CB for RoPE
         qrope_trans_mat_cb = 19  # Trans_mat CB for RoPE
@@ -536,6 +535,7 @@ class PreSDPA:
         krope_output_cb = 28  # Output CB for KV Cache Branch RoPE
         krope_cos_cb = 29  # Cos CB for RoPE
         krope_sin_cb = 30  # Sin CB for RoPE
+        create_q_heads_receiver_in_cb = 31  # Intermediate CB for CreateQHeads (row-major data before tilization)
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
