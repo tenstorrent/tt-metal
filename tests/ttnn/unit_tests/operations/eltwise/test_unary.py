@@ -743,9 +743,7 @@ def is_int32_overflow(tensor, scalar):
 )
 @pytest.mark.parametrize("scalar", [-54, -1, 0, 1, 13, -0])
 @pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq, ttnn.gt, ttnn.lt, ttnn.ge, ttnn.le])
-@pytest.mark.parametrize("use_legacy", [False])
-# TODO: Test use_legacy = True for all cases after #23179 is completed
-def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
+def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
     # Generate a uniform range of values across the valid int32 range
     num_elements = int(torch.prod(torch.tensor(input_shapes)).item())
     uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
@@ -755,12 +753,12 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
-    if use_legacy == False and is_int32_overflow(in_data, scalar).any():
+    if is_int32_overflow(in_data, scalar).any():
         pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_op(input_tensor, scalar, use_legacy=use_legacy)
+    output_tensor = ttnn_op(input_tensor, scalar, use_legacy=None)
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(in_data, scalar)
 

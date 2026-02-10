@@ -3697,8 +3697,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven_
 
 
 @pytest.mark.parametrize("input_shape", [(1, 4096, 640)])
-@pytest.mark.parametrize("is_legacy", [False])
-def test_add_sharded(device, input_shape, is_legacy):
+def test_add_sharded(device, input_shape):
     torch_input_tensor_a = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
@@ -3716,7 +3715,7 @@ def test_add_sharded(device, input_shape, is_legacy):
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
     )
-    output = ttnn.add(input_tensor_a, input_tensor_b, use_legacy=is_legacy)
+    output = ttnn.add(input_tensor_a, input_tensor_b, use_legacy=None)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, 0.9999)

@@ -120,7 +120,7 @@ def test_distributed_norm_allclose(
         var=var,
         outlier_pct=outlier_pct,
         outlier_var=outlier_var,
-        use_legacy=use_legacy,
+        use_legacy=None,
         use_high_precision=True,
         verbose=False,
         use_welford=use_welford,

@@ -303,8 +303,7 @@ def test_binary_sub_uint32_underflow(a_shape, b_shape, low_a, high_a, low_b, hig
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-@pytest.mark.parametrize("use_legacy", [False])
-def test_binary_sub_uint32_edge_cases(use_legacy, device):
+def test_binary_sub_uint32_edge_cases(device):
     """Test uint32 subtraction with edge cases including underflow"""
     torch_input_tensor_a = torch.tensor(
         [4294967295, 2147483647, 1000000000, 500, 0, 100, 1, 0]  # uint32 max, int32 max, large, medium, min
@@ -329,7 +328,7 @@ def test_binary_sub_uint32_edge_cases(use_legacy, device):
 
     golden_function = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
-    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
+    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, use_legacy=None)
 
     # Since ttnn.to_torch does not support int64, we convert torch_output_tensor to uint32 and compare the results using ttnn.eq
     torch_output_tensor = ttnn.from_torch(
@@ -430,8 +429,7 @@ def test_binary_add_uint32_upper_edge_cases(device):
         ttnn.bitwise_xor,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [False])
-def test_bitwise_uint32(device, ttnn_function, use_legacy):
+def test_bitwise_uint32(device, ttnn_function):
     x_torch = torch.tensor(
         [
             [1, 2, 3, 4, 5, 0],
@@ -450,7 +448,7 @@ def test_bitwise_uint32(device, ttnn_function, use_legacy):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=use_legacy)
+    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out, dtype=torch.uint32)
 
     assert torch.equal(z_torch, tt_out)
@@ -464,8 +462,7 @@ def test_bitwise_uint32(device, ttnn_function, use_legacy):
         ttnn.bitwise_xor,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [False])
-def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
+def test_bitwise_uint32_full_range(device, ttnn_function):
     x_values = torch.linspace(0, 4294967295, 1024, dtype=torch.float64)
     x_torch = x_values.to(dtype=torch.uint32)
 
@@ -477,7 +474,7 @@ def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
 
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=use_legacy)
+    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out, dtype=torch.uint32)
 
     assert torch.equal(z_torch, tt_out)
