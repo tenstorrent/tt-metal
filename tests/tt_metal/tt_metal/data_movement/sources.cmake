@@ -25,5 +25,6 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     direct_write/test_direct_write.cpp
     pcie_read_bw/test_pcie_read_bw.cpp
     atomics/test_atomic_semaphore_bandwidth.cpp
+    tests/tt_metal/tt_metal/data_movement/CMakeLists.txt
     noc_api_latency/test_noc_api_latency.cpp
 )
