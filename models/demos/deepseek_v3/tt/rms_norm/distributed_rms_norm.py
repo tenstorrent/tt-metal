@@ -28,7 +28,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
+from models.demos.deepseek_v3.utils.weight_spec import ModuleWeightSpec, WeightSpec, WeightSpecContext
 
 
 class DistributedRMSNorm(RMSNormBase):
@@ -60,6 +60,28 @@ class DistributedRMSNorm(RMSNormBase):
                     preprocessor=lambda t: t.reshape((num_shards, 1, -1, ttnn.TILE_SIZE)),
                 )
             }
+        }
+
+    @classmethod
+    def create_weight_spec(
+        cls, hf_config: PretrainedConfig, mesh_shape: tuple[int, int], context: WeightSpecContext
+    ) -> ModuleWeightSpec:
+        """Weight spec for cache-based loading. Returns flat {"weight": ...}; wrap with rms_norm_post_all_gather in run_config."""
+        num_shards = mesh_shape[0]
+
+        def preprocessor(t: torch.Tensor) -> torch.Tensor:
+            assert len(t.shape) == 1, "Weight expected to be a 1D tensor"
+            return t.reshape((1, 1, -1, ttnn.TILE_SIZE)).repeat(num_shards, 1, 1, 1)
+
+        return {
+            "weight": WeightSpec(
+                name="weight",
+                shard_dims=(0, -2),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                preprocessor=preprocessor,
+            ),
         }
 
     @classmethod

@@ -112,6 +112,34 @@ def compute_fingerprint(manifest: dict[str, Any]) -> str:
     return md5(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
 
 
+def _format_name(name: str | Sequence[str]) -> str:
+    """Format cache entry name for display."""
+    if isinstance(name, str):
+        return name
+    return ", ".join(sorted(name))
+
+
+def _format_sharding(memory_config: ttnn.MemoryConfig) -> str:
+    """Format sharding info from memory config for display."""
+    parts = [f"is_sharded={memory_config.is_sharded()}"]
+    if memory_config.is_sharded() and memory_config.shard_spec is not None:
+        parts.append(f"shard_spec={memory_config.shard_spec}")
+    parts.append(f"buffer_type={memory_config.buffer_type.__name__}")
+    parts.append(f"memory_layout={memory_config.memory_layout.__name__}")
+    return ", ".join(parts)
+
+
+def _format_mesh_mapper(mesh_mapper: MeshMapper | None) -> str:
+    """Format mesh mapper for display."""
+    if mesh_mapper is None:
+        return "none"
+    d = mesh_mapper_to_dict(mesh_mapper)
+    parts = [f"placements={d['placements']}"]
+    if d["mesh_shape_override"] is not None:
+        parts.append(f"mesh_shape_override={d['mesh_shape_override']}")
+    return ", ".join(parts)
+
+
 class InMemoryCacheStorage:
     """
     A cache backed by host memory. Does not persist across runs.
@@ -165,6 +193,47 @@ class TensorCache:
         self.hf_config = hf_config
         self.storage = storage
         self.converter = converter
+        # Fingerprint -> manifest for summary (populated when we set an entry)
+        self._entry_manifests: dict[str, CacheManifest] = {}
+
+    def summary(self) -> None:
+        """Print a summary of the TensorCache to the screen."""
+        num_state_keys = len(self.state_dict)
+        cache = getattr(self.storage, "cache", None)
+        if cache is None:
+            num_entries = 0
+            entries = []
+        else:
+            entries = list(cache.items())
+            num_entries = len(entries)
+
+        lines = [
+            "TensorCache summary",
+            "=" * 50,
+            f"State dict keys: {num_state_keys}",
+            f"Cached tensor entries: {num_entries}",
+        ]
+        if entries:
+            lines.append("-" * 50)
+            for fp, tensor in entries:
+                manifest = self._entry_manifests.get(fp)
+                name_str = _format_name(manifest.name) if manifest else "?"
+                shape = getattr(tensor, "shape", None)
+                shape_str = str(tensor.shape) if shape is not None else "?"
+                mem_cfg = getattr(tensor, "memory_config", None)
+                if callable(mem_cfg):
+                    mem_cfg = mem_cfg()
+                sharding_str = _format_sharding(mem_cfg) if mem_cfg is not None else "?"
+                mesh_str = _format_mesh_mapper(manifest.mesh_mapper) if manifest and manifest.mesh_mapper else "none"
+                lines.append(f"  name: {name_str}")
+                lines.append(
+                    f"    shape={shape_str}, dtype={tensor.dtype}, layout={tensor.layout}, "
+                    f"storage={tensor.storage_type()}"
+                )
+                lines.append(f"    sharding: {sharding_str}")
+                lines.append(f"    mesh_mapper: {mesh_str}")
+                lines.append(f"    fingerprint: {fp[:16]}...")
+        print("\n".join(lines))
 
     def cache_entry_exists_for_fingerprint(self, fingerprint: str):
         return self.storage.has(fingerprint)
@@ -203,6 +272,7 @@ class TensorCache:
             preprocess_source_tensor = preprocessor(*source_tensors)
             tensor = self.converter(preprocess_source_tensor, dtype, layout, memory_config, device, mesh_mapper)
             tensor = postprocessor(tensor)
+            self._entry_manifests[fingerprint] = manifest
             self.storage.set(fingerprint, tensor)
             return tensor
         else:
