@@ -148,7 +148,6 @@ def test_create_q_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
     )
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
-    # Kernel writes phase-based row-major; use ROW_MAJOR_LAYOUT so to_torch() reads buffer as-is.
     torch_interm = torch.zeros(output_tensor_shape, dtype=torch.bfloat16)  # (16, 2304)
     torch_output = torch.zeros(output_tensor_shape, dtype=torch.bfloat16)  # (16, 2304)
     ttnn_interm = ttnn.from_torch(

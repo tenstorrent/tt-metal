@@ -317,9 +317,6 @@ class CreateQHeads:
 
         receiver_data_addr = interm_tensor.buffer_address()
 
-        # Get output tensor's buffer address for receiver data address
-        # receiver_data_addr = output_tensor.buffer_address()
-
         # Kernel path
         kernel_path = "models/demos/deepseek_v3_b1/micro_ops/create_q_heads/kernels/create_q_heads_kernel.cpp"
 
@@ -608,10 +605,6 @@ class CreateQHeads:
         )
 
         # Execute generic op
-        # io_tensors: inputs first, output last.
-        # interm_tensor is NOT in io_tensors - its CB is bound to the tensor via
-        # cb_descriptor_from_sharded_tensor(.buffer), but the receiver handles
-        # synchronization manually (semaphores + cb_push_back).
         io_tensors = [qnope_tensor, qrope_tensor, output_tensor]
         output = ttnn.generic_op(io_tensors, program_descriptor)
 

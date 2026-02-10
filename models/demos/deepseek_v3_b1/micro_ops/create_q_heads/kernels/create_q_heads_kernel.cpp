@@ -21,12 +21,10 @@
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/create_q_heads.hpp"
 
-// Compile-time role flags for dead code elimination via if constexpr
 struct Core {
     static constexpr bool is_sender_core = get_named_compile_time_arg_val("is_sender_core") == 1;
     static constexpr bool is_receiver_core = get_named_compile_time_arg_val("is_receiver_core") == 1;
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-    // NOC sender flags only available for dataflow kernels
     static constexpr bool is_noc0_sender = get_named_compile_time_arg_val("is_noc0_sender") == 1;
     static constexpr bool is_noc1_sender = get_named_compile_time_arg_val("is_noc1_sender") == 1;
 #else
@@ -89,7 +87,6 @@ void kernel_main() {
     } else if constexpr (is_ncrisc_receiver) {
         // Receiver on NCRISC (when sender is NOC1/BRISC)
         deepseek_b1_ops::CreateQHeads::ReceiverArgs receiver_args{
-            // 3 semaphores for race-free synchronization
             get_named_compile_time_arg_val("nope_phase1_semaphore_id"),
             get_named_compile_time_arg_val("nope_phase2_semaphore_id"),
             get_named_compile_time_arg_val("rope_semaphore_id"),
@@ -128,7 +125,6 @@ void kernel_main() {
             get_named_compile_time_arg_val("qnope_cb"),
             get_named_compile_time_arg_val("qrope_cb"),
             get_named_compile_time_arg_val("src_num_pages"),
-            // 3 semaphores for race-free synchronization
             get_named_compile_time_arg_val("nope_phase1_semaphore_id"),
             get_named_compile_time_arg_val("nope_phase2_semaphore_id"),
             get_named_compile_time_arg_val("rope_semaphore_id"),
@@ -148,7 +144,6 @@ void kernel_main() {
     } else if constexpr (is_brisc_receiver) {
         // Receiver on BRISC (when sender is NOC0/NCRISC)
         deepseek_b1_ops::CreateQHeads::ReceiverArgs receiver_args{
-            // 3 semaphores for race-free synchronization
             get_named_compile_time_arg_val("nope_phase1_semaphore_id"),
             get_named_compile_time_arg_val("nope_phase2_semaphore_id"),
             get_named_compile_time_arg_val("rope_semaphore_id"),
@@ -166,8 +161,6 @@ void kernel_main() {
 // TRISC (Compute) - Tilization on receiver cores
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
-    // All TRISCs run, but each handles its respective part:
-    // TR0 (UNPACK): CB operations, TR1 (MATH): compute, TR2 (PACK): output
     if constexpr (Core::is_receiver_core) {
         using CreateQHeadsOp = deepseek_b1_ops::CreateQHeads::Op<false, true, false, true>;
         CreateQHeadsOp create_q_heads;

@@ -612,8 +612,6 @@ void kernel_main() {
     }
 
     // NCRISC: Receiver args for SDPA input cores
-    // 3-phase synchronization with separate semaphores for race-free tilization
-    // All args prefixed with "cqh_" to avoid name collisions with other ops
     deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_args{
         get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_id"),
         get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_id"),
