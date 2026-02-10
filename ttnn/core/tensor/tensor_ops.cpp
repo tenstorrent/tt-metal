@@ -19,9 +19,9 @@
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 
-namespace {
+namespace tt::tt_metal {
 
-tt::tt_metal::Tensor allocate_tensor_on_device(
+tt::tt_metal::DeviceTensor allocate_tensor_on_device(
     const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     using namespace tt::tt_metal;
     auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
@@ -38,11 +38,8 @@ tt::tt_metal::Tensor allocate_tensor_on_device(
     }
 
     auto tensor_topology = TensorTopology{device->shape(), placements, coords};
-    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
+    return DeviceTensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
-}  // namespace
-
-namespace tt::tt_metal {
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
@@ -73,11 +70,14 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
-    output = allocate_tensor_on_device(tensor_spec, mesh_device);
+    output = Tensor(allocate_tensor_on_device(tensor_spec, mesh_device));
     output = tt::tt_metal::set_tensor_id(output);
-
     GraphTracker::instance().track_function_end(output);
+    return output;
+}
 
+DeviceTensor create_device_metal_tensor(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
+    DeviceTensor output = allocate_tensor_on_device(tensor_spec, mesh_device);
     return output;
 }
 }  // namespace tt::tt_metal
