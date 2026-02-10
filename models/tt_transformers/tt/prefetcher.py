@@ -245,6 +245,7 @@ class Prefetcher(LightweightModule):
         self.all_core_range_set = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.width_cores - 1, self.height_cores - 1))]
         )
+        self.dram_banks = self.core_config.dram_banks
 
         # Dynamic worker core grid (for easily grabbing a sub core grid that is of mulitples of 8 cores)
         self.dynamic_worker_core_grid = lambda num_cores: ttnn.CoreRangeSet(
