@@ -250,7 +250,7 @@ The following artifacts are provided for minimal multi-pod (SuperPod) fabric tes
 
 - **Fabric test config (2D torus, multi-mesh):**
   `tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml`
-  Defines fabric tests (e.g. RandomPairing, AllToAll) for Mesh and 2D Torus XY topologies.
+  Defines fabric tests (e.g. RandomPairingMesh, AllToAllMesh, and 2D Torus XY variants) for Mesh and Torus topologies.
 
 - **Minimal 4-mesh (e.g. 4× SuperPod, each pod 32×4) Mesh Graph Descriptor:**
   `tt_metal/fabric/mesh_graph_descriptors/dual_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto`
@@ -271,9 +271,7 @@ Descriptor files live under `tt_metal/fabric/mesh_graph_descriptors/`. Use the m
 Fabric tests use **rank bindings** to map MPI ranks to (mesh_id, mesh_host_rank) and to point to the Mesh Graph Descriptor. You effectively **stamp out** one rank binding per process across all pods.
 
 - **Rank bindings file** — YAML listing each rank’s `mesh_id`, `mesh_host_rank`, and optional `env_overrides`; plus top-level `mesh_graph_desc_path` pointing at your Mesh Graph Descriptor.
-- **Rankfile** — OpenMPI rankfile that maps each rank to a (hostname, slot). Create one per deployment (do not commit; deployment-specific). **How to create one:** use one line per MPI rank, in order (rank 0, 1, 2, …). Each line has the form `rank <N>=<hostname> slot=0`. The number of lines must equal the number of ranks in your rank bindings, and the hostnames must match your `--host` list. Use the same host order in the rankfile and in `--host`.
-
-  Example rankfile (e.g. for 4 hosts):
+- **Rankfile** — OpenMPI rankfile that maps each rank to a (hostname, slot). Create one per deployment (do not commit; deployment-specific). **How to create one:** one line per MPI rank in order (rank 0, 1, 2, …), form `rank <N>=<hostname> slot=0`. Line count must equal the number of ranks in your rank bindings; hostnames and order must match your `--host` list. Example:
 
   ```
   rank 0=myhost-01 slot=0
@@ -282,9 +280,7 @@ Fabric tests use **rank bindings** to map MPI ranks to (mesh_id, mesh_host_rank)
   rank 3=myhost-04 slot=0
   ```
 
-Example for 4 meshes × 4 hosts (16 ranks):
-
-**Rank bindings** (excerpt; see `tests/tt_metal/distributed/config/dual_32x4_quad_bh_galaxy_rank_bindings.yaml` for the full file):
+**Rank bindings** for 4 meshes × 4 hosts (16 ranks): see `tests/tt_metal/distributed/config/dual_32x4_quad_bh_galaxy_rank_bindings.yaml` for the full file. Excerpt:
 
 ```yaml
 rank_bindings:
@@ -294,35 +290,15 @@ rank_bindings:
   - rank: 1
     mesh_id: 0
     mesh_host_rank: 1
-  # ... one entry per rank (e.g. 16 for 4 meshes × 4 hosts)
+  # ... one entry per rank (16 for 4 meshes × 4 hosts)
 mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 ```
-
-**Rankfile** — Example (16 ranks); replace hostnames with your hosts in the same order as your rank bindings:
-
-```
-rank 0=bh-glx-c01u08 slot=0
-rank 1=bh-glx-c01u02 slot=0
-rank 2=bh-glx-c02u02 slot=0
-rank 3=bh-glx-c02u08 slot=0
-rank 4=bh-glx-c05u08 slot=0
-rank 5=bh-glx-c05u02 slot=0
-rank 6=bh-glx-c06u08 slot=0
-rank 7=bh-glx-c06u02 slot=0
-rank 8=bh-glx-c03u08 slot=0
-rank 9=bh-glx-c03u02 slot=0
-rank 10=bh-glx-c04u08 slot=0
-rank 11=bh-glx-c04u02 slot=0
-# Add more lines for additional ranks (e.g. 12–15 for 4 meshes × 4 hosts)
-```
-
-Ensure the rankfile host list and count match your deployment and the rank bindings (same number of ranks in both).
 
 ### Running Fabric Tests with tt-run
 
 Use `tt-run` with a **rank-binding** file and MPI arguments that include your **rankfile** and **host list**. The test binary is `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric`; pass the fabric test config via `--test_config`.
 
-Example (for 16 ranks with dual_32x4 rank bindings; use your own rankfile and host list):
+Example (use your own rankfile and host list; `--host` order must match the rankfile):
 
 ```bash
 tt-run \
@@ -332,21 +308,15 @@ tt-run \
   --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml
 ```
 
-- Create a rankfile with one line per rank (e.g. `rank 0=<host0> slot=0` …). Do not commit rankfiles—they are deployment-specific.
-- Ensure `--host` lists the same hosts in the same order as your rankfile (one host per rank).
-- Use the correct NIC interface for your environment (`btl_tcp_if_include`; e.g. `ens5f0np0` or `cnx1`).
+Use the correct NIC for your environment (`btl_tcp_if_include`; e.g. `ens5f0np0` or `cnx1`).
 
 For more on rankfiles and generating cluster descriptors from multiple hosts, see [README_generate_cluster_descriptors.md](../../scripts/scaleout/README_generate_cluster_descriptors.md).
 
 ### Validating the setup (without a SuperPod)
 
-You can sanity-check the mainlined artifacts before running on real hardware:
+You can sanity-check the mainlined artifacts before running on real hardware. All commands below assume you run from the **repository root** (paths are relative to repo root).
 
-1. **Build the test binary** (from repo root):
-   ```bash
-   ./build_metal.sh --build-test test_tt_fabric
-   ```
-   Or build the full tree and ensure `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric` exists.
+1. **Build the test binary** (from repo root): `./build_metal.sh --build-tests` builds all tests; the fabric test binary is at `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric`.
 
 2. **Validate the fabric test config YAML** (parses and has expected structure):
    ```bash
@@ -363,7 +333,7 @@ You can sanity-check the mainlined artifacts before running on real hardware:
    ```bash
    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphDescriptorTests.ParsesDualPod32x4QuadBhGalaxyTorusXY"
    ```
-   This runs a unit test that loads `dual_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto`. Run from repo root so the relative path in the test resolves.
+   Run from repo root so the descriptor path resolves.
 
 4. **Validate the rank bindings YAML** (optional):
    ```bash
