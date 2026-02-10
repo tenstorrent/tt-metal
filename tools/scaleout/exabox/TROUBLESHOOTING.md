@@ -231,7 +231,7 @@ while attempting to start process rank 0.
 
 **Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.sh`), they don't use containers.
 
-**Solution**: 
+**Solution**:
 - **Build tt-metal first** - See [Quick Health Check](./README.md#quick-health-check-for-developers) for build instructions
 - **Or use Docker-based validation** - Run `./run_validation.sh --hosts <hosts> --image <docker-image>` which doesn't require a build
 
