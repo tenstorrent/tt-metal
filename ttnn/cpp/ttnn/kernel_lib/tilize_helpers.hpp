@@ -6,6 +6,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/cb_api.h"
+#include "internal/circular_buffer_interface.h"
 
 /**
  * @file tilize_helpers.hpp

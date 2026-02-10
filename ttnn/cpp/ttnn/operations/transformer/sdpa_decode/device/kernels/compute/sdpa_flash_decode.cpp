@@ -524,18 +524,12 @@ void kernel_main() {
             pack_reconfig_data_format(cb_out_accumulate_im);
 
             mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_cur_sum);
+            pack_reconfig_data_format(cb_out_final);
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
                 // Unified untilize - auto-dispatches based on out_chunk_tiles vs DEST limit
-                compute_kernel_lib::untilize<
-                    out_chunk_tiles,
-                    cb_out_accumulate_im,
-                    cb_out_final,
-                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
-                    1, compute_kernel_lib::untilize_config::PreviousCBs{cb_out_accumulate_im, cb_out_accumulate_im});
+                compute_kernel_lib::untilize<out_chunk_tiles, cb_out_accumulate_im, cb_out_final>(1);
             } else {
                 // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);

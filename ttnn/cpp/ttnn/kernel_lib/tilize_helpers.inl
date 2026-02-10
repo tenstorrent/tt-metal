@@ -34,6 +34,10 @@ ALWI void tilize(
     static_assert(output_cb < 32,
         "Invalid output_cb: must be less than 32");
 
+    // Runtime parameter validation
+    ASSERT(block_width_tiles > 0);
+    ASSERT(num_blocks > 0);
+
     // Determine if we're using fast tilize mode (explicit, NOT auto-detected)
     constexpr bool use_fast = (speed_mode == tilize_config::TilizeSpeedMode::Fast);
 
@@ -49,8 +53,37 @@ ALWI void tilize(
     // Determine if we're doing data type reconfiguration
     constexpr bool use_dt = (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure);
 
+    // Validate NonTileAlignedCBWaitConfig parameters
+    if (config.mode != tilize_config::NonTileAlignedMode::Disabled) {
+        ASSERT(config.value > 0);
+    }
+
+    // Validate input CB page size for standard tile-aligned mode
+    if (config.mode == tilize_config::NonTileAlignedMode::Disabled) {
+        UNPACK({
+            uint32_t operand_id = get_operand_id(input_cb);
+            uint32_t input_page_size_units = get_local_cb_interface(operand_id).fifo_page_size;
+            // fifo_page_size is in 16-byte units, convert to actual bytes
+            uint32_t input_page_size = input_page_size_units << 4;
+            ASSERT(input_page_size == 1088 || input_page_size == 2048 || input_page_size == 4096);
+        })
+    }
+
     // Reconfigure register datatypes if requested
     if constexpr (use_dt) {
+        // Validate previous CB IDs when reconfiguration is requested
+        if (prev_cbs.prev_cb_srca != tilize_config::INVALID_CB) {
+            ASSERT(prev_cbs.prev_cb_srca < NUM_CIRCULAR_BUFFERS);
+        }
+        if (prev_cbs.prev_cb_output != tilize_config::INVALID_CB) {
+            ASSERT(prev_cbs.prev_cb_output < NUM_CIRCULAR_BUFFERS);
+        }
+        if constexpr (use_fast) {
+            if (prev_cbs.prev_cb_srcb != tilize_config::INVALID_CB) {
+                ASSERT(prev_cbs.prev_cb_srcb < NUM_CIRCULAR_BUFFERS);
+            }
+        }
+
         // Reconfigure srcA
         if (prev_cbs.prev_cb_srca != tilize_config::INVALID_CB) {
             reconfig_data_format_srca(prev_cbs.prev_cb_srca, input_cb);

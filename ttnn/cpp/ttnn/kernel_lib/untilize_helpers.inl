@@ -132,13 +132,8 @@ ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs) {
     static_assert(output_cb < 32,
         "Invalid output_cb: must be less than 32");
 
-    // Validate that no valid CB is provided when reconfiguration is NOT requested
-    // Note: This is a runtime validation since prev_cbs is a runtime parameter
-    if constexpr (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure) {
-        bool has_valid_cb = (prev_cbs.prev_cb_srca != untilize_config::INVALID_CB) ||
-                           (prev_cbs.prev_cb_output != untilize_config::INVALID_CB);
-        ASSERT(!has_valid_cb);
-    }
+    // Runtime parameter validation
+    ASSERT(num_blocks > 0);
 
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool is_integer = is_integer_format<input_cb>();
@@ -148,6 +143,13 @@ ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs) {
 
     // Reconfigure register datatypes if requested
     if constexpr (use_dt) {
+        if (prev_cbs.prev_cb_srca != untilize_config::INVALID_CB) {
+            ASSERT(prev_cbs.prev_cb_srca < NUM_CIRCULAR_BUFFERS);
+        }
+        if (prev_cbs.prev_cb_output != untilize_config::INVALID_CB) {
+            ASSERT(prev_cbs.prev_cb_output < NUM_CIRCULAR_BUFFERS);
+        }
+
         // Reconfigure srcA
         if (prev_cbs.prev_cb_srca != untilize_config::INVALID_CB) {
             reconfig_data_format_srca(prev_cbs.prev_cb_srca, input_cb);
