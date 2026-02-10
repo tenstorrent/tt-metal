@@ -5,7 +5,7 @@
 """
 TTNN PreSDPA Test
 Tests pre-SDPA fused operation with full pipeline:
-- RMSNorm -> Matmul -> Gather -> RMSNorm2 -> Matmul2 (shuffled) -> Matmul3 (Qnope only) & RoPE (Qrope only) -> Interleaved Pre-SDPA Output
+- CCL Broadcast -> RMSNorm -> Matmul -> Gather -> RMSNorm2 -> Matmul2 (shuffled) -> Matmul3 (Qnope only) & RoPE (Qrope only) -> Interleaved Pre-SDPA Output
 - Qnope output: [64, 1, 512] after matmul3
 - Qrope output: [64, 1, 64] after RoPE
 """
@@ -13,18 +13,80 @@ Tests pre-SDPA fused operation with full pipeline:
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.utils import shuffle_weights_for_interleaved_qnope_qrope
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
+def create_fabric_router_config(max_payload_size):
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
+@pytest.mark.parametrize(
+    "sender_row, sender_col",
+    [
+        (1, 0),
+    ],
+)
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [True])
-def test_pre_sdpa(device, epsilon, use_fp32):
-    """Test TTNN pre-SDPA fused operation with full Qnope/Qrope pipeline"""
+@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("secondary_cluster_axis", [1])
+@pytest.mark.parametrize("using_persistent_buffers", [True])
+@pytest.mark.parametrize("mesh_rows, mesh_cols, skip_ccl", [(4, 2, False), (1, 1, True)])
+@pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 573440,
+        }
+    ],
+    indirect=True,
+)
+def test_pre_sdpa(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    epsilon,
+    use_fp32,
+    cluster_axis,
+    secondary_cluster_axis,
+    using_persistent_buffers,
+    skip_ccl,
+    num_iters,
+    num_warmup_iter,
+):
+    """Test TTNN pre-SDPA fused operation with CCL broadcast and full Qnope/Qrope pipeline"""
+
+    num_devices = mesh_rows * mesh_cols
+
+    # Validate mesh size
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    # Create submesh used by the test
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+
+    # Configure a single worker sub-device covering the full compute grid
+    device_grid_size = submesh.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    submesh.load_sub_device_manager(submesh.create_sub_device_manager([worker_sub_device], 0))
+    submesh.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
 
     # ========================================================================
     # Configuration
@@ -43,8 +105,6 @@ def test_pre_sdpa(device, epsilon, use_fp32):
 
     KNOPE_DIM = 512
     KROPE_DIM = 64
-    # Device grid configuration
-    device_grid_size = device.compute_with_storage_grid_size()
 
     # Qnope/Qrope grid configuration (must match head configuration)
     QNOPE_GRID_COLS = 8  # 8 Qnope cores per row (1 head each)
@@ -169,22 +229,54 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    ttnn_input = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
+    # Create mesh tensors for input and intermediate (CCL broadcast destination)
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+    device_tensors = []
+    intermediate_tensors = []
+    for row in range(mesh_rows):
+        for col in range(mesh_cols):
+            if skip_ccl:
+                # Single-device mode: all devices have the input
+                device_tensors.append(torch_input)  # (1, 7168)
+            elif row == sender_row and col == sender_col:
+                # Only sender device has actual input data
+                device_tensors.append(torch_input)  # (1, 7168)
+            else:
+                # All other devices start with zeros
+                device_tensors.append(torch.zeros_like(torch_input))  # (1, 7168)
+            intermediate_tensors.append(torch.zeros_like(torch_input))
+
+    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
+    intermediate_mesh_tensor_torch = torch.cat(intermediate_tensors, dim=0)
+
+    input_tensor_mesh = ttnn.from_torch(
+        mesh_tensor_torch,
+        device=submesh,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem_config,
         tile=tile,
+        dtype=ttnn.bfloat16,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
+    )
+
+    intermediate_tensor_mesh = ttnn.from_torch(
+        intermediate_mesh_tensor_torch,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        dtype=ttnn.bfloat16,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
     )
 
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=mem_config,
         tile=tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     # Matmul weights tensor - width sharded on 6x8 grid (48 cores)
@@ -202,8 +294,9 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         torch_matmul_weights,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=matmul_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     # Matmul2 weights tensor (shuffled) - width sharded on 8x12 grid
@@ -223,8 +316,9 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         torch_matmul2_weights_shuffled,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=matmul2_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     # RMSNorm2 gamma tensor
@@ -240,9 +334,10 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         torch_rmsnorm2_gamma,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=rmsnorm2_gamma_mem_config,
         tile=tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     # Matmul3 weights tensor - height sharded on Qnope grid (64 cores)
@@ -264,8 +359,9 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         torch_matmul3_weights_flat,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=matmul3_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
@@ -295,9 +391,10 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         torch_sdpa_input_output,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=sdpa_input_output_mem_config,
         tile=tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     # RoPE tensors - sharded on Qrope grid (4x8 = 32 cores)
@@ -334,18 +431,20 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         cos_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=qrope_cos_sin_mem_config,
         tile=tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     ttnn_sin = ttnn.from_torch(
         sin_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=qrope_cos_sin_mem_config,
         tile=tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     # Trans_mat: [1, 1, 32, 32] - repeat for all qrope cores
@@ -367,9 +466,10 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         trans_mat_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=trans_mem_config,
         tile=trans_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     # KV Cache Branch
@@ -396,8 +496,9 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         torch_dkv_matmul_weights_shuffled,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=dkv_matmul_weights_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
@@ -414,9 +515,10 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         torch_dkv_rmsnorm_gamma,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=dkv_rmsnorm_gamma_mem_config,
         tile=tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
     krope_num_heads = 1
@@ -433,25 +535,40 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         cos_selected,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=krope_cos_sin_mem_config,
         tile=tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
     ttnn_krope_sin = ttnn.from_torch(
         sin_selected,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=submesh,
         memory_config=krope_cos_sin_mem_config,
         tile=tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
+
+    num_cores = device_grid_size.x * device_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
+    out_ready_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    barrier_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
 
     # ========================================================================
     # Run pre-SDPA operation
     # ========================================================================
     logger.info("Running pre-SDPA operation...")
+
+    profiler = BenchmarkProfiler()
+
+    # Compile Run
+    logger.info("Compiling model")
     ttnn_sdpa_input_result = PreSDPA.op(
-        ttnn_input,
+        input_tensor_mesh,
+        intermediate_tensor_mesh,
         ttnn_gamma,
         ttnn_matmul_weights,
         ttnn_rmsnorm2_gamma,
@@ -465,12 +582,105 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         ttnn_dkv_matmul_weights,
         ttnn_dkv_rmsnorm_gamma,
         ttnn_sdpa_input_output,
+        sender_coord,
+        semaphores=semaphores,
+        cluster_axis=cluster_axis,
+        secondary_cluster_axis=secondary_cluster_axis,
+        using_persistent_buffers=using_persistent_buffers,
         epsilon=epsilon,
         fp32_dest_acc_en=use_fp32,
+        skip_ccl=skip_ccl,
     )
+    ttnn.synchronize_device(submesh)
+
+    # Capture warmup trace
+    logger.info("Capturing warmup trace")
+    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
+    for i in range(num_warmup_iter):
+        ttnn_sdpa_input_result = PreSDPA.op(
+            input_tensor_mesh,
+            intermediate_tensor_mesh,
+            ttnn_gamma,
+            ttnn_matmul_weights,
+            ttnn_rmsnorm2_gamma,
+            ttnn_matmul2_weights,
+            ttnn_matmul3_weights,
+            ttnn_sin,
+            ttnn_cos,
+            ttnn_trans_mat,
+            ttnn_krope_cos,
+            ttnn_krope_sin,
+            ttnn_dkv_matmul_weights,
+            ttnn_dkv_rmsnorm_gamma,
+            ttnn_sdpa_input_output,
+            sender_coord,
+            semaphores=semaphores,
+            cluster_axis=cluster_axis,
+            secondary_cluster_axis=secondary_cluster_axis,
+            using_persistent_buffers=using_persistent_buffers,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=skip_ccl,
+        )
+    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(submesh)
+
+    # Capture main trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
+    for i in range(num_iters):
+        ttnn_sdpa_input_result = PreSDPA.op(
+            input_tensor_mesh,
+            intermediate_tensor_mesh,
+            ttnn_gamma,
+            ttnn_matmul_weights,
+            ttnn_rmsnorm2_gamma,
+            ttnn_matmul2_weights,
+            ttnn_matmul3_weights,
+            ttnn_sin,
+            ttnn_cos,
+            ttnn_trans_mat,
+            ttnn_krope_cos,
+            ttnn_krope_sin,
+            ttnn_dkv_matmul_weights,
+            ttnn_dkv_rmsnorm_gamma,
+            ttnn_sdpa_input_output,
+            sender_coord,
+            semaphores=semaphores,
+            cluster_axis=cluster_axis,
+            secondary_cluster_axis=secondary_cluster_axis,
+            using_persistent_buffers=using_persistent_buffers,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=skip_ccl,
+        )
+    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+    ttnn.synchronize_device(submesh)
+
+    # Execute warmup trace
+    logger.info("Executing warmup trace...")
+    profiler.start("deepseek-pre-sdpa-warmup")
+    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
+    ttnn.release_trace(submesh, trace_id_warmup)
+    ttnn.synchronize_device(submesh)
+    profiler.end("deepseek-pre-sdpa-warmup")
+
+    # Execute main trace with signposts for profiling
+    logger.info("Starting Trace perf test...")
+    signpost("start")
+    profiler.start("deepseek-pre-sdpa-trace")
+
+    ttnn.execute_trace(submesh, trace_id, blocking=False)
+    ttnn.release_trace(submesh, trace_id)
+    ttnn.synchronize_device(submesh)
+
+    profiler.end("deepseek-pre-sdpa-trace")
+    signpost("stop")
 
     # Convert back to torch for verification
-    sdpa_input_output_torch = ttnn.to_torch(ttnn_sdpa_input_result)
+    sdpa_input_output_torch = ttnn.to_torch(
+        ttnn_sdpa_input_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
 
     # ========================================================================
     # Compute golden reference
@@ -500,19 +710,39 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         krope_dim=KROPE_DIM,
     )
 
-    # ========================================================================
-    # Verify final output (SDPA Input)
-    # ========================================================================
-    logger.info("Verifying SDPA Input interleaved results...")
-    # Golden SDPA Input shape: [8, 8, 576] -> reshape to [8, 4608] to match device output
-    # The 4×2 grid with ROW_MAJOR orientation gives indices 0-7 matching source rows 0-7
-    # Each combined head is (qnope[512], qrope[64]) where qrope has been processed by RoPE
-    torch_sdpa_input_expected_flat = torch_sdpa_expected.reshape(SDPA_INPUT_NUM_CORES, SDPA_INPUT_ELEMENTS_PER_CORE)
+    slice_size = sdpa_input_output_shape[0]
+    expected_width = 4608
 
-    sdpa_input_passing, sdpa_input_pcc_message = comp_pcc(torch_sdpa_input_expected_flat, sdpa_input_output_torch, 0.98)
-    logger.info(f"SDPA Input PCC: {sdpa_input_pcc_message}")
+    for device_idx in range(mesh_rows * mesh_cols):
+        start = device_idx * slice_size
+        end = start + slice_size
+        # Trim to expected width for comparison
+        received = sdpa_input_output_torch[start:end, :expected_width]
 
-    # Assert final output passes
-    assert sdpa_input_passing, f"SDPA Input verification failed: {sdpa_input_pcc_message}"
+        # Golden SDPA Input shape: [8, 8, 576] -> reshape to [8, 4608] to match device output
+        # The 4×2 grid with ROW_MAJOR orientation gives indices 0-7 matching source rows 0-7
+        # Each combined head is (qnope[512], qrope[64]) where qrope has been processed by RoPE
+        torch_sdpa_input_expected_flat = torch_sdpa_expected.reshape(SDPA_INPUT_NUM_CORES, SDPA_INPUT_ELEMENTS_PER_CORE)
+        if received.shape != torch_sdpa_input_expected_flat.shape:
+            logger.error(
+                f"Shape mismatch at device {device_idx}: got {received.shape}, expected {torch_sdpa_expected.shape}"
+            )
+            continue
 
-    logger.info("✓ PreSDPA test passed!")
+        max_diff = torch.max(torch.abs(received - torch_sdpa_input_expected_flat)).item()
+        mean_diff = torch.mean(torch.abs(received - torch_sdpa_input_expected_flat)).item()
+
+        logger.info(f"Device {device_idx}: Max diff={max_diff}, Mean diff={mean_diff}")
+
+        passing, pcc_message = comp_pcc(torch_sdpa_input_expected_flat, received, 0.99)
+        logger.info(f"Device {device_idx}: {pcc_message}")
+
+        assert passing, f"Device {device_idx} failed: {pcc_message}"
+
+    logger.info("✓ PreSDPA mesh test passed!")
+
+    # Clean up trace and sub-device state before fixture teardown
+    # This ensures profiler data is properly flushed before close_mesh_device
+    ttnn.synchronize_device(submesh)
+    submesh.reset_sub_device_stall_group()
+    submesh.clear_loaded_sub_device_manager()

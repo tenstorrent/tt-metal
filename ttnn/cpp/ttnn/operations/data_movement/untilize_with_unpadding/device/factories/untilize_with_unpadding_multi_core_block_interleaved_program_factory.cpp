@@ -200,8 +200,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
         unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
     bool use_pack_kernel = true;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         use_pack_kernel = false;
         unpack_to_dest_mode[tt::CBIndex::c_0] =
             UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
