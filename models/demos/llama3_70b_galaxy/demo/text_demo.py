@@ -177,6 +177,40 @@ def create_tt_model(
     return tt_model_args, model, page_table, [tt_kv_cache]
 
 
+def make_page_table(page_params, batch_size):
+    """Build page table for paged KV cache (same logic as create_tt_model). Used when reusing a cached model."""
+    paged_attention_config = PagedAttentionConfig(
+        block_size=page_params["page_block_size"],
+        max_num_blocks=page_params["page_max_num_blocks"],
+    )
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    reverse_permutation = torch.argsort(permutation)
+    return reverse_permutation.reshape(batch_size, paged_attention_config.max_num_blocks // batch_size)
+
+
+@pytest.fixture(scope="session")
+def cached_llama_model_80l(mesh_device):
+    """
+    Session-scoped 80-layer model (no prefill_profile). Reused across tests to avoid
+    repeated weight loading and warmup. Tests with num_layers=80 and not prefill_profile
+    use this and build page_table per batch_size; others still call create_tt_model.
+    """
+    model_args, model, _page_table, tt_kv_cache = create_tt_model(
+        mesh_device,
+        instruct=True,
+        max_batch_size=32,
+        optimizations=LlamaOptimizations.performance,
+        max_seq_len=128 * 1024,
+        num_layers=80,
+        dummy_weights=False,
+        page_params={"page_block_size": 64, "page_max_num_blocks": 2048},
+        dtype=ttnn.bfloat8_b,
+        use_paged_kv_cache=True,
+        prefill_profile=False,
+    )
+    return (model_args, model, tt_kv_cache)
+
+
 # List of supported Parameters for demo.py
 #
 # input_prompts (string): input json file with prompts to process. See models/demos/llama3_70b_galaxy/demo/sample_prompts/*.json for list of input files
@@ -661,7 +695,7 @@ def create_tt_model(
     indirect=True,
 )
 @pytest.mark.timeout(
-    900
+    1500
 )  # Device init + model load + prefill warmup (compile/trace for support_seqlens x batch 1,32) can exceed default 300s
 def test_demo_text(
     input_prompts,
@@ -676,6 +710,8 @@ def test_demo_text(
     optimizations,
     stop_at_eos,
     mesh_device,
+    device_params,
+    cached_llama_model_80l,
     is_ci_env,
     apc_test,
     prefill_profile,
@@ -830,19 +866,36 @@ def test_demo_text(
             [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
         )
 
-    model_args, model, page_table, tt_kv_cache = create_tt_model(
-        mesh_device,
-        instruct=instruct,
-        max_batch_size=batch_size,
-        optimizations=optimizations,
-        max_seq_len=max_seq_len,
-        num_layers=num_layers,
-        dummy_weights=not instruct,
-        page_params=page_params,
-        dtype=ttnn.bfloat8_b,
-        use_paged_kv_cache=paged_attention,
-        prefill_profile=prefill_profile,
-    )
+    use_cached_model = num_layers == 80 and not prefill_profile and paged_attention
+    if use_cached_model:
+        model_args, model, tt_kv_cache = cached_llama_model_80l
+        cached_already_used = getattr(model, "_cached_model_already_used", False)
+        # Only sync+reset when reusing the model after a previous test. Skip on first use to
+        # avoid hang (sync right after fixture creation can block; CCL indices are already 0).
+        if cached_already_used:
+            ttnn.synchronize_device(mesh_device)
+            model.tt_ccl.reset_gather_and_buffer_idx()
+        page_table = make_page_table(page_params, batch_size)
+        # Zero KV cache so reused model starts clean for this test
+        model.switch_mode("prefill")
+        for layer in model.layers:
+            k_cache, v_cache = layer.attention.layer_past
+            k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+            v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+    else:
+        model_args, model, page_table, tt_kv_cache = create_tt_model(
+            mesh_device,
+            instruct=instruct,
+            max_batch_size=batch_size,
+            optimizations=optimizations,
+            max_seq_len=max_seq_len,
+            num_layers=num_layers,
+            dummy_weights=not instruct,
+            page_params=page_params,
+            dtype=ttnn.bfloat8_b,
+            use_paged_kv_cache=paged_attention,
+            prefill_profile=prefill_profile,
+        )
 
     model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
     tokenizer = model_args.tokenizer
@@ -1056,6 +1109,8 @@ def test_demo_text(
 
         if prefill_profile:  # If we are profiling prefill, we stop here
             model.tt_ccl.close()
+            if use_cached_model:
+                setattr(model, "_cached_model_already_used", True)
             return True
 
         # Keep track of generated outputs to print out every iteration
@@ -1089,7 +1144,9 @@ def test_demo_text(
             model.switch_mode("decode")
         except Exception as e:
             logger.error(f"Error switching to decode mode: {str(e)}")
-            model.tt_ccl.close()
+            if not use_cached_model:
+                model.tt_ccl.close()
+            raise
         logger.info(f"Starting decode loop from positions: {decoding_pos}")
 
         # Log total inference (accounting for compile_decode as well)
@@ -1347,11 +1404,15 @@ def test_demo_text(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    # Prepare profile benchmark metrics for the first repeat batch only
+    # Prepare profile benchmark metrics
+    # When repeat_batches > 1: use prefill time from batch 1 (after warmup). Otherwise use batch 0.
     compile_prefill_time = profiler.get_duration("compile_prefill")
     compile_decode_time = profiler.get_duration("compile_decode")
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill")
+    if repeat_batches > 1 and profiler.contains_step("inference_prefill", 1):
+        total_inference_prefill_time = profiler.get_duration("inference_prefill", iteration=1)
+    else:
+        total_inference_prefill_time = profiler.get_duration("inference_prefill")
     total_inference_decode_time = 0
     for i in range(1, iteration):  # Iteration 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
@@ -1472,3 +1533,128 @@ def test_demo_text(
             run_type=f"tg_llama_text_demo_prefill",
             ml_model_name="llama70b-tg",
         )
+
+    if use_cached_model:
+        setattr(model, "_cached_model_already_used", True)
+
+
+# =============================================================================
+# Prefill prefix-caching benchmark (minimal, self-contained)
+# =============================================================================
+# Run: pytest text_demo.py::test_prefill_prefix_caching_benchmark -v -s
+# Output: models/demos/llama3_70b_galaxy/demo/output/prefill_prefix_caching_benchmark.json
+# =============================================================================
+
+PREFILL_BENCHMARK_OUTPUT = Path(__file__).resolve().parent / "output" / "prefill_prefix_caching_benchmark.json"
+
+# Seq lengths (powers of 2 from 128 to 32k). Aligned to page_block_size for prefix-caching.
+PREFILL_BENCHMARK_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+PREFILL_BENCHMARK_BLOCK_SIZE = 64
+
+
+def _make_synthetic_prefill_input(batch_size, seq_len, vocab_size, dtype=torch.long):
+    """Create synthetic token ids for prefill (no file load)."""
+    return torch.randint(0, vocab_size, (batch_size, seq_len), dtype=dtype)
+
+
+@pytest.mark.timeout(1800)
+def test_prefill_prefix_caching_benchmark(mesh_device, cached_llama_model_80l):
+    """
+    Measure prefill time (after warmup) for seq_len in [128..32k] (powers of 2),
+    with no prefix caching vs 50% prefix cached. Uses synthetic input tokens.
+    Results written to demo/output/.
+    """
+    page_params = {"page_block_size": PREFILL_BENCHMARK_BLOCK_SIZE, "page_max_num_blocks": 2048}
+    batch_size = 1
+
+    model_args, model, tt_kv_cache = cached_llama_model_80l
+    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    generator = Generator(model, model_args, mesh_device, tokenizer=model_args.tokenizer)
+    page_table = make_page_table(page_params, batch_size)
+    vocab_size = model_args.vocab_size
+
+    sampling_params = SamplingParams(temperature=0.0, top_p=0.05, top_k=32)
+    results = []
+
+    for seq_len in PREFILL_BENCHMARK_SEQ_LENS:
+        # Align to block_size for prefix-caching (generator asserts alignment)
+        seq_len = (seq_len // PREFILL_BENCHMARK_BLOCK_SIZE) * PREFILL_BENCHMARK_BLOCK_SIZE
+        if seq_len == 0:
+            continue
+
+        input_tokens_prefill_pt = _make_synthetic_prefill_input(batch_size, seq_len, vocab_size)
+        decoding_pos = torch.tensor([seq_len], dtype=torch.long)
+
+        for use_prefix_caching, prefix_cached_ratio in [(False, 0.0), (True, 0.5)]:
+            # Compute start_pos for prefix-cached case (warmup and measured use same input lengths)
+            num_cached = 0
+            if use_prefix_caching:
+                num_cached = int(seq_len * prefix_cached_ratio)
+                num_cached = min(num_cached, seq_len - 1)
+                num_cached = (num_cached // PREFILL_BENCHMARK_BLOCK_SIZE) * PREFILL_BENCHMARK_BLOCK_SIZE
+            start_pos = [num_cached] if use_prefix_caching else None
+
+            # Two batches: 0=warmup, 1=timed (both same input lengths; no KV cache clear needed since we don't check outputs)
+            profiler = BenchmarkProfiler()
+            for batch_idx in range(2):
+                if batch_idx == 0:
+                    # Warmup (same as measured: full prefill or prefix-cached prefill)
+                    generator.prefill_forward_text(
+                        input_tokens_prefill_pt,
+                        page_table=page_table,
+                        kv_cache=tt_kv_cache,
+                        prompt_lens=decoding_pos,
+                        enable_trace=True,
+                        tt_out_logits_all_users=None,
+                        sampling_params=sampling_params,
+                        start_pos=start_pos,
+                    )
+                else:
+                    # Timed run
+                    profiler.start("prefill")
+                    generator.prefill_forward_text(
+                        input_tokens_prefill_pt,
+                        page_table=page_table,
+                        kv_cache=tt_kv_cache,
+                        prompt_lens=decoding_pos,
+                        enable_trace=True,
+                        tt_out_logits_all_users=None,
+                        sampling_params=sampling_params,
+                        start_pos=start_pos,
+                    )
+                    profiler.end("prefill")
+                    prefill_s = profiler.get_duration("prefill")
+
+                    row = {
+                        "seq_len": seq_len,
+                        "use_prefix_caching": use_prefix_caching,
+                        "prefix_cached_ratio": prefix_cached_ratio,
+                        "prefill_s": prefill_s,
+                    }
+                    results.append(row)
+                    logger.info(f"seq_len={seq_len} prefix_cached={use_prefix_caching} -> {prefill_s:.4f}s")
+
+    # Write results
+    PREFILL_BENCHMARK_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    with open(PREFILL_BENCHMARK_OUTPUT, "w") as f:
+        json.dump({"results": results}, f, indent=2)
+    logger.info(f"Results written to {PREFILL_BENCHMARK_OUTPUT}")
+
+    # Print table
+    by_len = {}
+    for r in results:
+        k = r["seq_len"]
+        if k not in by_len:
+            by_len[k] = {}
+        label = "50%_cache" if r["use_prefix_caching"] else "no_cache"
+        by_len[k][label] = r["prefill_s"]
+
+    print("\n=== Prefill time (s) after warmup ===")
+    print(f"{'seq_len':>8}  {'no_cache':>10}  {'50%_cache':>10}  speedup")
+    print("-" * 45)
+    for seq_len in sorted(by_len.keys()):
+        d = by_len[seq_len]
+        nc = d.get("no_cache", 0)
+        c50 = d.get("50%_cache", 0)
+        sp = f"{nc / c50:.2f}x" if c50 > 0 else "—"
+        print(f"{seq_len:>8}  {nc:>10.4f}  {c50:>10.4f}  {sp}")

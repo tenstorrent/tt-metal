@@ -4,6 +4,7 @@
 
 import ttnn
 import torch
+from loguru import logger
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
@@ -826,6 +827,8 @@ class TtTransformer(LightweightModule):
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
+            if mode == "prefill":
+                logger.info(f"[DEBUG_HANG] forward prefill: layer {i}/{len(self.layers)}")
             x, h = layer(
                 x,
                 h,

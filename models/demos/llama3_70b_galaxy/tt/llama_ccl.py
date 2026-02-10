@@ -104,7 +104,7 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [4096, 2048, 1024, 128]
+            self.support_seqlens = [1024, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
