@@ -72,6 +72,8 @@ struct MeshWorkloadData {
 struct MeshWorkloadRuntimeIdEntry {
     workloadId @0 :UInt64;
     runtimeId @1 :UInt64;
+    name @2 :Text;
+    parameters @3 :Text;
 }
 
 # Build environment info for a specific device

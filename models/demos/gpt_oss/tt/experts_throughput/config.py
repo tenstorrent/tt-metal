@@ -139,13 +139,12 @@ class ThroughputProgramConfig:
     gate_up_cores: tuple[int, int] = (5, 9)
     down_cores: tuple[int, int] = (5, 9)
 
-    # Sparse matmul parameters
+    # Matmul parameters
     # in0_block_w: int = 2
     in0_block_w: int = 10
     ## can be estimated by k // 32 (2880 / 32 = 90) therefore factors of 90 (30, 15, 10, 9 etc.)
     out_subblock_h: int = 1
     out_subblock_w: int = 1
-    per_core_M: int = 1
 
     def __post_init__(self):
         """Validate configuration."""
@@ -160,17 +159,19 @@ class ThroughputProgramConfig:
         if core_x <= 0 or core_y <= 0:
             raise ValueError(f"{name} must have positive dimensions, got {cores}")
 
-    def get_gate_up_config(self, n: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    def get_gate_up_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Get program config for gate/up projections.
 
         Args:
             n: Output feature dimension
+            m: M dimension (total_tokens) for the matmul
 
         Returns:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = self.gate_up_cores
         n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
         per_core_N = n_tiles // (core_x * core_y)
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -178,24 +179,26 @@ class ThroughputProgramConfig:
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,
-            per_core_M=self.per_core_M,
+            per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
         )
 
-    def get_down_config(self, n: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    def get_down_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Get program config for down projection.
 
         Args:
             n: Output feature dimension
+            m: M dimension (total_tokens) for the matmul
 
         Returns:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = self.down_cores
         n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
         per_core_N = n_tiles // (core_x * core_y)
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -203,7 +206,7 @@ class ThroughputProgramConfig:
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,
-            per_core_M=self.per_core_M,
+            per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
             fuse_batch=False,
             fused_activation=None,

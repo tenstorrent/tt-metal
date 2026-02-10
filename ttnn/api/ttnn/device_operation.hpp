@@ -199,6 +199,13 @@ void enqueue_mesh_workload(
         mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
 }
 
+// Forward declaration for emit_mesh_workload_annotation
+template <DeviceOperationConcept mesh_device_operation_t>
+void emit_mesh_workload_annotation(
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args);
+
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
 // path for `ProgramFactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
@@ -238,6 +245,9 @@ void handle_mesh_adapter_cache_hit(
 
             WorkloadFactory::override_runtime_arguments(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+
+            emit_mesh_workload_annotation<mesh_device_operation_t>(
+                cached_mesh_workload.workload, operation_attributes, tensor_args);
 
             enqueue_mesh_workload<mesh_device_operation_t>(
                 operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload);

@@ -48,8 +48,10 @@ def run(args, context) -> dict[int, tuple[str, str]]:
             workload = mesh_workloads.get(entry.workloadId)
             if workload is None:
                 continue
-            runtime_id_map[int(entry.runtimeId)] = (workload.name, workload.parameters)
+            name = getattr(entry, "name", "") or (workload.name if workload else "")
+            params = getattr(entry, "parameters", "") or (workload.parameters if workload else "")
 
+            runtime_id_map[int(entry.runtimeId)] = (name, params)
         log_check(True, f"Built runtime_id map with {len(runtime_id_map)} operation(s)")
     except Exception as e:
         log_check(False, f"Failed to build runtime_id to operation map: {e}")
