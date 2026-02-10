@@ -146,7 +146,7 @@ def default_serializer(value) -> str:
     if value is None:
         return "N/A"
     if isinstance(value, Device):
-        return str(value._id)
+        return str(value.id)
     elif isinstance(value, OnChipCoordinate):
         return value.to_user_str()
     elif isinstance(value, ElfVariable):

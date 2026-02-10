@@ -189,20 +189,6 @@ def get_devices(
 
 
 @dataclass(frozen=True)
-class BrokenDevice:
-    device: Device
-    error: Exception | None = None
-
-    def __hash__(self):
-        return hash(self.device)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, BrokenDevice):
-            return False
-        return self.device == other.device
-
-
-@dataclass(frozen=True)
 class BrokenCore:
     location: OnChipCoordinate
     risc_name: str
@@ -215,6 +201,23 @@ class BrokenCore:
         if not isinstance(other, BrokenCore):
             return False
         return self.location == other.location and self.risc_name == other.risc_name
+
+    def __str__(self) -> str:
+        return f"{self.risc_name} at {self.location.to_user_str()}"
+
+
+@dataclass(frozen=True)
+class BrokenDevice:
+    device: Device
+    error: Exception | None = None
+
+    def __hash__(self):
+        return hash(self.device)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BrokenDevice):
+            return False
+        return self.device == other.device
 
 
 class RunChecks:
@@ -234,19 +237,19 @@ class RunChecks:
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
         self._broken_devices: set[BrokenDevice] = set()
-        self._broken_cores: set[BrokenCore] = set()
+        self._broken_cores: dict[Device, set[BrokenCore]] = {}
         self._skip_lock = threading.Lock()
 
     def get_device_by_unique_id(self, unique_id: int) -> Device | None:
         return self._unique_id_to_device.get(unique_id)
 
-    def get_broken_devices(self) -> list[BrokenDevice]:
+    def get_broken_devices(self) -> set[BrokenDevice]:
         with self._skip_lock:
-            return list(self._broken_devices)
+            return self._broken_devices
 
-    def get_broken_cores(self) -> list[BrokenCore]:
+    def get_broken_cores(self) -> dict[Device, set[BrokenCore]]:
         with self._skip_lock:
-            return list(self._broken_cores)
+            return self._broken_cores
 
     def _collect_results(
         self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
@@ -384,17 +387,21 @@ class RunChecks:
                 # If script writer wants to disable this, they should handle RiscHaltError inside script.
                 if skip_broken_cores:
                     with self._skip_lock:
-                        key = BrokenCore(location, risc_name)
-                        if key in self._broken_cores:
-                            # Find broken core to get the error
-                            broken_core = next(bc for bc in self._broken_cores if bc == key)
-                            # log_warning(f"Skipping broken core {risc_name} at {location.to_user_str()} at device {location.device_id} with: {broken_core.error}")
-                            continue
+                        if location._device in self._broken_cores.keys():
+                            key = BrokenCore(location, risc_name)
+                            if key in self._broken_cores[location._device]:
+                                # Find broken core to get the error
+                                # broken_core = next(bc for bc in self._broken_cores[location._device] if bc == key)
+                                # log_warning(f"Skipping broken core {risc_name} at {location.to_user_str()} at device {location.device_id} with: {broken_core.error}")
+                                continue
                 try:
                     check_result = check(location, risc_name)
                 except RiscHaltError as e:
                     with self._skip_lock:
-                        self._broken_cores.add(BrokenCore(location, risc_name, e))
+                        if location._device in self._broken_cores.keys():
+                            self._broken_cores[location._device].add(BrokenCore(location, risc_name, e))
+                        else:
+                            self._broken_cores[location._device] = {BrokenCore(location, risc_name, e)}
                     # log_warning(f"Skipping broken core {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}")
                     continue
 
