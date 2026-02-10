@@ -11,247 +11,14 @@ core infrastructure logic independently.
 
 import pytest
 import sys
-from copy import deepcopy
-from dataclasses import dataclass, field
-from typing import Dict, Set, List, Optional, Any
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
 
 # Mock ttnn before importing sequential
 sys.modules["ttnn"] = MagicMock()
-
-
-class TestCBRemapperStandalone:
-    """Tests for the CBRemapper class without ttnn dependency."""
-
-    def test_basic_allocation(self):
-        """Test basic CB allocation."""
-        from models.experimental.ops.descriptors.sequential import CBRemapper, PhaseInfo, CBInfo
-
-        remapper = CBRemapper()
-        assert remapper.NUM_CBS == 32
-        assert len(remapper.allocated) == 0
-
-        # Create a phase with CBs
-        phase = PhaseInfo(
-            phase_idx=0,
-            op_descriptor=None,
-            cb_info={
-                0: CBInfo(0, 2048, None, 2048, None),
-                1: CBInfo(1, 2048, None, 2048, None),
-                16: CBInfo(16, 2048, None, 2048, None),
-            },
-            input_cb_indices={0, 1},
-            output_cb_indices={16},
-        )
-
-        remapping = remapper.allocate_for_phase(phase)
-
-        # Should allocate 3 unique CB indices
-        assert len(remapping) == 3
-        assert len(set(remapping.values())) == 3
-
-        # All original indices should be mapped
-        assert 0 in remapping
-        assert 1 in remapping
-        assert 16 in remapping
-
-    def test_sequential_allocation(self):
-        """Test that CBs are allocated sequentially from 0."""
-        from models.experimental.ops.descriptors.sequential import CBRemapper, PhaseInfo, CBInfo
-
-        remapper = CBRemapper()
-
-        phase = PhaseInfo(
-            phase_idx=0,
-            op_descriptor=None,
-            cb_info={
-                0: CBInfo(0, 2048, None, 2048, None),
-                5: CBInfo(5, 2048, None, 2048, None),
-                10: CBInfo(10, 2048, None, 2048, None),
-            },
-        )
-
-        remapping = remapper.allocate_for_phase(phase)
-
-        # CBs should be allocated starting from 0
-        allocated_values = sorted(remapping.values())
-        assert allocated_values == [0, 1, 2]
-
-    def test_chaining_reuses_output_cb(self):
-        """Test that chaining reuses the previous phase's output CB."""
-        from models.experimental.ops.descriptors.sequential import CBRemapper, PhaseInfo, CBInfo
-
-        remapper = CBRemapper()
-
-        # Phase 0
-        phase0 = PhaseInfo(
-            phase_idx=0,
-            op_descriptor=None,
-            cb_info={
-                0: CBInfo(0, 2048, None, 2048, None),
-                16: CBInfo(16, 2048, None, 2048, None),
-            },
-            output_cb_indices={16},
-        )
-
-        remap0 = remapper.allocate_for_phase(phase0)
-        remapper.finish_phase(remap0, output_cb_original=16)
-
-        # The output CB should be in live_data_cbs
-        assert remap0[16] in remapper.live_data_cbs
-
-        # Phase 1 - chains from phase 0
-        phase1 = PhaseInfo(
-            phase_idx=1,
-            op_descriptor=None,
-            cb_info={
-                0: CBInfo(0, 2048, None, 2048, None),  # This will be the chained input
-                16: CBInfo(16, 2048, None, 2048, None),
-            },
-        )
-
-        remap1 = remapper.allocate_for_phase(
-            phase1,
-            chain_from_previous=True,
-            previous_output_cb=remap0[16],
-            target_input_cb=0,
-        )
-
-        # Phase 1's CB 0 should be mapped to phase 0's CB 16
-        assert remap1[0] == remap0[16]
-
-    def test_cb_reuse_after_free(self):
-        """Test that freed CBs are reused in subsequent phases."""
-        from models.experimental.ops.descriptors.sequential import CBRemapper, PhaseInfo, CBInfo
-
-        remapper = CBRemapper()
-
-        # Phase 0 uses CBs 0, 1, 2, 3
-        phase0 = PhaseInfo(
-            phase_idx=0,
-            op_descriptor=None,
-            cb_info={i: CBInfo(i, 2048, None, 2048, None) for i in [0, 1, 2, 3]},
-            output_cb_indices={3},
-        )
-
-        remap0 = remapper.allocate_for_phase(phase0)
-        assert len(remapper.allocated) == 4
-
-        # Finish phase 0 - frees CBs 0, 1, 2 but keeps 3
-        remapper.finish_phase(remap0, output_cb_original=3)
-        assert len(remapper.allocated) == 1
-        assert remap0[3] in remapper.allocated
-
-        # Phase 1 should reuse freed CBs
-        phase1 = PhaseInfo(
-            phase_idx=1,
-            op_descriptor=None,
-            cb_info={
-                0: CBInfo(0, 2048, None, 2048, None),
-                1: CBInfo(1, 2048, None, 2048, None),
-            },
-            input_cb_indices={0},
-            output_cb_indices={1},
-        )
-
-        remap1 = remapper.allocate_for_phase(
-            phase1,
-            chain_from_previous=True,
-            previous_output_cb=remap0[3],
-            target_input_cb=0,
-        )
-
-        # CB 0 is chained from phase 0's output
-        assert remap1[0] == remap0[3]
-
-        # CB 1 should reuse one of the freed indices (0, 1, or 2)
-        assert remap1[1] in [0, 1, 2]
-
-    def test_find_free_cb_exhaustion(self):
-        """Test that exhausting all CBs raises an error."""
-        from models.experimental.ops.descriptors.sequential import CBRemapper, PhaseInfo, CBInfo
-
-        remapper = CBRemapper()
-
-        # Create a phase that uses all 32 CBs
-        phase = PhaseInfo(
-            phase_idx=0,
-            op_descriptor=None,
-            cb_info={i: CBInfo(i, 2048, None, 2048, None) for i in range(32)},
-        )
-
-        remap0 = remapper.allocate_for_phase(phase)
-        assert len(remap0) == 32
-
-        # Don't free any CBs, try to allocate more
-        phase1 = PhaseInfo(
-            phase_idx=1,
-            op_descriptor=None,
-            cb_info={32: CBInfo(32, 2048, None, 2048, None)},  # Try to allocate another
-        )
-
-        with pytest.raises(RuntimeError, match="No free CBs"):
-            remapper.allocate_for_phase(phase1)
-
-    def test_get_total_cbs_used(self):
-        """Test counting total unique CBs used."""
-        from models.experimental.ops.descriptors.sequential import CBRemapper, PhaseInfo, CBInfo
-
-        remapper = CBRemapper()
-
-        phase0 = PhaseInfo(
-            phase_idx=0,
-            op_descriptor=None,
-            cb_info={0: CBInfo(0, 2048, None, 2048, None), 1: CBInfo(1, 2048, None, 2048, None)},
-            output_cb_indices={1},
-        )
-
-        remap0 = remapper.allocate_for_phase(phase0)
-        remapper.finish_phase(remap0, output_cb_original=1)
-
-        # 2 CBs used so far
-        assert remapper.get_total_cbs_used() == 2
-
-        phase1 = PhaseInfo(
-            phase_idx=1,
-            op_descriptor=None,
-            cb_info={0: CBInfo(0, 2048, None, 2048, None), 2: CBInfo(2, 2048, None, 2048, None)},
-        )
-
-        remap1 = remapper.allocate_for_phase(
-            phase1,
-            chain_from_previous=True,
-            previous_output_cb=remap0[1],
-            target_input_cb=0,
-        )
-
-        # Phase 1's CB 0 reuses phase 0's output (physical CB 1)
-        # Phase 1's CB 2 reuses freed physical CB 0
-        # Total unique physical CBs: {0, 1} = 2
-        assert remapper.get_total_cbs_used() == 2
-
-
-class TestPhaseInfo:
-    """Tests for PhaseInfo dataclass."""
-
-    def test_creation(self):
-        """Test creating PhaseInfo."""
-        from models.experimental.ops.descriptors.sequential import PhaseInfo, CBInfo
-
-        phase = PhaseInfo(
-            phase_idx=0,
-            op_descriptor=MagicMock(),
-            cb_info={0: CBInfo(0, 1024, None, 1024, None)},
-            input_cb_indices={0},
-            output_cb_indices={16},
-        )
-
-        assert phase.phase_idx == 0
-        assert 0 in phase.cb_info
-        assert phase.input_cb_indices == {0}
-        assert phase.output_cb_indices == {16}
-        assert phase.cb_remapping == {}  # Default empty
+sys.modules["ttnn._ttnn"] = MagicMock()
+sys.modules["ttnn._ttnn.program_descriptor"] = MagicMock()
 
 
 class TestCBInfo:
@@ -267,87 +34,38 @@ class TestCBInfo:
             data_format="Float16_b",
             page_size=2048,
             core_ranges="mock_ranges",
-            is_input=True,
-            is_output=False,
         )
 
         assert cb.original_index == 5
         assert cb.total_size == 4096
         assert cb.page_size == 2048
-        assert cb.is_input is True
-        assert cb.is_output is False
+        assert cb.data_format == "Float16_b"
+        assert cb.core_ranges == "mock_ranges"
 
 
-class TestRemapKernelCBIndices:
-    """Tests for remap_kernel_cb_indices function."""
+class TestPhaseInfo:
+    """Tests for PhaseInfo dataclass."""
 
-    def test_remap_via_compile_args(self):
-        """Test remapping CB indices via compile-time args."""
-        from models.experimental.ops.descriptors.sequential import remap_kernel_cb_indices
+    def test_creation(self):
+        """Test creating PhaseInfo."""
+        from models.experimental.ops.descriptors.sequential import PhaseInfo, CBInfo
 
-        kernel = MagicMock()
-        kernel.compile_time_args = [100, 200, 0, 16, 300]  # CB 0 at pos 2, CB 16 at pos 3
-        kernel.defines = []
+        phase = PhaseInfo(
+            phase_idx=0,
+            op_descriptor=MagicMock(),
+            cb_info={0: CBInfo(0, 1024, None, 1024, None)},
+        )
 
-        remapping = {0: 5, 16: 20}
-        cb_arg_positions = {0: 2, 16: 3}
+        assert phase.phase_idx == 0
+        assert 0 in phase.cb_info
+        assert phase.cb_info == {0: CBInfo(0, 1024, None, 1024, None)}
 
-        result = remap_kernel_cb_indices(kernel, remapping, cb_arg_positions)
+    def test_default_empty_cb_info(self):
+        """Test PhaseInfo with default empty cb_info."""
+        from models.experimental.ops.descriptors.sequential import PhaseInfo
 
-        assert result.compile_time_args[2] == 5
-        assert result.compile_time_args[3] == 20
-        assert result.compile_time_args[0] == 100  # Unchanged
-        assert result.compile_time_args[1] == 200  # Unchanged
-        assert result.compile_time_args[4] == 300  # Unchanged
-
-    def test_remap_via_defines(self):
-        """Test remapping CB indices via defines."""
-        from models.experimental.ops.descriptors.sequential import remap_kernel_cb_indices
-
-        kernel = MagicMock()
-        kernel.compile_time_args = []
-        kernel.defines = [("CB_IN", "0"), ("CB_OUT", "16"), ("OTHER", "42")]
-
-        remapping = {0: 5, 16: 20}
-        cb_defines = {0: "CB_IN", 16: "CB_OUT"}
-
-        result = remap_kernel_cb_indices(kernel, remapping, cb_defines=cb_defines)
-
-        defines_dict = dict(result.defines)
-        assert defines_dict["CB_IN"] == "5"
-        assert defines_dict["CB_OUT"] == "20"
-        assert defines_dict["OTHER"] == "42"  # Unchanged
-
-    def test_remap_adds_missing_defines(self):
-        """Test that missing defines are added."""
-        from models.experimental.ops.descriptors.sequential import remap_kernel_cb_indices
-
-        kernel = MagicMock()
-        kernel.compile_time_args = []
-        kernel.defines = []  # No existing defines
-
-        remapping = {0: 5}
-        cb_defines = {0: "CB_NEW"}
-
-        result = remap_kernel_cb_indices(kernel, remapping, cb_defines=cb_defines)
-
-        defines_dict = dict(result.defines)
-        assert defines_dict["CB_NEW"] == "5"
-
-    def test_no_modification_without_mappings(self):
-        """Test that nothing changes if no mappings provided."""
-        from models.experimental.ops.descriptors.sequential import remap_kernel_cb_indices
-
-        kernel = MagicMock()
-        kernel.compile_time_args = [1, 2, 3]
-        kernel.defines = [("X", "Y")]
-
-        remapping = {0: 5}  # CB 0 -> 5, but no arg positions or defines for it
-
-        result = remap_kernel_cb_indices(kernel, remapping)
-
-        assert result.compile_time_args == [1, 2, 3]
-        assert result.defines == [("X", "Y")]
+        phase = PhaseInfo(phase_idx=1, op_descriptor=MagicMock())
+        assert phase.cb_info == {}
 
 
 class TestExtractCBInfo:
@@ -384,7 +102,6 @@ class TestExtractCBInfo:
         """Test extracting multiple CBs."""
         from models.experimental.ops.descriptors.sequential import extract_cb_info
 
-        # Create multiple CB descriptors
         fmt1 = MagicMock(buffer_index=0, data_format="F16", page_size=1024)
         fmt2 = MagicMock(buffer_index=16, data_format="F32", page_size=2048)
 
@@ -402,6 +119,31 @@ class TestExtractCBInfo:
         assert result[16].page_size == 2048
 
 
+class TestExtractCBNames:
+    """Tests for extract_cb_names_from_kernel function."""
+
+    def test_extract_cb_names(self):
+        """Test extracting CB names from kernel descriptor."""
+        from models.experimental.ops.descriptors.sequential import extract_cb_names_from_kernel
+
+        kernel = MagicMock()
+        kernel.named_compile_time_args = [
+            ("cb_in", 0),
+            ("cb_out", 16),
+            ("cb_scaler", 2),
+            ("some_other_arg", 42),
+        ]
+
+        result = extract_cb_names_from_kernel(kernel)
+
+        assert result == {
+            "cb_in": 0,
+            "cb_out": 16,
+            "cb_scaler": 2,
+        }
+        assert "some_other_arg" not in result
+
+
 class TestSequentialChainBuilderBasic:
     """Basic tests for SequentialChainBuilder."""
 
@@ -411,7 +153,6 @@ class TestSequentialChainBuilderBasic:
 
         builder = SequentialChainBuilder()
         assert len(builder.phases) == 0
-        assert len(builder.connections) == 0
         assert builder._built is False
 
     def test_add_phase(self):
@@ -427,48 +168,9 @@ class TestSequentialChainBuilderBasic:
         assert len(builder.phases) == 1
         assert builder.phases[0].phase_idx == 0
 
-        builder.add_phase(mock_desc, input_from_previous=True)
+        builder.add_phase(mock_desc)
         assert len(builder.phases) == 2
         assert builder.phases[1].phase_idx == 1
-
-        # Should have one connection (phase 0 -> phase 1)
-        assert len(builder.connections) == 1
-
-    def test_set_phase_io(self):
-        """Test setting phase I/O configuration."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
-
-        builder = SequentialChainBuilder()
-
-        mock_desc = MagicMock()
-        mock_desc.descriptor = MagicMock(cbs=[])
-
-        builder.add_phase(mock_desc)
-        builder.set_phase_io(0, input_cbs=[0, 1, 2], output_cbs=[16, 17])
-
-        phase = builder.phases[0]
-        assert phase.input_cb_indices == {0, 1, 2}
-        assert phase.output_cb_indices == {16, 17}
-
-    def test_connect_phases(self):
-        """Test explicit phase connections."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
-
-        builder = SequentialChainBuilder()
-
-        mock_desc = MagicMock()
-        mock_desc.descriptor = MagicMock(cbs=[])
-
-        builder.add_phase(mock_desc)
-        builder.add_phase(mock_desc)
-        builder.connect_phases(0, 16, 1, 0)
-
-        assert len(builder.connections) == 1
-        conn = builder.connections[0]
-        assert conn.source_phase_idx == 0
-        assert conn.source_output_cb == 16
-        assert conn.target_phase_idx == 1
-        assert conn.target_input_cb == 0
 
     def test_method_chaining(self):
         """Test that builder methods return self."""
@@ -479,27 +181,60 @@ class TestSequentialChainBuilderBasic:
         mock_desc = MagicMock()
         mock_desc.descriptor = MagicMock(cbs=[])
 
-        result = (
-            builder.add_phase(mock_desc)
-            .set_phase_io(0, input_cbs=[0], output_cbs=[16])
-            .add_phase(mock_desc, input_from_previous=True)
-        )
+        result = builder.add_phase(mock_desc).add_phase(mock_desc)
 
         assert result is builder
         assert len(builder.phases) == 2
+
+    def test_single_phase_returns_original(self):
+        """Test that single-phase build returns original descriptor."""
+        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+
+        builder = SequentialChainBuilder()
+
+        mock_desc = MagicMock()
+        mock_desc.descriptor = MagicMock(cbs=[])
+
+        builder.add_phase(mock_desc)
+        result = builder.build(device=MagicMock())
+
+        assert result is mock_desc
+
+    def test_build_empty_raises(self):
+        """Test that building empty chain raises ValueError."""
+        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+
+        builder = SequentialChainBuilder()
+
+        with pytest.raises(ValueError, match="no phases"):
+            builder.build(device=MagicMock())
+
+    def test_build_twice_raises(self):
+        """Test that building twice raises ValueError."""
+        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+
+        builder = SequentialChainBuilder()
+        mock_desc = MagicMock()
+        mock_desc.descriptor = MagicMock(cbs=[])
+
+        builder.add_phase(mock_desc)
+        builder.build(device=MagicMock())
+
+        with pytest.raises(ValueError, match="already been built"):
+            builder.build(device=MagicMock())
 
 
 class TestChainDescriptorsConvenience:
     """Tests for the chain_descriptors convenience function."""
 
     def test_single_descriptor(self):
-        """Test that single descriptor is returned as-is."""
+        """Test that single descriptor returns it unchanged."""
         from models.experimental.ops.descriptors.sequential import chain_descriptors
 
         mock_desc = MagicMock()
         mock_desc.descriptor = MagicMock(cbs=[])
 
-        result = chain_descriptors([mock_desc])
+        result = chain_descriptors([mock_desc], device=MagicMock())
         assert result is mock_desc
 
     def test_empty_list_raises(self):
@@ -507,237 +242,228 @@ class TestChainDescriptorsConvenience:
         from models.experimental.ops.descriptors.sequential import chain_descriptors
 
         with pytest.raises(ValueError, match="no phases"):
-            chain_descriptors([])
+            chain_descriptors([], device=MagicMock())
 
 
-class TestFusedKernelGeneratorStandalone:
-    """Standalone tests for FusedKernelGenerator without device dependency."""
+class TestParallelChainsStandalone:
+    """Standalone tests for parallel chain functions."""
 
-    def test_generator_creation(self):
-        """Test basic generator creation."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
+    def test_create_parallel_chain_empty(self):
+        """Test creating parallel chains with empty list."""
+        from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
 
-        generator = FusedKernelGenerator()
-        assert generator.phases == []
-        assert generator.include_paths == []
+        result = create_parallel_chain_descriptors([], device=MagicMock())
+        assert result == []
 
-    def test_generator_with_include_paths(self):
-        """Test generator with custom include paths."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
+    def test_create_parallel_chain_single_ops(self):
+        """Test creating parallel chains with single-op chains."""
+        from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
 
-        generator = FusedKernelGenerator(include_paths=["/path/1", "/path/2"])
-        assert generator.include_paths == ["/path/1", "/path/2"]
+        mock_desc1 = MagicMock()
+        mock_desc1.descriptor = MagicMock(cbs=[])
+        mock_desc2 = MagicMock()
+        mock_desc2.descriptor = MagicMock(cbs=[])
 
-    def test_add_single_phase(self):
-        """Test adding a single phase."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
+        chains = [[mock_desc1], [mock_desc2]]
+        result = create_parallel_chain_descriptors(chains, device=MagicMock())
 
-        generator = FusedKernelGenerator()
-        generator.add_phase(
-            compute_source="void kernel_main() { }",
-            cb_remapping={0: 10},
-            is_first=True,
-            is_last=True,
+        # Single-op chains should return original descriptors
+        assert len(result) == 2
+        assert result[0] is mock_desc1
+        assert result[1] is mock_desc2
+
+
+class TestSourceTransformations:
+    """Tests for kernel source transformation functions."""
+
+    def test_prefix_named_args_phase0_unchanged(self):
+        """Test that phase 0 source is unchanged."""
+        from models.experimental.ops.descriptors.sequential import _prefix_named_args_in_source
+
+        source = 'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");'
+        result = _prefix_named_args_in_source(source, 0)
+        assert result == source
+
+    def test_prefix_named_args_phase1(self):
+        """Test that phase 1 gets prefixed named args."""
+        from models.experimental.ops.descriptors.sequential import _prefix_named_args_in_source
+
+        source = 'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");'
+        result = _prefix_named_args_in_source(source, 1)
+        assert 'get_named_compile_time_arg_val("phase1_cb_in")' in result
+
+    def test_prefix_named_args_phase2(self):
+        """Test phase 2 prefix."""
+        from models.experimental.ops.descriptors.sequential import _prefix_named_args_in_source
+
+        source = 'constexpr uint32_t blk = get_named_compile_time_arg_val("blk");'
+        result = _prefix_named_args_in_source(source, 2)
+        assert 'get_named_compile_time_arg_val("phase2_blk")' in result
+
+    def test_offset_runtime_args_phase0_unchanged(self):
+        """Test that phase 0 runtime args are unchanged."""
+        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+
+        source = "uint32_t val = get_arg_val<uint32_t>(3);"
+        result = _offset_runtime_args_in_source(source, 0)
+        assert result == source
+
+    def test_offset_runtime_args_phase1(self):
+        """Test phase 1 runtime arg offsetting."""
+        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+
+        source = "uint32_t val = get_arg_val<uint32_t>(3);"
+        result = _offset_runtime_args_in_source(source, 1)
+        assert "__phase1_rt_offset + 3" in result
+        assert "phase1_rt_arg_offset" in result
+
+    def test_offset_runtime_args_variable_init(self):
+        """Test that incrementing variable init pattern is offset."""
+        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+
+        source = "uint32_t rt_args_idx = 0;"
+        result = _offset_runtime_args_in_source(source, 1)
+        assert "__phase1_rt_offset" in result
+        # The variable should be initialized to the offset, not 0
+        assert "= 0;" not in result or "__phase1_rt_offset" in result
+
+    def test_offset_compile_time_args_phase0_unchanged(self):
+        """Test that phase 0 positional args are unchanged."""
+        from models.experimental.ops.descriptors.sequential import _offset_compile_time_args_in_source
+
+        source = "uint32_t blk = get_compile_time_arg_val(0);"
+        result = _offset_compile_time_args_in_source(source, 0, 0)
+        assert result == source
+
+    def test_offset_compile_time_args_phase1(self):
+        """Test that phase 1 positional args are offset."""
+        from models.experimental.ops.descriptors.sequential import _offset_compile_time_args_in_source
+
+        source = "uint32_t blk = get_compile_time_arg_val(0);\nuint32_t mode = get_compile_time_arg_val(1);"
+        result = _offset_compile_time_args_in_source(source, 1, 3)
+        assert "get_compile_time_arg_val(3)" in result
+        assert "get_compile_time_arg_val(4)" in result
+
+    def test_offset_compile_time_args_tensor_accessor(self):
+        """Test that TensorAccessorArgs<N> is also offset."""
+        from models.experimental.ops.descriptors.sequential import _offset_compile_time_args_in_source
+
+        source = "constexpr auto src_args = TensorAccessorArgs<2>();"
+        result = _offset_compile_time_args_in_source(source, 1, 5)
+        assert "TensorAccessorArgs<7>" in result
+
+    def test_transform_phase_source_combines_all(self):
+        """Test that _transform_phase_source applies all transforms."""
+        from models.experimental.ops.descriptors.sequential import _transform_phase_source
+
+        source = (
+            'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");\n'
+            "uint32_t blk = get_compile_time_arg_val(0);\n"
+            "constexpr auto args = TensorAccessorArgs<2>();\n"
+            "uint32_t val = get_arg_val<uint32_t>(3);\n"
         )
+        result = _transform_phase_source(source, 1, ct_arg_offset=5)
+        assert "phase1_cb_in" in result
+        assert "get_compile_time_arg_val(5)" in result  # offset from 0
+        assert "TensorAccessorArgs<7>" in result  # offset from 2
+        assert "__phase1_rt_offset + 3" in result
 
-        assert len(generator.phases) == 1
-        assert generator.phases[0]["is_first"] is True
-        assert generator.phases[0]["is_last"] is True
-        assert generator.phases[0]["cb_remapping"] == {0: 10}
 
-    def test_add_multiple_phases(self):
-        """Test adding multiple phases."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
+class TestIfdefResolution:
+    """Tests for preprocessor directive resolution."""
 
-        generator = FusedKernelGenerator()
-        generator.add_phase(compute_source="void kernel_main() { phase0(); }", is_first=True)
-        generator.add_phase(compute_source="void kernel_main() { phase1(); }")
-        generator.add_phase(compute_source="void kernel_main() { phase2(); }", is_last=True)
+    def test_resolve_ifdef_rmsnorm_defined(self):
+        """Test resolving #ifdef RMSNORM when it's defined."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
 
-        assert len(generator.phases) == 3
-        assert generator.phases[0]["is_first"] is True
-        assert generator.phases[0]["is_last"] is False
-        assert generator.phases[2]["is_last"] is True
+        source = """
+int a = 1;
+#ifdef RMSNORM
+int b = 2;
+#else
+int c = 3;
+#endif
+int d = 4;
+"""
+        result = _resolve_ifdef_directives(source, {"RMSNORM"})
+        assert "int a = 1" in result
+        assert "int b = 2" in result
+        assert "int c = 3" not in result
+        assert "int d = 4" in result
 
-    def test_generate_single_phase_compute(self):
-        """Test generating compute for single phase."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
+    def test_resolve_ifdef_rmsnorm_not_defined(self):
+        """Test resolving #ifdef RMSNORM when it's not defined."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
 
-        generator = FusedKernelGenerator()
-        generator.add_phase(
-            compute_source="""#include "api.h"
-void kernel_main() {
-    // do something
-}
-""",
-            is_first=True,
-            is_last=True,
-        )
+        source = """
+int a = 1;
+#ifdef RMSNORM
+int b = 2;
+#else
+int c = 3;
+#endif
+int d = 4;
+"""
+        result = _resolve_ifdef_directives(source, set())
+        assert "int a = 1" in result
+        assert "int b = 2" not in result
+        assert "int c = 3" in result
+        assert "int d = 4" in result
 
-        fused = generator.generate_fused_compute()
+    def test_resolve_ifdef_fuse_gamma_defined(self):
+        """Test resolving #ifdef FUSE_GAMMA when it's defined."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
 
-        # Single phase should return the source with remapping applied
-        assert "void kernel_main()" in fused
-        assert "do something" in fused
+        source = """
+int a = 1;
+#ifdef FUSE_GAMMA
+int gamma_code = 2;
+#endif
+int b = 3;
+"""
+        result = _resolve_ifdef_directives(source, {"FUSE_GAMMA"})
+        assert "int gamma_code = 2" in result
+        assert "int a = 1" in result
+        assert "int b = 3" in result
 
-    def test_cb_remapping_in_source(self):
-        """Test that CB indices are remapped in source code."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
+    def test_resolve_ifdef_fuse_gamma_not_defined(self):
+        """Test resolving #ifdef FUSE_GAMMA when it's not defined."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
 
-        generator = FusedKernelGenerator()
-        generator.add_phase(
-            compute_source="""
-void kernel_main() {
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_out = tt::CBIndex::c_16;
-    constexpr auto cb_other = CB::c_5;
-}
-""",
-            cb_remapping={0: 10, 16: 26, 5: 15},
-            is_first=True,
-            is_last=True,
-        )
+        source = """
+int a = 1;
+#ifdef FUSE_GAMMA
+int gamma_code = 2;
+#endif
+int b = 3;
+"""
+        result = _resolve_ifdef_directives(source, set())
+        assert "int gamma_code = 2" not in result
+        assert "int a = 1" in result
+        assert "int b = 3" in result
 
-        fused = generator.generate_fused_compute()
+    def test_resolve_leaves_unknown_defines(self):
+        """Test that unknown defines are left untouched."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
 
-        # Check remapping was applied
-        assert "tt::CBIndex::c_10" in fused
-        assert "tt::CBIndex::c_26" in fused
-        assert "CB::c_15" in fused
+        source = """
+#ifdef SOME_OTHER_FLAG
+int a = 1;
+#endif
+"""
+        result = _resolve_ifdef_directives(source, set())
+        # Unknown directive should pass through
+        assert "#ifdef SOME_OTHER_FLAG" in result
+        assert "int a = 1" in result
+        assert "#endif" in result
 
-    def test_generate_multi_phase_compute(self):
-        """Test generating fused compute for multiple phases."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
 
-        generator = FusedKernelGenerator()
-        generator.add_phase(
-            compute_source="""#include "api1.h"
-void kernel_main() {
-    // phase 0 code
-}
-""",
-            is_first=True,
-        )
-        generator.add_phase(
-            compute_source="""#include "api2.h"
-void kernel_main() {
-    // phase 1 code
-}
-""",
-            is_last=True,
-        )
+class TestKernelBodyExtraction:
+    """Tests for kernel body extraction."""
 
-        fused = generator.generate_fused_compute()
-
-        # Should have auto-generated comment
-        assert "Auto-generated fused compute kernel" in fused
-        assert "Fuses 2 phases" in fused
-
-        # Should have phase markers
-        assert "Phase 0" in fused
-        assert "Phase 1" in fused
-
-        # Should have a single kernel_main
-        assert fused.count("void kernel_main()") == 1
-
-    def test_noop_reader_generation(self):
-        """Test generating no-op reader when no reader source provided."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
-
-        generator = FusedKernelGenerator()
-        generator.add_phase(
-            compute_source="void kernel_main() {}",
-            reader_source=None,  # No reader
-            is_first=True,
-            is_last=True,
-        )
-
-        reader = generator.generate_fused_reader()
-
-        assert "No-op" in reader
-        assert "void kernel_main()" in reader
-
-    def test_noop_writer_generation(self):
-        """Test generating no-op writer when no writer source provided."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
-
-        generator = FusedKernelGenerator()
-        generator.add_phase(
-            compute_source="void kernel_main() {}",
-            writer_source=None,  # No writer
-            is_first=True,
-            is_last=True,
-        )
-
-        writer = generator.generate_fused_writer()
-
-        assert "No-op" in writer
-        assert "void kernel_main()" in writer
-
-    def test_reader_from_first_phase(self):
-        """Test that reader comes from first phase."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
-
-        generator = FusedKernelGenerator()
-        generator.add_phase(
-            compute_source="void kernel_main() {}",
-            reader_source="void kernel_main() { first_reader(); }",
-            is_first=True,
-        )
-        generator.add_phase(
-            compute_source="void kernel_main() {}",
-            reader_source="void kernel_main() { second_reader(); }",
-            is_last=True,
-        )
-
-        reader = generator.generate_fused_reader()
-
-        # Should use reader from first phase only
-        assert "first_reader" in reader
-        assert "second_reader" not in reader
-
-    def test_writer_from_last_phase(self):
-        """Test that writer comes from last phase."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
-
-        generator = FusedKernelGenerator()
-        generator.add_phase(
-            compute_source="void kernel_main() {}",
-            writer_source="void kernel_main() { first_writer(); }",
-            is_first=True,
-        )
-        generator.add_phase(
-            compute_source="void kernel_main() {}",
-            writer_source="void kernel_main() { second_writer(); }",
-            is_last=True,
-        )
-
-        writer = generator.generate_fused_writer()
-
-        # Should use writer from last phase only
-        assert "second_writer" in writer
-        assert "first_writer" not in writer
-
-    def test_empty_generator_raises(self):
-        """Test that generating from empty generator raises."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
-
-        generator = FusedKernelGenerator()
-
-        with pytest.raises(ValueError, match="No phases"):
-            generator.generate_fused_compute()
-
-        with pytest.raises(ValueError, match="No phases"):
-            generator.generate_fused_reader()
-
-        with pytest.raises(ValueError, match="No phases"):
-            generator.generate_fused_writer()
-
-    def test_extract_kernel_body(self):
-        """Test extracting kernel body from source."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
-
-        generator = FusedKernelGenerator()
+    def test_extract_simple_body(self):
+        """Test extracting a simple kernel body."""
+        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
 
         source = """
 #include "api.h"
@@ -756,158 +482,502 @@ void other_func() {
     // other
 }
 """
-        body = generator._extract_kernel_body(source)
+        body = _extract_kernel_body_for_fusion(source)
 
-        # Should extract content inside kernel_main
         assert "int x = 1" in body
         assert "int y = 2" in body
         assert "compute(x, y)" in body
-        # Should not include other functions
         assert "helper code" not in body
         assert "other" not in body
 
-    def test_collect_includes(self):
-        """Test collecting includes from all phases."""
-        from models.experimental.ops.descriptors.sequential import FusedKernelGenerator
+    def test_extract_nested_braces(self):
+        """Test extracting body with nested braces."""
+        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
 
-        generator = FusedKernelGenerator()
-        generator.add_phase(
-            compute_source="""#include "common.h"
-#include "phase0_specific.h"
-void kernel_main() {}
-""",
-            is_first=True,
-        )
-        generator.add_phase(
-            compute_source="""#include "common.h"
-#include "phase1_specific.h"
-void kernel_main() {}
-""",
-            is_last=True,
-        )
-
-        includes = generator._collect_includes()
-
-        # Should collect unique includes
-        assert len(includes) == 3
-        assert '#include "common.h"' in includes
-        assert '#include "phase0_specific.h"' in includes
-        assert '#include "phase1_specific.h"' in includes
-
-
-class TestParallelChainsStandalone:
-    """Standalone tests for parallel chain functions."""
-
-    def test_create_parallel_chain_empty(self):
-        """Test creating parallel chains with empty list."""
-        from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
-
-        result = create_parallel_chain_descriptors([])
-        assert result == []
-
-    def test_create_parallel_chain_single_ops(self):
-        """Test creating parallel chains with single-op chains."""
-        from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
-
-        mock_desc1 = MagicMock()
-        mock_desc1.descriptor = MagicMock(cbs=[])
-        mock_desc2 = MagicMock()
-        mock_desc2.descriptor = MagicMock(cbs=[])
-
-        chains = [[mock_desc1], [mock_desc2]]
-        result = create_parallel_chain_descriptors(chains)
-
-        # Single-op chains should return original descriptors
-        assert len(result) == 2
-        assert result[0] is mock_desc1
-        assert result[1] is mock_desc2
-
-    def test_fuse_layernorm_chain_empty_raises(self):
-        """Test that fusing empty chain raises."""
-        from models.experimental.ops.descriptors.sequential import fuse_layernorm_chain
-
-        with pytest.raises(ValueError, match="No descriptors"):
-            fuse_layernorm_chain([])
-
-    def test_fuse_layernorm_chain_single(self):
-        """Test that fusing single op returns it unchanged."""
-        from models.experimental.ops.descriptors.sequential import fuse_layernorm_chain
-
-        mock_desc = MagicMock()
-        mock_desc.descriptor = MagicMock(cbs=[])
-
-        result = fuse_layernorm_chain([mock_desc])
-        assert result is mock_desc
-
-
-class TestReadKernelSource:
-    """Tests for read_kernel_source function."""
-
-    def test_read_kernel_source(self, tmp_path):
-        """Test reading kernel source from file."""
-        from models.experimental.ops.descriptors.sequential import read_kernel_source
-
-        # Create a temp file
-        kernel_file = tmp_path / "test_kernel.cpp"
-        kernel_content = """
-#include "api.h"
+        source = """
 void kernel_main() {
-    // test kernel
+    for (int i = 0; i < 10; i++) {
+        if (i > 5) {
+            do_something();
+        }
+    }
 }
 """
-        kernel_file.write_text(kernel_content)
+        body = _extract_kernel_body_for_fusion(source)
+        assert "do_something" in body
+        assert "for" in body
 
-        result = read_kernel_source(str(kernel_file))
-        assert result == kernel_content
+    def test_extract_empty_body(self):
+        """Test extracting from source with no kernel_main."""
+        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
+
+        source = """
+void other_function() {
+    int x = 1;
+}
+"""
+        body = _extract_kernel_body_for_fusion(source)
+        assert body.strip() == ""
 
 
-class TestNamedCompileTimeArgs:
-    """Tests for named compile-time args handling."""
+class TestCollectIncludes:
+    """Tests for include collection."""
 
-    def test_remap_named_compile_time_args(self):
-        """Test remapping named compile-time args."""
-        from models.experimental.ops.descriptors.sequential import remap_kernel_cb_indices
+    def test_collect_unique_includes(self):
+        """Test collecting unique includes from multiple sources."""
+        from models.experimental.ops.descriptors.sequential import _collect_includes
 
-        kernel = MagicMock()
-        kernel.compile_time_args = []
-        kernel.defines = []
-        kernel.named_compile_time_args = [
-            ("cb_in", 0),
-            ("cb_out", 16),
-            ("other_arg", 100),
+        sources = [
+            '#include "common.h"\n#include "phase0.h"\nvoid kernel_main() {}',
+            '#include "common.h"\n#include "phase1.h"\nvoid kernel_main() {}',
         ]
 
-        remapping = {0: 10, 16: 26}
+        includes = _collect_includes(sources)
 
-        result = remap_kernel_cb_indices(kernel, remapping)
+        assert len(includes) == 3
+        assert '#include "common.h"' in includes
+        assert '#include "phase0.h"' in includes
+        assert '#include "phase1.h"' in includes
 
-        # Check named args were remapped
-        named_dict = dict(result.named_compile_time_args)
-        assert named_dict["cb_in"] == 10
-        assert named_dict["cb_out"] == 26
-        assert named_dict["other_arg"] == 100  # Not in remapping, unchanged
 
-    def test_extract_cb_names(self):
-        """Test extracting CB names from kernel descriptor."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_names_from_kernel
+class TestCollectDefines:
+    """Tests for define collection."""
 
-        kernel = MagicMock()
-        kernel.named_compile_time_args = [
-            ("cb_in", 0),
-            ("cb_out", 16),
-            ("cb_scaler", 2),
-            ("some_other_arg", 42),
+    def test_collect_defines_before_main(self):
+        """Test collecting defines only before kernel_main."""
+        from models.experimental.ops.descriptors.sequential import _collect_defines
+
+        sources = [
+            "#define FOO 1\n#define BAR 2\nvoid kernel_main() {\n#define INSIDE 3\n}",
         ]
 
-        result = extract_cb_names_from_kernel(kernel)
+        defines = _collect_defines(sources)
+        define_strs = [d.strip() for d in defines]
 
-        # Should only extract cb_ prefixed names
-        assert result == {
-            "cb_in": 0,
-            "cb_out": 16,
-            "cb_scaler": 2,
-        }
-        assert "some_other_arg" not in result
+        assert "#define FOO 1" in define_strs
+        assert "#define BAR 2" in define_strs
+        assert "#define INSIDE 3" not in define_strs
+
+
+class TestInlineLocalIncludes:
+    """Tests for local include inlining."""
+
+    def test_inlines_local_include(self, tmp_path):
+        """Test inlining a local include file."""
+        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+
+        # Create a local header file
+        header = tmp_path / "utils.h"
+        header.write_text("#pragma once\nint helper() { return 42; }\n")
+
+        source = '#include "utils.h"\nvoid kernel_main() {}\n'
+        result = _inline_local_includes(source, str(tmp_path))
+
+        assert "int helper()" in result
+        assert '#include "utils.h"' not in result
+        # pragma once should be stripped
+        assert "#pragma once" not in result
+
+    def test_leaves_path_includes(self):
+        """Test that includes with paths are left unchanged."""
+        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+
+        source = '#include "api/dataflow/dataflow_api.h"\nvoid kernel_main() {}\n'
+        result = _inline_local_includes(source, "/some/dir")
+
+        # Path includes should remain
+        assert '#include "api/dataflow/dataflow_api.h"' in result
+
+    def test_no_kernel_dir_returns_unchanged(self):
+        """Test that None kernel_dir returns source unchanged."""
+        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+
+        source = '#include "utils.h"\nvoid kernel_main() {}\n'
+        result = _inline_local_includes(source, None)
+        assert result == source
+
+
+class TestMergeNamedCompileTimeArgs:
+    """Tests for named compile-time arg merging."""
+
+    def test_phase0_keeps_original_names(self):
+        """Test that phase 0 keeps original arg names."""
+        from models.experimental.ops.descriptors.sequential import _merge_named_compile_time_args
+
+        phase_kernels = [
+            {"reader": MagicMock(named_compile_time_args=[("cb_in", 0), ("blk", 4)])},
+        ]
+
+        result = _merge_named_compile_time_args(phase_kernels, "reader")
+        names = dict(result)
+        assert "cb_in" in names
+        assert "blk" in names
+        assert names["cb_in"] == 0
+        assert names["blk"] == 4
+
+    def test_phase1_gets_prefixed_names(self):
+        """Test that phase 1+ args get prefixed."""
+        from models.experimental.ops.descriptors.sequential import _merge_named_compile_time_args
+
+        phase_kernels = [
+            {"reader": MagicMock(named_compile_time_args=[("cb_in", 0)])},
+            {"reader": MagicMock(named_compile_time_args=[("cb_in", 0)])},
+        ]
+
+        result = _merge_named_compile_time_args(phase_kernels, "reader")
+        names = dict(result)
+        assert "cb_in" in names  # Phase 0
+        assert "phase1_cb_in" in names  # Phase 1
+
+    def test_rt_arg_offsets_added(self):
+        """Test that runtime arg offsets are added for phase 1+."""
+        from models.experimental.ops.descriptors.sequential import _merge_named_compile_time_args
+
+        phase_kernels = [
+            {"reader": MagicMock(named_compile_time_args=[("cb_in", 0)])},
+            {"reader": MagicMock(named_compile_time_args=[("cb_in", 0)])},
+        ]
+
+        rt_offsets = {0: 0, 1: 10}
+        result = _merge_named_compile_time_args(phase_kernels, "reader", rt_offsets)
+        names = dict(result)
+        assert "phase1_rt_arg_offset" in names
+        assert names["phase1_rt_arg_offset"] == 10
+
+    def test_barrier_config_added(self):
+        """Test that barrier config named args are added."""
+        from models.experimental.ops.descriptors.sequential import _merge_named_compile_time_args, BarrierConfig
+
+        phase_kernels = [
+            {"reader": MagicMock(named_compile_time_args=[])},
+        ]
+
+        bc = BarrierConfig(
+            num_cores=2,
+            core0_phys_x=1,
+            core0_phys_y=1,
+            mcast_start_x=1,
+            mcast_start_y=1,
+            mcast_end_x=2,
+            mcast_end_y=1,
+        )
+        result = _merge_named_compile_time_args(
+            phase_kernels,
+            "reader",
+            barrier_rt_offset=10,
+            barrier_config=bc,
+        )
+        names = dict(result)
+        assert "barrier_rt_offset" in names
+        assert names["barrier_rt_offset"] == 10
+        assert "num_barrier_cores" in names
+        assert names["num_barrier_cores"] == 2
+
+
+class TestComputeRuntimeArgOffsets:
+    """Tests for runtime arg offset computation."""
+
+    @staticmethod
+    def _make_runtime_args_view(args_per_core):
+        """Create a mock RuntimeArgsView.
+
+        args_per_core: list of lists, one per core.
+        rv[col_idx] -> col_proxy, col_proxy[0] -> VectorUInt32
+        """
+        view = MagicMock()
+        view.__len__ = MagicMock(return_value=len(args_per_core))
+        cols = []
+        for args in args_per_core:
+            col = MagicMock()
+            col.__getitem__ = MagicMock(return_value=args)
+            cols.append(col)
+        view.__getitem__ = MagicMock(side_effect=lambda i: cols[i])
+        return view
+
+    def test_basic_offsets(self):
+        """Test basic runtime arg offset computation."""
+        from models.experimental.ops.descriptors.sequential import _compute_runtime_arg_offsets
+
+        kernel0 = MagicMock()
+        kernel0.runtime_args = self._make_runtime_args_view([[1, 2, 3, 4, 5]])
+
+        kernel1 = MagicMock()
+        kernel1.runtime_args = self._make_runtime_args_view([[10, 20, 30]])
+
+        phase_kernels = [
+            {"reader": kernel0},
+            {"reader": kernel1},
+        ]
+
+        offsets = _compute_runtime_arg_offsets(phase_kernels, "reader")
+        assert offsets[0] == 0
+        assert offsets[1] == 5  # Phase 0 had 5 args
+
+    def test_offsets_with_missing_kernel(self):
+        """Test offsets when a phase has no kernel of that type."""
+        from models.experimental.ops.descriptors.sequential import _compute_runtime_arg_offsets
+
+        kernel0 = MagicMock()
+        kernel0.runtime_args = self._make_runtime_args_view([[1, 2, 3]])
+
+        phase_kernels = [
+            {"reader": kernel0},
+            {"reader": None},
+        ]
+
+        offsets = _compute_runtime_arg_offsets(phase_kernels, "reader")
+        assert offsets[0] == 0
+        assert offsets[1] == 3
+
+
+class TestConcatenateRuntimeArgs:
+    """Tests for runtime arg concatenation."""
+
+    @staticmethod
+    def _make_runtime_args_view(args_per_core):
+        """Create a mock RuntimeArgsView."""
+        view = MagicMock()
+        view.__len__ = MagicMock(return_value=len(args_per_core))
+        cols = []
+        for args in args_per_core:
+            col = MagicMock()
+            col.__getitem__ = MagicMock(return_value=args)
+            cols.append(col)
+        view.__getitem__ = MagicMock(side_effect=lambda i: cols[i])
+        return view
+
+    @staticmethod
+    def _make_core_ranges():
+        """Create a mock CoreRangeSet with one core at (0,0)."""
+        core_range = MagicMock()
+        core_range.start.x = 0
+        core_range.start.y = 0
+        core_range.end.x = 0
+        core_range.end.y = 0
+        core_range_set = MagicMock()
+        core_range_set.ranges.return_value = [core_range]
+        return core_range_set
+
+    def test_basic_concatenation(self):
+        """Test basic runtime arg concatenation across phases."""
+        from models.experimental.ops.descriptors.sequential import _concatenate_runtime_args
+
+        core_ranges = self._make_core_ranges()
+
+        kernel0 = MagicMock()
+        kernel0.runtime_args = self._make_runtime_args_view([[1, 2, 3]])
+        kernel0.core_ranges = core_ranges
+
+        kernel1 = MagicMock()
+        kernel1.runtime_args = self._make_runtime_args_view([[10, 20]])
+        kernel1.core_ranges = core_ranges
+
+        phase_kernels = [
+            {"reader": kernel0},
+            {"reader": kernel1},
+        ]
+
+        result = _concatenate_runtime_args(phase_kernels, "reader")
+        assert len(result) == 1  # One core
+        core_coord, args = result[0]
+        assert args == [1, 2, 3, 10, 20]
+
+
+class TestMergeCompileTimeArgs:
+    """Tests for compile-time arg concatenation."""
+
+    def test_concatenates_all_phases(self):
+        """Test that compile-time args from all phases are concatenated."""
+        from models.experimental.ops.descriptors.sequential import _merge_compile_time_args
+
+        phase_kernels = [
+            {"reader": MagicMock(compile_time_args=[10, 20, 30])},
+            {"reader": MagicMock(compile_time_args=[40, 50])},
+        ]
+
+        merged, offsets = _merge_compile_time_args(phase_kernels, "reader")
+        assert merged == [10, 20, 30, 40, 50]
+        assert offsets == {0: 0, 1: 3}
+
+    def test_handles_missing_kernel(self):
+        """Test offset computation with a missing kernel."""
+        from models.experimental.ops.descriptors.sequential import _merge_compile_time_args
+
+        phase_kernels = [
+            {"reader": MagicMock(compile_time_args=[10, 20])},
+            {"reader": None},
+            {"reader": MagicMock(compile_time_args=[30])},
+        ]
+
+        merged, offsets = _merge_compile_time_args(phase_kernels, "reader")
+        assert merged == [10, 20, 30]
+        assert offsets == {0: 0, 1: 2, 2: 2}
+
+
+class TestMergeDefines:
+    """Tests for define merging."""
+
+    def test_common_defines_kept(self):
+        """Test that common defines (REDUCE_OP etc.) are kept once."""
+        from models.experimental.ops.descriptors.sequential import _merge_defines
+
+        phase_kernels = [
+            {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "1")])},
+            {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "2")])},
+        ]
+
+        result = _merge_defines(phase_kernels, "compute")
+        names = [name for name, _ in result]
+
+        # REDUCE_OP should appear once
+        assert names.count("REDUCE_OP") == 1
+        # CUSTOM from phase 0 keeps original name, phase 1 gets prefixed
+        assert "CUSTOM" in names
+        assert "PHASE1_CUSTOM" in names
+
+    def test_source_level_defines_excluded(self):
+        """Test that source-level defines (RMSNORM, FUSE_GAMMA, etc.) are excluded."""
+        from models.experimental.ops.descriptors.sequential import _merge_defines
+
+        phase_kernels = [
+            {
+                "compute": MagicMock(
+                    defines=[
+                        ("RMSNORM", "1"),
+                        ("FUSE_PRE_ADD", "1"),
+                        ("FUSE_GAMMA", "1"),
+                        ("FUSE_BETA", "1"),
+                        ("NORMAL", "val"),
+                    ]
+                )
+            },
+        ]
+
+        result = _merge_defines(phase_kernels, "compute")
+        names = [name for name, _ in result]
+
+        assert "RMSNORM" not in names
+        assert "FUSE_PRE_ADD" not in names
+        assert "FUSE_GAMMA" not in names
+        assert "FUSE_BETA" not in names
+        assert "NORMAL" in names
+
+
+class TestValidateFp32Consistency:
+    """Tests for fp32_dest_acc_en validation."""
+
+    def test_consistent_fp32_passes(self):
+        """Test that consistent fp32 settings pass validation."""
+        from models.experimental.ops.descriptors.sequential import _validate_fp32_consistency
+
+        mock_kernel1 = MagicMock()
+        mock_kernel1.config = MagicMock(fp32_dest_acc_en=True)
+
+        mock_kernel2 = MagicMock()
+        mock_kernel2.config = MagicMock(fp32_dest_acc_en=True)
+
+        desc1 = MagicMock()
+        desc1.descriptor.kernels = [mock_kernel1]
+        desc2 = MagicMock()
+        desc2.descriptor.kernels = [mock_kernel2]
+
+        # Should not raise
+        _validate_fp32_consistency([desc1, desc2])
+
+    def test_inconsistent_fp32_raises(self):
+        """Test that inconsistent fp32 settings raise ValueError."""
+        from models.experimental.ops.descriptors.sequential import _validate_fp32_consistency
+
+        mock_kernel1 = MagicMock()
+        mock_kernel1.config = MagicMock(fp32_dest_acc_en=True)
+
+        mock_kernel2 = MagicMock()
+        mock_kernel2.config = MagicMock(fp32_dest_acc_en=False)
+
+        desc1 = MagicMock()
+        desc1.descriptor.kernels = [mock_kernel1]
+        desc2 = MagicMock()
+        desc2.descriptor.kernels = [mock_kernel2]
+
+        with pytest.raises(ValueError, match="fp32_dest_acc_en mismatch"):
+            _validate_fp32_consistency([desc1, desc2])
+
+
+class TestKernelClassification:
+    """Tests for kernel type classification."""
+
+    @staticmethod
+    def _setup_config_types():
+        """Set up real classes on mocked ttnn so isinstance() works."""
+        import ttnn
+
+        # Create real classes for config descriptors (isinstance needs real types)
+        class _Compute:
+            pass
+
+        class _Reader:
+            pass
+
+        class _Writer:
+            pass
+
+        ttnn.ComputeConfigDescriptor = _Compute
+        ttnn.ReaderConfigDescriptor = _Reader
+        ttnn.WriterConfigDescriptor = _Writer
+        return _Compute, _Reader, _Writer
+
+    def test_classify_compute(self):
+        """Test classifying a compute kernel."""
+        from models.experimental.ops.descriptors.sequential import _classify_kernel
+
+        Compute, _, _ = self._setup_config_types()
+        kernel = MagicMock()
+        kernel.config = Compute()
+        assert _classify_kernel(kernel) == "compute"
+
+    def test_classify_reader(self):
+        """Test classifying a reader kernel."""
+        from models.experimental.ops.descriptors.sequential import _classify_kernel
+
+        _, Reader, _ = self._setup_config_types()
+        kernel = MagicMock()
+        kernel.config = Reader()
+        assert _classify_kernel(kernel) == "reader"
+
+    def test_classify_writer(self):
+        """Test classifying a writer kernel."""
+        from models.experimental.ops.descriptors.sequential import _classify_kernel
+
+        _, _, Writer = self._setup_config_types()
+        kernel = MagicMock()
+        kernel.config = Writer()
+        assert _classify_kernel(kernel) == "writer"
+
+
+class TestCollectPreMainCode:
+    """Tests for pre-main code collection."""
+
+    def test_collects_namespace_code(self):
+        """Test that namespace code before kernel_main is collected."""
+        from models.experimental.ops.descriptors.sequential import _collect_pre_main_code
+
+        source = """#include "api.h"
+#define FOO 1
+
+namespace my_ns {
+    constexpr int val = 42;
+}
+
+void kernel_main() {
+    // body
+}
+"""
+        result = _collect_pre_main_code(source)
+        assert "namespace my_ns" in result
+        assert "constexpr int val = 42" in result
+        # Should not include includes, defines, or comments
+        assert "#include" not in result
+        assert "#define" not in result
 
 
 if __name__ == "__main__":
