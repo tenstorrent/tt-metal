@@ -276,19 +276,17 @@ void kernel_main() {
                         slice_idx++;
                     }
 
-                    if (do_reduce && (i == (ring_size - 1))) {
-                        DPRINT << "Resetting the semaphore before the next chunk" << ENDL();
-                        DPRINT << "sem_target: " << sem_target << ENDL();
-                        // Reset the semaphore before the next batch
-                        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
-                        sem_target = 0;
-                    }
                     DPRINT << "ring iteration: " << i << " done" << ENDL();
                 }
                 DPRINT << "chunk_idx: " << chunk_idx << " done" << ENDL();
             }
             DPRINT << "m_block_iter: " << m_block_iter << " done" << ENDL();
         }
+        // Reset the semaphore before the next batch
+        DPRINT << "Resetting the semaphore before the next batch" << ENDL();
+        DPRINT << "sem_target: " << sem_target << ENDL();
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+        sem_target = 0;
         DPRINT << "batch: " << b << " done" << ENDL();
     }
 }
