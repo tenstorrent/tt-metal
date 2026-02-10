@@ -67,7 +67,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-watcher: ${{ inputs.enable-watcher }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run ${{ matrix.test-group.name }}
         timeout-minutes: 10
         env:
