@@ -255,11 +255,10 @@ ttnn::Tensor reshape_tiled(
         sub_core_grid);
 
     if (updated_mem_config.is_sharded()) {
-        TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-
         // Recompute the shard spec for the output tensor shape
         auto output_mem_config =
             detail::recompute_shard_spec_for_output(updated_mem_config, output_tensor_3d.tensor_spec());
+
         output_tensor_3d = ttnn::prim::reshape_view(
             tensor3d,
             requested_shape_3d,
