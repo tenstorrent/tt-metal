@@ -7,10 +7,21 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
+    const uint32_t core_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t core_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t super_sync_core_x = 12;
+    const uint32_t super_sync_core_y = 0;
+    const bool is_super_sync_core = (bool)(core_x == super_sync_core_x && core_y == super_sync_core_y);
+
+    // DPRINT << "is_super_sync_core: " << (uint32_t)is_super_sync_core << ENDL();
+    // DPRINT << "core_x: " << core_x << ENDL();
+    // DPRINT << "core_y: " << core_y << ENDL();
+
     // in1 mcast args
     const uint32_t in1_mcast_sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t in1_mcast_sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
@@ -76,8 +87,24 @@ void kernel_main() {
     constexpr uint32_t cb_id_in3 = 3;
 #endif
     constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(18);
+    uint32_t super_sync_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(19));
+    // local L1 semaphore address
+    volatile tt_l1_ptr uint32_t* super_sync_sender_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(super_sync_sender_semaphore_addr);
+    // NOC address of the super sync semaphore on core super_sync_core_x, super_sync_core_y
+    const uint64_t super_sync_sender_semaphore_noc_addr =
+        get_noc_addr(super_sync_core_x, super_sync_core_y, super_sync_sender_semaphore_addr);
 
-    constexpr auto out_args = TensorAccessorArgs<19>();
+    uint32_t super_sync_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));
+    // local L1 semaphore address
+    volatile tt_l1_ptr uint32_t* super_sync_receiver_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(super_sync_receiver_semaphore_addr);
+
+    DPRINT << "super_sync_sender_semaphore_addr: " << super_sync_sender_semaphore_addr << ENDL();
+    DPRINT << "super_sync_sender_semaphore_noc_addr: " << super_sync_sender_semaphore_noc_addr << ENDL();
+    DPRINT << "super_sync_receiver_semaphore_addr: " << super_sync_receiver_semaphore_addr << ENDL();
+
+    constexpr auto out_args = TensorAccessorArgs<21>();
     OpSignaler op_signaler;
     if constexpr (fuse_op_reduce_scatter) {
         op_signaler = OpSignaler(rt_args_idx);
@@ -121,6 +148,18 @@ void kernel_main() {
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
 
+                    DPRINT << "C0" << ENDL();
+                    noc_semaphore_set(super_sync_receiver_semaphore_addr_ptr, INVALID);
+                    DPRINT << "C1" << ENDL();
+                    noc_semaphore_inc(super_sync_sender_semaphore_noc_addr, 1);
+                    DPRINT << "C2 " << ENDL();
+                    while (1) {
+                        if (*super_sync_sender_semaphore_addr_ptr > 0) {
+                            DPRINT << "FOUND THE CORE: " << *super_sync_sender_semaphore_addr_ptr << ENDL();
+                        }
+                    }
+                    noc_semaphore_wait(super_sync_receiver_semaphore_addr_ptr, VALID);
+                    DPRINT << "C3" << ENDL();
                     cb_push_back(cb_id_in1, in1_block_num_tiles);
                 }
 

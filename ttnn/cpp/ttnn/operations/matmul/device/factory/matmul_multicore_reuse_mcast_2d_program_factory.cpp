@@ -302,6 +302,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto super_sync_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto super_sync_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
@@ -461,6 +463,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)super_sync_sender_semaphore_id);
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)super_sync_receiver_semaphore_id);
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
@@ -523,6 +527,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
+    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)super_sync_sender_semaphore_id);
+    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)super_sync_receiver_semaphore_id);
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -692,6 +698,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_receiver.num_cores() > 0) {
+        log_info(LogOp, "here2");
         mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
@@ -1122,6 +1129,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             if (in0_idx == 0) {
                 std::vector<uint32_t> mm_in1_sender_writer_args = {
                     // READER
+                    (std::uint32_t)core.x,
+                    (std::uint32_t)core.y,
                     // in1 tensor args
                     (std::uint32_t)in1_buffer->address(),
                     (std::uint32_t)in1_tensor_start_tile_id_stride * in1_idx,  // in1_tensor_start_tile_id
@@ -1256,6 +1265,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 // in1 receiver
             } else {
                 std::vector<uint32_t> mm_in1_receiver_writer_args = {
+                    (std::uint32_t)core.x,
+                    (std::uint32_t)core.y,
                     // READER
                     // in1 mcast args
                     (std::uint32_t)in1_mcast_sender.x,  // in1_mcast_sender_noc_x

@@ -9,6 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
 #include "internal/mod_div_lib.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
@@ -230,7 +231,9 @@ void kernel_main() {
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
-                    bool last_out = block == (num_blocks_inner_dim - 1);
+                    {
+                        DeviceZoneScopedN("MATH-BLOCK");
+                        bool last_out = block == (num_blocks_inner_dim - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
                     if (last_out) {
@@ -398,6 +401,7 @@ void kernel_main() {
 
                     cb_pop_front(in0_cb_id, in0_block_num_tiles);
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
+                    }
                 }
 
 #ifdef FUSE_BIAS
