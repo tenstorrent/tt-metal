@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from functools import reduce
 from typing import List
 
 import pandas as pd
@@ -154,7 +155,7 @@ class FuserConfig:
                 test_config.generate_variant_hash()
                 test_config.build_elfs()
 
-                for _ in range(run_count):
+                for run_index in range(run_count):
                     elfs = test_config.run_elf_files(location)
                     wait_for_tensix_operations_finished(elfs, location)
 
@@ -169,16 +170,22 @@ class FuserConfig:
                         )
                         for addr in TestConfig.THREAD_PERFORMANCE_DATA_BUFFER
                     ]
-                    runs.append(Profiler._parse_buffers(buffer_data, meta))
+                    profiler_data = Profiler._parse_buffers(buffer_data, meta)
+                    # Tag profiler data with run index for proper L1-to-L1 pairing
+                    profiler_data.df["run_index"] = run_index
+                    runs.append(profiler_data)
 
                 get_stats = Profiler.STATS_FUNCTION[run_type]
                 all_results.append(get_stats(ProfilerData.concat(runs)))
 
-            results = (
-                pd.concat(all_results, ignore_index=True)
-                .groupby("marker")
-                .first()
-                .reset_index()
+            # Merge results with validation
+            # how="outer" keeps all markers (some may not appear in all run types)
+            # validate="1:1" catches duplicate markers within each run type
+            results = reduce(
+                lambda left, right: pd.merge(
+                    left, right, on="marker", how="outer", validate="1:1"
+                ),
+                all_results,
             )
             results["test_name"] = self.global_config.test_name
             results["loop_factor"] = self.global_config.loop_factor

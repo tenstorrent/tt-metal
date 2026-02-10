@@ -6,6 +6,7 @@ import glob
 import os
 import re
 from dataclasses import fields
+from functools import reduce
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, ClassVar
@@ -358,7 +359,7 @@ class PerfConfig(TestConfig):
             self.runtimes = runtimes
             self.generate_variant_hash()
             variant_raw_data = []
-            for _ in range(run_count):
+            for run_index in range(run_count):
                 self.write_runtimes_to_L1(location)
                 elfs = self.run_elf_files(location)
                 wait_for_tensix_operations_finished(elfs, location)
@@ -368,13 +369,22 @@ class PerfConfig(TestConfig):
                 )
                 # TODO You add additional data collections you want here
 
+                # Tag profiler data with run index for proper L1-to-L1 pairing
+                profiler_data.df["run_index"] = run_index
                 variant_raw_data.append(profiler_data)
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             results.append(get_stats(ProfilerData.concat(variant_raw_data)))
 
-        results = pd.concat(results, ignore_index=True)
-        run_results = results.groupby("marker").first().reset_index()
+        # Merge results with validation
+        # how="outer" keeps all markers (some may not appear in all run types)
+        # validate="1:1" catches duplicate markers within each run type
+        run_results = reduce(
+            lambda left, right: pd.merge(
+                left, right, on="marker", how="outer", validate="1:1"
+            ),
+            results,
+        )
 
         # Setting header fields that are always there
         names = ["formats.input", "formats.output"] if self.formats else []

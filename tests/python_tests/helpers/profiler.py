@@ -185,11 +185,21 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _stats_l1_to_l1(data: ProfilerData) -> pd.Series:
-    groups = data.zones().raw().groupby(["marker"])
+def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
+    raw_data = data.zones().raw()
+
+    # Validate that run_index has been explicitly set
+    if raw_data["run_index"].isna().any():
+        raise ValueError(
+            "run_index must be explicitly set before computing L1-to-L1 stats. "
+            "Set profiler_data.df['run_index'] = <run_number> after collecting data."
+        )
+
+    # Group by both marker and run_index to ensure events from the same run are paired
+    groups = raw_data.groupby(["marker", "run_index"])
 
     timings = []
-    for (marker,), group in groups:
+    for (marker, run_index), group in groups:
         unpack_start = group[
             (group["thread"] == "unpack") & (group["type"] == "ZONE_START")
         ].reset_index(drop=True)
@@ -200,12 +210,15 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.Series:
 
         if len(unpack_start) == 0 or len(pack_end) == 0:
             raise ValueError(
-                "Zone must be captured on both unpack and pack for L1_TO_L1 to work properly"
+                f"Zone must be captured on both unpack and pack for L1_TO_L1 to work properly "
+                f"(marker={marker}, run_index={run_index})"
             )
 
         if len(unpack_start) != len(pack_end):
             raise ValueError(
-                f"Unpack and pack must be paired properly for L1_TO_L1 to work properly"
+                f"Unpack and pack must be paired properly for L1_TO_L1 to work properly "
+                f"(marker={marker}, run_index={run_index}, "
+                f"unpack_count={len(unpack_start)}, pack_count={len(pack_end)})"
             )
 
         durations = pack_end["timestamp"] - unpack_start["timestamp"]
@@ -256,12 +269,14 @@ def _stats_pack_isolate(data: ProfilerData) -> pd.DataFrame:
 
 
 def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
-    stats = [
-        _stats_thread(f"{PerfRunType.L1_CONGESTION.name}[UNPACK]", data.unpack().raw()),
-        _stats_thread(f"{PerfRunType.L1_CONGESTION.name}[PACK]", data.pack().raw()),
-    ]
+    unpack_stats = _stats_thread(
+        f"{PerfRunType.L1_CONGESTION.name}[UNPACK]", data.unpack().raw()
+    )
+    pack_stats = _stats_thread(
+        f"{PerfRunType.L1_CONGESTION.name}[PACK]", data.pack().raw()
+    )
 
-    return pd.concat(stats, ignore_index=True)
+    return pd.merge(unpack_stats, pack_stats, on="marker", how="outer", validate="1:1")
 
 
 class EntryType(Enum):
@@ -368,6 +383,7 @@ class Profiler:
     def _dataframe(rows: list[dict] | None = None) -> pd.DataFrame:
         # Define the schema
         schema = {
+            "run_index": "Int32",  # nullable int for multi-run L1-to-L1 pairing
             "thread": pd.CategoricalDtype(categories=TestConfig.KERNEL_COMPONENTS),
             "type": pd.CategoricalDtype(
                 categories=["TIMESTAMP", "ZONE_START", "ZONE_END"]
@@ -436,7 +452,21 @@ class Profiler:
                     )
 
                 case EntryType.ZONE_END:
-                    rows.append(zone_stack.pop())  # Pop the ZONE_START pair
+                    if not zone_stack:
+                        raise ValueError(
+                            f"ZONE_END for marker '{marker.marker}' (id={marker_id}) "
+                            f"on thread '{thread}' at timestamp {timestamp} has no "
+                            f"matching ZONE_START. Possible buffer corruption."
+                        )
+                    start_row = zone_stack.pop()
+                    if start_row["marker_id"] != marker.id:
+                        raise ValueError(
+                            f"ZONE_END marker '{marker.marker}' (id={marker.id}) "
+                            f"does not match ZONE_START marker "
+                            f"'{start_row['marker']}' (id={start_row['marker_id']}) "
+                            f"on thread '{thread}'. Possible nested zone mismatch."
+                        )
+                    rows.append(start_row)
                     rows.append(
                         Profiler._row(thread, "ZONE_END", marker, timestamp, pd.NA)
                     )
