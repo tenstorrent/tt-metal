@@ -3,16 +3,12 @@ name: "[internal] Validate installation step from instructions impl"
 
 on:
   workflow_call:
-    inputs:
-      runner-label:
-        required: false
-        type: string
-        default: N150
+
 
 jobs:
   install-and-run-mnist:
     name: Install deps and run MNIST MLP
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'N150') }}
     timeout-minutes: 30
     steps:
       - name: Prepare system
@@ -79,3 +75,40 @@ jobs:
               --input-method=json \
               --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"
+
+  install-and-run-llama70b:
+    name: Install deps and run Llama 70B Demo
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'TG') }}
+    timeout-minutes: 120
+    steps:
+      - name: Prepare system
+        run: |
+          # The runners come with docker preinstalled but we want to
+          # simulate a completely blank system for our Podman install
+          sudo apt-get purge -y docker-ce docker-ce-cli containerd.io
+
+      - name: Install TT dependencies via TT-Installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/download/v2.1.0/install.sh -O
+          chmod +x install.sh
+
+          timeout 600 bash ./install.sh \
+            --update-firmware=off \
+            --install-metalium-models-container \
+            --verbose \
+            --reboot-option=never \
+            --mode-non-interactive
+
+      - name: Run Llama 70B Demo via tt-metalium-models
+        shell: bash
+        timeout-minutes: 90
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          LLAMA_DIR_HOST=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+          # Mount host MLPerf model weights into container (Galaxy runners have this path)
+          tt-metalium-models \
+            -v "$LLAMA_DIR_HOST:$LLAMA_DIR_HOST" \
+            -c "export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ && export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache && pytest --timeout=1000 --disable-warnings -q -s models/demos/llama3_70b_galaxy/demo/demo_decode.py -k full"
