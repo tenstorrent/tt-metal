@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole, is_watcher_enabled
+from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.operations.activations import get_golden_function_for_activation
 
@@ -367,14 +367,6 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 def test_matmul_in1_dram_sharded_tiny_tile(
     mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
-    if (
-        is_watcher_enabled()
-        and in1_dtype in (ttnn.bfloat16, ttnn.bfloat8_b)
-        and tile_w == 32
-        and n == 1280
-        and k == 1024
-    ):
-        pytest.skip("Skipping the test since it is failing with watcher github issue #36314")
     # PCC issue when height not equal to tile height
     m = tile_h
     if is_blackhole():
@@ -2566,8 +2558,6 @@ def test_matmul_padding(
     input_b_memory_config,
     output_memory_config,
 ):
-    if is_watcher_enabled() and isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
-        pytest.skip("Skipping test_matmul_padding dram_sharded with watcher enabled, github issue #36314")
     torch.manual_seed(0)
 
     # Create input tensors with specified shapes and values
