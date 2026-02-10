@@ -10,13 +10,25 @@ YOLOv8 is one of the recent iterations in the YOLO series of real-time object de
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
+
 ## How to Run
 - Use the following command to run the model:
 ```
 pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640
 ```
 
-## Model performant running with Trace+2CQ
+## Model performant running with Trace+2CQ (The current fps is mentioned in the below table)
 ### Single Device (BS=1):
 - For `640x640`, end-2-end perf is `66` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```
@@ -28,6 +40,16 @@ pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_y
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant_dp
   ```
+## Current Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+| Resolution | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
+|----------- |----------------------|-------------------------|-------------|
+| 640x640    | 0.9988843            | 63.2                    | Passed      |
+
+| Resolution | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
+|------------|----------------------|-------------------------|-------------|
+| 640x640    | 0.9989218            | 113.4                   | Passed      |
 
 ### Demo
 Note: Output images will be saved in the `models/demos/yolov8x/demo/runs` folder.
@@ -67,17 +89,6 @@ Note: Output images will be saved in the `models/demos/yolov8x/demo/runs` folder
   pytest models/demos/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-tt_model]
   ```
 Note: The model is evaluated with 500 samples.
-
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
-|------------|------------------- |----------------------|-------------------------|-------------|
-| 640x640    | True               |   0.9987692          | 63.2                    | Passed      |
-
-| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
-|------------|--------------------|----------------------|-------------------------|-------------|
-| 640x640    | True               | 0.9987606            | 113.4                   | Passed      |
 
 
 ### Web Demo

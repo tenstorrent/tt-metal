@@ -12,6 +12,18 @@ YOLOv10x introduces a new approach to real-time object detection, addressing bot
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
 ## How to Run
 Use the following command to run the Yolov10x model:
 ```
@@ -32,6 +44,16 @@ pytest --disable-warnings models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py:
   ```bash
   pytest --disable-warnings models/demos/yolov10x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
+## Current Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+| Resolution | PCC (threshold:0.999) | Performance (FPS, N150) | Demo Status |
+|------------|-----------------------|-------------------------|-------------|
+| 640x640    | 0.9999193             | 48                      | Passed      |
+
+| Resolution | PCC (threshold:0.999) | Performance (FPS, N300) | Demo Status |
+|------------|-----------------------|--------------------------|------------|
+| 640x640    | 0.9999193             | 89                       | Passed     |
 
 ### Demo
 
@@ -75,18 +97,6 @@ Note: Output images will be saved in the `models/demos/yolov10x/demo/runs` folde
   ```
 
 Note: The model is evaluated with 500 samples.
-
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | Pretrained Weights | PCC (threshold:0.999) | Performance (FPS, N150) | Demo Status |
-|------------|--------------------|-----------------------|-------------------------|-------------|
-| 640x640    | True               | 0.9999193             | 48                      | Passed      |
-
-| Resolution | Pretrained Weights | PCC (threshold:0.999) | Performance (FPS, N300) | Demo Status |
-|------------|--------------------|-----------------------|--------------------------|------------|
-| 640x640    | True               | 0.9999193             | 89                       | Passed     |
-
 
 ### Web Demo:
 Try the interactive web demo at [yolov10x/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov10x/web_demo/README.md)

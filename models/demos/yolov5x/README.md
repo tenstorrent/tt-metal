@@ -11,6 +11,17 @@ Wormhole (n150, n300)
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
 ## How to Run:
 Use the following command to run the model:
 
@@ -35,6 +46,20 @@ pytest --disable-warnings models/demos/yolov5x/tests/pcc/test_ttnn_yolov5x.py::t
   ```
   pytest --disable-warnings models/demos/yolov5x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
+
+## Current Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9941650             | 67                       | Passed      |
+
+**N300**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9941650             | 125                      | Passed      |
 
 ### Demo:
 
@@ -74,19 +99,6 @@ pytest --disable-warnings models/demos/yolov5x/tests/pcc/test_ttnn_yolov5x.py::t
   pytest --disable-warnings models/demos/yolov5x/demo/demo.py::test_demo_dataset_dp
   ```
 
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-
-**N150**
-| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
-|-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9941650             | 67                       | Passed      |
-
-**N300**
-| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
-|-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9941650             | 123                      | Passed      |
 
 
 ## Details

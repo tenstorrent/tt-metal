@@ -11,6 +11,17 @@ Wormhole (n150, n300)
 
 Yolov12 has an attention-centric architecture that moves away from the traditional CNN-based approaches of previous YOLO models while preserving the real-time inference speed crucial for many applications. This model leverages innovative attention mechanisms and a redesigned network architecture to achieve state-of-the-art object detection accuracy without compromising real-time performance.
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
 ## How to Run:
 
 Use the following command to run the Yolo12x model with pre-trained weights :
@@ -35,6 +46,18 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
   ```
   pytest --disable-warnings models/demos/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
+
+## Current Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+| Resolution | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
+|------------|----------------------|-------------------------|-------------|
+| 640x640    | 0.9974655            | 32                      | Passed      |
+
+| Resolution | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
+|------------|----------------------|-------------------------|-------------|
+| 640x640    | 0.9974655            | 61                      | Passed      |
+
 
 ### Demo with Trace+2CQ:
 
@@ -89,17 +112,6 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
   pytest models/demos/yolo_eval/evaluate.py::test_yolov12x[device_params0-tt_model]
   ```
 Note: The model is evaluated with 500 samples.
-
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
-|------------|--------------------|----------------------|-------------------------|-------------|
-| 640x640     | True              |0.9974655             | 33                      | Passed      |
-
-| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
-|------------|--------------------|----------------------|-------------------------|-------------|
-| 640x640    | True               | 0.9974655            | 60                      | Passed      |
 
 
 ### Details:

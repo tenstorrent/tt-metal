@@ -12,6 +12,18 @@ Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ul
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
+
 ## How to Run
 Use the following command(s) to run the model:
 ```
@@ -30,6 +42,20 @@ pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_dp_inference[wormhole_b0-1-device_params0]
 ```
+
+## Current Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9992724             | 217                      | Passed      |
+
+**N300**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9992221             | 348                      | Passed      |
 
 ### Demo
 Note: Output images will be saved in the `models/demos/yolov8s/demo/runs/<model_type>` folder.
@@ -64,19 +90,6 @@ Note: The model is evaluated with 500 samples.
 ### Web Demo
 - Try the interactive web demo at [yolov8s/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8s/web_demo/README.md)
 
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-
-**N150**
-| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
-|-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9990457             | 214                      | Passed      |
-
-**N300**
-| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
-|-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9990912             | 348                      | Passed      |
 
 ## Details
 - The entry point to the yolov8s is located at:`models/demos/yolov8s/tt/ttnn_yolov8s.py`

@@ -12,6 +12,17 @@ The YOLO-World Model introduces an advanced, real-time Ultralytics YOLOv8-based 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
 ## How to Run
 - Use the following command to run the model:
 ```
@@ -30,6 +41,19 @@ pytest --disable-warnings models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s
   ```bash
   pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_e2e_performant.py::test_perf_yolov8s_world_dp
   ```
+## Current Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9969080             | 107                      | Passed      |
+
+**N300**
+| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
+|-------------|-----------------------|--------------------------|-------------|
+| 640x640     | 0.9969080             | 177                      | Passed      |
 
 ### Demo with Trace+2CQs
 Note: To test the demo with your own images, replace images with `models/demos/yolov8s_world/demo/images`.
@@ -70,20 +94,6 @@ Note: To test the demo with your own images, replace images with `models/demos/y
   pytest models/demos/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-tt_model]
   ```
 Note: The model is evaluated with 500 samples.
-
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-
-**N150**
-| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
-|-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9969080             | 107                      | Passed      |
-
-**N300**
-| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
-|-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9969080             | 189                      | Passed      |
 
 ## Details
 The model picks up certain configs and weights from Ultralytics pretrained model. We've used weights available [here](https://docs.ultralytics.com/models/yolo-world/#available-models-supported-tasks-and-operating-modes) in YOLOv8s-world row.

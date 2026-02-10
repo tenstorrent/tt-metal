@@ -10,6 +10,17 @@ YOLOv7 is a state-of-the-art real-time object detector that surpasses all known 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
 ## How to Run
 - Use the following command to run the yolov7 model
 ```python
@@ -29,6 +40,20 @@ pytest --disable-warnings models/demos/yolov7/tests/pcc/test_ttnn_yolov7.py
   ```bash
   pytest --disable-warnings models/demos/yolov7/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
+
+## Current Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N150)  | Demo Status  |
+|-------------|------------------------|--------------------------|--------------|
+| 640x640     | 0.9991836              | 119.4                    | Passed       |
+
+**N300**
+| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N300)  | Demo Status  |
+|-------------|------------------------|--------------------------|--------------|
+| 640x640     | 0.9991836              | 199.9                    | Passed       |
 
 ### Demo
 
@@ -73,19 +98,6 @@ pytest models/demos/yolo_eval/evaluate.py::test_yolov7[res0-device_params0-tt_mo
 ```
 Note: The model is evaluated with 500 samples.
 
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-
-**N150**
-| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N150)  | Demo Status  |
-|-------------|------------------------|--------------------------|--------------|
-| 640x640     | 0.9991836              | 119.4                    | Passed       |
-
-**N300**
-| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N300)  | Demo Status  |
-|-------------|------------------------|--------------------------|--------------|
-| 640x640     | 0.9991836              | 204.4                    | Passed       |
 
 
 ## Details

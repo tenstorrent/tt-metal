@@ -10,6 +10,17 @@ YOLOv6-L is a large variant of the YOLOv6 family—an advanced real-time object 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
 
 ### How to Run:
 
@@ -35,6 +46,20 @@ pytest --disable-warnings models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py
   ```
   pytest --disable-warnings models/demos/yolov6l/tests/perf/test_e2e_performant.py::test_perf_yolov6l_dp
   ```
+
+## Current Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+**N150**
+| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N150)  | Demo Status |
+|-------------|------------------------|--------------------------|-------------|
+| 640x640     | 0.9998796              | 104                      | Passed      |
+
+**N300**
+| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N300)  | Demo Status |
+|-------------|------------------------|--------------------------|-------------|
+| 640x640     | 0.9998796              | 184                      | Passed      |
 
 ### Demo:
 
@@ -86,19 +111,6 @@ pytest --disable-warnings models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py
 
 Note: The model is evaluated with 500 samples.
 
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-
-**N150**
-| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N150)  | Demo Status |
-|-------------|------------------------|--------------------------|-------------|
-| 640x640     | 0.9998796              | 104                      | Passed      |
-
-**N300**
-| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N300)  | Demo Status |
-|-------------|------------------------|--------------------------|-------------|
-| 640x640     | 0.9998796              | 180                      | Passed      |
 
 
 ### Details

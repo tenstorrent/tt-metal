@@ -10,6 +10,56 @@ YOLOv4 is a state-of-the-art real-time object detection model introduced in 2020
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
+## Download Model Weights
+
+Before running perf tests, download the YOLOv4 model weights file. The perf tests require `models/demos/yolov4/tests/pcc/yolov4.pth` to be present.
+
+### Automatic Download (Recommended):
+
+Run the download script from the repository root:
+
+```bash
+bash models/demos/yolov4/tests/pcc/yolov4_weights_download.sh
+```
+
+**Note:** This script requires `gdown` to be installed. If not installed, it will attempt to install it automatically. If the automatic download fails, use the manual method below.
+
+### Manual Download:
+
+If the automatic download script fails, you can manually download the weights:
+
+1. Install `gdown` if not already installed:
+   ```bash
+   pip3 install gdown
+   or
+   python_env/bin/python -m pip install gdown (if trying to install inside the venv)
+   ```
+
+2. Run the Download script:
+   ```bash models/demos/yolov4/tests/pcc/yolov4_weights_download.sh
+    ```
+
+3. Verify the file exists:
+   ```bash
+   ls -lh models/demos/yolov4/tests/pcc/yolov4.pth
+   ```
+
+**Troubleshooting:** If you encounter `FileNotFoundError: [Errno 2] No such file or directory: 'models/demos/yolov4/tests/pcc/yolov4.pth'` when running perf tests, ensure:
+- You have downloaded the weights file using one of the methods above
+- You are running pytest from the repository root directory
+- The file path `models/demos/yolov4/tests/pcc/yolov4.pth` exists relative to your current working directory
+
 ## How to Run
 ### For 320x320:
 ```
@@ -43,6 +93,23 @@ pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::tes
   pytest --disable-warnings models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-resolution1-123-1-DataType.BFLOAT16-DataType.BFLOAT16-device_params0]
   ```
 
+## Current Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+
+| Resolution | Pretrained Weights | Boxes PCC (threshold: 0.99) | Confs PCC (threshold: 0.9) | Performance (FPS, N150)  | Demo Status |
+|------------|--------------------|-----------------------------|----------------------------|--------------------------|-------------|
+| 640x640     | False             | 0.9999884                   | 0.9937709                  | 86.7                     | Passed      |
+| 640x640     | True              | 0.9991520                   | 0.9368130                  | 86.7                     | Passed      |
+| 320x320     | False             | 0.9999879                   | 0.9937709                  | 184                      | Passed      |
+| 320x320     | True              | 0.9976081                   | 0.9537761                  | 184                      | Passed      |
+
+| Resolution | Pretrained Weights | Boxes PCC (threshold: 0.99) | Confs PCC (threshold: 0.9) | Performance (FPS, N300)  | Demo Status |
+|------------|--------------------|-----------------------------|----------------------------|--------------------------|-------------|
+| 640x640    | False              | 0.9999884                   | 0.9937709                  | 136                      | Passed      |
+| 640x640    | True               | 0.9991520                   | 0.9368130                  | 136                      | Passed      |
+| 320x320    | False              | 0.9999879                   | 0.9937709                  | 254                      | Passed      |
+| 320x320    | True               | 0.9976081                   | 0.9537761                  | 254                      | Passed      |
 
 ### Demo
 **Note:** Output images will be saved in the `yolov4_predictions/` folder.
@@ -97,23 +164,6 @@ pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::tes
   pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_coco_dp[wormhole_b0-resolution1-1-act_dtype0-weight_dtype0-device_params0]
   ```
 
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-
-| Resolution | Pretrained Weights | Boxes PCC (threshold: 0.99) | Confs PCC (threshold: 0.9) | Performance (FPS, N150)  | Demo Status |
-|------------|--------------------|-----------------------------|----------------------------|--------------------------|-------------|
-| 640x640     | False             | 0.9999884                   | 0.9937709                  | 86.7                     | Passed      |
-| 640x640     | True              | 0.9991520                   | 0.9368130                  | 86.7                     | Passed      |
-| 320x320     | False             | 0.9999879                   | 0.9937709                  | 184                      | Passed      |
-| 320x320     | True              | 0.9976081                   | 0.9537761                  | 184                      | Passed      |
-
-| Resolution | Pretrained Weights | Boxes PCC (threshold: 0.99) | Confs PCC (threshold: 0.9) | Performance (FPS, N300)  | Demo Status |
-|------------|--------------------|-----------------------------|----------------------------|--------------------------|-------------|
-| 640x640    | False              | 0.9999884                   | 0.9937709                  | 136                      | Passed      |
-| 640x640    | True               | 0.9991520                   | 0.9368130                  | 136                      | Passed      |
-| 320x320    | False              | 0.9999879                   | 0.9937709                  | 254                      | Passed      |
-| 320x320    | True               | 0.9976081                   | 0.9537761                  | 254                      | Passed      |
 
 #### Web Demo
 - Try the interactive web demo (35 FPS end-2-end) for 320x320 following the [./web_demo/README.md](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov4/web_demo/README.md)

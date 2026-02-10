@@ -10,6 +10,18 @@ Yolov9 marks a significant advancement in real-time object detection, introducin
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+pip3 install ultralytics
+or
+python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+python_env/bin/python -m pip install ultralytics
+```
+
+
 ## How to Run:
 **Note:**
 - Use `yolov9c-seg.pt` pre-trained weights for segmentation tasks and `yolov9c.pt` pre-trained weights for detection in Tests and Demos.
@@ -97,17 +109,17 @@ Note: To test the demo with your own images, replace images with `models/demos/y
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant_dp
   ```
-  ## Model Performance Summary
+## Current Model Performance Summary
 
 **Note:** Performance numbers are measured on **N150 AND N300** platform.
 | Resolution | Pretrained Weights | Segmentation PCC (threshold:0.99) | Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N150) | Detection Performance (FPS, N150) | Demo Status |
 |------------|--------------------|-----------------------------------|-------------------------------|---------------------------------------|-----------------------------------|
-| 640x640    | True               |  0.9993999                        |0.9993025                      | 86                                    | 98                                | Passed      |
+| 640x640    | True               |  0.9993999                        |0.9993025                      | 85                                    | 98                                | Passed      |
 
 
 | Resolution | Pretrained Weights | Segmentation PCC (threshold:0.99) |Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N300) | Detection Performance (FPS, N300) | Demo Status |
 |------------|--------------------|-----------------------------------|------------------------------|---------------------------------------|----------------------------------|----------|
-| 640x640    | True               | 0.9993999                         | 0.9993025                    |145                                    |162                               | Passed      |
+| 640x640    | True               | 0.9993999                         | 0.9993025                    |152                                    |172                               | Passed      |
 
 
 ### Web Demo

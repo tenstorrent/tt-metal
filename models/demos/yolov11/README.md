@@ -10,6 +10,18 @@
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Install Packages before running the tests if not present:
+- ``` sudo apt-get update && sudo apt-get install -y graphviz ```
+
+Ideally, ultralytics should be automatically installed while running ./create_venv.sh but if still package error then manually follow the below commands
+```
+- pip3 install ultralytics
+or
+- python_env/bin/python -m ensurepip --upgrade      (if trying to install inside the venv)
+- python_env/bin/python -m pip install ultralytics
+```
+
+
 ## How to Run
 Use the following command to run the model:
 ```
@@ -30,6 +42,16 @@ pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py
   ```
   pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
+|------------|--------------------|----------------------|-------------------------|-------------|
+| 640x640     | True              | 0.9996607            | 228                     | Passed     |
+
+| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
+|------------|------------------- |----------------------|-------------------------|-------------|
+| 640x640    | True               | 0.9996607            | 370                     | Passed      |
 
 ### Demo with Trace+2CQ
 
@@ -71,17 +93,6 @@ Use the following command to run the performant evaluation with Trace+2CQs:
 pytest models/demos/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.
-
-## Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
-|------------|--------------------|----------------------|-------------------------|-------------|
-| 640x640     | True              | 0.9996607            | 230                     | Passed     |
-
-| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
-|------------|------------------- |----------------------|-------------------------|-------------|
-| 640x640    | True               | 0.9996607            | 373                     | Passed      |
 
 ## Details
 - The entry point to the `yolov11` is located at : `models/demos/yolov11/tt/ttnn_yolov11.py`
