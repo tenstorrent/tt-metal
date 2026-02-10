@@ -56,12 +56,14 @@ from models.tt_transformers.tt.rope import get_rot_mats, get_rot_mats_hf
     "use_prefetcher",
     ([False]),
 )
+@pytest.mark.parametrize("use_hf_rope", (True, False), ids=("hf_rope", "mllama_rope"))
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_inference(
     max_seq_len,
     paged_attention,
     page_params,
     mesh_device,
+    use_hf_rope,
     reset_seeds,
     ensure_gc,
     use_prefetcher,
@@ -77,7 +79,7 @@ def test_attention_inference(
         prefetcher.init(mode=Mode.PREFILL)
 
     model_args = ModelArgs(
-        mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=True
+        mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=use_hf_rope
     )
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()

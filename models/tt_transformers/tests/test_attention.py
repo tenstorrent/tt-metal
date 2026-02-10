@@ -55,6 +55,7 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize("use_hf_rope", (True, False), ids=("hf_rope", "mllama_rope"))
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_inference(
     max_seq_len,
@@ -62,6 +63,7 @@ def test_attention_inference(
     paged_attention,
     page_params,
     mesh_device,
+    use_hf_rope,
     reset_seeds,
     use_prefetcher,
     ensure_gc,
@@ -81,7 +83,7 @@ def test_attention_inference(
         max_seq_len=max_seq_len,
         cache_hf=True,
         prefetcher=prefetcher,
-        use_hf_rope=True,
+        use_hf_rope=use_hf_rope,
     )
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
