@@ -1091,7 +1091,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         std::function<HostBuffer()> produce_buffer = [&host_buffer]() { return host_buffer; };
         distributed_host_buffer.emplace_shard(coord, produce_buffer);
-        mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/true);
+        mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/false);
+        EXPECT_TRUE(pinned_shared->lock_may_block());
 
         // Read back and verify
         std::vector<uint32_t> dst_vec = {};
