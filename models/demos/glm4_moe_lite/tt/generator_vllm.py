@@ -294,14 +294,17 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             for t in range(prompt_len):
                 tok = tokens[i, t].view(1, 1).to(torch.int32)
                 pos = torch.tensor([t], dtype=torch.int32)
-                if impl == "decode_loop_trace" and t < (prompt_len - 1):
+                if t < (prompt_len - 1):
+                    # Intermediate prompt tokens: update KV cache, but avoid reading
+                    # back full logits. Use on-device greedy sampling (ids only) and
+                    # discard the result.
                     _ = self._tt_runner.decode(
                         tokens=tok,
                         start_pos=pos,
                         page_table=user_page_table,
                         kv_cache=kv_cache,
                         sampling_params={"temperature": 0.0},
-                        enable_trace=True,
+                        enable_trace=(impl == "decode_loop_trace"),
                     )
                     continue
 
