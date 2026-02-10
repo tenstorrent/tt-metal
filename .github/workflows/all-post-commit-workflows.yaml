@@ -288,7 +288,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.tests-to-run.outputs.run-profiler-regression == 'true' }}
+    if: ${{ needs.tests-to-run.outputs.run-profiler-regression == 'true' && !inputs.enable-watcher && !inputs.enable-lightweight-kernel-asserts}}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
