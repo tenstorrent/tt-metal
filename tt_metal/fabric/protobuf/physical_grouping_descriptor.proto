@@ -25,8 +25,11 @@ package tt.tt_fabric.proto;
 //   - GroupingReference.grouping_name MUST reference a grouping that exists in groupings
 //
 // RULE 4: COUNT VALIDATION (documented in comments, type constraints)
-//   - If Grouping.name == "meshes": GroupingReference.count >= 1
-//   - If Grouping.name != "meshes": GroupingReference.count >= 2
+//   - If Grouping.name == "meshes": GroupingReference.count >= 1 (meshes can have 1 item)
+//   - If Grouping.name != "meshes":
+//     * If grouping has only one item: GroupingReference.count >= 2
+//     * If grouping has multiple items: each GroupingReference.count >= 1
+//     * Total logical items (expanded counts) must be >= 2
 //   - ENFORCED BY: uint32 type (ensures non-negative)
 //
 // RULE 5: GROUPING STRUCTURE (ENFORCED BY SCHEMA STRUCTURE - repeated oneof)
