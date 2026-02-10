@@ -291,6 +291,8 @@ struct CreateQHeads {
             tilize_block(args.receiver_in_cb, args.rope_tiles, args.out_cb);
             cb_push_back(args.out_cb, args.rope_tiles);
             cb_pop_front(args.receiver_in_cb, args.rope_tiles);
+
+            tilize_uninit(args.receiver_in_cb, args.out_cb);
         }
 #endif
     };  // class Op
