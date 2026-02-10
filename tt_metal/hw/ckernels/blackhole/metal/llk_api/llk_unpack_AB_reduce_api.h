@@ -20,15 +20,15 @@ inline void llk_unpack_AB_reduce_mop_config(const std::uint32_t operand_id = 0) 
 template <PoolType pool_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face_r_d for srcA
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
 
     if constexpr (enforce_fp32_accumulation) {
         // Set necessary config regs for MOVB2D hi16/lo16 to work
         _llk_unpack_dbg_feature_disable_();
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
     }
-    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim>(face_r_dim, num_faces);
+
+    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim, enforce_fp32_accumulation>(face_r_dim, num_faces);
 }
 
 template <PoolType pool_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
