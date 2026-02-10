@@ -254,6 +254,12 @@ void kernel_main() {
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
+        // Reset ping-pong buffer assignments at the start of each head iteration
+        cb_cur_max = cb_max_1;
+        cb_prev_max = cb_max_2;
+        cb_cur_sum = cb_sum_1;
+        cb_prev_sum = cb_sum_2;
+
         /******************************************************************************
          *                           FLASH ATTENTION LOOP                             *
          ******************************************************************************/
@@ -528,7 +534,6 @@ void kernel_main() {
                     // Combine child with existing local/accumulated data
                     // Move child's L to cb_prev_sum_2 for correction
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
-
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -621,6 +626,25 @@ void kernel_main() {
             mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, sum_cb);
             pack_reconfig_data_format(cb_out_final);
 
+            // Note: sum_cb was already consumed (popped) by mul_block_bcast_cols_inplace above,
+            // so we don't need to pop it again here.
+
+            // Pop the max buffer that still has data
+            if constexpr (use_attention_sink) {
+                // In attention sink path:
+                // - If actual_num_children > 0: max_cb_for_sink = cb_prev_max, cb_cur_max was popped
+                //   So we need to pop cb_prev_max
+                // - If actual_num_children == 0: max_cb_for_sink = cb_cur_max, cb_cur_max was popped
+                //   Nothing left to pop
+                if (actual_num_children > 0) {
+                    cb_pop_front(cb_prev_max, Sq_chunk_t);
+                }
+            } else {
+                // No attention sink: the max buffer was never popped
+                uint32_t max_cb = (actual_num_children > 0) ? cb_prev_max : cb_cur_max;
+                cb_pop_front(max_cb, Sq_chunk_t);
+            }
+
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
                 // Conditionally use pack_untilize or untilize
@@ -663,10 +687,6 @@ void kernel_main() {
             // Move L to output CB
             move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
         }
-
-        // Free up prev buffers if we used them
-        cb_pop_front(cb_prev_max, Sq_chunk_t);
-        cb_pop_front(cb_prev_sum, Sq_chunk_t);
     }
 
     // Free up cb_q_in after Q chunks

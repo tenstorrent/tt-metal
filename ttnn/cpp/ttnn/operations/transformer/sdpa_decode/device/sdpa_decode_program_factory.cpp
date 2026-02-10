@@ -302,7 +302,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t out_im_tiles = PNHt * vDHt;
     uint32_t out0_t = PNHt * vDHt;
     uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = PNHt;  // Single column of values in each iteration
+    uint32_t statistics_tiles = PNHt * 2;  // Single column of values in each iteration
 
     // log all values
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
