@@ -55,7 +55,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
 /**
  * Helper function to reconfigure srca input data format, only if it differs from existing format.
  */
-template <bool to_from_int8 = false, boool is_tile_dim_reconfig_en = false>
+template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
