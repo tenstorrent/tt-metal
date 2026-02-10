@@ -65,32 +65,40 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Shape& padded_shape,
     const MemoryConfig& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    auto temp_tensor = tensor;
-    auto intermediate_out_memory_config = memory_config;
+    std::cout << "PERFORMING RESHAPE ON 2D RM" << std::endl;
 
-    if (tensor.memory_config().is_sharded()) {
+    if (tensor.memory_config().is_sharded() || memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-        MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        temp_tensor = ttnn::sharded_to_interleaved(tensor, temp_memory_config, std::nullopt);
     }
-    if (memory_config.is_sharded()) {
-        intermediate_out_memory_config =
-            MemoryConfig{TensorMemoryLayout::INTERLEAVED, intermediate_out_memory_config.buffer_type()};
-    }
-    // Guaranteed to be interleaved
-    // We are guaranteed to be working 2D->2D in this function
-    auto temp_tensor2 = ttnn::prim::reshape_view(
-        temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid);
+
+    auto output_tensor =
+        ttnn::prim::reshape_view(tensor, logical_shape, padded_shape, memory_config, false, sub_core_grid);
+
+    std::cout << "OUTPUT TENSOR HAS BEEN CALCULATED" << std::endl;
 
     if (memory_config.is_sharded()) {
-        TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-
         // Recompute the shard spec for the output tensor shape
-        auto output_mem_config = recompute_shard_spec_for_output(memory_config, temp_tensor2.tensor_spec());
-
-        return ttnn::interleaved_to_sharded(temp_tensor2, output_mem_config, std::nullopt);
+        auto output_mem_config = recompute_shard_spec_for_output(memory_config, output_tensor.tensor_spec());
+        std::cout << "recompute complete" << std::endl;
+        if (output_mem_config.shard_spec().value() != memory_config.shard_spec().value()) {
+            if (output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+                std::cout << "HEIGHT SHARDED HIT" << std::endl;
+                auto shard_spec = output_mem_config.shard_spec().value();
+                shard_spec.shape[1] = logical_shape[-1];
+                output_mem_config = output_mem_config.with_shard_spec(shard_spec);
+            } else if (output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+                std::cout << "WIDTH SHARDED HIT" << std::endl;
+                auto shard_spec = output_mem_config.shard_spec().value();
+                shard_spec.shape[0] = logical_shape[-2];
+                output_mem_config = output_mem_config.with_shard_spec(shard_spec);
+            }
+            std::cout << "about to reshape output " << std::endl;
+            output_tensor =
+                ttnn::prim::reshape_view(tensor, logical_shape, padded_shape, output_mem_config, false, sub_core_grid);
+        }
     }
-    return temp_tensor2;
+    std::cout << "RETURNING OUTPUT TENSOR" << std::endl;
+    return output_tensor;
 }
 
 ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
