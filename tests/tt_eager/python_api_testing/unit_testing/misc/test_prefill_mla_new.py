@@ -183,7 +183,7 @@ def run_flash_mla_prefill_impl(
     dtype,
     v_head_dim,
 ):
-    device.disable_and_clear_program_cache()
+    # device.disable_and_clear_program_cache()
     # Log the test parameters
     logger.debug(f"Running FlashMLA Prefill with parameters: ")
     logger.debug(f"Batch: {batch}")
@@ -314,6 +314,7 @@ def run_flash_mla_prefill_impl(
     # print("TT_v_pre_sdpa tensor dtype is: ", tt_v_pre_sdpa.dtype)
     # print("TT_Q_tensor dtype is: ", tt_q.dtype)
     # print("tt_k_post_repeat tensor dtype is: ", tt_v_out.dtype)
+    signpost(header="New SDPA")
     tt_new_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k_post_repeat,

@@ -983,8 +983,8 @@ class MLA1D(AbstractModule):
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
-        print(f"tt_q.shape: {tt_q.shape}")
-        print(f"cfg['wq_a']: {cfg['wq_a']['input_tensor_b'].shape}")
+        # print(f"tt_q.shape: {tt_q.shape}")
+        # print(f"cfg['wq_a']: {cfg['wq_a']['input_tensor_b'].shape}")
 
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])

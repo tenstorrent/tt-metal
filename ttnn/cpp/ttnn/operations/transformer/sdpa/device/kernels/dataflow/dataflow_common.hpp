@@ -40,23 +40,6 @@ void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
     noc_async_read_barrier();
 }
 
-// template <bool is_output_cb, bool is_wr_ptr>
-// void dprint_cb_tile_sdpa(uint32_t cb_id, uint32_t tile_id) {
-//     noc_async_read_barrier();
-//     noc_async_write_barrier();
-//     for (uint8_t i = 0; i < 32; ++i) {
-//         DPRINT << TileSlice(
-//                       cb_id,
-//                       tile_id,
-//                       SliceRange{.h0 = i, .h1 = (uint8_t)(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-//                       is_output_cb ? TSLICE_OUTPUT_CB : TSLICE_INPUT_CB,
-//                       is_wr_ptr ? TSLICE_WR_PTR : TSLICE_RD_PTR,
-//                       true,
-//                       true)
-//                << ENDL();
-//     }
-// }
-
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
     uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
@@ -118,7 +101,6 @@ void read_chunk_with_padding(
     */
     // Read Q chunk
     const uint32_t num_tiles = dst_rows * dst_cols;
-    DPRINT << "num_tiles_to_read: " << num_tiles << ENDL();
     cb_reserve_back(cb_id, num_tiles);
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
     uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
@@ -131,10 +113,6 @@ void read_chunk_with_padding(
             noc_async_read_tile(start_tile_id, reader, write_ptr);
             start_tile_id += 1;
             write_ptr += inner_ptr_stride;
-
-            // DPRINT << "Read tile: " << start_tile_id - 1 << ENDL();
-            // dprint_cb_tile_sdpa<false, false>(cb_id, start_tile_id - 1); // print the tile that was just read
-            // DPRINT << ENDL();
 
             if (++barrier_count == barrier_threshold) {
                 noc_async_read_barrier();

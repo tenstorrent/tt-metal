@@ -6,25 +6,6 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_tile.h"
-
-template <bool is_output_cb, bool is_wr_ptr>
-void dprint_cb_tile_sdpa_writer_interleaved(uint32_t cb_id, uint32_t tile_id) {
-    noc_async_read_barrier();
-    noc_async_write_barrier();
-    for (uint8_t i = 0; i < 32; ++i) {
-        DPRINT << TileSlice(
-                      cb_id,
-                      tile_id,
-                      SliceRange{.h0 = i, .h1 = (uint8_t)(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                      is_output_cb ? TSLICE_OUTPUT_CB : TSLICE_INPUT_CB,
-                      is_wr_ptr ? TSLICE_WR_PTR : TSLICE_RD_PTR,
-                      true,
-                      true)
-               << ENDL();
-    }
-}
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -160,12 +141,7 @@ void kernel_main() {
                     const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
                     uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
                     cb_wait_front(cb_out, out_chunk_tiles);
-                    // DPRINT << "Out chunk tiles: " << out_chunk_tiles << ENDL();
-                    // for (uint32_t i = 0; i < out_chunk_tiles; i++) {
-                    //     DPRINT << "Out tile id: " << out_tile_id << ENDL();
-                    //     dprint_cb_tile_sdpa_writer_interleaved<false, true>(cb_out, i);
-                    //     DPRINT << ENDL();
-                    // }
+
                     barrier_count = 0;
                     uint32_t l1_read_addr = get_read_ptr(cb_out);
                     for (uint32_t row = 0; row < out_row_tile_count; ++row) {

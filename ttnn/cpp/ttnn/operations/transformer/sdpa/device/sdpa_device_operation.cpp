@@ -369,7 +369,7 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
-    const Tensor& v = attrs.use_mla ? tensors.k : tensors.v.value_or(tensors.k);
+    const Tensor& v = tensors.v.value_or(tensors.k);
 
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
@@ -385,7 +385,8 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
         v,
         tensors.attn_mask,
         tensors.page_table,
-        tensors.attention_sink);
+        tensors.attention_sink,
+        attrs.use_mla);
     return hash;
 }
 

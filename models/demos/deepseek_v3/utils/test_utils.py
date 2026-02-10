@@ -190,6 +190,9 @@ def paged_cache_from_torch(
     Raises:
         AssertionError: If the input tensor does not meet expected shapes or configuration constraints.
     """
+    import time
+
+    start_time = time.time()
     if user_id is not None:
         torch_cache_line = torch_cache
         torch_cache = torch.zeros(
@@ -197,33 +200,60 @@ def paged_cache_from_torch(
         )
         torch_cache[user_id : user_id + 1] = torch_cache_line
 
+    end_time = time.time()
+    print(f"Time taken to zero out the cache: {end_time - start_time} seconds")
+
     batch_size, num_heads, seq_len, dim = torch_cache.shape
     batches_per_device = even_int_div(batch_size, mesh_shape[0] * mesh_shape[1])
     blocks_per_batch = even_int_div(paged_config.max_num_blocks, batches_per_device)
     assert num_heads == 1, "Expected the kvpe cache to have only one head"
 
+    start_time = time.time()
     if mapping is None:
         mapping = torch.randperm(batches_per_device * blocks_per_batch).reshape(batches_per_device, blocks_per_batch)
     assert mapping.shape == (batches_per_device, blocks_per_batch)
+    end_time = time.time()
+    print(f"Time taken to generate the mapping: {end_time - start_time} seconds")
 
+    start_time = time.time()
     assert paged_config.block_size * blocks_per_batch >= seq_len
     torch_cache = torch.nn.functional.pad(torch_cache, (0, 0, 0, paged_config.block_size * blocks_per_batch - seq_len))
+    end_time = time.time()
+    print(f"Time taken to pad the cache: {end_time - start_time} seconds")
 
+    start_time = time.time()
     torch_cache = torch_cache.reshape(
         mesh_shape[0] * mesh_shape[1], batches_per_device, num_heads, blocks_per_batch, paged_config.block_size, dim
     )
+    end_time = time.time()
+    print(f"Time taken to reshape the cache: {end_time - start_time} seconds")
+
+    start_time = time.time()
     torch_cache = torch_cache.transpose(
         2, 3
     )  # (num_devices, batches_per_device, blocks_per_batch, num_heads, block_size, dim)
+    end_time = time.time()
+    print(f"Time taken to transpose the cache: {end_time - start_time} seconds")
+
+    start_time = time.time()
 
     paged_cache = torch.empty(
         (mesh_shape[0] * mesh_shape[1], batches_per_device * blocks_per_batch, num_heads, paged_config.block_size, dim),
         dtype=torch_cache.dtype,
     )
+    end_time = time.time()
+    print(f"Time taken to create the paged cache: {end_time - start_time} seconds")
+
+    start_time = time.time()
     paged_cache[:, mapping] = torch_cache
+    end_time = time.time()
+    print(f"Time taken to copy the cache: {end_time - start_time} seconds")
+    start_time = time.time()
     paged_cache = paged_cache.reshape(
         mesh_shape[0] * mesh_shape[1] * batches_per_device * blocks_per_batch, num_heads, paged_config.block_size, dim
     )
+    end_time = time.time()
+    print(f"Time taken to reshape the paged cache: {end_time - start_time} seconds")
 
     return paged_cache, mapping
 
