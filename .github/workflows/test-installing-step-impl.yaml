@@ -7,7 +7,7 @@ on:
 
 jobs:
   install-and-run-mnist:
-    name: Install deps and run MNIST MLP
+    name: TT-Installer and run MNIST MLP
     runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'N150') }}
     timeout-minutes: 30
     steps:
@@ -40,8 +40,8 @@ jobs:
           tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
 
   install-and-run-falcon7b:
-    name: Install deps and run Falcon7b Demo
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    name: TT-Installer and run Falcon7b Demo
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'N150') }}
     timeout-minutes: 90
     steps:
       - name: Prepare system
@@ -64,6 +64,25 @@ jobs:
             --reboot-option=never \
             --mode-non-interactive
 
+      - name: Download Falcon 7B weights from LFC
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
+          # Download under tt_dnn-models/Falcon so once workspace is mounted at /mnt/MLPerf,
+          # model_location_generator finds /mnt/MLPerf/tt_dnn-models/Falcon/tiiuae/falcon-7b-instruct
+          mkdir -p tt_dnn-models/Falcon
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P tt_dnn-models/Falcon "${LFC_BASE}/tiiuae/falcon-7b-instruct/"
+      - name: Patch tt-metalium-models to mount workspace volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          SCRIPT=$(which tt-metalium-models)
+          ls -al $(pwd)
+          ls -al tt_dnn-models/Falcon
+          sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
       - name: Run Falcon7b Demo via tt-metalium-models
         shell: bash
         timeout-minutes: 60
@@ -76,9 +95,9 @@ jobs:
               --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"
 
-  install-and-run-llama70b:
-    name: Install deps and run Llama 70B Demo
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'TG') }}
+  install-and-run-llama70b-t3k:
+    name: TT-Installer and run T3K Llama 70B Demo
+    runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "bare-metal"]
     timeout-minutes: 120
     steps:
       - name: Prepare system
@@ -101,14 +120,11 @@ jobs:
             --reboot-option=never \
             --mode-non-interactive
 
-      - name: Run Llama 70B Demo via tt-metalium-models
+      - name: Run T3K Llama 70B Demo via tt-metalium-models
         shell: bash
         timeout-minutes: 90
         run: |
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
-          LLAMA_DIR_HOST=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-          # Mount host MLPerf model weights into container (Galaxy runners have this path)
           tt-metalium-models \
-            -v "$LLAMA_DIR_HOST:$LLAMA_DIR_HOST" \
-            -c "export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ && export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache && pytest --timeout=1000 --disable-warnings -q -s models/demos/llama3_70b_galaxy/demo/demo_decode.py -k full"
+            -c "export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache && export HF_MODEL=meta-llama/Llama-3.1-70B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py -k 'not performance-ci-stress-1'"
