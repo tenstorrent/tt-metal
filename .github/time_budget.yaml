@@ -104,7 +104,7 @@ models:
     wh_llmbox: 422
   perf:
     wh_llmbox_perf: 685
-    wh_galaxy: 260
+    wh_galaxy: 305
   demo:
     wh_llmbox_perf: 1090
     wh_galaxy: 270

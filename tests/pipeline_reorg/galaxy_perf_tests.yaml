@@ -91,6 +91,17 @@
   save-perf-data: true
   model-type: QwenImage
 
+- name: Galaxy DeepSeek V3 decode perf tests
+  cmd: export MESH_DEVICE=TG && uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt && pytest models/demos/deepseek_v3/demo/test_decode_demo_perf.py --timeout=1200
+  model: deepseek_v3
+  sku: wh_galaxy
+  owner_id: U03HY7MK4BT
+  team: models
+  timeout: 45
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: deepseek_v3
+
 - name: Galaxy Sentence Bert tests
   cmd: |
     pytest --timeout 600 models/demos/tg/sentence_bert/tests/device_perf_test.py
