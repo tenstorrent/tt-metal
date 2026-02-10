@@ -7,7 +7,7 @@ from itertools import product
 import torch
 from loguru import logger
 
-from models.tt_transformers.tt.common import SamplingParams
+from models.common.sampling.sampling_params import SamplingParams
 
 
 class DecodeWarmupMixin:
