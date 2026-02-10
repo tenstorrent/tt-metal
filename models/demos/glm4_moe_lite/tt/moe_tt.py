@@ -75,6 +75,13 @@ def _parse_math_fidelity(value: str, *, default: ttnn.MathFidelity) -> ttnn.Math
     return table.get(raw, default)
 
 
+def _env_bool(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw not in {"0", "false", "no", "off"}
+
+
 def _tt_to_torch_device0(t: ttnn.Tensor) -> torch.Tensor:
     """Best-effort TT -> torch conversion that works for 1x1 mesh bring-up.
 
@@ -663,6 +670,7 @@ def moe_sparse_experts_forward_tt(
     - The older all-to-all dispatch/combine path remains available behind
       `GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL=a2a` for future DP-sharded inputs.
     """
+    packer_l1_acc = _env_bool("GLM4_MOE_LITE_PACKER_L1_ACC", default=False)
     # Default to BF16-speed settings for sparse MoE. Users can opt back into
     # higher-precision accumulation via env overrides if needed for debugging.
     sparse_fidelity = _parse_math_fidelity(
@@ -675,7 +683,7 @@ def moe_sparse_experts_forward_tt(
         math_fidelity=sparse_fidelity,
         math_approx_mode=sparse_approx,
         fp32_dest_acc_en=sparse_fp32_acc,
-        packer_l1_acc=False,
+        packer_l1_acc=packer_l1_acc,
     )
     # STEP 0: Put all tokens on dim -2: [1,1,tokens,H]
     input_shape = hidden_states.shape
