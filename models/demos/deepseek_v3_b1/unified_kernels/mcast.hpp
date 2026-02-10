@@ -125,14 +125,14 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
     }
 }
 
-template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid>
+template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid, bool linked, bool posted>
 FORCE_INLINE void init_persistent_mcast_sender(uint64_t mcast_flag_noc_addr, uint32_t data_sender_semaphore_addr) {
     mcast_send_set_state<
         mcast_num_cores,
         loopback,
         is_part_of_receiver_grid,
-        true,
-        true,
+        linked,
+        posted,
         true,
         false,
         false,
@@ -141,21 +141,21 @@ FORCE_INLINE void init_persistent_mcast_sender(uint64_t mcast_flag_noc_addr, uin
         mcast_num_cores,
         loopback,
         is_part_of_receiver_grid,
+        linked,
+        posted,
         true,
         true,
         true,
-        false,
-        true,
-        write_reg_cmd_buf>(0, mcast_flag_noc_addr, 4);
+        write_reg_cmd_buf>(data_sender_semaphore_addr, mcast_flag_noc_addr, 4);
     mcast_send_with_state<
         mcast_num_cores,
         loopback,
         is_part_of_receiver_grid,
-        true,
-        true,
+        linked,
+        posted,
         false,
         false,
-        write_reg_cmd_buf>(data_sender_semaphore_addr, mcast_flag_noc_addr, 0);
+        write_reg_cmd_buf>(0, 0, 0);
     noc_async_posted_writes_flushed();
 }
 
@@ -305,7 +305,9 @@ struct Mcast {
                     init_persistent_mcast_sender<
                         CTArgsT::mcast_num_cores,
                         CTArgsT::loopback,
-                        CTArgsT::is_part_of_receiver_grid>(mcast_flag_noc_addr, data_sender_semaphore_addr);
+                        CTArgsT::is_part_of_receiver_grid,
+                        linked,
+                        posted>(mcast_flag_noc_addr, data_sender_semaphore_addr);
                 }
                 noc_semaphore_set(data_sender_semaphore_addr_ptr, VALID);
             }
@@ -351,8 +353,8 @@ struct Mcast {
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
                     CTArgsT::is_part_of_receiver_grid,
-                    true,
-                    true,
+                    linked,
+                    posted,
                     true,
                     true,
                     write_cmd_buf>(args.input_data_addr, args.mcast_receiver_data_addr, args.data_size_bytes);
@@ -360,8 +362,8 @@ struct Mcast {
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
                     CTArgsT::is_part_of_receiver_grid,
-                    true,
-                    true,
+                    linked,
+                    posted,
                     true,
                     false,
                     write_reg_cmd_buf>(data_sender_semaphore_addr, data_receiver_semaphore_addr, 0);
@@ -393,6 +395,10 @@ struct Mcast {
             }
 #endif
         }
+
+        static constexpr bool linked = true;
+        static constexpr bool posted = true;
+
     };  // class Op
 
 };  // struct Mcast
