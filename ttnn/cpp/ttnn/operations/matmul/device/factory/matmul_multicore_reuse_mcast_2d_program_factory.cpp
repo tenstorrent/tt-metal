@@ -12,6 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "tt-metalium/buffer_types.hpp"
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -64,7 +65,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -149,8 +151,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
+    uint32_t start_core_x = sub_device_start_core.x;
+    uint32_t start_core_y = sub_device_start_core.y;
 
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
@@ -1614,6 +1616,17 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
+    //                      Sub-device start core
+    ////////////////////////////////////////////////////////////////////////////
+    CoreCoord sub_device_start_core = {0, 0};
+    if (operation_attributes.sub_device_id.has_value()) {
+        auto sub_device_cores = device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
+        auto bbox = sub_device_cores.bounding_box();
+        sub_device_start_core = bbox.start_coord;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
@@ -1654,7 +1667,8 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         bias_data_format,
         output_data_format,
         untilize_out,
-        fused_op_signaler);
+        fused_op_signaler,
+        sub_device_start_core);
 }
 
 MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t MatmulMultiCoreReuseMcast2DProgramFactory::create(
