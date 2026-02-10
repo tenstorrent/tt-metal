@@ -450,6 +450,132 @@ def moe_dense_experts_forward_decode_tt(
     inter = int(hparams.moe_intermediate_size)
     k = int(hparams.num_experts_per_tok)
 
+    is_mesh = device.__class__.__name__ == "MeshDevice"
+
+    # MeshDevice case: expert weights are sharded across the mesh (rank-5 tensor).
+    # We cannot slice global expert ids directly without a topology-aware dispatch.
+    # Instead:
+    # - build a dense routing weight vector [1,1,1,E] (replicated)
+    # - partition it across the mesh -> per-device local weights [1,1,1,E_local]
+    # - run dense experts for all local experts on each device
+    # - weight+reduce locally, then all-reduce across devices
+    if is_mesh:
+        num_devices = int(device.get_num_devices())
+        num_experts = int(hparams.n_routed_experts)
+        if num_experts % max(1, num_devices) != 0:
+            raise ValueError(f"n_routed_experts={num_experts} must be divisible by num_devices={num_devices}")
+        experts_per_device = num_experts // max(1, num_devices)
+
+        # Convert routing tensors to ROW_MAJOR and build dense per-expert weights.
+        topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+        topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(topk_expert_indices, force=False)
+        ttnn.deallocate(topk_expert_weights, force=False)
+
+        weights_zero = _get_scatter_zero_tensor(device=device, tokens_per_device=1, num_experts=num_experts)
+        topk_weights_dense = ttnn.scatter(
+            weights_zero,
+            3,
+            topk_indices_rm,
+            topk_weights_rm,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(topk_indices_rm, force=False)
+        ttnn.deallocate(topk_weights_rm, force=False)
+
+        # Partition expert dimension across the mesh to match the expert weight sharding.
+        local_weights = ttnn.mesh_partition(
+            topk_weights_dense,
+            dim=3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,1,1,E_local] ROW_MAJOR
+        ttnn.deallocate(topk_weights_dense, force=False)
+
+        # Run dense experts for all local experts on each device and stack outputs.
+        expert_outputs: list[ttnn.Tensor] = []
+        w_rank = len(moe_w.w1_experts.shape)
+        if w_rank != 5:
+            raise RuntimeError(f"expected sharded expert weights rank 5 on mesh, got {w_rank}")
+        for local_expert in range(experts_per_device):
+            # Slice local expert weights: [D,1,E_local,in,out] sharded -> [1,1,in,out] per device.
+            w1 = ttnn.slice(
+                moe_w.w1_experts,
+                [0, 0, local_expert, 0, 0],
+                [1, 1, local_expert + 1, hidden, inter],
+            )
+            w3 = ttnn.slice(
+                moe_w.w3_experts,
+                [0, 0, local_expert, 0, 0],
+                [1, 1, local_expert + 1, hidden, inter],
+            )
+            w2 = ttnn.slice(
+                moe_w.w2_experts,
+                [0, 0, local_expert, 0, 0],
+                [1, 1, local_expert + 1, inter, hidden],
+            )
+            w1 = ttnn.squeeze(w1, 2)
+            w3 = ttnn.squeeze(w3, 2)
+            w2 = ttnn.squeeze(w2, 2)
+
+            if compute_kernel_config is None:
+                gate = ttnn.linear(hidden_states, w1, memory_config=memory_config)
+                up = ttnn.linear(hidden_states, w3, memory_config=memory_config)
+            else:
+                gate = ttnn.linear(hidden_states, w1, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+                up = ttnn.linear(hidden_states, w3, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+            ttnn.deallocate(w1, force=False)
+            ttnn.deallocate(w3, force=False)
+
+            gate = ttnn.silu(gate)
+            x_ff = gate * up
+            ttnn.deallocate(gate, force=False)
+            ttnn.deallocate(up, force=False)
+
+            if compute_kernel_config is None:
+                out = ttnn.linear(x_ff, w2, memory_config=memory_config)  # [1,1,1,H]
+            else:
+                out = ttnn.linear(x_ff, w2, memory_config=memory_config, compute_kernel_config=compute_kernel_config)  # [1,1,1,H]
+            ttnn.deallocate(x_ff, force=False)
+            ttnn.deallocate(w2, force=False)
+            expert_outputs.append(out)
+
+        # `concat` may return a view-like tensor; materialize before freeing sources.
+        expert_output_view = ttnn.concat(expert_outputs, dim=0, memory_config=memory_config)  # [E_local,1,1,H]
+        expert_output = ttnn.clone(expert_output_view, memory_config=memory_config)
+        ttnn.deallocate(expert_output_view, force=False)
+        for t in expert_outputs:
+            ttnn.deallocate(t, force=False)
+
+        # Apply routing weights and reduce across local experts.
+        local_weights_rm = local_weights
+        if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
+            local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(local_weights, force=False)
+        local_weights_rm = ttnn.repeat(local_weights_rm, ttnn.Shape((hidden, 1, 1, 1)))  # [H,1,1,E_local]
+        local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0))  # [E_local,1,1,H]
+        local_weights_tiled = ttnn.to_layout(local_weights_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(local_weights_rm, force=False)
+
+        weighted = ttnn.mul(expert_output, local_weights_tiled, memory_config=memory_config)
+        ttnn.deallocate(expert_output, force=False)
+        ttnn.deallocate(local_weights_tiled, force=False)
+        out_local = ttnn.sum(weighted, dim=0, keepdim=True)
+        ttnn.deallocate(weighted, force=False)
+
+        # Sum contributions across devices (experts are sharded across the mesh).
+        out_full = out_local
+        if num_devices > 1:
+            out_full = ttnn.all_reduce(
+                out_local,
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+                memory_config=memory_config,
+            )
+            ttnn.deallocate(out_local, force=False)
+
+        ttnn.deallocate(hidden_states, force=False)
+        return out_full
+
     # Pull indices/weights to host.
     idx_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     w_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
