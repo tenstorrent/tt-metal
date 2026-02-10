@@ -230,7 +230,7 @@ def gen_output_ref(
 
             if local_reduce:
                 local_reduction_k = next(
-                    filter(k_entries, lambda x: x != select_experts_k + 1)
+                    filter(lambda x: x != select_experts_k + 1, k_entries)
                 )  # somewhat arbitrary placement
                 output_ref_tensor[global_batch * seq + s, 0] = reduction_buffer
                 output_data_map[global_batch * seq + s, 0] = 1

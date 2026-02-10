@@ -34,7 +34,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             dense_input_tensor (ttnn.Tensor): Dense expert contributions from MoE compute. It is expected to be structured as follows
                 L1 tensor
                 Hidden padded up to fabric max packet size, only last shard has padding
-                shape: [`data_parallel_core_dim`, `token_parallel_core_dim``, E, T/token_parallel_core_dim, H[P]/num_data_parallel_dim]
+                shape: [`data_parallel_core_dim`, `token_parallel_core_dim`, E, T/token_parallel_core_dim, H[P]/num_data_parallel_dim]
 
                 Height sharded,
                 shard shape: [local_experts * T / token_parallel_core_dim, H[P] / num_data_parallel_dim]
