@@ -17,8 +17,7 @@
 #include "api/compute/untilize.h"
 #include "api/debug/assert.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     SET_CALLED_RECONFIG(RECONFIG_NOTHING_CHANGED);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;    // Bfp8_b
@@ -112,4 +111,3 @@ void MAIN {
     tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 }
-}  // namespace NAMESPACE

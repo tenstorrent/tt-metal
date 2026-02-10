@@ -7,6 +7,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_watcher_enabled
 from ttnn.graph_tracer_utils import GraphTracerUtils
+from ttnn.operations.conv2d import Conv2dConfig
 
 
 @pytest.mark.parametrize("scalar", [3])
@@ -427,3 +428,94 @@ def test_extract_levelized_graph(device):
     assert isinstance(levelized_graph_2, list)
     # Level 2 should have at least as many vertices as level 1 (possibly more)
     assert len(levelized_graph_2) >= len(levelized_graph_1)
+
+
+def test_program_cache_invalidation_across_dispatch_modes(device):
+    def test_conv(device):
+        weights_shape = (32, 3, 3, 3)
+        bias_shape = (1, 1, 1, 32)
+
+        conv_params = {
+            "in_channels": 3,
+            "out_channels": 32,
+            "batch_size": 1,
+            "input_height": 320,
+            "input_width": 320,
+            "kernel_size": (3, 3),
+            "stride": (1, 1),
+            "padding": (1, 1),
+            "dilation": (1, 1),
+            "groups": 1,
+            "device": device,
+            "conv_config": Conv2dConfig(
+                weights_dtype=ttnn.bfloat8_b,
+                activation=None,
+                deallocate_activation=True,
+                reallocate_halo_output=True,
+                config_tensors_in_dram=True,
+                act_block_h_override=128,
+                act_block_w_div=1,
+                reshard_if_not_optimal=False,
+                override_sharding_config=False,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                core_grid=None,
+                transpose_shards=False,
+                output_layout=ttnn.TILE_LAYOUT,
+                enable_act_double_buffer=True,
+                enable_weights_double_buffer=False,
+                full_inner_dim=False,
+                enable_kernel_stride_folding=False,
+                enable_activation_reuse=False,
+            ),
+        }
+
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+            math_approx_mode=False,
+        )
+
+        torch_input = torch.randn([1, 1, 102400, 16]).bfloat16()
+        ttnn_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))]),
+                    [1600, 16],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        )
+
+        weight = torch.randn(weights_shape).bfloat16()
+        bias = torch.randn(bias_shape).bfloat16()
+        ttnn_weights = ttnn.from_torch(weight, dtype=ttnn.float32)
+        ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.float32)
+
+        [x, [output_height, output_width], _] = ttnn.conv2d(
+            input_tensor=ttnn_input,
+            weight_tensor=ttnn_weights,
+            bias_tensor=ttnn_bias,
+            **conv_params,
+            compute_config=compute_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            dtype=ttnn.bfloat8_b,
+        )
+
+    try:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        test_conv(device)
+        ttnn.graph.end_graph_capture()
+        test_conv(device)
+    except Exception as e:
+        print(f"Error during test_conv: {e}")
+        assert False
+
+    assert True
