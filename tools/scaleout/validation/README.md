@@ -240,6 +240,95 @@ To visualize the discovered connectivity, the user can use the `--print-connecti
 
 ```
 
+## SuperPod and Multi-Mesh Fabric Testing
+
+SuperPod testing goes beyond single-pod validation: it exercises the fabric across multiple pods (meshes) and requires matching Mesh Graph Descriptors, rank bindings, and MPI placement to your physical deployment.
+
+### Mainlined Artifacts
+
+The following artifacts are provided for minimal multi-pod (SuperPod) fabric testing:
+
+- **Fabric test config (2D torus, multi-mesh):**  
+  `tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml`  
+  Defines fabric tests (e.g. RandomPairing, AllToAll) for Mesh and 2D Torus XY topologies.
+
+- **Minimal 4-mesh (e.g. 4× SuperPod, each pod 32×4) Mesh Graph Descriptor:**  
+  `tt_metal/fabric/mesh_graph_descriptors/dual_pod_16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto`  
+  Describes four meshes (each 32×4, 4 hosts per mesh) with full 2D torus-style connectivity between meshes.
+
+### Building Your Mesh Graph Descriptor
+
+Your Mesh Graph Descriptor must match your physical SuperPod layout:
+
+- **Number of meshes** — One graph instance per pod (or per logical mesh).
+- **Shape of each mesh** — e.g. 32×4 (device dims) and host topology (e.g. 4×1) must match how many hosts and devices you have per pod.
+- **Connectivity** — Inter-pod links (and optional torus wrap) must reflect how pods are wired (e.g. XY torus between pods).
+
+Descriptor files live under `tt_metal/fabric/mesh_graph_descriptors/`. Use the mainlined `dual_pod_16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto` as a reference; adapt or add descriptors for different pod counts and shapes. See the [Cabling Generator README](../README.md) and fabric docs for generating or customizing descriptors from your deployment.
+
+### Rank Files and Rank Binding Files
+
+Fabric tests use **rank bindings** to map MPI ranks to (mesh_id, mesh_host_rank) and to point to the Mesh Graph Descriptor. You effectively **stamp out** one rank binding per process across all pods.
+
+- **Rank bindings file** — YAML listing each rank’s `mesh_id`, `mesh_host_rank`, and optional `env_overrides`; plus top-level `mesh_graph_desc_path` pointing at your Mesh Graph Descriptor.
+- **Rankfile** — OpenMPI rankfile that maps each rank to a (hostname, slot). You must have **one rankfile entry per rank**; the order must match the rank bindings (rank 0, 1, …).
+
+Example pattern for 4 meshes with 4 hosts per mesh (16 ranks), following the mainlined dual-pod style:
+
+**Rank bindings** (excerpt; see `tests/tt_metal/distributed/config/dual_16x8_quad_bh_galaxy_rank_bindings.yaml` for the full file):
+
+```yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+  # ... one entry per rank (e.g. 16 for 4 meshes × 4 hosts)
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_pod_16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+```
+
+**Rankfile** — One line per rank, listing the host for that rank. A reference 16-rank rankfile for 4 meshes × 4 hosts is provided in the repo root as `8_glx_rankfile` (hosts bh-glx-d03u02/d03u08 through bh-glx-d10u02/d10u08). For other deployments, use the same format; example pattern:
+
+```
+rank 0=bh-glx-c01u08 slot=0
+rank 1=bh-glx-c01u02 slot=0
+rank 2=bh-glx-c02u02 slot=0
+rank 3=bh-glx-c02u08 slot=0
+rank 4=bh-glx-c05u08 slot=0
+rank 5=bh-glx-c05u02 slot=0
+rank 6=bh-glx-c06u08 slot=0
+rank 7=bh-glx-c06u02 slot=0
+rank 8=bh-glx-c03u08 slot=0
+rank 9=bh-glx-c03u02 slot=0
+rank 10=bh-glx-c04u08 slot=0
+rank 11=bh-glx-c04u02 slot=0
+# Add more lines for additional ranks (e.g. 12–15 for 4 meshes × 4 hosts)
+```
+
+Ensure the rankfile host list and count match your deployment and the rank bindings (same number of ranks in both).
+
+### Running Fabric Tests with tt-run
+
+Use `tt-run` with a **rank-binding** file and MPI arguments that include your **rankfile** and **host list**. The test binary is `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric`; pass the fabric test config via `--test_config`.
+
+Example (for 16 ranks using the in-repo rankfile and rank bindings; adjust host list and NIC to your cluster):
+
+```bash
+tt-run \
+  --rank-binding tests/tt_metal/distributed/config/dual_16x8_quad_bh_galaxy_rank_bindings.yaml \
+  --mpi-args "--host bh-glx-d03u08,bh-glx-d03u02,bh-glx-d04u02,bh-glx-d04u08,bh-glx-d05u08,bh-glx-d05u02,bh-glx-d06u02,bh-glx-d06u08,bh-glx-d07u08,bh-glx-d07u02,bh-glx-d08u02,bh-glx-d08u08,bh-glx-d09u08,bh-glx-d09u02,bh-glx-d10u02,bh-glx-d10u08 --rankfile 8_glx_rankfile --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 --bind-to none --tag-output" \
+  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+  --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml
+```
+
+- The repo includes a 16-rank rankfile at `8_glx_rankfile` (repo root) matching the dual_16x8 bindings; the `--host` list above matches that rankfile’s hostnames.
+- For other deployments, use your own rankfile and ensure `--host` lists the same hosts in the same order (one host per rank).
+- Use the correct NIC interface for your environment (`btl_tcp_if_include`; e.g. `ens5f0np0` or `cnx1`).
+
+For more on rankfiles and generating cluster descriptors from multiple hosts, see [README_generate_cluster_descriptors.md](../../scripts/scaleout/README_generate_cluster_descriptors.md).
+
 ## Directed Link Retrains (Wormhole Only)
 
 The validation tool supports directed link recovery on Wormhole based clusters. If a missing connection is detected, the tool will attempt to recover the link by retraining the affected links.
