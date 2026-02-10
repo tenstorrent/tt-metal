@@ -26,13 +26,12 @@ void hacky_sync(uint32_t sync_num, uint32_t wait_cycles, uint32_t sync_addr) {
 /*
  * A test for the watcher waypointing feature.
 */
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-void kernel_main() {
-#else
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
+#if !defined(COMPILE_FOR_BRISC) && !defined(COMPILE_FOR_NCRISC) && !defined(COMPILE_FOR_ERISC) && \
+    !defined(COMPILE_FOR_IDLE_ERISC)
+#include "api/compute/common.h"
 #endif
+
+void kernel_main() {
     uint32_t sync_wait_cycles = get_arg_val<uint32_t>(0);
     uint32_t sync_address     = get_arg_val<uint32_t>(1);
     WATCHER_RING_BUFFER_PUSH(sync_wait_cycles);
@@ -45,9 +44,4 @@ void MAIN {
     hacky_sync(3, sync_wait_cycles, sync_address);
     //WAYPOINT("CCCC");
     hacky_sync(4, sync_wait_cycles, sync_address);
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 }
-#else
-}
-}
-#endif

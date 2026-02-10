@@ -205,6 +205,20 @@ void bind_fabric_api(nb::module_& mod) {
                 kernel_idx: Index of the kernel in the program descriptor
                 worker_core: Logical core coordinate of the worker
         )");
+
+    mod.def(
+        "get_tt_fabric_packet_header_size_bytes",
+        &tt::tt_fabric::get_tt_fabric_packet_header_size_bytes,
+        R"(
+            Returns the fabric packet header size in bytes.
+        )");
+
+    mod.def(
+        "get_tt_fabric_max_payload_size_bytes",
+        &tt::tt_fabric::get_tt_fabric_max_payload_size_bytes,
+        R"(
+            Returns the maximum fabric packet payload size in bytes.
+        )");
 }
 
 }  // namespace ttnn::fabric

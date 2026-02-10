@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
 #include "api/debug/dprint.h"
 #include "common.cpp"
 
