@@ -72,18 +72,14 @@ def create_program_descriptor(
     reduce_scaler_value = 1.0 / W
     reduce_scaler_packed = _pack_bf16_pair(reduce_scaler_value)  # Always bfloat16 for reduce
 
-    # Calculate epsilon scalar
+    # Calculate epsilon scalar - pack according to input dtype
     eps_scalar_packed = _pack_scalar_for_dtype(epsilon, dtype)
 
     # Determine intermediate dtype
-    # For float32 input, intermediates are float32
-    # For bfloat16 input, intermediates are float32 for better precision
-    if dtype == ttnn.float32:
-        intermed_dtype = ttnn.float32
-        fp32_dest_acc_en = True
-    else:  # bfloat16
-        intermed_dtype = ttnn.float32  # Use float32 intermediates for precision
-        fp32_dest_acc_en = True
+    # Use same format as input for CB storage to avoid unpacker reconfig issues.
+    # Precision is maintained via fp32_dest_acc_en=True (FPU accumulates in float32).
+    intermed_dtype = dtype  # Match input format (bfloat16 or float32)
+    fp32_dest_acc_en = True
 
     # Get device
     device = input_tensor.device()
@@ -99,9 +95,9 @@ def create_program_descriptor(
 
     intermed_page_size = input_tile.get_tile_size(intermed_dtype)
 
-    # CB data formats
-    input_data_format = ttnn.DataFormat.Float16_b if dtype == ttnn.bfloat16 else ttnn.DataFormat.Float32
-    intermed_data_format = ttnn.DataFormat.Float32  # Always float32 for intermediates
+    # CB data types - CBFormatDescriptor accepts DataType directly
+    input_data_format = dtype  # bfloat16 or float32
+    intermed_data_format = intermed_dtype  # Same as input format
 
     # --- Circular Buffer Configuration ---
 
@@ -113,9 +109,7 @@ def create_program_descriptor(
             total_size=Wt * input_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=0, data_format=input_data_format, page_size=input_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=0, data_format=input_data_format, page_size=input_page_size)
             ],
         )
     )
@@ -126,9 +120,7 @@ def create_program_descriptor(
             total_size=Wt * input_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=1, data_format=input_data_format, page_size=input_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=1, data_format=input_data_format, page_size=input_page_size)
             ],
         )
     )
@@ -139,9 +131,7 @@ def create_program_descriptor(
             total_size=Wt * input_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=2, data_format=input_data_format, page_size=input_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=2, data_format=input_data_format, page_size=input_page_size)
             ],
         )
     )
@@ -152,9 +142,7 @@ def create_program_descriptor(
             total_size=Wt * input_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=3, data_format=input_data_format, page_size=input_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=3, data_format=input_data_format, page_size=input_page_size)
             ],
         )
     )
@@ -165,9 +153,7 @@ def create_program_descriptor(
             total_size=Wt * input_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=4, data_format=input_data_format, page_size=input_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=4, data_format=input_data_format, page_size=input_page_size)
             ],
         )
     )
@@ -178,9 +164,7 @@ def create_program_descriptor(
             total_size=Wt * input_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=5, data_format=input_data_format, page_size=input_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=5, data_format=input_data_format, page_size=input_page_size)
             ],
         )
     )
@@ -194,23 +178,20 @@ def create_program_descriptor(
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=6,
-                    data_format=ttnn.DataFormat.Float16_b,  # ALWAYS bfloat16
+                    data_format=ttnn.bfloat16,  # ALWAYS bfloat16
                     page_size=bf16_page_size,
-                    num_pages=1,
                 )
             ],
         )
     )
 
-    # CB 7: cb_eps_scalar - Epsilon scalar tile
+    # CB 7: cb_eps_scalar - Epsilon scalar tile (matches intermediate format)
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=input_page_size,
+            total_size=intermed_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=7, data_format=input_data_format, page_size=input_page_size, num_pages=1
-                )
+                ttnn.CBFormatDescriptor(buffer_index=7, data_format=intermed_data_format, page_size=intermed_page_size)
             ],
         )
     )
@@ -221,9 +202,7 @@ def create_program_descriptor(
             total_size=Wt * input_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=8, data_format=input_data_format, page_size=input_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=8, data_format=input_data_format, page_size=input_page_size)
             ],
         )
     )
@@ -234,9 +213,7 @@ def create_program_descriptor(
             total_size=Wt * input_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=16, data_format=input_data_format, page_size=input_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=16, data_format=input_data_format, page_size=input_page_size)
             ],
         )
     )
@@ -247,9 +224,7 @@ def create_program_descriptor(
             total_size=intermed_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=24, data_format=intermed_data_format, page_size=intermed_page_size, num_pages=1
-                )
+                ttnn.CBFormatDescriptor(buffer_index=24, data_format=intermed_data_format, page_size=intermed_page_size)
             ],
         )
     )
@@ -260,9 +235,7 @@ def create_program_descriptor(
             total_size=Wt * intermed_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=25, data_format=intermed_data_format, page_size=intermed_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=25, data_format=intermed_data_format, page_size=intermed_page_size)
             ],
         )
     )
@@ -273,9 +246,7 @@ def create_program_descriptor(
             total_size=Wt * intermed_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=26, data_format=intermed_data_format, page_size=intermed_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=26, data_format=intermed_data_format, page_size=intermed_page_size)
             ],
         )
     )
@@ -286,9 +257,7 @@ def create_program_descriptor(
             total_size=intermed_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=27, data_format=intermed_data_format, page_size=intermed_page_size, num_pages=1
-                )
+                ttnn.CBFormatDescriptor(buffer_index=27, data_format=intermed_data_format, page_size=intermed_page_size)
             ],
         )
     )
@@ -299,9 +268,7 @@ def create_program_descriptor(
             total_size=intermed_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=28, data_format=intermed_data_format, page_size=intermed_page_size, num_pages=1
-                )
+                ttnn.CBFormatDescriptor(buffer_index=28, data_format=intermed_data_format, page_size=intermed_page_size)
             ],
         )
     )
@@ -312,9 +279,7 @@ def create_program_descriptor(
             total_size=Wt * intermed_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=29, data_format=intermed_data_format, page_size=intermed_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=29, data_format=intermed_data_format, page_size=intermed_page_size)
             ],
         )
     )
@@ -325,9 +290,7 @@ def create_program_descriptor(
             total_size=Wt * intermed_page_size,
             core_ranges=core_range_set,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=30, data_format=intermed_data_format, page_size=intermed_page_size, num_pages=Wt
-                )
+                ttnn.CBFormatDescriptor(buffer_index=30, data_format=intermed_data_format, page_size=intermed_page_size)
             ],
         )
     )
@@ -345,19 +308,19 @@ def create_program_descriptor(
     if gamma is not None:
         reader_compile_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
     else:
-        # Add dummy accessor args (zeros) - need to match expected count
-        reader_compile_args.extend([0] * 8)  # Approximate accessor arg count
+        # Non-sharded dummy accessor: exactly 1 compile-time arg (args_config = 0)
+        reader_compile_args.extend([0])
     # Add TensorAccessor args for beta (if provided, else dummy)
     if beta is not None:
         reader_compile_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
     else:
-        reader_compile_args.extend([0] * 8)
+        reader_compile_args.extend([0])
 
     # Reader kernel runtime args
     reader_rt_args = ttnn.RuntimeArgs()
-    input_buffer_addr = input_tensor.buffer().address()
-    gamma_addr = gamma.buffer().address() if gamma is not None else 0
-    beta_addr = beta.buffer().address() if beta is not None else 0
+    input_buffer_addr = input_tensor.buffer_address()
+    gamma_addr = gamma.buffer_address() if gamma is not None else 0
+    beta_addr = beta.buffer_address() if beta is not None else 0
 
     reader_rt_args[0][0] = [
         input_buffer_addr,  # 0: src_addr
@@ -376,7 +339,7 @@ def create_program_descriptor(
         core_ranges=core_range_set,
         compile_time_args=reader_compile_args,
         runtime_args=reader_rt_args,
-        config=ttnn.ReaderConfig(),
+        config=ttnn.ReaderConfigDescriptor(),
     )
 
     # Compute kernel compile-time args
@@ -416,7 +379,7 @@ def create_program_descriptor(
 
     # Writer kernel runtime args
     writer_rt_args = ttnn.RuntimeArgs()
-    output_buffer_addr = output_tensor.buffer().address()
+    output_buffer_addr = output_tensor.buffer_address()
 
     writer_rt_args[0][0] = [
         output_buffer_addr,  # 0: dst_addr
@@ -428,7 +391,7 @@ def create_program_descriptor(
         core_ranges=core_range_set,
         compile_time_args=writer_compile_args,
         runtime_args=writer_rt_args,
-        config=ttnn.WriterConfig(),
+        config=ttnn.WriterConfigDescriptor(),
     )
 
     # --- Assemble Program Descriptor ---

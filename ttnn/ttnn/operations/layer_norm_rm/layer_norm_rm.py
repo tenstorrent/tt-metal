@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from ttnn.ttnn.operations.layer_norm_rm.layer_norm_rm_program_descriptor import create_program_descriptor
+from ttnn.operations.layer_norm_rm.layer_norm_rm_program_descriptor import create_program_descriptor
 
 
 def layer_norm_rm(
