@@ -8,8 +8,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     uint32_t tile_factor = get_compile_time_arg_val(2);
@@ -38,4 +37,3 @@ void MAIN {
 
     cb_push_back(tt::CBIndex::c_16, per_core_block_dim);
 }
-}  // namespace NAMESPACE

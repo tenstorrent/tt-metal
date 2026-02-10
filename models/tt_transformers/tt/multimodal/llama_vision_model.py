@@ -15,7 +15,7 @@ import ttnn
 from models.common.llama_models import VariableSizeImageTransform
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len
+from models.tt_transformers.tt.common import Mode, copy_host_to_device, get_padded_prefill_len
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
@@ -624,7 +624,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
         S = 1
 
-        tt_h = ttnn.to_memory_config(tt_h, self.configuration.model_config["DECODE_RESIDUAL_MEMCFG"])
+        tt_h = ttnn.to_memory_config(tt_h, self.configuration.get_residual_mem_config(Mode.DECODE))
 
         tt_rot_mats = self.text_model.rope_setup.get_rot_mats(tt_rope_id)
 
@@ -691,7 +691,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             current_pos=None,
             rot_mats_global=rot_mats,
             user_id=user_id,
-            mode="prefill",
+            mode=Mode.PREFILL,
             page_table=page_table,
             kv_cache=kv_cache,
             cross_page_table=cross_page_table,
@@ -733,7 +733,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             xattn_caches=xattn_caches,
             current_pos=position_id,
             rot_mats_global=rot_mats,
-            mode="decode",
+            mode=Mode.DECODE,
             page_table=page_table,
             kv_cache=kv_cache,
             cross_page_table=cross_page_table,

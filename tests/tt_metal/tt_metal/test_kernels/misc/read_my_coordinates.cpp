@@ -18,12 +18,7 @@
 #include "api/dataflow/dataflow_api.h"
 #endif
 
-#ifdef COMPILE_FOR_TRISC
-namespace NAMESPACE {
-void MAIN {
-#else
 void kernel_main() {
-#endif
     volatile tt_l1_ptr uint32_t* results = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_compile_time_arg_val(0));
 #ifndef COMPILE_FOR_TRISC
     results[0] = my_x[noc_index];
@@ -33,8 +28,4 @@ void kernel_main() {
     results[3] = get_absolute_logical_y();
     results[4] = get_relative_logical_x();
     results[5] = get_relative_logical_y();
-
-#ifdef COMPILE_FOR_TRISC
-}
-#endif
 }
