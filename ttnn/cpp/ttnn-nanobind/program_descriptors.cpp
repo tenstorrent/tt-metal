@@ -380,6 +380,28 @@ void py_module_types(nb::module_& mod) {
             "address_offset",
             &tt::tt_metal::CBDescriptor::address_offset,
             "Byte offset from buffer base address for CB placement (default 0)");
+            "Collection of format descriptors for different sections of the buffer")
+        .def(
+            "has_buffer",
+            [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },
+            R"pbdoc(
+                Check if this CB has a pinned L1 buffer.
+
+                When True, the CB is bound to a specific L1 address (e.g., a sharded tensor's memory).
+                Writes to this CB go directly to that tensor's L1 space.
+
+                Returns:
+                    True if a buffer pointer is set, False otherwise.
+            )pbdoc")
+        .def(
+            "clear_buffer",
+            [](tt::tt_metal::CBDescriptor& self) { self.buffer = nullptr; },
+            R"pbdoc(
+                Clear the pinned buffer, making this CB use dynamically allocated L1 space.
+
+                Use this when creating intermediate CBs in fused kernels where the CB
+                should not be pinned to any specific tensor's L1 address.
+            )pbdoc");
 
     // Helper function for creating CBDescriptor from sharded tensor
     mod.def(
