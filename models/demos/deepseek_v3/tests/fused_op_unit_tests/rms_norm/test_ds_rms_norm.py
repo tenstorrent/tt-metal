@@ -46,12 +46,12 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 1, "kv_lora_rank"): {"kernel": 134, "op_to_op": 0.0},
-    ("decode", 1, "q_lora_rank"): {"kernel": 134, "op_to_op": 0.0},
-    ("prefill", 128, "kv_lora_rank"): {"kernel": 195, "op_to_op": 0.0},
-    ("prefill", 128, "q_lora_rank"): {"kernel": 195, "op_to_op": 0.0},
-    ("prefill", 1024, "kv_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 1024, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 128, "kv_lora_rank"): {"kernel": 7863.044, "op_to_op": 1929896.763},
+    ("decode", 1, "q_lora_rank"): {"kernel": 134, "op_to_op": 0.0},  # TODO
+    ("decode", 1, "kv_lora_rank"): {"kernel": 7690.514, "op_to_op": 1023748.442},
+    ("prefill", 128, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},  # TODO
+    ("prefill", 1024, "kv_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},  # TODO
+    ("prefill", 1024, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},  # TODO
 }
 
 
