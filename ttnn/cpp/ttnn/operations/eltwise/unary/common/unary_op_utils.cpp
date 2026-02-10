@@ -444,8 +444,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::MAXIMUM:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
-                return {"unary_max_tile_init();", fmt::format("unary_max_int32_tile({}, {}u);", idst, (uint)params[0])};
+            if (input_dtype == DataType::INT32) {
+                return {
+                    "unary_max_int32_tile_init();",
+                    fmt::format("unary_max_int32_tile({}, {}u);", idst, (uint)params[0])};
+            }
+            if (input_dtype == DataType::UINT32) {
+                return {
+                    "unary_max_uint32_tile_init();",
+                    fmt::format("unary_max_uint32_tile({}, {}u);", idst, (uint)params[0])};
             }
             return {
                 "unary_max_tile_init();",
@@ -454,8 +461,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::MINIMUM:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
-                return {"unary_min_tile_init();", fmt::format("unary_min_int32_tile({}, {}u);", idst, (uint)params[0])};
+            if (input_dtype == DataType::INT32) {
+                return {
+                    "unary_min_int32_tile_init();",
+                    fmt::format("unary_min_int32_tile({}, {}u);", idst, (uint)params[0])};
+            }
+            if (input_dtype == DataType::UINT32) {
+                return {
+                    "unary_min_uint32_tile_init();",
+                    fmt::format("unary_min_uint32_tile({}, {}u);", idst, (uint)params[0])};
             }
             return {
                 "unary_min_tile_init();",
@@ -627,7 +641,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                     "mul_int_tile_init<DataFormat::UInt16>();",
                     fmt::format("mul_int_tile<DataFormat::UInt16>({0}, {0}, {0});", idst)};
             }
-            return {"        square_tile_init();", fmt::format("square_tile({});", idst)};
+            return {"square_tile_init();", fmt::format("square_tile({});", idst)};
         case UnaryOpType::TILED_PROD: return {"tiled_prod_tile_init();", fmt::format("tiled_prod_tile({});", idst)};
         case UnaryOpType::EQZ:
             TT_FATAL(

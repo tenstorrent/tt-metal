@@ -435,13 +435,17 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 fmt::format("bitwise_xor_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
         case MAXIMUM:
             if (dtype == DataType::INT32) {
-                return {"binary_max_tile_init();", "binary_max_int32_tile"};
+                return {"binary_max_int32_tile_init();", "binary_max_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_max_uint32_tile_init();", "binary_max_uint32_tile"};
             } else {
                 return {"binary_max_tile_init();", "binary_max_tile"};
             }
         case MINIMUM:
             if (dtype == DataType::INT32) {
-                return {"binary_min_tile_init();", "binary_min_int32_tile"};
+                return {"binary_min_int32_tile_init();", "binary_min_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_min_uint32_tile_init();", "binary_min_uint32_tile"};
             } else {
                 return {"binary_min_tile_init();", "binary_min_tile"};
             }

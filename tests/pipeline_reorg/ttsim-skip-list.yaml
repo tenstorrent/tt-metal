@@ -80,6 +80,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_nextafter.py
   - tests/ttnn/unit_tests/operations/eltwise/test_fmod.py
   - tests/ttnn/unit_tests/operations/eltwise/test_expm1.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
 
   # Pool tests
   - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
@@ -197,6 +198,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/eltwise/test_nextafter.py
   - tests/ttnn/unit_tests/operations/eltwise/test_fmod.py
   - tests/ttnn/unit_tests/operations/eltwise/test_expm1.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
 
   # Core tests
   - tests/ttnn/unit_tests/base_functionality/test_untilize_bfloat8_b.py
@@ -207,7 +209,6 @@ blackhole:
   - tests/ttnn/unit_tests/base_functionality/test_async.py
 
   # Eltwise tests (BH-specific failures)
-  - tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
   - tests/ttnn/unit_tests/operations/eltwise/test_sigmoid_accurate_21f.py
 
   # Conv tests
