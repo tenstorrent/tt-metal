@@ -33,6 +33,7 @@ set(SOURCES
     datasets/generators_test.cpp
     datasets/dataloader_test.cpp
     optimizers/adamw_test.cpp
+    optimizers/muon_test.cpp
     optimizers/sgd_fused_test.cpp
     optimizers/adamw_fused_test.cpp
     optimizers/adamw_full_precision_test.cpp
@@ -52,6 +53,7 @@ set(SOURCES
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
+    ops/newton_schulz_op_test.cpp
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
