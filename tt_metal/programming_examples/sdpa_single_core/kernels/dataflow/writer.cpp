@@ -15,20 +15,4 @@ void kernel_main() {
 
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
-
-    // // Dummy produce of prev max (used in sdpa reduce max)
-    // constexpr uint32_t cb_prev_max_im = tt::CBIndex::c_27;
-    // DPRINT << "Producing " << Sq_chunk_t << " tiles in prev_max" << ENDL();
-    // cb_reserve_back(cb_prev_max_im, Sq_chunk_t);
-    // cb_push_back(cb_prev_max_im, Sq_chunk_t);
-
-    // // Pre-populate prev_sum so iter 0 has uniform structure (no special-casing)
-    // constexpr uint32_t cb_prev_sum_im = tt::CBIndex::c_29;
-    // cb_reserve_back(cb_prev_sum_im, Sq_chunk_t);
-    // cb_push_back(cb_prev_sum_im, Sq_chunk_t);
-
-    // // Pre-populate prev_out so iter 0 has uniform structure (no special-casing)
-    // constexpr uint32_t cb_prev_out_im = tt::CBIndex::c_25;
-    // cb_reserve_back(cb_prev_out_im, Sq_chunk_t * head_dim_t);
-    // cb_push_back(cb_prev_out_im, Sq_chunk_t * head_dim_t);
 }
