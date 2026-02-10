@@ -137,7 +137,22 @@ Proceed with analysis, or suggest different references?"
 - User confirms → proceed to Phase 1
 - User suggests alternatives → update references and re-confirm
 
-### Step 5: Execute Workflow
+### Step 5: Enable Logging (If Requested)
+
+If the user requests breadcrumbs or logging, create the signal file **before launching any agents**:
+
+```bash
+mkdir -p .claude && echo '{"operation_path": "{operation_path}"}' > .claude/active_logging.json
+```
+
+A `SubagentStart` hook automatically injects breadcrumb instructions into every agent's context. No need to mention logging in agent prompts. See `.claude/references/logging-mechanism.md` for details.
+
+After the pipeline completes, clean up:
+```bash
+rm -f .claude/active_logging.json
+```
+
+### Step 6: Execute Workflow
 
 1. **Phase 1**: Run `ttnn-operation-analyzer` on EACH confirmed reference
 2. **Phase 2**: Run `ttnn-operation-planner` with all analyzer outputs
