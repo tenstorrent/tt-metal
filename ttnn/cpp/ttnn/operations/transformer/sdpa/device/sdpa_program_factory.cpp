@@ -377,7 +377,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       (uint32_t)is_chunked,
                                                       block_size_t,
                                                       page_table_stick_size,
-                                                      (std::uint32_t)use_attention_sink};
+                                                      (std::uint32_t)use_attention_sink,
+                                                      qk_out_subblock_h};
 
     // Placeholder semaphore IDs for KV chain forwarding (will be filled later if enabled)
     // Add these BEFORE TensorAccessorArgs to keep indexing consistent with kernel expectations
