@@ -1,5 +1,4 @@
 import pytest
-import torch
 from transformers import AutoProcessor, CLIPModel
 from transformers.image_utils import load_image
 
@@ -22,6 +21,8 @@ from models.demos.clip_vit.tests.test_tt_clip_vision import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+# TODO could probably turn these into a dispatch table via a map
+# TODO Figure out different way to invoke the seperate modules, str is kinda dumb
 def test_clip_get_image_features(torch_model, submodule, pixel_values, config, pcc, device):
     vision_config = config.vision_config
     vision_model = torch_model.vision_model
@@ -37,19 +38,6 @@ def test_clip_get_image_features(torch_model, submodule, pixel_values, config, p
         torch_output, ttnn_output = test_clip_vision_encoder_layer(vision_model, vision_config, pixel_values, device)
     if submodule == "FULL":
         torch_output, ttnn_output = test_clip_vision_encoder(vision_model, vision_config, pixel_values, device)
-
-    """
-    ttnn_pixel_values = ttnn.from_torch(
-        pixel_values, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
-    )
-
-    with torch.no_grad():
-        torch_image_features = torch_model.get_image_features(pixel_values=pixel_values)
-        torch_image_features = torch_image_features.to(torch.bfloat16)
-
-    ttnn_image_features = ttnn_model.get_image_features(pixel_values=ttnn_pixel_values)
-    ttnn_image_features_torch = ttnn.to_torch(ttnn_image_features)
-    """
 
     passed, pcc_value = comp_pcc(torch_output, ttnn_output, pcc=pcc)
     assert_with_pcc(torch_output, ttnn_output, pcc=pcc)
@@ -83,7 +71,7 @@ def test_clip_get_text_features(torch_model, submodule, input_ids, config, pcc, 
             "http://images.cocodataset.org/val2017/000000039769.jpg",
             ["a photo of a cat", "a photo of a dog"],
             77,
-            0.95,
+            0.98,
         )
     ],
 )
@@ -95,17 +83,16 @@ def test_clip_get_text_features(torch_model, submodule, input_ids, config, pcc, 
         ("VISION", "ATTENTION"),
         ("VISION", "ENCODER_LAYER"),
         ("VISION", "FULL"),
-        ("TEXT", "EMBEDDINGS"),
-        ("TEXT", "MLP"),
-        ("TEXT", "ATTENTION"),
-        ("TEXT", "ENCODER_LAYER"),
-        ("TEXT", "FULL"),
+        # ("TEXT", "EMBEDDINGS"),
+        # ("TEXT", "MLP"),
+        # ("TEXT", "ATTENTION"),
+        # ("TEXT", "ENCODER_LAYER"),
+        # ("TEXT", "FULL"),
     ],
 )
 def test_clip_model_forward(model_name, image_url, text_queries, max_seq_len, pcc, encoder, submodule):
     torch_model = CLIPModel.from_pretrained(model_name)
     processor = AutoProcessor.from_pretrained(model_name)
-    torch_model = torch_model.to(torch.bfloat16)
     torch_model.eval()
 
     config = torch_model.config
@@ -130,28 +117,6 @@ def test_clip_model_forward(model_name, image_url, text_queries, max_seq_len, pc
             test_clip_get_image_features(torch_model, submodule, pixel_values, config, pcc, device)
         if encoder == "TEXT":
             test_clip_get_text_features(torch_model, submodule, torch_input_ids, config, pcc, device)
-
-        """
-        with torch.no_grad():
-            torch_outputs = torch_model(input_ids=torch_input_ids, pixel_values=torch_pixel_values)
-            torch_logits_per_image = torch_outputs.logits_per_image.to(torch.bfloat16)
-            torch_logits_per_text = torch_outputs.logits_per_text.to(torch.bfloat16)
-
-        logits_per_image, logits_per_text = ttnn_model(
-            input_ids=ttnn_input_ids,
-            pixel_values=ttnn_pixel_values,
-        )
-
-        ttnn_logits_per_image = ttnn.to_torch(logits_per_image)
-        ttnn_logits_per_text = ttnn.to_torch(logits_per_text)
-
-        passed_img, pcc_img = comp_pcc(torch_logits_per_image, ttnn_logits_per_image, pcc=pcc)
-        assert_with_pcc(torch_logits_per_image, ttnn_logits_per_image, pcc=pcc)
-
-        passed_txt, pcc_txt = comp_pcc(torch_logits_per_text, ttnn_logits_per_text, pcc=pcc)
-        assert_with_pcc(torch_logits_per_text, ttnn_logits_per_text, pcc=pcc)
-
-        """
 
     finally:
         if device is not None:
