@@ -131,9 +131,8 @@ Before starting, ensure you have:
 |------|----------|
 | **Cutsheets (Internal)** | [Top Level Topologies Spreadsheet](https://docs.google.com/spreadsheets/d/1mnZJueW4BKZGNvrtGiCQZa12hxQbg49Aref2FDrRBsQ/edit?gid=0#gid=0) |
 | Cabling Web Tool | https://aus2-cablegen.aus2.tenstorrent.com/ |
-| 4x32 IntraPod Configs (Current) | `/data/scaleout_configs/4xBH_4x32_intrapod_updated/` |
-| Legacy BH GLX Configs | `/data/scaleout_configs/bh_glx_exabox/` |
-| Merged Output Location | `/data/scaleout_configs/` (requires sudo) |
+| Latest Vetted Exabox State | `/data/scaleout_configs/bh_glx_exabox/` |
+| Scaleout Configs Directory | `/data/scaleout_configs/` (shared location, requires sudo) |
 | Docker Image (Known Good) | `ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a` |
 
 ---
