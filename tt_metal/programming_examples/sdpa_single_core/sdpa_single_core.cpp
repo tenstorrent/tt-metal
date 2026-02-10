@@ -167,8 +167,9 @@ void sdpa_single_core(
         sub_exp_granularity);
 
     std::map<std::string, std::string> defines;
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
+    constexpr bool exp_approx_mode = true;
+    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+
     // Create the data movement kernels and the compute kernel
     std::vector<uint32_t> reader_compile_time_args = {
         Sq_chunk_t,
