@@ -12,6 +12,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <utility>
 #include <llrt/tt_cluster.hpp>
+#include <llrt/llrt.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -80,6 +81,15 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
     TT_THROW("Not supported for slow dispatch");
 }
 
+void SDMeshCommandQueue::wait_for_cores_idle() {
+    if (!logical_cores_for_previous_workload_.empty()) {
+        for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
+            tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
+        }
+        logical_cores_for_previous_workload_.clear();
+    }
+}
+
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip workload execution for mock devices
@@ -90,6 +100,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         log_debug(
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload execution.", __FUNCTION__);
     }
+    wait_for_cores_idle();
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             if (mesh_device_->impl().is_local(coord)) {
@@ -98,11 +109,16 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             }
         }
     }
+
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             if (mesh_device_->impl().is_local(coord)) {
                 auto* device = mesh_device_->impl().get_device(coord);
-                tt_metal::detail::WaitProgramDone(device, program);
+                if (blocking) {
+                    tt_metal::detail::WaitProgramDone(device, program);
+                } else {
+                    logical_cores_for_previous_workload_[device->id()] = program.impl().logical_cores();
+                }
             }
         }
     }
@@ -132,7 +148,7 @@ void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
-
+    wait_for_cores_idle();
     for (const auto& device : mesh_device_->get_devices()) {
         tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
