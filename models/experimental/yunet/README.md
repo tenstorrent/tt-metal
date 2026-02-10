@@ -28,54 +28,103 @@ This will:
 ## Input Sizes
 
 The model supports two input sizes:
-- **320×320** (default): Faster inference, suitable for most use cases
-- **640×640**: Higher accuracy for smaller faces, 4x more pixels
+- **640×640** (default): Higher accuracy for smaller faces
+- **320×320**: Faster inference, use `--input-size 320`
 
-All tests and demo default to 320×320. Use `--input-size 640` to run with 640×640.
+## Performance
 
-## Performance (P150 Blackhole)
+### P150 Blackhole
 
 | Input Size | Device FPS (kernel) | E2E FPS (trace+2CQ) |
 |------------|---------------------|---------------------|
-| 320×320    | ~1150 samples/s     | ~280 FPS |
-| 640×640    | ~450 samples/s      | ~70 FPS |
+| 320×320    | ~1150 samples/s     | ~250 FPS |
+| 640×640    | ~450 samples/s      | ~60 FPS |
+
+### N150 Wormhole
+
+| Input Size | Device FPS (kernel) | E2E FPS (trace+2CQ) |
+|------------|---------------------|---------------------|
+| 320×320    | ~545 samples/s      | ~171 FPS |
+| 640×640    | ~185 samples/s      | ~43 FPS |
 
 ## Usage
 
 ### Running Demo
 
 ```bash
-# Default 320x320 input size
-python models/experimental/yunet/demo/demo.py --input <image_path> --output <output_path>
+# Default 640x640 input size
+python models/experimental/yunet/demo/demo.py --input <image_path>
+#test_images available in yunet folder
 
-# With 640x640 input size
-python models/experimental/yunet/demo/demo.py --input <image_path> --output <output_path> --input-size 640
-
+# With 320x320 input size
+python models/experimental/yunet/demo/demo.py --input <image_path> --input-size 320
+```
 
 ### Running PCC Tests
 
 ```bash
-# Default 320x320
+# Default 640x640
 pytest models/experimental/yunet/tests/pcc/test_pcc.py -v
 
-# With 640x640 input size
-pytest models/experimental/yunet/tests/pcc/test_pcc.py -v --input-size 640
+# With 320x320 input size
+pytest models/experimental/yunet/tests/pcc/test_pcc.py -v --input-size 320
 ```
 
 ### Running Performance Tests
 
 ```bash
-# E2E performant test (default 320x320)
+# E2E performant test (default 640x640)
 pytest models/experimental/yunet/tests/perf/test_e2e_performant.py -v
 
-# E2E performant test with 640x640
-pytest models/experimental/yunet/tests/perf/test_e2e_performant.py -v --input-size 640
+# E2E performant test with 320x320
+pytest models/experimental/yunet/tests/perf/test_e2e_performant.py -v --input-size 320
 
-# Device perf test (requires profiler, default 320x320)
+# Device perf test (default 640x640)
 pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v
 
-# Device perf test with 640x640
-pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v  --input-size 640
+# Device perf test with 320x320
+pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v --input-size 320
+```
+
+### Web Demo (Real-time Face Detection)
+
+The web demo provides a FastAPI server for inference and a Streamlit client for real-time webcam face detection.
+
+> **Note:** For best results, run the Streamlit client locally on your laptop to avoid WebRTC NAT/firewall issues. The server runs on the Tenstorrent machine.
+
+**1. Start the FastAPI server (on Tenstorrent machine):**
+
+```bash
+cd models/experimental/yunet/web_demo/server
+pip install fastapi uvicorn python-multipart
+./run_server.sh
+```
+
+Server runs at `http://0.0.0.0:8000`
+
+**2. Run the Streamlit client:**
+
+For best results, run the client locally on your laptop (avoids WebRTC NAT issues):
+
+```bash
+# Install dependencies
+pip install streamlit streamlit-webrtc opencv-python requests av
+
+# Copy client file to your laptop
+scp user@server:~/tt-metal/models/experimental/yunet/web_demo/client/yunet_streamlit.py .
+
+# Run client
+streamlit run yunet_streamlit.py
+```
+
+In the sidebar, set **API Server URL** to `http://<server-ip>:8000`
+
+Alternatively, run the client on the server:
+
+```bash
+cd models/experimental/yunet/web_demo/client
+pip install streamlit streamlit-webrtc opencv-python requests av
+./run_client.sh
 ```
 
 ## Directory Structure
@@ -106,6 +155,13 @@ models/experimental/yunet/
 ├── tt/
 │   ├── model_preprocessing.py  # Weight loading utilities
 │   └── ttnn_yunet.py          # Main TTNN model
+├── web_demo/
+│   ├── client/
+│   │   ├── yunet_streamlit.py # Streamlit webcam client
+│   │   └── run_client.sh
+│   └── server/
+│       ├── fast_api_yunet.py  # FastAPI inference server
+│       └── run_server.sh
 └── YUNet/                     # Cloned PyTorch repo (after setup.sh)
     └── weights/best.pt
 ```

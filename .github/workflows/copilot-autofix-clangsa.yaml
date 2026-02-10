@@ -67,11 +67,13 @@ jobs:
           # Read attempted hashes into a variable (newline-separated)
           ATTEMPTED=$(cat attempted_hashes.txt)
 
-          # Find first issue whose hash is not in attempted list
+          # Find first clangsa issue whose hash is not in attempted list
           ISSUE=$(jq -c --arg attempted "$ATTEMPTED" '
-            .reports[] |
-            select(.report_hash as $h | $attempted | split("\n") | index($h) | not)
-          ' "$JSON_FILE" | head -1)
+            [.reports[] |
+            select(.analyzer_name == "clangsa") |
+            select(.report_hash as $h | $attempted | split("\n") | index($h) | not)] |
+            first // empty
+          ' "$JSON_FILE")
 
           if [ -z "$ISSUE" ]; then
             echo "All issues have been attempted"

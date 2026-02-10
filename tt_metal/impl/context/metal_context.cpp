@@ -221,6 +221,14 @@ void MetalContext::initialize(
         std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
     noc_debug_state_ = std::make_unique<NOCDebugState>();
 
+    if (rtoptions_.get_experimental_noc_debug_dump_enabled()) {
+        TT_FATAL(
+            !rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint),
+            "Both DPRINT and NOC debug dump cannot be enabled at the same time.");
+        TT_FATAL(
+            !rtoptions_.get_watcher_enabled(), "Both Watcher and NOC debug dump cannot be enabled at the same time.");
+    }
+
     if (rtoptions_.get_profiler_enabled()) {
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
@@ -304,7 +312,7 @@ void MetalContext::initialize(
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        cluster_->set_internal_routing_info_for_ethernet_cores(true);
+        cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), true);
     }
 
     // Initialize debug tools, reset cores, init FW
@@ -369,7 +377,7 @@ void MetalContext::teardown() {
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        cluster_->set_internal_routing_info_for_ethernet_cores(false);
+        cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), false);
     }
 
     if (data_collector_) {

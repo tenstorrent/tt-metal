@@ -3,14 +3,14 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/add_int_sfpu.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tilize.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/pack.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/add_int_sfpu.h"
 
 #define DEBUG_PRINT 0
 
@@ -212,7 +212,7 @@ void kernel_main() {
 
                         // we allow overflow here for negative values as this only occurs in padding regions
                         add_int_tile_init();
-                        add_uint16_tile(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                        add_int_tile<DataFormat::UInt16>(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
 
                         max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
                     }

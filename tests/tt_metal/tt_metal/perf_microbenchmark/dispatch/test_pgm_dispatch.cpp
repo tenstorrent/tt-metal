@@ -6,7 +6,6 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <cstdint>
-#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
