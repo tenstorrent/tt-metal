@@ -259,7 +259,7 @@ class Generator(DecodeWarmupMixin):
         sample_on_device_mode=None,
         non_greedy_decoding_on_device=False,
     ):
-        return self._ttt_generator.warmup_model_decode(
+        return super().warmup_model_decode(
             kv_cache=kv_cache,
             enable_trace=enable_trace,
             max_batch_size=max_batch_size,
