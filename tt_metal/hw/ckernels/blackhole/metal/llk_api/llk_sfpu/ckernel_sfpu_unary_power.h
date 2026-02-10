@@ -196,16 +196,21 @@ inline void calculate_unary_power_iterative(const uint32_t exponent) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = 1.0f;
-        uint exp = exponent;
-        while (exp > 0) {
-            if (exp & 1) {
-                result *= in;
+        if (exponent == 0) {
+            sfpi::dst_reg[0] = 1.0f;
+        } else {
+            sfpi::vFloat result = in;
+            uint32_t exp = exponent - 1;
+
+            while (exp > 0) {
+                if (exp & 1) {
+                    result *= in;
+                }
+                in *= in;
+                exp >>= 1;
             }
-            in *= in;
-            exp >>= 1;
+            sfpi::dst_reg[0] = result;
         }
-        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
