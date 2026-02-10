@@ -17,6 +17,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/eltwise_mul_scalar.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 using namespace ckernel;
 #endif
 
@@ -153,8 +154,13 @@ struct EltwiseMul {
 
             if constexpr (CTArgs::enable_scalar) {
                 // ---- 3-way multiply: in0 * scalar -> dest, then dest * in1 -> dest ----
-                deepseek_mul_tiles_bcast_scalar_hw_startup<CTArgs::fp32_dest_acc_en>(
-                    CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
+                if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
+                    deepseek_compute_kernel_hw_startup<CTArgs::fp32_dest_acc_en>(
+                        CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
+                } else {
+                    reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_scalar);
+                    pack_reconfig_data_format<true>(CTArgs::cb_out);
+                }
                 deepseek_mul_tiles_bcast_scalar_init_short(CTArgs::cb_in0, CTArgs::cb_scalar);
 
                 tile_regs_acquire();
@@ -172,7 +178,8 @@ struct EltwiseMul {
                 }
             } else {
                 // ---- Simple binary multiply: in0 * in1 -> dest ----
-                compute_kernel_hw_startup(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+                reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_in1);
+                pack_reconfig_data_format<true>(CTArgs::cb_out);
                 mul_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
 
                 tile_regs_acquire();
@@ -198,6 +205,10 @@ struct EltwiseMul {
                 if constexpr (CTArgs::enable_scalar) {
                     cb_pop_front(CTArgs::cb_scalar, 1);
                 }
+            }
+            // Reset FP32 accum mode if different from DST_ACCUM_MODE
+            if constexpr (CTArgs::enable_scalar && CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
+                deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
             }
 #endif
         }
