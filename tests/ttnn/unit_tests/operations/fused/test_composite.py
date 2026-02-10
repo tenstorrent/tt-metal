@@ -9,6 +9,7 @@ import ttnn
 import models.experimental.ops.descriptors as descriptors
 import models.experimental.ops.descriptors.composite as composite
 from tests.ttnn.utils_for_testing import assert_allclose
+from tests.ttnn.unit_tests.operations.fused.test_layer_norm import allclose_thresholds as thresholds
 
 
 # ============================================================================
@@ -35,7 +36,13 @@ def torch_layer_norm(x, gamma, eps=1e-5):
     return x_normed.to(x.dtype)
 
 
-def assert_outputs_are_close(torch_inputs, torch_weights, ttnn_outputs, rtol=1e-2, atol=2.5e-2):
+def assert_outputs_are_close(
+    torch_inputs,
+    torch_weights,
+    ttnn_outputs,
+    rtol=thresholds[torch.bfloat16].rtol,
+    atol=thresholds[torch.bfloat16].atol,
+):
     for torch_input, torch_weight, ttnn_output in zip(torch_inputs, torch_weights, ttnn_outputs):
         # Compute expected output
         expected = torch_rms_norm(torch_input, torch_weight)
@@ -372,7 +379,7 @@ def _run_heavy_composite_norm_test(device, norm_fn, torch_norm_fn):
     ):
         expected = torch_norm_fn(torch_input, torch_weight)
         actual = ttnn.to_torch(ttnn.from_device(ttnn_output))
-        assert_allclose(expected, actual, rtol=1e-2, atol=2.5e-2)
+        assert_allclose(expected, actual, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol)
 
 
 def test_composite_rms_heavy(device):
@@ -435,12 +442,16 @@ def test_composite_mixed_norm(device):
     # Verify left output (RMS norm)
     expected_left = torch_rms_norm(tensors["left"]["torch_input"], tensors["left"]["torch_weight"])
     actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
-    assert_allclose(expected_left, actual_left, rtol=1e-2, atol=2.5e-2)
+    assert_allclose(
+        expected_left, actual_left, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
+    )
 
     # Verify right output (layer norm)
     expected_right = torch_layer_norm(tensors["right"]["torch_input"], tensors["right"]["torch_weight"])
     actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
-    assert_allclose(expected_right, actual_right, rtol=1e-2, atol=2.5e-2)
+    assert_allclose(
+        expected_right, actual_right, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
+    )
 
 
 def test_composite_non_sharded(device):
@@ -511,11 +522,15 @@ def test_composite_non_sharded(device):
     # Verify outputs
     expected_left = torch_rms_norm(torch_left_input, torch_left_weight)
     actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
-    assert_allclose(expected_left, actual_left, rtol=1e-2, atol=2.5e-2)
+    assert_allclose(
+        expected_left, actual_left, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
+    )
 
     expected_right = torch_layer_norm(torch_right_input, torch_right_weight)
     actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
-    assert_allclose(expected_right, actual_right, rtol=1e-2, atol=2.5e-2)
+    assert_allclose(
+        expected_right, actual_right, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
+    )
 
 
 def test_composite_8_ops_random_cores(device):
@@ -615,7 +630,7 @@ def test_composite_8_ops_random_cores(device):
     ):
         expected = norm_fn(torch_input, torch_weight)
         actual = ttnn.to_torch(ttnn.from_device(output[0]))
-        assert_allclose(expected, actual, rtol=1e-2, atol=2.5e-2)
+        assert_allclose(expected, actual, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol)
 
 
 def test_composite_program_cache(device):
@@ -831,11 +846,15 @@ def test_composite_layer_norm_welford_non_sharded(device):
     # Verify outputs
     expected_left = torch_layer_norm(torch_left_input, torch_left_weight)
     actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
-    assert_allclose(expected_left, actual_left, rtol=1e-2, atol=2.5e-2)
+    assert_allclose(
+        expected_left, actual_left, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
+    )
 
     expected_right = torch_layer_norm(torch_right_input, torch_right_weight)
     actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
-    assert_allclose(expected_right, actual_right, rtol=1e-2, atol=2.5e-2)
+    assert_allclose(
+        expected_right, actual_right, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
+    )
 
 
 def test_composite_layer_norm_welford_sharded(device):
@@ -951,11 +970,15 @@ def test_composite_layer_norm_welford_sharded(device):
     # Verify outputs
     expected_left = torch_layer_norm(torch_left_input, torch_left_weight)
     actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
-    assert_allclose(expected_left, actual_left, rtol=1e-2, atol=2.5e-2)
+    assert_allclose(
+        expected_left, actual_left, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
+    )
 
     expected_right = torch_layer_norm(torch_right_input, torch_right_weight)
     actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
-    assert_allclose(expected_right, actual_right, rtol=1e-2, atol=2.5e-2)
+    assert_allclose(
+        expected_right, actual_right, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
+    )
 
 
 def test_composite_overlapping_cores_error(device):
