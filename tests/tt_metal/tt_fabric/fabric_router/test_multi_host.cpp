@@ -744,7 +744,7 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchControlPlaneInit) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
     auto control_plane = make_control_plane(
         mesh_graph_desc_path.string(),
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     check_asic_mapping_against_golden("TestClosetBox3PodTTSwitchControlPlaneInit");
@@ -776,7 +776,7 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
 
     auto control_plane = make_control_plane(
         mesh_graph_desc_path.string(),
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     const auto& mesh_graph = control_plane->get_mesh_graph();
 
