@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
+#include "llk_defs.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -272,7 +273,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFlo
     return _sfpu_binary_power_61f_(base, pow);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -287,7 +288,7 @@ inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_i
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void sfpu_binary_pow_init() {
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;

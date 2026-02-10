@@ -6,18 +6,19 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, RoundingMode rounding_mode, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, RoundingMode rounding_mode, int ITERATIONS>
 inline void calculate_rdiv(const uint value) {
     sfpi::vFloat val = Converter::as_float(value);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat recip;
-        if constexpr (APPROXIMATION_MODE) {
+        if constexpr (APPROX_MODE == ApproximationMode::Fast) {
             recip = _sfpu_reciprocal_<0>(in);
         } else {
             if constexpr (is_fp32_dest_acc_en) {
@@ -51,9 +52,9 @@ inline void calculate_rdiv(const uint value) {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void rdiv_init() {
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    _init_sfpu_reciprocal_<APPROX_MODE>();
 }
 
 }  // namespace sfpu

@@ -7,13 +7,13 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(uint value) {
     // SFPU microcode
     vFloat s = Converter::as_float(value);

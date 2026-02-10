@@ -5,11 +5,12 @@
 #pragma once
 
 #include "ckernel_sfpu_exp.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
     sfpi::vFloat s = Converter::as_float(slope);
 #pragma GCC unroll 8

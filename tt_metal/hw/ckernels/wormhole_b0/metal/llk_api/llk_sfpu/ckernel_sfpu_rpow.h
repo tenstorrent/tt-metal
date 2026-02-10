@@ -6,11 +6,12 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_binary_pow.h"
+#include "llk_defs.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 // ttnn.rpow(exponent, scalar_base) = pow(scalar_base, exponent)
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
+template <ApproximationMode APPROX_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_rpow(const uint32_t base_val) {
     sfpi::vFloat base_val_v = Converter::as_float(base_val);
 #pragma GCC unroll 8

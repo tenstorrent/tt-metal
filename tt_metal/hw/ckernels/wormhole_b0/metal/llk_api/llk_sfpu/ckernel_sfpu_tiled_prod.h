@@ -6,13 +6,14 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_tiled_prod() {
     vFloat result = 1.0f;
 #pragma GCC unroll 8

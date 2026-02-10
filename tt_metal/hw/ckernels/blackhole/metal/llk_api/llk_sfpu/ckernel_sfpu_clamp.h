@@ -7,13 +7,14 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_unary_max_min.h"
+#include "llk_defs.h"
 
 namespace ckernel::sfpu {
 
 enum { Max = true, Min = false };  // Clamp Mode
 
 // out = min(max(x, min_val), max_val)
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_clamp(uint min_val, uint max_val) {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -25,7 +26,7 @@ inline void calculate_clamp(uint min_val, uint max_val) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_clamp_int32(uint min_val, uint max_val) {
     for (int d = 0; d < ITERATIONS; d++) {
         load_value_param_int(min_val);

@@ -7,6 +7,7 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_hardmish.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 
@@ -18,7 +19,9 @@ inline void llk_math_eltwise_unary_sfpu_hardmish_init() {
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardmish(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::hardmish<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+        ckernel::sfpu::hardmish<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), ITERATIONS>,
+        dst_index,
+        vector_mode);
 }
 
 }  // namespace ckernel

@@ -8,6 +8,9 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_defs.h"
+
+using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
@@ -56,9 +59,9 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_legacy_(sfpi::vFloat val) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
-    if constexpr (!APPROXIMATION_MODE) {
+    if constexpr (APPROX_MODE == ApproximationMode::Precise) {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
@@ -75,10 +78,10 @@ inline void calculate_sigmoid() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void sigmoid_init() {
-    if constexpr (!APPROXIMATION_MODE) {
-        _init_sfpu_reciprocal_<false>();
+    if constexpr (APPROX_MODE == ApproximationMode::Precise) {
+        _init_sfpu_reciprocal_<ApproximationMode::Precise>();
     } else {
         sigmoid_appx_init();
     }

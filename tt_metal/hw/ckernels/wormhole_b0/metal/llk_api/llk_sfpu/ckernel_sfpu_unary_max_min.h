@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 
 namespace ckernel::sfpu {
 
@@ -26,7 +27,7 @@ sfpi_inline void calculate_unary_max_min_float_body() {
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 }
 
-template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_MAX_OP = true, ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min(uint value) {
     load_value_param_float(value);
 
@@ -71,7 +72,7 @@ sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
     }
 }
 
-template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_MAX_OP = true, ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min_int32(uint value) {
     load_value_param_int(value);
 

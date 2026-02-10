@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 
 namespace ckernel::sfpu {
 
@@ -14,7 +15,7 @@ sfpi_inline void load_value_param_float(uint value) { sfpi::vConstIntPrgm0 = val
 
 template <bool IS_MAX_OP>
 sfpi_inline void calculate_unary_max_min_float_body() {
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 
     if constexpr (IS_MAX_OP) {
         // L0 = max(L0, constant); this will only write to L0 since L12 is a constant register.
@@ -23,10 +24,10 @@ sfpi_inline void calculate_unary_max_min_float_body() {
         // L0 = min(L0, constant); this will only write to L0 since L12 is a constant register.
         TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     }
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 }
 
-template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_MAX_OP = true, ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min(uint value) {
     load_value_param_float(value);
 
@@ -52,26 +53,26 @@ sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
     if (value != 0x80000000u) {
         if ((int)value >= 0) {
             // if msb(value) == 0, we can safely use SFPSWAP even though it expects sign-magnitude integers
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
             TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX); // mod1=9 means set VD=max and VC=min
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
         } else {
             // if msb(value) == 1, we need to invert both values for SFPSWAP to work
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
             TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
             TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9); // mod1=9 means set VD=max and VC=min
             TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
         }
     } else if constexpr (!IS_MAX_OP) {
         // if value == INT_MIN, then min(x, value) = INT_MIN
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
     } else {
         // if value == INT_MIN, then max(x, value) = x; do nothing
     }
 }
 
-template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_MAX_OP = true, ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min_int32(uint value) {
     load_value_param_int(value);
 

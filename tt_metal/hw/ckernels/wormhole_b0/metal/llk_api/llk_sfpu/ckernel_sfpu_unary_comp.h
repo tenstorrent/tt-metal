@@ -7,12 +7,14 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpi.h"
+#include "llk_defs.h"
+
+using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_ne(uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
@@ -30,7 +32,7 @@ inline void calculate_unary_ne(uint value) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_eq(uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
@@ -48,7 +50,7 @@ inline void calculate_unary_eq(uint value) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_gt(uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
@@ -66,7 +68,7 @@ inline void calculate_unary_gt(uint value) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_lt(uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
@@ -84,7 +86,7 @@ inline void calculate_unary_lt(uint value) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_unary_ge(uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
@@ -102,7 +104,7 @@ inline void calculate_unary_ge(uint value) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_unary_le(uint value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);

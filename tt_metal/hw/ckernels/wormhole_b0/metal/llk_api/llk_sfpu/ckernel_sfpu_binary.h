@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 
@@ -37,12 +38,12 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     return sfpi::reinterpret<sfpi::vFloat>(bits);
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <ApproximationMode APPROX_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    _calculate_sfpu_binary_<APPROXIMATION_MODE, BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+    _calculate_sfpu_binary_<APPROX_MODE, BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
+template <ApproximationMode APPROX_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
@@ -53,8 +54,9 @@ inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_i
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // Software RNE approach (kept for reference):
+            // software RNE approach:
             result = float32_to_bf16_rne(result);
+
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
             v_endif;
@@ -65,7 +67,7 @@ inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_i
     }
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
+template <ApproximationMode APPROX_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
@@ -95,9 +97,9 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
     }
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
+template <ApproximationMode APPROX_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
-    _sfpu_binary_init_<APPROXIMATION_MODE, BINOP>();
+    _sfpu_binary_init_<APPROX_MODE, BINOP>();
 }
 
 }  // namespace sfpu
