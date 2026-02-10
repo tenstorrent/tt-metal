@@ -52,7 +52,7 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), t3k_mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::T3K, t3k_mesh_graph_desc_path.string());
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -107,7 +107,7 @@ TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), dual_galaxy_big_mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::GALAXY, dual_galaxy_big_mesh_graph_desc_path.string());
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -170,7 +170,7 @@ TEST_F(TopologyMapperTest, N300MeshGraphTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), n300_mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::N300, n300_mesh_graph_desc_path.string());
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -211,7 +211,7 @@ TEST_F(TopologyMapperTest, P100MeshGraphTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), p100_mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::P100, p100_mesh_graph_desc_path.string());
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -256,7 +256,7 @@ TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), bh_qb_4x4_mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, bh_qb_4x4_mesh_graph_desc_path.string());
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -343,7 +343,8 @@ TEST_F(TopologyMapperTest, BHQB4x4StrictReducedMeshGraphTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_strict_reduced_mesh_graph_descriptor.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), bh_qb_4x4_strict_mesh_graph_desc_path.string());
+    auto mesh_graph =
+        MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, bh_qb_4x4_strict_mesh_graph_desc_path.string());
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -406,7 +407,8 @@ TEST_F(TopologyMapperTest, BHQB4x4RelaxedMeshGraphTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_relaxed_mesh_graph_descriptor.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), bh_qb_4x4_relaxed_mesh_graph_desc_path.string());
+    auto mesh_graph =
+        MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, bh_qb_4x4_relaxed_mesh_graph_desc_path.string());
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -469,7 +471,8 @@ TEST_F(TopologyMapperTest, BHQB4x4StrictInvalidMeshGraphTest) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_strict_invalid_mesh_graph_descriptor.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), bh_qb_4x4_strict_invalid_mesh_graph_desc_path.string());
+    auto mesh_graph =
+        MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, bh_qb_4x4_strict_invalid_mesh_graph_desc_path.string());
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -517,7 +520,7 @@ TEST_F(TopologyMapperTest, ClosetBox3PodTTSwitchHostnameAPIs) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::GALAXY, mesh_graph_desc_path.string());
 
     // Create local mesh binding (for testing, bind all meshes including switch)
     LocalMeshBinding local_mesh_binding;
@@ -646,7 +649,7 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) 
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
-    auto mesh_graph = MeshGraph(get_cluster(), galaxy_mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::GALAXY, galaxy_mesh_graph_desc_path.string());
 
     // Local mesh binding for single-host
     LocalMeshBinding local_mesh_binding;
@@ -777,7 +780,7 @@ TEST_P(T3kTopologyMapperWithCustomMappingFixture, T3kMeshGraphWithCustomMapping)
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
 
-    auto mesh_graph = MeshGraph(get_cluster(), t3k_mesh_graph_desc_path.string());
+    auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::T3K, t3k_mesh_graph_desc_path.string());
 
     // Create logical to physical chip mapping from eth_coords
     auto logical_mesh_chip_id_to_physical_chip_id_mapping =

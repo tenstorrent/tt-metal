@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
+#include "cluster.hpp"
 #include "impl/context/metal_context.hpp"
 
 using namespace tt::tt_fabric;
@@ -1487,10 +1488,11 @@ TEST(MeshGraphDescriptorTests, AssignZDirectionInMeshGraph) {
         file << text_proto;
     }
 
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(cluster, test_file.string()));
+    // Cluster type doesn't matter
+    const tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
+    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(cluster_type, test_file.string()));
 
-    tt::tt_fabric::MeshGraph mesh_graph(cluster, test_file.string());
+    tt::tt_fabric::MeshGraph mesh_graph(cluster_type, test_file.string());
 
     // Test should_assign_z_direction method
     tt::tt_fabric::MeshId mesh_0(0);
@@ -1551,10 +1553,11 @@ TEST(MeshGraphDescriptorTests, AssignZDirectionGraphTopologyInMeshGraph) {
         file << text_proto;
     }
 
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(cluster, test_file.string()));
+    // Cluster type doesn't matter
+    const tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
+    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(cluster_type, test_file.string()));
 
-    tt::tt_fabric::MeshGraph mesh_graph(cluster, test_file.string());
+    tt::tt_fabric::MeshGraph mesh_graph(cluster_type, test_file.string());
 
     // Test should_assign_z_direction method for all mesh pairs
     tt::tt_fabric::MeshId mesh_0(0);

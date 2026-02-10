@@ -104,6 +104,11 @@ using RequestedIntermeshPorts =
 class MeshGraph {
 public:
     explicit MeshGraph(
+        tt::tt_metal::ClusterType cluster_type,
+        const std::string& mesh_graph_desc_file_path,
+        std::optional<FabricConfig> fabric_config = std::nullopt);
+
+    explicit MeshGraph(
         const tt::Cluster& cluster,
         const std::string& mesh_graph_desc_file_path,
         std::optional<FabricConfig> fabric_config = std::nullopt);

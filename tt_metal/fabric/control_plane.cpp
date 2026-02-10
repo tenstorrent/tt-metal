@@ -435,7 +435,7 @@ void ControlPlane::init_control_plane(
     auto fabric_config = this->get_fabric_config();
 
     // Create mesh_graph first
-    this->mesh_graph_ = std::make_unique<MeshGraph>(this->cluster_, mesh_graph_desc_file, fabric_config);
+    this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
 
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
         driver, distributed_context, &this->hal_.get(), rtoptions);

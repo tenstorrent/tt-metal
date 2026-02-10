@@ -101,7 +101,7 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}}}});
 
 MeshGraph::MeshGraph(
-    const tt::Cluster& cluster,
+    tt::tt_metal::ClusterType cluster_type,
     const std::string& mesh_graph_desc_file_path,
     std::optional<FabricConfig> fabric_config) {
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
@@ -109,7 +109,8 @@ MeshGraph::MeshGraph(
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
         mesh_graph_desc_file_path_ = filepath;
         mesh_graph_descriptor_.emplace(filepath, true);
-        this->initialize_from_mgd(mesh_graph_descriptor_.value(), fabric_config, cluster.is_ubb_galaxy());
+        this->initialize_from_mgd(
+            mesh_graph_descriptor_.value(), fabric_config, tt::Cluster::is_ubb_galaxy(cluster_type));
     } else {
         TT_THROW(
             "Mesh graph descriptor file must use the .textproto format. "
@@ -124,6 +125,12 @@ MeshGraph::MeshGraph(
             mesh_graph_desc_file_path);
     }
 }
+
+MeshGraph::MeshGraph(
+    const tt::Cluster& cluster,
+    const std::string& mesh_graph_desc_file_path,
+    std::optional<FabricConfig> fabric_config) :
+    MeshGraph(cluster.get_cluster_type(), mesh_graph_desc_file_path, fabric_config) {}
 
 void MeshGraph::add_to_connectivity(
     MeshId src_mesh_id, ChipId src_chip_id, MeshId dest_mesh_id, ChipId dest_chip_id, RoutingDirection port_direction) {
