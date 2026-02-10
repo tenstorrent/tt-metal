@@ -355,7 +355,7 @@ ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPRO
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The integer exponent value                                                 | uint32_t | Must be a positive integer exponent                   | True     |
+ * | param0          | The integer exponent value                                                 | uint32_t | Must be a non-negative integer exponent               | True     |
  */
 // clang-format on
 ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {

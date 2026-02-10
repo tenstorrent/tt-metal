@@ -170,7 +170,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             // For exponents 0, 1, 2, 3: use iterative approach
             TT_FATAL(
                 param0 >= 0.0f && param0 == std::floor(param0),
-                "POWER_ITERATIVE requires positive integer exponent, got {}",
+                "POWER_ITERATIVE requires non-negative integer exponent, got {}",
                 param0);
             return {"power_iterative_tile_init();", fmt::format("power_iterative_tile({}, {});", idst, param0_raw)};
         case UnaryOpType::LEAKY_RELU:
