@@ -54,6 +54,7 @@ def get_batch_ttml(
 
 def train(
     cfg,
+    seq_len: int,
     model,
     optim,
     train_ids: np.ndarray,
@@ -84,7 +85,7 @@ def train(
     loss_fn = ttml.ops.loss.cross_entropy_loss
     reduce = ttml.ops.ReduceType.MEAN
 
-    causal_mask = build_causal_mask(cfg.seq_len)
+    causal_mask = build_causal_mask(seq_len)
     tt_mask = ttml.autograd.Tensor.from_numpy(
         causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
     )
@@ -114,7 +115,7 @@ def train(
     train_losses = []
     val_losses = []  # Unused, kept for API compatibility
 
-    performance_meter = PerformanceMeter(cfg)
+    performance_meter = PerformanceMeter(cfg, seq_len)
     # Training loop: outer loop = optimizer steps, inner loop = gradient accumulation
     for step in range(1, cfg.steps + 1):
         performance_meter.step()
@@ -126,7 +127,7 @@ def train(
             # Generate batch data
             # Note: All ranks generate batches, but only rank 0's input is used.
             # Pipeline model handles activation passing between ranks automatically.
-            tt_x, tt_y = get_batch_ttml(train_ids, cfg.seq_len, cfg.batch_size, use_ddp)
+            tt_x, tt_y = get_batch_ttml(train_ids, seq_len, cfg.batch_size, use_ddp)
 
             # Transfer targets from first stage to final stage
             # Only the final stage computes loss, so it needs the correct targets

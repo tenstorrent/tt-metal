@@ -60,6 +60,11 @@ def initialize_device(yaml_config: dict):
     from ttml.common.config import DeviceConfig
 
     device_config = DeviceConfig(yaml_config)
+
+    print(f"{device_config.device_ids}", flush=True)
+    print(f"Device ID Type: {type(device_config.device_ids)}", flush=True)
+    print(f"{device_config.mesh_shape}", flush=True)
+
     if device_config.total_devices() > 1:
         ttml.core.distributed.enable_fabric(device_config.total_devices())
     ttml.autograd.AutoContext.get_instance().open_device(
@@ -84,20 +89,27 @@ def create_optimizer(model, yaml_config: dict):
     beta2 = optimizer_config.get("beta2", 0.999)
     eps = optimizer_config.get("eps", 1e-8)
     weight_decay = optimizer_config.get("weight_decay", 0.01)
+    use_sgd = optimizer_config.get("use_sgd", False)
     use_moreh_adamw = optimizer_config.get("use_moreh_adamw", False)
 
-    adamw_cfg = ttml.optimizers.AdamWConfig.make(
-        float(lr),
-        float(beta1),
-        float(beta2),
-        float(eps),
-        float(weight_decay),
-    )
-
-    if use_moreh_adamw:
-        return ttml.optimizers.MorehAdamW(model.parameters(), adamw_cfg)
+    if use_sgd:
+        sgd_cfg = ttml.optimizers.SGDConfig.make(
+            float(lr), 0.0, float(weight_decay), 0.0, False
+        )
+        return ttml.optimizers.SGD(model.parameters(), sgd_cfg)
     else:
-        return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
+        adamw_cfg = ttml.optimizers.AdamWConfig.make(
+            float(lr),
+            float(beta1),
+            float(beta2),
+            float(eps),
+            float(weight_decay),
+        )
+
+        if use_moreh_adamw:
+            return ttml.optimizers.MorehAdamW(model.parameters(), adamw_cfg)
+        else:
+            return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
 
 
 def get_loss_over_devices(loss):
@@ -117,8 +129,9 @@ def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.
 
 
 class PerformanceMeter:
-    def __init__(self, cfg, window_size=10):
+    def __init__(self, cfg, seq_len, window_size=10):
         self.cfg = cfg
+        self.seq_len = seq_len
         self.steps = []
         self.window_size = window_size
 
@@ -136,7 +149,7 @@ class PerformanceMeter:
             len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
         )
         samples_per_second = samples / time_window
-        tokens_per_second = samples * self.cfg.seq_len / time_window
+        tokens_per_second = samples * self.seq_len / time_window
         return samples_per_second, tokens_per_second
 
 

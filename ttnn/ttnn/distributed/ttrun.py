@@ -11,7 +11,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import click
 import yaml
@@ -22,6 +22,10 @@ TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
+
+# Store the original working directory at module load time to preserve it
+# across mpirun process launches (critical for SLURM/sbatch environments)
+ORIGINAL_CWD = Path.cwd().resolve()
 
 
 class RankBinding(BaseModel):
@@ -59,19 +63,106 @@ class TTRunConfig(BaseModel):
 
     @field_validator("mesh_graph_desc_path")
     def validate_mesh_graph_exists(cls, path: str) -> str:
-        """Ensure mesh graph descriptor file exists"""
-        mesh_path = Path(path).expanduser().resolve()
-        if not mesh_path.is_file():
-            raise ValueError(f"Mesh graph descriptor not found: {mesh_path}")
-        return str(mesh_path)
+        """Ensure mesh graph descriptor file exists.
+
+        Uses resolve_path() to search multiple locations for relative paths.
+        """
+        resolved = resolve_path(path, description="Mesh graph descriptor", must_be_file=True)
+        return str(resolved)
+
+
+def get_search_paths() -> List[Optional[Path]]:
+    """Get the ordered list of paths to search for relative file resolution.
+
+    Search order:
+    1. TT_METAL_HOME - If environment variable is set (explicit user configuration)
+    2. ORIGINAL_CWD - Launch directory (critical for SLURM/sbatch where mpirun
+       may change the working directory on remote nodes)
+    3. Current working directory - Fallback for local execution
+
+    Returns:
+        List of paths to search, with None entries for unset optional paths.
+    """
+    return [
+        Path(os.environ["TT_METAL_HOME"]).expanduser() if os.environ.get("TT_METAL_HOME") else None,
+        ORIGINAL_CWD,
+        Path.cwd(),
+    ]
+
+
+def resolve_path(
+    path: Union[str, Path],
+    description: str = "file",
+    must_exist: bool = True,
+    must_be_file: bool = False,
+) -> Path:
+    """Resolve a path by searching multiple locations.
+
+    For absolute paths, validates existence if required and returns as-is.
+    For relative paths, searches locations from get_search_paths() in order.
+
+    Args:
+        path: The path to resolve (can be relative or absolute)
+        description: Human-readable description for error messages
+        must_exist: Raise ValueError if path doesn't exist (default: True)
+        must_be_file: Require path to be a file, not directory (default: False)
+
+    Returns:
+        Resolved absolute path
+
+    Raises:
+        ValueError: If must_exist=True and path not found in any search location
+    """
+    expanded_path = Path(path).expanduser()
+
+    # Absolute paths: validate and return
+    if expanded_path.is_absolute():
+        resolved = expanded_path.resolve()
+        if must_exist:
+            if must_be_file and not resolved.is_file():
+                raise ValueError(f"{description} not found: {resolved}")
+            elif not must_be_file and not resolved.exists():
+                raise ValueError(f"{description} not found: {resolved}")
+        return resolved
+
+    # Relative paths: search multiple locations
+    search_paths = get_search_paths()
+    check_fn = Path.is_file if must_be_file else Path.exists
+
+    for base_path in search_paths:
+        if base_path is None:
+            continue
+        candidate = (base_path / expanded_path).resolve()
+        if check_fn(candidate):
+            logger.debug(f"{TT_RUN_PREFIX} Resolved {description}: {path} -> {candidate}")
+            return candidate
+
+    # Path not found
+    if must_exist:
+        searched = [str(p) for p in search_paths if p is not None]
+        raise ValueError(
+            f"{description} not found: {path}\n"
+            f"Searched in: {searched}\n"
+            f"Tip: Use an absolute path or ensure the file exists relative to the launch directory."
+        )
+
+    # Best-effort resolution when existence check is not required
+    return (ORIGINAL_CWD / expanded_path).resolve()
 
 
 def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
-    """Parse YAML configuration file with schema validation."""
-    if not yaml_path.exists():
-        raise ValueError(f"Configuration file not found: {yaml_path}")
+    """Parse YAML configuration file with schema validation.
 
-    with open(yaml_path, "r") as f:
+    Resolves all relative paths in the configuration against the launch directory
+    to ensure proper operation in SLURM/sbatch environments.
+    """
+    # Resolve the yaml_path first
+    resolved_yaml_path = resolve_path(yaml_path, description="Configuration file", must_be_file=True)
+
+    logger.debug(f"{TT_RUN_PREFIX} Loading configuration from: {resolved_yaml_path}")
+    logger.debug(f"{TT_RUN_PREFIX} Original CWD: {ORIGINAL_CWD}")
+
+    with open(resolved_yaml_path, "r") as f:
         data = yaml.safe_load(f)
 
     try:
@@ -81,17 +172,32 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
 
     # Parse mock cluster rank binding configuration
     if mock_cluster_rank_binding:
-        with open(mock_cluster_rank_binding, "r") as f:
+        resolved_mock_path = resolve_path(
+            mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
+        )
+        with open(resolved_mock_path, "r") as f:
             mock_data = yaml.safe_load(f)
 
-        # Validate mock cluster rank binding configuration
+        # Validate and resolve mock cluster rank binding configuration paths
+        resolved_mock_bindings = {}
         for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
-            if not Path(path).expanduser().resolve().is_file():
-                raise ValueError(f"Mock cluster rank binding configuration file not found: {path}")
+            resolved_path = resolve_path(
+                path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
+            )
+            resolved_mock_bindings[rank] = resolved_path
 
-        config.mock_cluster_rank_binding = mock_data["rank_to_cluster_mock_cluster_desc"]
+        config.mock_cluster_rank_binding = resolved_mock_bindings
 
     return config
+
+
+# Environment variable prefixes that should be automatically passed through to MPI processes
+ENV_PASSTHROUGH_PREFIXES = (
+    "TT_",  # TT-Metal/TTNN variables
+    "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
+    "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
+    "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+)
 
 
 def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
@@ -115,24 +221,42 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
             f"will be modified with rank suffix for multi-process safety"
         )
     else:
-        # Use default pattern when TT_METAL_CACHE is not set
-        base_path = f"{Path.home()}/.cache"
+        # Use launch directory for cache when TT_METAL_CACHE is not set.
+        # This ensures the cache is on the shared filesystem (NFS) visible to all nodes.
+        base_path = f"{ORIGINAL_CWD}/.cache"
 
     # Apply consistent suffix pattern to both user-provided and default paths
     cache_path = f"{base_path}_{hostname}"
 
-    env = {
-        "TT_METAL_CACHE": cache_path,
-        "TT_MESH_ID": str(binding.mesh_id),
-        "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
-        "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
-        "TT_METAL_RUNTIME_ROOT": os.environ.get(
-            "TT_METAL_RUNTIME_ROOT", os.environ.get("TT_METAL_HOME", str(Path.home()))
-        ),
-        "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
-        # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
-        "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
-    }
+    # Start with automatic pass-through of TT-related environment variables
+    # This ensures variables like ARCH_NAME, WH_ARCH_YAML, TTNN_CONFIG_OVERRIDES are propagated
+    env = {}
+    for key, value in os.environ.items():
+        if key.startswith(ENV_PASSTHROUGH_PREFIXES):
+            env[key] = value
+
+    # Use ORIGINAL_CWD as the default for TT_METAL_HOME when not explicitly set.
+    # This assumes the launch directory is on a shared filesystem (NFS) visible to all nodes.
+    default_tt_metal_home = os.environ.get("TT_METAL_HOME", str(ORIGINAL_CWD))
+
+    # Set/override core tt-run managed variables
+    env.update(
+        {
+            "TT_METAL_CACHE": cache_path,
+            "TT_MESH_ID": str(binding.mesh_id),
+            "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
+            "TT_METAL_HOME": default_tt_metal_home,
+            "TT_METAL_RUNTIME_ROOT": os.environ.get("TT_METAL_RUNTIME_ROOT", default_tt_metal_home),
+            "PYTHONPATH": os.environ.get("PYTHONPATH", str(ORIGINAL_CWD)),
+            "PYTHONHOME": os.environ.get("PYTHONHOME", str(ORIGINAL_CWD)),
+            # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
+            "LD_LIBRARY_PATH": os.environ.get(
+                "LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD))
+            ),
+            # Pass the original CWD to subprocesses so they can resolve relative paths correctly
+            "TT_RUN_ORIGINAL_CWD": str(ORIGINAL_CWD),
+        }
+    )
 
     # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
     if binding.mesh_host_rank is not None:
@@ -255,9 +379,9 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 )
 @click.option(
     "--rank-binding",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     required=True,
-    help="Rank binding configuration file (YAML)",
+    help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
 )
 @click.option("--dry-run", is_flag=True, help="Print command without executing")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
@@ -270,11 +394,22 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 @click.option(
     "--mock-cluster-rank-binding",
     required=False,
-    type=click.Path(exists=True, path_type=Path),
-    help="Mock cluster rank binding configuration file (YAML)",
+    type=click.Path(path_type=Path),
+    help="Mock cluster rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
 )
 @click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
+)
+@click.option(
+    "--multihost",
+    is_flag=True,
+    help="Enable recommended MPI settings for multi-host clusters (TCP transport, tagged output, etc.)",
+)
+@click.option(
+    "--tcp-interface",
+    type=str,
+    default=None,
+    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Implies --multihost.",
 )
 @click.pass_context
 def main(
@@ -286,6 +421,8 @@ def main(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     skip_executable_check: bool,
+    multihost: bool,
+    tcp_interface: Optional[str],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -320,12 +457,40 @@ def main(
         mesh_graph_desc_path: "path/to/mesh_graph.yaml"  # Required
 
     \b
+    Understanding --rank-binding vs MPI Host Options:
+        tt-run's --rank-binding and MPI's host/rankfile options serve complementary purposes:
+
+        --rank-binding (tt-run):
+            Configures TT-Metal mesh topology. Maps MPI ranks to:
+            - mesh_id: Which TT-Metal mesh the rank belongs to
+            - mesh_host_rank: Position within the mesh
+            - env_overrides: Per-rank environment variables (e.g., TT_VISIBLE_DEVICES)
+            This is about TT-Metal's logical device organization.
+
+        --mpi-args "--host ..." or "--rankfile ...":
+            Configures MPI process placement. Tells mpirun:
+            - Which physical cluster nodes to spawn processes on
+            - How to distribute ranks across those nodes
+            This is about physical cluster topology.
+
+        For multi-host setups, you typically need BOTH:
+            tt-run --rank-binding mesh_config.yaml \\
+                   --mpi-args "--host nodeA,nodeB --map-by rankfile:file=/etc/mpirun/rankfile" \\
+                   ./my_app
+
+        The rank-binding configures what each MPI rank "sees" in terms of TT-Metal devices,
+        while the MPI host options control where those ranks physically execute.
+
+    \b
     Examples:
         # Single host, multiple processes
         tt-run --rank-binding rank_binding.yaml ./my_app
 
-        # Multi-host with rankfile
-        tt-run --rank-binding binding.yaml --mpi-args "--rankfile hosts.txt" ./my_app
+        # Multi-host with recommended MPI settings
+        tt-run --rank-binding binding.yaml --multihost --mpi-args "--rankfile hosts.txt" ./my_app
+
+        # Multi-host with specific network interface (e.g., ConnectX NIC)
+        tt-run --rank-binding binding.yaml --tcp-interface cnx1 --mpi-args "--rankfile hosts.txt" ./my_app
 
         # With additional MPI args
         tt-run --rank-binding binding.yaml --mpi-args "--bind-to core" ./my_app
@@ -338,15 +503,81 @@ def main(
         The following variables are automatically set for each rank:
         - TT_MESH_ID: Mesh identifier
         - TT_MESH_HOST_RANK: Host rank within the mesh
-        - TT_METAL_CACHE: Per-rank cache directory
+        - TT_METAL_CACHE: Per-rank cache directory (defaults to `<LAUNCH_DIR>/.cache_<hostname>_rank<N>`)
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
+        - PYTHONHOME: Python installation directory
         - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
+        - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
+
         Default values for the following environment variables will be used if not set when calling tt-run:
-        - TT_METAL_HOME: User's home directory
-        - PYTHONPATH: User's home directory
-        - LD_LIBRARY_PATH: `<USER_HOME>/build/lib`
+        - TT_METAL_HOME: Launch directory (where tt-run was invoked)
+        - TT_METAL_RUNTIME_ROOT: Same as TT_METAL_HOME
+        - PYTHONPATH: Launch directory
+        - PYTHONHOME: Launch directory
+        - LD_LIBRARY_PATH: `<LAUNCH_DIR>/build/lib`
+
+        This assumes the launch directory is on a shared filesystem (e.g., NFS) visible to all
+        cluster nodes, which is the common setup for SLURM environments.
+
+        Additionally, all environment variables with the following prefixes are automatically
+        passed through to MPI processes:
+        - TT_*: TT-Metal/TTNN variables
+        - ARCH_*: Architecture variables (e.g., ARCH_NAME)
+        - WH_*: Wormhole-specific variables (e.g., WH_ARCH_YAML)
+        - TTNN_*: TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+
+        You can also specify additional environment variables in the rank binding YAML using
+        the `global_env` field (for all ranks) or `env_overrides` field (per-rank).
+
+    \b
+    Path Resolution (SLURM/sbatch compatibility):
+        Relative paths for --rank-binding, --mock-cluster-rank-binding, and mesh_graph_desc_path
+        are resolved by searching multiple locations in order:
+
+        1. TT_METAL_HOME - If the environment variable is set (explicit user configuration).
+        2. Launch directory - The directory where tt-run was originally invoked. This is
+           captured at module load time and is critical for SLURM/sbatch environments where
+           mpirun may change the working directory when spawning processes on remote nodes.
+        3. Current working directory - Fallback to the current directory at resolution time.
+
+        The first location where the file is found will be used. If the file is not found
+        in any location, an error is raised listing all searched paths.
+
+        This behavior ensures that commands like:
+            tt-run --rank-binding tests/config/bindings.yaml ./my_app
+        work correctly when launched from a tt-metal directory on an NFS mount, even when
+        mpirun spawns processes on remote cluster nodes with different working directories.
+
+        Use --verbose to see path resolution diagnostics.
+
+    \b
+    Multi-Host Mode (--multihost):
+        The --multihost flag enables recommended MPI settings for multi-host cluster environments.
+        This adds the following MPI arguments:
+
+        - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
+        - --mca btl_tcp_if_exclude lo: Exclude loopback interface (can't route inter-node traffic)
+        - --tag-output: Prefix output lines with rank information for easier debugging
+
+        If --tcp-interface is specified (e.g., --tcp-interface cnx1), it uses btl_tcp_if_include
+        instead of btl_tcp_if_exclude to explicitly select the network interface.
+
+        These settings help avoid common MPI issues in multi-host environments:
+        - Stale process connections from other nodes
+        - Network interface selection problems
+        - Output interleaving from multiple ranks
+
+        Note: Only loopback (lo) is excluded by default. Loopback must be excluded because it
+        can only communicate with the local machine, making it useless for inter-node MPI traffic.
+        Other interfaces like docker0 are not excluded to remain compatible with Docker containers
+        and other virtualized environments where network interface naming varies. For explicit
+        interface control, use --tcp-interface.
+
+        Example:
+            tt-run --multihost --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
+            tt-run --tcp-interface cnx1 --rank-binding config.yaml --mpi-args "--rankfile hosts.txt" ./my_app
 
     \b
     Debugging with --debug-gdbserver:
@@ -402,10 +633,29 @@ def main(
         Section 2.4: Distributed Process Launch with tt-run
     """
     program = ctx.args
+
+    # Log diagnostic information for path resolution debugging
+    if verbose:
+        logger.info(f"{TT_RUN_PREFIX} Path Resolution Diagnostics:")
+        logger.info(f"{TT_RUN_PREFIX}   Original CWD (at launch): {ORIGINAL_CWD}")
+        logger.info(f"{TT_RUN_PREFIX}   Current CWD: {Path.cwd()}")
+        logger.info(f"{TT_RUN_PREFIX}   rank-binding input: {rank_binding}")
+        logger.info(f"{TT_RUN_PREFIX}   TT_METAL_HOME env: {os.environ.get('TT_METAL_HOME', '<not set>')}")
+        logger.info(f"{TT_RUN_PREFIX}   HOME env: {os.environ.get('HOME', '<not set>')}")
+        logger.info(f"{TT_RUN_PREFIX}   PYTHONPATH env: {os.environ.get('PYTHONPATH', '<not set>')}")
+        logger.info(f"{TT_RUN_PREFIX}   PYTHONHOME env: {os.environ.get('PYTHONHOME', '<not set>')}")
+        logger.info(f"{TT_RUN_PREFIX}   LD_LIBRARY_PATH env: {os.environ.get('LD_LIBRARY_PATH', '<not set>')}")
+        if os.environ.get("SLURM_JOB_ID"):
+            logger.info(f"{TT_RUN_PREFIX}   SLURM_JOB_ID: {os.environ.get('SLURM_JOB_ID')}")
+            logger.info(f"{TT_RUN_PREFIX}   SLURM_SUBMIT_DIR: {os.environ.get('SLURM_SUBMIT_DIR', '<not set>')}")
+
     try:
         config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
     except (ValueError, ValidationError) as e:
         raise click.ClickException(f"Configuration error: {e}")
+
+    if verbose:
+        logger.info(f"{TT_RUN_PREFIX}   Resolved mesh_graph_desc_path: {config.mesh_graph_desc_path}")
 
     if not program:
         raise click.ClickException("No program specified. Please provide a program to run.")
@@ -416,8 +666,53 @@ def main(
         if not program_path.exists() and not shutil.which(program[0]):
             raise click.ClickException(f"Program not found: {program[0]}")
 
+    # Build multihost MPI args if requested
+    # --tcp-interface implies --multihost
+    if tcp_interface:
+        multihost = True
+
+    effective_mpi_args = list(mpi_args) if mpi_args else []
+
+    if multihost:
+        # Recommended MPI settings for multi-host clusters:
+        # - Use TCP for byte transfer layer (reliable for multi-host)
+        # - Exclude loopback (can't route inter-node traffic)
+        # - Tag output with rank info for easier debugging
+        # Note: Only exclude 'lo' to remain compatible with Docker containers
+        # and other virtualized environments. Users needing specific interface
+        # control should use --tcp-interface.
+        multihost_args = [
+            "--mca",
+            "btl",
+            "self,tcp",
+            "--mca",
+            "btl_tcp_if_exclude",
+            "lo",
+            "--tag-output",
+        ]
+
+        if tcp_interface:
+            # If a specific interface is requested, use include instead of exclude
+            multihost_args = [
+                "--mca",
+                "btl",
+                "self,tcp",
+                "--mca",
+                "btl_tcp_if_include",
+                tcp_interface,
+                "--tag-output",
+            ]
+
+        # Prepend multihost args so user-provided --mpi-args can override if needed
+        effective_mpi_args = multihost_args + effective_mpi_args
+
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Multihost mode enabled with args: {' '.join(multihost_args)}")
+
     # Build MPI command
-    mpi_cmd = build_mpi_command(config, program, mpi_args, debug_gdbserver=debug_gdbserver)
+    mpi_cmd = build_mpi_command(
+        config, program, effective_mpi_args if effective_mpi_args else None, debug_gdbserver=debug_gdbserver
+    )
 
     if verbose or dry_run:
         print_command(mpi_cmd)

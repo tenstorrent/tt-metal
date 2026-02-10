@@ -19,6 +19,9 @@ OPTIONS:
     --force               Overwrite existing virtual environment without prompting.
                           By default, warns and prompts for confirmation if the
                           target directory exists and is not empty.
+    --bundle-python       Deep-copy the Python interpreter into the venv instead of
+                          using symlinks. This makes the venv fully self-contained
+                          and portable, at the cost of increased disk space.
     --help, -h            Show this help message and exit
 
 ENVIRONMENT VARIABLES:
@@ -57,6 +60,7 @@ EOF
 ARG_PYTHON_VERSION=""
 ARG_ENV_DIR=""
 FORCE_OVERWRITE="false"
+BUNDLE_PYTHON="false"
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -83,6 +87,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --force)
             FORCE_OVERWRITE="true"
+            shift
+            ;;
+        --bundle-python)
+            BUNDLE_PYTHON="true"
             shift
             ;;
         --help|-h)
@@ -123,7 +131,7 @@ validate_python_version() {
     minor=$((10#$minor))
 
     # Require Python 3.10+
-    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 8 ]]; }; then
+    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 10 ]]; }; then
         echo "Error: Python version must be 3.10 or higher (got: $version)" >&2
         echo "Supported versions: 3.10, 3.11, etc." >&2
         exit 1
@@ -291,8 +299,17 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 # Install Python via uv and create virtual environment
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
-uv venv "$PYTHON_ENV_DIR" --python "${VENV_PYTHON_VERSION}"
+uv venv --link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}" "$PYTHON_ENV_DIR"
 source "$PYTHON_ENV_DIR/bin/activate"
+
+# Install uv into the venv at the same version as the invoking uv
+UV_CURRENT_VERSION=$(uv --version | cut -d' ' -f2)
+echo "Installing uv ${UV_CURRENT_VERSION} into venv..."
+uv pip install "uv==${UV_CURRENT_VERSION}"
+
+# Import functions for detecting OS (use absolute path from SCRIPT_DIR)
+. "$SCRIPT_DIR/install_dependencies.sh" --source-only
+detect_os
 
 # PyTorch CPU index URL for all uv pip commands
 PYTORCH_INDEX="https://download.pytorch.org/whl/cpu"
@@ -349,5 +366,114 @@ if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
 else
     echo "In worktree: not generating git hooks"
 fi
+
+# Bundle Python interpreter into the venv if requested
+if [[ "$BUNDLE_PYTHON" == "true" ]]; then
+    echo "Bundling Python interpreter into venv..."
+
+    # Get the real path to the Python interpreter
+    REAL_PYTHON_PATH=$(readlink -f "$PYTHON_ENV_DIR/bin/python")
+    echo "  Python interpreter: $REAL_PYTHON_PATH"
+
+    # Extract the cpython installation directory (parent of bin/python)
+    # Path is in form: <prefix>/python/cpython<version>/bin/python
+    CPYTHON_DIR=$(dirname "$(dirname "$REAL_PYTHON_PATH")")
+    echo "  CPython directory: $CPYTHON_DIR"
+
+    # Remove python symlinks in venv (they may not match the interpreter's structure)
+    echo "  Removing venv python symlinks..."
+    rm -f "$PYTHON_ENV_DIR/bin/python"*
+
+    # Copy the cpython directory contents into the venv
+    echo "  Copying Python interpreter files into venv..."
+    cp -r "$CPYTHON_DIR"/* "$PYTHON_ENV_DIR/"
+
+    # Patch activation scripts to set PYTHONHOME for NFS/distributed contexts
+    # PYTHONHOME should point to the venv root where lib/python<version> exists
+    echo "  Patching activation scripts to set PYTHONHOME..."
+
+    # Patch bin/activate (bash/zsh) using awk for portability
+    # Key insight: The activate script has a section that unsets PYTHONHOME midway through,
+    # so we must set PYTHONHOME after that, right before the final hash -r call.
+    # We also need to modify deactivate() to unset PYTHONHOME if no old value was saved.
+    if [ -f "$PYTHON_ENV_DIR/bin/activate" ]; then
+        awk '
+        # Modify deactivate to properly unset PYTHONHOME when no old value exists
+        # Match: unset _OLD_VIRTUAL_PYTHONHOME followed by fi
+        /^[[:space:]]*unset _OLD_VIRTUAL_PYTHONHOME$/ {
+            print
+            if (getline nextline > 0) {
+                if (nextline ~ /^[[:space:]]*fi$/) {
+                    print "    else"
+                    print "        unset PYTHONHOME"
+                }
+                print nextline
+            }
+            next
+        }
+        # Insert PYTHONHOME export right before the final hash -r call
+        /^hash -r 2>\/dev\/null \|\| true$/ {
+            print "# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)"
+            print "PYTHONHOME=\"$VIRTUAL_ENV\""
+            print "export PYTHONHOME"
+            print ""
+            print $0
+            next
+        }
+        { print }
+        ' "$PYTHON_ENV_DIR/bin/activate" > "$PYTHON_ENV_DIR/bin/activate.tmp"
+        mv "$PYTHON_ENV_DIR/bin/activate.tmp" "$PYTHON_ENV_DIR/bin/activate"
+        chmod +x "$PYTHON_ENV_DIR/bin/activate"
+    fi
+
+    # Patch bin/activate.csh (C shell)
+    if [ -f "$PYTHON_ENV_DIR/bin/activate.csh" ]; then
+        awk '
+        # Insert PYTHONHOME export right before the rehash call
+        /^rehash$/ {
+            print "# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)"
+            print "setenv PYTHONHOME \"$VIRTUAL_ENV\""
+            print ""
+            print $0
+            next
+        }
+        { print }
+        ' "$PYTHON_ENV_DIR/bin/activate.csh" > "$PYTHON_ENV_DIR/bin/activate.csh.tmp"
+        mv "$PYTHON_ENV_DIR/bin/activate.csh.tmp" "$PYTHON_ENV_DIR/bin/activate.csh"
+    fi
+
+    # Patch bin/activate.fish (Fish shell)
+    if [ -f "$PYTHON_ENV_DIR/bin/activate.fish" ]; then
+        awk '
+        { print }
+        END {
+            print ""
+            print "# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)"
+            print "set -gx PYTHONHOME \"$VIRTUAL_ENV\""
+        }
+        ' "$PYTHON_ENV_DIR/bin/activate.fish" > "$PYTHON_ENV_DIR/bin/activate.fish.tmp"
+        mv "$PYTHON_ENV_DIR/bin/activate.fish.tmp" "$PYTHON_ENV_DIR/bin/activate.fish"
+    fi
+
+    # Patch Activate.ps1 (PowerShell)
+    if [ -f "$PYTHON_ENV_DIR/bin/Activate.ps1" ]; then
+        awk '
+        { print }
+        END {
+            print ""
+            print "# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)"
+            print "$env:PYTHONHOME = $env:VIRTUAL_ENV"
+        }
+        ' "$PYTHON_ENV_DIR/bin/Activate.ps1" > "$PYTHON_ENV_DIR/bin/Activate.ps1.tmp"
+        mv "$PYTHON_ENV_DIR/bin/Activate.ps1.tmp" "$PYTHON_ENV_DIR/bin/Activate.ps1"
+    fi
+
+    echo "  Python interpreter bundled successfully"
+fi
+
+# Compile bytecode at the end to take advantage of parallelism
+echo "Compiling bytecode (for improved startup performance)..."
+python -m compileall -j 0 -q "$PYTHON_ENV_DIR/lib" 2>/dev/null || true
+echo "Bytecode compilation completed"
 
 echo "If you want stubs, run ./scripts/build_scripts/create_stubs.sh"

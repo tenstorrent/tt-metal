@@ -5,5 +5,5 @@ rank_bindings:
     mesh_id: 0
 
 global_env:
-  TT_METAL_HOME: "/home/ttuser/git/tt-metal"
+  TT_METAL_HOME: "/data/${USER}/tt-metal"
 mesh_graph_desc_path: "configurations/2loudboxes/mgd.textproto"
