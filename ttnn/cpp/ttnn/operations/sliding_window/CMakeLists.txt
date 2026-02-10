@@ -32,12 +32,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_sliding_window PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_sliding_window
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_sliding_window PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS
