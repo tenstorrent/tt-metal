@@ -41,26 +41,22 @@ AllGather of spatial on TP axis followed by FF1.
 FF2 followed by reduce scatter on TP axis.
 """
 
-import subprocess
 import shlex
+import subprocess
 
+import pandas as pd
 import pytest
 import torch
-import ttnn
-import pandas as pd
 from loguru import logger
+from tracy.process_model_log import get_latest_ops_log_filename, get_profiler_folder
 
-from tracy.process_model_log import (
-    get_latest_ops_log_filename,
-    get_profiler_folder,
-)
+import ttnn
 
-from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from .....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from .....layers.linear import ColParallelLinear, RowParallelLinear
+from .....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from .....parallel.manager import CCLManager
+from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from .....utils.test import line_params
-
 
 # Wan2.2 14B model configuration
 WAN_DIM = 5120

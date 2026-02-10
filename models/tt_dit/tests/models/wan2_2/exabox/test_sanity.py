@@ -1,5 +1,6 @@
 import pytest
 import torch
+
 import ttnn
 
 
@@ -34,7 +35,8 @@ def test_open_4x32_mesh(
     else:
         print("MPI rank or size environment variables not set, cannot determine MPI rank")
 
-    import subprocess, os as _os
+    import os as _os
+    import subprocess
 
     try:
         print(

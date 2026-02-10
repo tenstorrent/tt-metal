@@ -3,19 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+
 import pytest
 import torch
-import ttnn
+from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 from loguru import logger
 
-from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+import ttnn
+
 from .....models.transformers.wan2_2.transformer_wan import WanTransformerBlock
-from .....parallel.manager import CCLManager
 from .....parallel.config import DiTParallelConfig, ParallelFactor
-from .....utils.padding import pad_vision_seq_parallel
+from .....parallel.manager import CCLManager
 from .....utils.mochi import get_rot_transformation_mat, stack_cos_sin
-from .....utils.test import ring_params, line_params
-from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
+from .....utils.padding import pad_vision_seq_parallel
+from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from .....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
@@ -53,6 +55,8 @@ def test_wan_transformer_block(
     topology: ttnn.Topology,
     reset_seeds,
 ) -> None:
+    assert os.environ.get("TT_MM_THROTTLE_PERF") is not None, "TT_MM_THROTTLE_PERF must be set for stress test"
+
     torch_dtype = torch.float32
     parent_mesh_device = mesh_device
     mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -162,8 +166,6 @@ def test_wan_transformer_block(
         rope_sin=tt_rope_sin,
         trans_mat=tt_trans_mat,
     )
-
-    assert os.environ.get("TT_MM_THROTTLE_PERF") == "1", "TT_MM_THROTTLE_PERF must be set to 1 for stress test"
 
     logger.info(f"running stress test")
     for i in range(1_000_000_000):
