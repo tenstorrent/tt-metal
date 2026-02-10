@@ -123,11 +123,11 @@ class PreSDPA:
         # Reshape back: [1, 64, 1, 64] -> [64, 1, 64]
         qrope_output = qrope_output_reshaped.squeeze(0).permute(1, 0, 2)  # [64, 1, 64]
 
-        # Interleave QNOPE and QROPE outputs for SDPA
-        # Each of 8 rows has 8 combined heads: (QNOPE[512], QROPE[64]) interleaved
-        # Total per row: 8 * 576 = 4608 elements
-        # Shape: [8, 8, 576] = [rows, heads_per_row, combined_head_dim]
-        num_rows = num_qnope_heads // heads_per_row  # 8 rows
+        # CreateQHeads: Combine QNOPE and QROPE outputs for SDPA
+        # After 3-phase tilization, output is [64, 576] where each row is one head:
+        #   row[i] = [qnope_first256[i], qnope_second256[i], qrope[i]] = [qnope[512], qrope[64]]
+        # Heads are grouped by receiver core: 8 cores × 8 heads = 64 rows
+        num_rows = num_qnope_heads // heads_per_row  # 8 receiver cores
         qnope_out_dim = qnope_output.shape[2]  # 512
         combined_head_dim = qnope_out_dim + qrope_head_dim  # 512 + 64 = 576
 
@@ -137,10 +137,12 @@ class PreSDPA:
         # Reshape qrope_output: [64, 1, 64] -> [8, 8, 64]
         qrope_reshaped = qrope_output.squeeze(1).reshape(num_rows, heads_per_row, qrope_head_dim)
 
-        # Interleave: [8, 8, 576] where each combined head is (qnope[512], qrope[64])
+        # Build [8, 8, 576] then reshape to [64, 576] for tilized output format
         sdpa_interleaved = torch.zeros(num_rows, heads_per_row, combined_head_dim, dtype=qnope_output.dtype)
         sdpa_interleaved[:, :, :qnope_out_dim] = qnope_reshaped
         sdpa_interleaved[:, :, qnope_out_dim:] = qrope_reshaped
+        # Reshape: [8, 8, 576] -> [64, 576] (each row = one head)
+        sdpa_interleaved = sdpa_interleaved.reshape(num_rows * heads_per_row, combined_head_dim)
 
         # KV Cache Branch
         dkv = input_layernorm @ dkv_matmul_weights_tensor
@@ -416,12 +418,13 @@ class PreSDPA:
             ]
         )
 
-        # Unicast parameters for interleaved layout
+        # CreateQHeads parameters for 3-phase tilization layout
         COMBINED_HEAD_SIZE = 576  # 512 (QNOPE) + 64 (QROPE) elements per combined head
         QNOPE_DATA_SIZE = 512  # Elements per QNOPE head
-        QROPE_DATA_SIZE = 64  # Elements per QROPE head
-        HEADS_PER_SDPA_INPUT_CORE = 8  # 8 interleaved heads per SDPA Input core
-        UNICAST_NUM_SENDERS_PER_SDPA_INPUT = 12  # 8 QNOPE cores + 4 QROPE cores
+        QROPE_HEAD_DIM = 64  # Elements per QROPE head
+        HEADS_PER_SDPA_INPUT_CORE = 8  # 8 heads per SDPA Input core
+        QNOPE_COLS = 8  # Number of QNOPE sender columns
+        QROPE_COLS = 4  # Number of QROPE sender columns
 
         # KV Cache Branch grid configuration
         # DKV Matmul (9x2)
@@ -476,9 +479,11 @@ class PreSDPA:
         gather_reduce_noc0_receiver_semaphore_id = gather_noc0_receiver_semaphore_id
         gather_reduce_noc1_receiver_semaphore_id = gather_noc1_receiver_semaphore_id
 
-        # Semaphore ID for gather heads synchronization (QNOPE/QROPE -> SDPA)
-        # Reuse gather_noc0_receiver_semaphore_id (ID 2)
-        gather_heads_receiver_semaphore_id = gather_noc0_receiver_semaphore_id
+        # CreateQHeads 3-phase semaphore IDs (reuse existing IDs, safe since prior ops have completed)
+        # Phase 1: QNOPE first halves, Phase 2: QNOPE second halves, Phase 3: QROPE
+        nope_phase1_semaphore_id = gather_noc0_receiver_semaphore_id  # ID 2
+        nope_phase2_semaphore_id = gather_noc1_receiver_semaphore_id  # ID 3
+        rope_semaphore_id = mcast_data_sender_semaphore_id  # ID 0 (mcast completed before CreateQHeads)
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -507,14 +512,15 @@ class PreSDPA:
         rmsnorm2_input_cb = 7  # Input CB for RMSNorm2
         gather_reduce_half1_scratch_cb = 8  # Dedicated half1 scratch CB for gather_reduce
         rmsnorm2_output_cb = 9  # Output CB for RMSNorm2
-        # Matmul2 + Matmul3 + QRoPE/GatherHeads path
+        # Matmul2 + Matmul3 + QRoPE/CreateQHeads path
         matmul2_input_cb = 10  # Input CB for second matmul (1x1536 with 1x32 tiles)
         matmul2_weights_cb = 11  # Weights CB for second matmul (width sharded, 4 tiles per core)
         matmul2_output_cb = 12  # Output CB for second matmul ([64, 1, 128] + [64, 1, 64])
         matmul3_weights_cb = 13  # Weights CB for third matmul (height sharded on Qnope grid)
         matmul3_output_cb = 14  # Output CB for third matmul (Qnope final output)
         qrope_output_cb = 15  # Output CB for Qrope (RoPE output)
-        gather_heads_out_cb = 16  # Output CB for gather_heads (linked to tensor, allocated on sender+receiver cores)
+        create_q_heads_out_cb = 16  # Output CB for CreateQHeads (linked to output tensor on receiver cores)
+        create_q_heads_receiver_in_cb = 31  # Intermediate CB for CreateQHeads (row-major data before tilization)
         qrope_cos_cb = 17  # Cos CB for RoPE
         qrope_sin_cb = 18  # Sin CB for RoPE
         qrope_trans_mat_cb = 19  # Trans_mat CB for RoPE
@@ -743,41 +749,61 @@ class PreSDPA:
         # Common unicast parameters
         head_stride_bytes = COMBINED_HEAD_SIZE * 2  # 576 * 2 = 1152 bytes (2 bytes per bfloat16 element)
         qnope_data_size_bytes = QNOPE_DATA_SIZE * 2  # 512 * 2 = 1024 bytes
-        qrope_data_size_bytes = QROPE_DATA_SIZE * 2  # 64 * 2 = 128 bytes
-        gather_heads_out_pages = (
-            HEADS_PER_SDPA_INPUT_CORE * COMBINED_HEAD_SIZE // 32
-        )  # 8 * 576 / 32 = 144 tiles of 1x32
+        qrope_head_size_bytes = QROPE_HEAD_DIM * 2  # 64 * 2 = 128 bytes per head
+        # Tilization parameters for 3-phase CreateQHeads
+        nope_tiles = 8  # [8, 256] / [8, 32] = 8 tiles per NOPE phase
+        rope_tiles = 2  # [8, 64] / [8, 32] = 2 tiles for ROPE phase
 
         # BRISC sender compile-time args (QNOPE/QROPE -> SDPA Input)
+        # 3-phase synchronization: senders write to intermediate CB, TRISC tilizes to output
         # Pack NOC coordinates for each row's target SDPA Input core (x in lower 16 bits, y in upper 16 bits)
-        gather_heads_brisc_named_compile_time_args = [
+        create_q_heads_brisc_named_compile_time_args = [
             # Packed coordinates (x | (y << 16)) for each source row's target
-            ("target_noc_coords_row0", sdpa_input_noc_coords[0][0] | (sdpa_input_noc_coords[0][1] << 16)),
-            ("target_noc_coords_row1", sdpa_input_noc_coords[1][0] | (sdpa_input_noc_coords[1][1] << 16)),
-            ("target_noc_coords_row2", sdpa_input_noc_coords[2][0] | (sdpa_input_noc_coords[2][1] << 16)),
-            ("target_noc_coords_row3", sdpa_input_noc_coords[3][0] | (sdpa_input_noc_coords[3][1] << 16)),
-            ("target_noc_coords_row4", sdpa_input_noc_coords[4][0] | (sdpa_input_noc_coords[4][1] << 16)),
-            ("target_noc_coords_row5", sdpa_input_noc_coords[5][0] | (sdpa_input_noc_coords[5][1] << 16)),
-            ("target_noc_coords_row6", sdpa_input_noc_coords[6][0] | (sdpa_input_noc_coords[6][1] << 16)),
-            ("target_noc_coords_row7", sdpa_input_noc_coords[7][0] | (sdpa_input_noc_coords[7][1] << 16)),
-            ("head_stride_bytes", head_stride_bytes),
-            ("qnope_data_size_bytes", qnope_data_size_bytes),
-            ("qrope_data_size_bytes", qrope_data_size_bytes),
-            ("receiver_semaphore_id", gather_heads_receiver_semaphore_id),
-            ("qnope_src_cb", matmul3_output_cb),  # QNOPE sends from matmul3 output
-            ("qrope_src_cb", qrope_output_cb),  # QROPE sends from qrope output
-            ("qnope_src_num_pages", matmul3_out_w),  # 16 tiles of 1x32
-            ("qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
-            ("qnope_grid_cols", QNOPE_GRID_COLS),
-            ("receive_cb", gather_heads_out_cb),  # Output CB (allocated on sender+receiver grids, linked to tensor)
+            ("cqh_target_noc_coords_row0", sdpa_input_noc_coords[0][0] | (sdpa_input_noc_coords[0][1] << 16)),
+            ("cqh_target_noc_coords_row1", sdpa_input_noc_coords[1][0] | (sdpa_input_noc_coords[1][1] << 16)),
+            ("cqh_target_noc_coords_row2", sdpa_input_noc_coords[2][0] | (sdpa_input_noc_coords[2][1] << 16)),
+            ("cqh_target_noc_coords_row3", sdpa_input_noc_coords[3][0] | (sdpa_input_noc_coords[3][1] << 16)),
+            ("cqh_target_noc_coords_row4", sdpa_input_noc_coords[4][0] | (sdpa_input_noc_coords[4][1] << 16)),
+            ("cqh_target_noc_coords_row5", sdpa_input_noc_coords[5][0] | (sdpa_input_noc_coords[5][1] << 16)),
+            ("cqh_target_noc_coords_row6", sdpa_input_noc_coords[6][0] | (sdpa_input_noc_coords[6][1] << 16)),
+            ("cqh_target_noc_coords_row7", sdpa_input_noc_coords[7][0] | (sdpa_input_noc_coords[7][1] << 16)),
+            ("cqh_head_stride_bytes", head_stride_bytes),
+            ("cqh_qnope_data_size_bytes", qnope_data_size_bytes),
+            ("cqh_qrope_head_size_bytes", qrope_head_size_bytes),
+            # 3 semaphores for race-free synchronization
+            ("cqh_nope_phase1_semaphore_id", nope_phase1_semaphore_id),
+            ("cqh_nope_phase2_semaphore_id", nope_phase2_semaphore_id),
+            ("cqh_rope_semaphore_id", rope_semaphore_id),
+            ("cqh_qnope_src_cb", matmul3_output_cb),  # QNOPE sends from matmul3 output
+            ("cqh_qrope_src_cb", qrope_output_cb),  # QROPE sends from qrope output
+            ("cqh_qnope_src_num_pages", matmul3_out_w),  # 16 tiles of 1x32
+            ("cqh_qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
+            ("cqh_qnope_cols", QNOPE_COLS),
+            ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB for row-major data
         ]
 
         # NCRISC receiver compile-time args (SDPA Input cores)
-        gather_heads_ncrisc_named_compile_time_args = [
-            ("num_senders", UNICAST_NUM_SENDERS_PER_SDPA_INPUT),  # 12 cores (8 QNOPE + 4 QROPE)
-            ("receiver_semaphore_id", gather_heads_receiver_semaphore_id),
-            ("receive_cb", gather_heads_out_cb),  # Output CB
-            ("dst_num_pages", gather_heads_out_pages),  # 144 tiles of 1x32
+        # 3-phase receiver: waits for each phase's semaphore, then marks pages in intermediate CB
+        # Prefixed with "cqh_" to avoid name collisions with other NCRISC args
+        create_q_heads_ncrisc_named_compile_time_args = [
+            ("cqh_nope_phase1_semaphore_id", nope_phase1_semaphore_id),
+            ("cqh_nope_phase2_semaphore_id", nope_phase2_semaphore_id),
+            ("cqh_rope_semaphore_id", rope_semaphore_id),
+            ("cqh_num_nope_senders", QNOPE_COLS),  # 8 QNOPE senders per receiver
+            ("cqh_num_rope_senders", QROPE_COLS),  # 4 QROPE senders per receiver
+            ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB
+            ("cqh_out_cb", create_q_heads_out_cb),  # Output CB (backed by output tensor)
+            ("cqh_nope_tiles", nope_tiles),  # 8 tiles per NOPE phase
+            ("cqh_rope_tiles", rope_tiles),  # 2 tiles for ROPE phase
+        ]
+
+        # TRISC compute compile-time args (tilization on SDPA Input cores)
+        # Prefixed with "cqh_" to avoid name collisions with other TRISC args (e.g., RoPE's "out_cb")
+        create_q_heads_trisc_named_compile_time_args = [
+            ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),
+            ("cqh_out_cb", create_q_heads_out_cb),
+            ("cqh_nope_tiles", nope_tiles),
+            ("cqh_rope_tiles", rope_tiles),
         ]
 
         # RMSNorm compute compile-time args (named args for TRISC)
@@ -1380,18 +1406,32 @@ class PreSDPA:
                     format_descriptors=[qrope_output_cb_format],
                 )
 
-                # CB 16: Gather heads output buffer (directly gather into output, no staging)
-                # Allocate CB on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
-                # The output tensor is only sharded on receiver cores (sdpa_input_grid)
-                # On sender cores: CB is allocated but not backed by tensor memory (just for get_write_ptr)
-                # On receiver cores: CB is backed by the output tensor's device buffer
-                gather_heads_out_cb_core_ranges = qnope_grid.merge(qrope_grid).merge(sdpa_input_grid)
-                # Create CB descriptor linked to output tensor
-                gather_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather_heads_out_cb, output_tensor_device
+                # CB 31: CreateQHeads intermediate buffer (row-major data before tilization)
+                # Senders write row-major data here via NOC, receiver marks pages, TRISC tilizes to output
+                # Allocated on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
+                # so senders can use get_write_ptr to determine the L1 destination address
+                TILE_8x32 = ttnn.Tile((8, 32))
+                create_q_heads_interm_tile_descriptor = ttnn.TileDescriptor(TILE_8x32)
+                create_q_heads_interm_page_size = TILE_8x32.get_tile_size(data_format)  # 8*32*2 = 512 bytes
+                create_q_heads_interm_cb_core_ranges = qnope_grid.merge(qrope_grid).merge(sdpa_input_grid)
+                create_q_heads_interm_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=create_q_heads_receiver_in_cb,
+                    data_format=data_format,
+                    page_size=create_q_heads_interm_page_size,
+                    tile=create_q_heads_interm_tile_descriptor,
                 )
-                # Override core_ranges to include sender cores (for get_write_ptr access)
-                gather_heads_out_cb_descriptor.core_ranges = gather_heads_out_cb_core_ranges
+                create_q_heads_interm_cb_descriptor = ttnn.CBDescriptor(
+                    total_size=(2 * nope_tiles + rope_tiles)
+                    * create_q_heads_interm_page_size,  # 18 pages (all phases: 8+8+2)
+                    core_ranges=create_q_heads_interm_cb_core_ranges,
+                    format_descriptors=[create_q_heads_interm_cb_format],
+                )
+
+                # CB 16: CreateQHeads output buffer (tilized data, backed by output tensor)
+                # Only allocated on receiver cores (SDPA Input grid) - senders no longer write here
+                create_q_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    create_q_heads_out_cb, output_tensor_device
+                )
 
                 # CB: DKV Matmul weights buffer
                 dkv_matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1590,14 +1630,14 @@ class PreSDPA:
                     + mcast2_ncrisc_named_compile_time_args
                     + matmul3_ncrisc_named_compile_time_args
                     + qrope_ncrisc_named_compile_time_args
-                    + gather_heads_ncrisc_named_compile_time_args
+                    + create_q_heads_ncrisc_named_compile_time_args
                     + dkv_matmul_ncrisc_named_compile_time_args
                     + kv_rmsnorm_ncrisc_named_compile_time_args
                     + dkv_gather_sender_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args,
                     # NCRISC common runtime args:
                     ncrisc_common_runtime_args=ncrisc_bcast_common_args,
-                    # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather_reduce receiver + matmul2 + mcast2 + matmul3 + qrope + gather_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
+                    # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather_reduce receiver + matmul2 + mcast2 + matmul3 + qrope + create_q_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
                     brisc_named_compile_time_args=bcast_brisc_named_compile_time_args
                     + rmsnorm_reader_named_compile_time_args
                     + mcast_sender_named_compile_time_args
@@ -1607,13 +1647,13 @@ class PreSDPA:
                     + mcast2_brisc_named_compile_time_args
                     + matmul3_brisc_named_compile_time_args
                     + qrope_brisc_named_compile_time_args
-                    + gather_heads_brisc_named_compile_time_args
+                    + create_q_heads_brisc_named_compile_time_args
                     + dkv_gather_receiver_named_compile_time_args
                     + kv_rmsnorm_brisc_named_compile_time_args
                     + krope_brisc_named_compile_time_args,
                     # BRISC common runtime args: bcast args
                     brisc_common_runtime_args=brisc_bcast_common_args,
-                    # TRISC named compile-time args: rmsnorm compute + matmul + gather-reduce + rmsnorm2 + matmul2 + matmul3 + dkv_matmul + kv_rmsnorm
+                    # TRISC named compile-time args: rmsnorm compute + matmul + gather-reduce + rmsnorm2 + matmul2 + matmul3 + qrope + create_q_heads + dkv_matmul + kv_rmsnorm + krope
                     trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
                     + matmul_trisc_named_compile_time_args
@@ -1622,6 +1662,7 @@ class PreSDPA:
                     + matmul2_trisc_named_compile_time_args
                     + matmul3_trisc_named_compile_time_args
                     + qrope_trisc_named_compile_time_args
+                    + create_q_heads_trisc_named_compile_time_args
                     + dkv_matmul_trisc_named_compile_time_args
                     + kv_rmsnorm_trisc_named_compile_time_args
                     + krope_trisc_named_compile_time_args,
@@ -1728,7 +1769,7 @@ class PreSDPA:
                     matmul3_weights_cb_descriptor,  # CB 13: Matmul3 weights
                     matmul3_output_cb_descriptor,  # CB 14: Matmul3 output (Qnope final)
                     qrope_output_cb_descriptor,  # CB 15: Qrope output (RoPE output)
-                    gather_heads_out_cb_descriptor,  # CB 16: Gather heads output (linked to tensor, no staging)
+                    create_q_heads_out_cb_descriptor,  # CB 16: CreateQHeads output (tilized, linked to tensor)
                     qrope_cos_cb_descriptor,  # CB 17: Cos (sharded tensor)
                     qrope_sin_cb_descriptor,  # CB 18: Sin (sharded tensor)
                     qrope_trans_mat_cb_descriptor,  # CB 19: Trans_mat (sharded tensor)
@@ -1743,6 +1784,7 @@ class PreSDPA:
                     krope_output_cb_descriptor,  # CB 28: KV Cache Branch RoPE output
                     krope_cos_cb_descriptor,  # CB 29: Cos (sharded tensor)
                     krope_sin_cb_descriptor,  # CB 30: Sin (sharded tensor)
+                    create_q_heads_interm_cb_descriptor,  # CB 31: CreateQHeads intermediate (row-major)
                 ]
                 if not skip_ccl:
                     cbs_list.append(bcast_pkt_cb_descriptor)
@@ -1753,7 +1795,7 @@ class PreSDPA:
                     semaphores=[
                         mcast_sender_semaphore_descriptor,  # ID 0
                         mcast_receiver_semaphore_descriptor,  # ID 1
-                        gather_noc0_receiver_semaphore_descriptor,  # ID 2 (reused by gather_heads)
+                        gather_noc0_receiver_semaphore_descriptor,  # ID 2 (reused by create_q_heads)
                         gather_noc1_receiver_semaphore_descriptor,  # ID 3
                     ],
                 )
