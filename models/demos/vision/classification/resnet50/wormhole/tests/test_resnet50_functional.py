@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, skip_with_watcher
 from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra
 
 
@@ -64,6 +64,7 @@ def run_resnet_50(
         "pretrained_weight_false",
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled. See github issue #37097")
 def test_resnet_50(
     device,
     batch_size,
