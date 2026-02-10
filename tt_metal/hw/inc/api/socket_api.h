@@ -269,7 +269,8 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
 #endif
 }
 
-void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_pages) {
+bool socket_wait_for_pages(
+    const SocketReceiverInterface& socket, uint32_t num_pages, uint32_t early_exit_iter_count = 0) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.fifo_curr_size);
@@ -279,10 +280,16 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
     volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_sent_addr);
     uint32_t bytes_recv;
+    uint32_t iter_count = 0;
     do {
         invalidate_l1_cache();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
+        iter_count++;
+        if (early_exit_iter_count && iter_count >= early_exit_iter_count) {
+            return false;
+        }
     } while (bytes_recv < num_bytes);
+    return true;
 #endif
 }
 

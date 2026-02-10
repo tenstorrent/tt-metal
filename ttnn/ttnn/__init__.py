@@ -186,6 +186,12 @@ from ttnn._ttnn.mesh_socket import (
     MeshCoreCoord,
 )
 
+from ttnn._ttnn.hd_socket import (
+    H2DSocket,
+    D2HSocket,
+    H2DMode,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
