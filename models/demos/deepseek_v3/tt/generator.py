@@ -1052,6 +1052,17 @@ class DeepseekGenerator(DecodeWarmupMixin):
                 f"set_kv_cache: More kv_cache entries provided ({len(kv_cache_list)}) than decoder blocks ({cache_idx})"
             )
 
+    def warmup_model_decode(
+        self,
+        kv_cache,
+        enable_trace,
+        max_batch_size,
+        num_gpu_blocks,
+        sample_on_device_mode=None,
+        non_greedy_decoding_on_device=False,
+    ):
+        logger.warning("decode_forward_text is not implemented for DeepseekGenerator")
+
     def _convert_vllm_page_table_for_user(
         self, page_table: torch.Tensor, user_id: int, local_user_id: int | None = None
     ) -> tuple[ttnn.Tensor, ...]:

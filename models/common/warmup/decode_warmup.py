@@ -65,7 +65,6 @@ class DecodeWarmupMixin:
         num_gpu_blocks,
         sample_on_device_mode=None,
         non_greedy_decoding_on_device=False,
-        sampling_params=None,
     ):
         sampling_params = self._create_sampling_params(
             sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size

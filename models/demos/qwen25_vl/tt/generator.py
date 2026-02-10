@@ -6,11 +6,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.warmup.decode_warmup import DecodeWarmupMixin
 from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
-class Generator:
+class Generator(DecodeWarmupMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a Qwen2_5_Vision wrapper requires only a mesh_device and model_args.
@@ -207,6 +208,24 @@ class Generator:
                 ttnn.deallocate(page_table_tt)
 
             return logits
+
+    def warmup_model_decode(
+        self,
+        kv_cache,
+        enable_trace,
+        max_batch_size,
+        num_gpu_blocks,
+        sample_on_device_mode=None,
+        non_greedy_decoding_on_device=False,
+    ):
+        return self._ttt_generator.warmup_model_decode(
+            kv_cache=kv_cache,
+            enable_trace=enable_trace,
+            max_batch_size=max_batch_size,
+            num_gpu_blocks=num_gpu_blocks,
+            sample_on_device_mode=sample_on_device_mode,
+            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+        )
 
     # [INFO] this is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):
