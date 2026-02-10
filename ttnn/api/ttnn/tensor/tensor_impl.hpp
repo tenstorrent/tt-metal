@@ -95,7 +95,7 @@ void copy_to_device(
 //                                  .to_layout()
 // ======================================================================================
 
-Tensor to_layout(const Tensor& tensor, Layout target_layout);
+HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .pad() and .unpad()

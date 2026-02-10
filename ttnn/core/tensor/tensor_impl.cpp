@@ -424,7 +424,7 @@ void to_string(
 }  // namespace detail
 
 template <typename T>
-Tensor to_layout_impl(const Tensor& tensor, Layout target_layout);
+HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout);
 
 template <typename T>
 std::string to_string_impl(const Tensor& tensor) {
@@ -444,9 +444,10 @@ std::string to_string_impl(const Tensor& tensor) {
             return tensor;
         }
         if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout_impl<T>(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+            Tensor float_tensor = tt::tt_metal::to_dtype(tensor, DataType::FLOAT32);
+            return Tensor(to_layout_impl<T>(float_tensor.host_tensor(), Layout::ROW_MAJOR));
         }
-        return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
+        return Tensor(to_layout_impl<T>(tensor.host_tensor(), Layout::ROW_MAJOR));
     };
 
     auto get_host_buffers = [&](const HostStorage& storage) {
@@ -1071,7 +1072,7 @@ template std::vector<uint8_t> decode_tensor_data<uint8_t>(
 // ======================================================================================
 
 template <typename T>
-Tensor to_layout_impl(const Tensor& tensor, Layout target_layout) {
+HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
     if (tensor.layout() == target_layout) {
         return tensor;
     }
@@ -1094,8 +1095,8 @@ Tensor to_layout_impl(const Tensor& tensor, Layout target_layout) {
         TT_THROW("Unreachable");
     };
 
-    return Tensor(
-        tensor.host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); }),
+    return HostTensor(
+        tensor.get_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); }),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -1108,7 +1109,7 @@ Tensor to_layout_impl(const Tensor& tensor, Layout target_layout) {
 }
 
 template <typename T>
-Tensor to_layout_bfloat_impl(const Tensor& tensor, Layout target_layout) {
+HostTensor to_layout_bfloat_impl(const HostTensor& tensor, Layout target_layout) {
     static_assert(std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b>, "Invalid type T");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (tensor.layout() != target_layout or tensor.layout() != Layout::TILE) {
@@ -1122,16 +1123,16 @@ Tensor to_layout_bfloat_impl(const Tensor& tensor, Layout target_layout) {
 }
 
 template <>
-Tensor to_layout_impl<bfloat8_b>(const Tensor& tensor, Layout target_layout) {
+HostTensor to_layout_impl<bfloat8_b>(const HostTensor& tensor, Layout target_layout) {
     return to_layout_bfloat_impl<bfloat8_b>(tensor, target_layout);
 }
 
 template <>
-Tensor to_layout_impl<bfloat4_b>(const Tensor& tensor, Layout target_layout) {
+HostTensor to_layout_impl<bfloat4_b>(const HostTensor& tensor, Layout target_layout) {
     return to_layout_bfloat_impl<bfloat4_b>(tensor, target_layout);
 }
 
-Tensor to_layout(const Tensor& tensor, Layout target_layout) {
+HostTensor to_layout(const HostTensor& tensor, Layout target_layout) {
     return dispatch(tensor.dtype(), [&]<typename T>() { return to_layout_impl<T>(tensor, target_layout); });
 }
 
