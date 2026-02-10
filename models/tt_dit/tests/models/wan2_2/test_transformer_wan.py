@@ -15,7 +15,7 @@ import ttnn
 from ....models.transformers.wan2_2.transformer_wan import WanTransformer3DModel, WanTransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
-from ....utils.cache import get_and_create_cache_path, get_cache_path, load_cache_dict, save_cache_dict
+from ....utils import cache
 from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
@@ -24,33 +24,25 @@ from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        [(2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
-        [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
+        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
+        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0",
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("B, T, H, W, prompt_seq_len"),
+    ("B", "T", "H", "W", "prompt_seq_len"),
     [
-        (1, 31, 40, 80, 118),  # 5B-720p
-        (1, 21, 60, 104, 118),  # 14B-480p
-        (1, 21, 90, 160, 118),  # 14B-720p
+        pytest.param(1, 31, 40, 80, 118, id="5b-720p"),
+        pytest.param(1, 21, 60, 104, 118, id="14b-480p"),
+        pytest.param(1, 21, 90, 160, 118, id="14b-720p"),
     ],
-    ids=["5b-720p", "14b-480p", "14b-720p"],
 )
 def test_wan_transformer_block(
     mesh_device: ttnn.MeshDevice,
@@ -123,7 +115,7 @@ def test_wan_transformer_block(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Initialize weights randomly for testing
     torch.manual_seed(0)
@@ -205,40 +197,36 @@ def test_wan_transformer_block(
     [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        [(2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
-        [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
+        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring, True],
-        [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
+        pytest.param((4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp0tp1"),
+        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
-        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "wh_4x8sp0tp1",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp0tp1",
-        "bh_4x8sp1tp0",
+        pytest.param((4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp0tp1"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("B, T, H, W, prompt_seq_len"),
+    ("B", "T", "H", "W", "prompt_seq_len"),
     [
-        (1, 8, 40, 50, 118),  # small input
-        (1, 31, 40, 80, 118),  # 5B-720p
-        (1, 21, 60, 104, 118),  # 14B-480p
-        (1, 21, 90, 160, 118),  # 14B-720p
+        pytest.param(1, 8, 40, 50, 118, id="short_seq"),
+        pytest.param(1, 31, 40, 80, 118, id="5b-720p"),
+        pytest.param(1, 21, 60, 104, 118, id="14b-480p"),
+        pytest.param(1, 21, 90, 160, 118, id="14b-720p"),
     ],
-    ids=["short_seq", "5b-720p", "14b-480p", "14b-720p"],
 )
-@pytest.mark.parametrize("load_cache", [True, False], ids=["yes_load_cache", "no_load_cache"])
+@pytest.mark.parametrize(
+    "load_cache",
+    [
+        pytest.param(True, id="yes_load_cache"),
+        pytest.param(False, id="no_load_cache"),
+    ],
+)
 def test_wan_transformer_model(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],
@@ -327,19 +315,20 @@ def test_wan_transformer_model(
     )
 
     if load_cache:
-        cache_path = get_cache_path(
-            model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-            subfolder="transformer",
-            parallel_config=parallel_config,
-            mesh_shape=tuple(mesh_device.shape),
-            dtype="bf16",
-        )
-        assert os.path.exists(
-            cache_path
-        ), "Cache path does not exist. Run test_wan_transformer_model_caching first with the desired parallel config."
         start = time.time()
-        cache_dict = load_cache_dict(cache_path)
-        tt_model.from_cached_state_dict(cache_dict)
+
+        try:
+            cache.load_model(
+                tt_model,
+                model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+                subfolder="transformer",
+                parallel_config=parallel_config,
+                mesh_shape=tuple(mesh_device.shape),
+            )
+        except cache.MissingCacheError as err:
+            msg = "Cache path does not exist. Run test_wan_transformer_model_caching first with the desired parallel config."
+            raise RuntimeError(msg) from err
+
         end = time.time()
         logger.info(f"Time taken to load cached state dict: {end - start} seconds")
     else:
@@ -377,24 +366,24 @@ def test_wan_transformer_model(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        [(2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
-        [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
+        pytest.param((2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
+        pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
         # WH (ring) on 4x8
-        [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
+        pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         # BH (linear) on 4x8
-        [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0",
+        pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("subfolder", ["transformer", "transformer_2"], ids=["transformer_1", "transformer_2"])
+@pytest.mark.parametrize(
+    "subfolder",
+    [
+        pytest.param("transformer", id="transformer_1"),
+        pytest.param("transformer_2", id="transformer_2"),
+    ],
+)
 def test_wan_transformer_model_caching(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -445,12 +434,11 @@ def test_wan_transformer_model_caching(
         cfg_parallel=None,
     )
 
-    cache_path = get_and_create_cache_path(
+    cache_dir = cache.model_cache_dir(
         model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         subfolder=subfolder,
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
-        dtype="bf16",
     )
 
     # Create TT model
@@ -477,8 +465,7 @@ def test_wan_transformer_model_caching(
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 
     start = time.time()
-    cache_dict = tt_model.to_cached_state_dict(cache_path)
-    save_cache_dict(cache_dict, cache_path)
+    tt_model.save(cache_dir)
     end = time.time()
     logger.info(f"Time taken to cache state dict: {end - start} seconds")
 
@@ -502,7 +489,6 @@ def test_wan_transformer_model_caching(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
-    loaded_cache_dict = load_cache_dict(cache_path)
-    cache_model.from_cached_state_dict(loaded_cache_dict)
+    cache_model.load(cache_dir)
     end = time.time()
     logger.info(f"Time taken to load cached state dict: {end - start} seconds")
