@@ -51,20 +51,15 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     const auto& nd_shard_spec = a.nd_shard_spec().value();
     uint32_t input_shard_height = nd_shard_spec.shard_shape[-2];
     uint32_t input_shard_width = nd_shard_spec.shard_shape[-1];
-    CoreRangeSet grid = nd_shard_spec.grid;
 
-    const auto distribution_spec = BufferDistributionSpec::from_shard_spec(
-        a.padded_shape(),
-        nd_shard_spec.shard_shape,
-        tile_shape,
-        nd_shard_spec.grid,
-        nd_shard_spec.orientation,
-        nd_shard_spec.shard_distribution_strategy);
+    const auto distribution_spec = a.buffer()->buffer_distribution_spec().value();
+
     uint32_t num_shards = distribution_spec.num_shards();
     const auto page_mapping = distribution_spec.compute_page_mapping();
     const auto& groups = distribution_spec.core_groups();
-    uint32_t num_compute_cores = grid.num_cores();
-    const auto& compute_core_range = grid;
+    const auto& ordered_cores_with_data = distribution_spec.cores_with_data();
+    uint32_t num_compute_cores = ordered_cores_with_data.size();
+    const auto& compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
 
     uint32_t num_tiles_per_input_block = input_shard_width / tile_width;
     uint32_t num_blocks_per_shard_plane =
@@ -225,10 +220,6 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     }
 
     // Run-time args
-    ShardOrientation orientation = a.nd_shard_spec().value().orientation;
-    bool is_row_major = orientation == ShardOrientation::ROW_MAJOR;
-
-    std::vector<CoreCoord> full_cores = corerange_to_cores(compute_core_range, std::nullopt, is_row_major);
     // Logic for ND sharding makes as few assumptions about page locations as possible. Padded pages will be handled
     // in the writer kernel.
     const auto& mapped_cores = page_mapping.all_cores;
@@ -237,7 +228,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     // page_mapping.core_host_page_indices[core_id] contains host page indices for all device pages on that core,
     // with UncompressedBufferPageMapping::PADDING indicating padding pages
     uint32_t start_shard_id = 0;
-    for (auto core : full_cores) {
+    for (auto core : ordered_cores_with_data) {
         auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
         uint32_t num_input_blocks_to_process = 0;
 
@@ -253,7 +244,8 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
                 if (host_page_indices[page_offset] != UncompressedBufferPageMapping::PADDING) {
                     num_input_blocks_to_process++;
                 } else if (page_offset == 0) {  // First page is PADDING means this core has no shards, no need to
-                                                // iterate further
+                                                // iterate further. This should never happen, as we are iterating over
+                                                // only cores with data.
                     break;
                 }
                 // Advance by num_tiles_per_input_block
@@ -276,8 +268,9 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     }
 
     std::vector<CoreCoord> cores_with_run_time_args;
-    cores_with_run_time_args.reserve(full_cores.size());
-    cores_with_run_time_args.insert(cores_with_run_time_args.end(), full_cores.begin(), full_cores.end());
+    cores_with_run_time_args.reserve(ordered_cores_with_data.size());
+    cores_with_run_time_args.insert(
+        cores_with_run_time_args.end(), ordered_cores_with_data.begin(), ordered_cores_with_data.end());
 
     return cached_program_t{
         std::move(program),
