@@ -5,6 +5,7 @@
 #pragma once
 
 #include "fast_matmul_device_operation_types.hpp"
+#include "tt-metalium/circular_buffer.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
@@ -12,14 +13,7 @@ namespace ttnn::experimental::prim {
 
 struct FastMatmulProgramFactory {
     struct shared_variables_t {
-        uint32_t num_cores{};
-        std::vector<CoreCoord> cores;
-        tt::tt_metal::KernelHandle in0_sender_kernels_id{};
-        tt::tt_metal::KernelHandle in0_receiver_kernels_id{};
-        tt::tt_metal::KernelHandle in1_sender_kernels_id{};
-        tt::tt_metal::KernelHandle in1_receiver_kernels_id{};
-        bool transpose_core_grid{};
-        bool read_local_slice_from_input{};
+        std::array<tt::tt_metal::CBHandle, 3> cbs{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -60,10 +54,8 @@ FastMatmulProgramFactory::shared_variables_t fast_matmul_factory_helper_common(
 // Common helper for override_runtime_arguments - used by both fast_matmul and fast_matmul_split
 void override_runtime_arguments_common(
     FastMatmulProgramFactory::cached_program_t& cached_program,
-    uint32_t in0_addr,
-    uint32_t in1_addr,
-    uint32_t in2_addr,
-    uint32_t in3_addr,
-    const std::vector<uint32_t>& output_addrs);
+    const Buffer& in0_buffer,
+    const Buffer& in1_buffer,
+    const Buffer& output_buffer);
 
 }  // namespace ttnn::experimental::prim

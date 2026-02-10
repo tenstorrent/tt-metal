@@ -152,6 +152,9 @@ void kernel_main() {
 
     bool reuse_in0_block = false;
 
+    mm_block_init_short(
+        in0_cb, in1_cb, false /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, K_block_tiles /*kt_dim*/);
+
     uint32_t current_M_block_tiles = M_block_tiles;
     uint32_t current_N_block_tiles = N_block_tiles;
     uint32_t current_subblock_h = subblock_h;
