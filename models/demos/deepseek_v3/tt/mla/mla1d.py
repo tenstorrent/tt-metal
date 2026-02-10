@@ -743,12 +743,12 @@ class MLA1D(AbstractModule):
                 kv_cache_shape[2],
                 kv_cache_shape[3],
             )
-
         assert (
             caches is None
             or len(caches) == mesh_device.shape[0]
             and all(cache.shape == cache_shape for cache in caches)
         )
+
         if caches is None:
             caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
 
@@ -766,14 +766,16 @@ class MLA1D(AbstractModule):
         caches: tuple[torch.Tensor, ...],
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        return ttnn.as_tensor(
-            torch.concatenate(caches),
+        concat_caches = torch.concatenate(caches)
+        x = ttnn.as_tensor(
+            concat_caches,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
         )
+        return x
 
     @classmethod
     def forward_decode(
@@ -981,6 +983,8 @@ class MLA1D(AbstractModule):
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
+        print(f"tt_q.shape: {tt_q.shape}")
+        print(f"cfg['wq_a']: {cfg['wq_a']['input_tensor_b'].shape}")
 
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])
@@ -1059,7 +1063,9 @@ class MLA1D(AbstractModule):
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
 
         if new_attention_mode:
-            tt_kvpe_expanded = ttnn.repeat(tt_kvpe, [1, num_heads_local, 1, 1])
+            tt_kvpe_expanded = tt_kvpe
+            # tt_kvpe_expanded = ttnn.repeat(tt_kvpe, [1, num_heads_local, 1, 1])
+            print("Skipping expanding kvpe for new attention mode")
 
         # Update KVPE Cache
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)

@@ -26,44 +26,6 @@ from models.tt_transformers.tt.common import (
 )
 
 
-def nearest_n(x, n):
-    return ((x + n - 1) // n) * n
-
-
-def print_tensor_chunked(tensor, name="Tensor", chunk_size=32):
-    """
-    Print tensor in chunks of chunk_size along the last dimension.
-    For a tensor with shape [B, H, S, D], prints chunks of D dimension.
-    """
-    if isinstance(tensor, ttnn.Tensor):
-        tensor_np = ttnn.to_torch(tensor).float().numpy()
-    else:
-        tensor_np = tensor.float().numpy() if isinstance(tensor, torch.Tensor) else tensor
-
-    shape = tensor_np.shape
-    if len(shape) < 1:
-        print(f"{name} (full): {tensor_np}")
-        return
-
-    # Last dimension index
-    dim_idx = len(shape) - 1
-    dim_size = shape[dim_idx]
-
-    num_chunks = (dim_size + chunk_size - 1) // chunk_size
-
-    print(f"{name} shape: {shape}")
-    for chunk_idx in range(num_chunks):
-        start = chunk_idx * chunk_size
-        end = min(start + chunk_size, dim_size)
-
-        # Create slice for all dimensions
-        slices = [slice(None)] * len(shape)
-        slices[dim_idx] = slice(start, end)
-
-        chunk = tensor_np[tuple(slices)]
-        print(f"{name} [{start}:{end}] (dim {dim_idx}): {chunk}")
-
-
 def print_tensor_tiled(tensor, name="Tensor", tile_size=32):
     """
     Print tensor as tiles of [tile_size, tile_size] along the last two dimensions.
@@ -106,15 +68,6 @@ def print_tensor_tiled(tensor, name="Tensor", tile_size=32):
             tile = tensor_np[tuple(slices)]
             print(f"{name} tile {tile_idx} = [{start_2nd_last}:{end_2nd_last}, {start_last}:{end_last}]: {tile}")
             tile_idx += 1
-
-
-def nearest_pow_2(x):
-    if x < 1:
-        raise ValueError("x must be >= 1")
-    import math
-
-    power = math.ceil(math.log2(x))
-    return 1 << power
 
 
 def sdpa_online_cpu(
@@ -312,8 +265,8 @@ def run_flash_mla_prefill_impl(
     ### FlashMLA Prefill
     ##########################
     if run_old_path:
-        print("tt_q shape is: ", tt_q.shape)
-        print("tt_k shape is: ", tt_k.shape)
+        # print("tt_q shape is: ", tt_q.shape)
+        # print("tt_k shape is: ", tt_k.shape)
         tt_flash_mla_prefill_out = ttnn.transformer.flash_mla_prefill(
             tt_q,
             tt_k,
@@ -328,9 +281,9 @@ def run_flash_mla_prefill_impl(
         signpost(header="Original v_out matmul")
         tt_out = ttnn.linear(tt_flash_mla_prefill_out, tt_v_out)
 
-        print("q shape is: ", q.shape)
-        print("k shape is: ", k.shape)
-        print("v shape is: ", v.shape)
+        # print("q shape is: ", q.shape)
+        # print("k shape is: ", k.shape)
+        # print("v shape is: ", v.shape)
         ref_out_t = scaled_dot_product_attention_reference(
             q,
             k,
@@ -353,17 +306,16 @@ def run_flash_mla_prefill_impl(
     print("tt_v_post_repeat shape is: ", tt_v_post_repeat.shape)
     print("tt_v_out shape is: ", tt_v_out.shape)
     tt_v_pre_sdpa = ttnn.linear(tt_v_post_repeat, tt_v_out)
+
     # Repeat K as a current limitation of the SDPA op
-    tt_k_post_repeat = ttnn.repeat(tt_k, [1, nh, 1, 1])
+    print("tt_k shape pre repeat is: ", tt_k.shape)
+    # tt_k_post_repeat = ttnn.repeat(tt_k, [1, nh, 1, 1])
+    tt_k_post_repeat = tt_k
     print("Calling SDPA with shapes: ", tt_q.shape, tt_k_post_repeat.shape, tt_v_pre_sdpa.shape)
 
-    # print_tensor_chunked(tt_k_post_repeat, "TT_K")
-    # print_tensor_tiled(tt_q, "TT_Q")
-    # print_tensor_tiled(tt_k, "TT_K")
-    # print_tensor_tiled(tt_v_pre_sdpa, "TT_V")
-    print("TT_v_pre_sdpa tensor dtype is: ", tt_v_pre_sdpa.dtype)
-    print("TT_Q_tensor dtype is: ", tt_q.dtype)
-    print("tt_k_post_repeat tensor dtype is: ", tt_v_out.dtype)
+    # print("TT_v_pre_sdpa tensor dtype is: ", tt_v_pre_sdpa.dtype)
+    # print("TT_Q_tensor dtype is: ", tt_q.dtype)
+    # print("tt_k_post_repeat tensor dtype is: ", tt_v_out.dtype)
     tt_new_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k_post_repeat,
@@ -378,14 +330,11 @@ def run_flash_mla_prefill_impl(
         attn_mask=None,
     )
     print("tt_new_sdpa_out shape is: ", tt_new_sdpa_out.shape)
-    # print_tensor_chunked(tt_new_sdpa_out, "TT_NEW_SDPA_OUT")
     if run_old_path:
         ref_tt_impl_out_torch = ttnn.to_torch(tt_out)
         new_tt_impl_out_torch = ttnn.to_torch(tt_new_sdpa_out)
 
         pcc_threshold = 0.99
-        # if dtype == ttnn.bfloat4_b:
-        #     pcc_threshold = 0.98
 
         out_pass, out_pcc = comp_pcc(ref_tt_impl_out_torch, new_tt_impl_out_torch, pcc_threshold)
         print(f"Output PCC: {out_pcc}")
@@ -397,14 +346,16 @@ def run_flash_mla_prefill_impl(
     "batch, seq_len, nh, nkv, kv_lora_rank, d_rope, v_head_dim",
     [
         # working cases
-        # (1, 32, 1, 1, 512, 64, 128) ,
+        (1, 32, 16, 16, 512, 64, 128),
         (1, 4096, 16, 16, 512, 64, 128),
-        # (1, 32, 1, 1, 256, 32, 32),
-        #  (1, 32, 1, 1, 128, 64, 32) ,
-        #  (1, 32, 1, 1, 128, 64, 32) ,
-        #  (1, 32, 1, 1, 32, 64, 32) ,
-        #  (1, 32, 1, 1, 96, 64, 32) ,
-        #  (1, 32, 1, 1, 96, 96, 64) ,
+        (1, 8192, 16, 16, 512, 64, 128),
+        (1, 16384, 16, 16, 512, 64, 128),
+        (1, 32, 16, 16, 256, 32, 32),
+        (1, 32, 16, 16, 128, 64, 32),
+        (1, 32, 16, 16, 128, 64, 32),
+        (1, 32, 16, 16, 32, 64, 32),
+        (1, 32, 16, 16, 96, 64, 32),
+        (1, 32, 16, 16, 96, 96, 64),
     ],
 )
 @pytest.mark.parametrize(

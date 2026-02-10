@@ -55,8 +55,21 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.logical_shape();
+    const auto& v_shape = input_tensor_v.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
     const uint32_t NKH = k_shape[1];
+    const uint32_t NVH = v_shape[1];
+
+    // In flash mla prefill, we have to support the case where NKH != NVH
+    // We are calling op with the following shapes:
+    // q - [B, NHQ, Sq, DH_qk]
+    // k - [B, 1, Sk, DH_qk]
+    // v - [B, NVH, Sk, DH_v]
+    // k head is in latent space, and is reused accross all q heads
+
+    log_info(tt::LogOp, "q_shape: {}", q_shape);
+    log_info(tt::LogOp, "k_shape: {}", k_shape);
+    log_info(tt::LogOp, "v_shape: {}", v_shape);
 
     // Paged cache parameters when in chunked mode
     bool is_chunked = chunk_start_idx.has_value();
@@ -101,7 +114,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // log_debug all of the above
     log_info(tt::LogOp, "B: {}", B);
     log_info(tt::LogOp, "NQH: {}", NQH);
-
+    log_info(tt::LogOp, "NVH: {}", NVH);
     log_info(tt::LogOp, "Sk: {}", Sk);
     log_info(tt::LogOp, "padded_Sq: {}", padded_Sq);
     log_info(tt::LogOp, "padded_Sk: {}", padded_Sk);
@@ -353,6 +366,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       B,
                                                       NQH,
                                                       NKH,
+                                                      NVH,
                                                       Sqt,
                                                       Skt,
                                                       valid_Sqt,
@@ -385,7 +399,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         // interleaved accessor args
         B,
         NQH,
-        NKH,
+        NKH,  // unused
         Sqt,
         valid_Sqt,
         Sk,
@@ -411,7 +425,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         // matmul args
         B,
         NQH,
-        NKH,
+        NKH,  // unused
         Skt,
         DHt,
         vDHt,

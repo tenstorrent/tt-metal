@@ -26,30 +26,35 @@ void dprint_cb_tile_sdpa(uint32_t cb_id, uint32_t tile_id) {
 }
 // v dtype
 void kernel_main() {
+    // B,
+    // NQH,
+    // NKH,
+    // NVH,
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t Sqt = get_compile_time_arg_val(3);
-    constexpr uint32_t Skt = get_compile_time_arg_val(4);
-    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(5);
-    constexpr uint32_t valid_Skt = get_compile_time_arg_val(6);
-    constexpr uint32_t DHt = get_compile_time_arg_val(7);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(8);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(9);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(10);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(11);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(13);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(19);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(20);
-    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t NVH = get_compile_time_arg_val(3);
+    constexpr uint32_t Sqt = get_compile_time_arg_val(4);
+    constexpr uint32_t Skt = get_compile_time_arg_val(5);
+    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(6);
+    constexpr uint32_t valid_Skt = get_compile_time_arg_val(7);
+    constexpr uint32_t DHt = get_compile_time_arg_val(8);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(9);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(10);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(12);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(15) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(19) == 1;
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(20);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(21);
+    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(22) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<22>();
+    constexpr auto q_args = TensorAccessorArgs<23>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -103,7 +108,8 @@ void kernel_main() {
     constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
     constexpr uint32_t attention_sink_tile_bytes = use_attention_sink ? get_tile_size(cb_attention_sink) : 0;
 
-    constexpr uint32_t q_heads_per_kv = NQH / NKH;
+    constexpr uint32_t q_heads_per_k = NQH / NKH;
+    constexpr uint32_t q_heads_per_v = NQH / NVH;
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
@@ -124,7 +130,7 @@ void kernel_main() {
     DPRINT << "skip_src_cols: " << skip_src_cols << ENDL();
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
-    const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, vDHt);
+    const auto v_tile_shape = TensorTileShape(B, NVH, valid_Skt, vDHt);
     const auto attention_sink_tile_shape = TensorTileShape(B, NQH, 1, 1);
     // DPRINT << "q_tile_shape: [" << q_tile_shape.shape[0] << " " << q_tile_shape.shape[1] << " " <<
     // q_tile_shape.shape[2] << " " << q_tile_shape.shape[3] << "]" << ENDL(); DPRINT << "k_tile_shape: [" <<
@@ -233,9 +239,10 @@ void kernel_main() {
                         q_high_idx = Skt;
                     }
 
-                    const uint32_t kv_head = nq / q_heads_per_kv;
+                    const uint32_t k_head = nq / q_heads_per_k;
+                    const uint32_t v_head = nq / q_heads_per_v;
                     // Fix this
-                    DPRINT << "kv_head: " << kv_head << ENDL();
+                    DPRINT << "k_head: " << k_head << ENDL();
 
                     // loop while k_low < q_high
                     for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
@@ -243,24 +250,10 @@ void kernel_main() {
                         const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                         const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
 
-                        const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
-                        const uint32_t k_row_end_tile = std::min(k_row_start_tile + Sk_chunk_t, valid_Skt_bound);
-                        const uint32_t k_row_tile_count = k_row_end_tile - k_row_start_tile;
-                        const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
-
-                        // const uint32_t v_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
-                        // const uint32_t v_row_end_tile = std::min(v_row_start_tile + Sk_chunk_t, valid_Skt_bound);
-                        // const uint32_t v_row_tile_count = v_row_end_tile - v_row_start_tile;
-                        // const uint32_t v_start_tile_id = v_tile_shape.id_of(nb, kv_head, v_row_start_tile, 0);
-                        // DPRINT << "k_row_start_tile: " << k_row_start_tile << ENDL();
-                        // DPRINT << "k_row_end_tile: " << k_row_end_tile << ENDL();
-                        // DPRINT << "k_row_tile_count: " << k_row_tile_count << ENDL();
-                        // DPRINT << "k_start_tile_id: " << k_start_tile_id << ENDL();
-
-                        // DPRINT << "v_row_start_tile: " << v_row_start_tile << ENDL();
-                        // DPRINT << "v_row_end_tile: " << v_row_end_tile << ENDL();
-                        // DPRINT << "v_row_tile_count: " << v_row_tile_count << ENDL();
-                        // DPRINT << "v_start_tile_id: " << v_start_tile_id << ENDL();
+                        const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
+                        const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
+                        const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
+                        const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, k_head, kv_row_start_tile, 0);
 
                         if constexpr (is_chunked) {
                             // Use page table to read K chunk
@@ -268,9 +261,9 @@ void kernel_main() {
                             read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                                 k_reader,
                                 cb_k_in,
-                                kv_head,
+                                k_head,
                                 k_chunk_start_row_num,
-                                k_row_tile_count,
+                                kv_row_tile_count,
                                 DHt,
                                 Sk_chunk_t,
                                 DHt,
@@ -284,7 +277,7 @@ void kernel_main() {
                                 k_reader,
                                 cb_k_in,
                                 k_start_tile_id,
-                                k_row_tile_count,
+                                kv_row_tile_count,
                                 DHt,
                                 Sk_chunk_t,
                                 DHt,
@@ -342,9 +335,9 @@ void kernel_main() {
                             read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                                 v_reader,
                                 cb_v_in,
-                                kv_head,
+                                k_head,
                                 k_chunk_start_row_num,
-                                k_row_tile_count,
+                                kv_row_tile_count,
                                 vDHt,
                                 Sk_chunk_t,
                                 vDHt,
@@ -356,8 +349,7 @@ void kernel_main() {
                         } else {
                             uint32_t v_start_tile_id = k_start_tile_id;
                             if (v_addr != k_addr) {
-                                v_start_tile_id = v_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
-                                ;
+                                v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
                             }
                             // const ReaderType& reader,
                             // const uint32_t cb_id,
@@ -371,7 +363,7 @@ void kernel_main() {
                             // const uint32_t skip_src_cols = 0)
                             DPRINT << "v_start_tile_id: " << v_start_tile_id << " corresponding to start_tile_id "
                                    << ENDL();
-                            DPRINT << "k_row_tile_count: " << k_row_tile_count << " corresponding to src_rows"
+                            DPRINT << "kv_row_tile_count: " << kv_row_tile_count << " corresponding to src_rows"
                                    << ENDL();
                             DPRINT << "vDHt: " << vDHt << " corresponding to src_cols" << ENDL();
                             DPRINT << "Sk_chunk_t: " << Sk_chunk_t << " corresponding to dst_cols" << ENDL();
@@ -381,7 +373,7 @@ void kernel_main() {
                                 v_reader,
                                 cb_v_in,
                                 v_start_tile_id,
-                                k_row_tile_count,
+                                kv_row_tile_count,
                                 vDHt,
                                 Sk_chunk_t,
                                 vDHt,
