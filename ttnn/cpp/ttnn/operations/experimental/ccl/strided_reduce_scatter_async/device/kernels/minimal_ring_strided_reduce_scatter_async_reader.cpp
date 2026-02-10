@@ -178,15 +178,17 @@ void kernel_main() {
                     DPRINT << "actual_slice_idx: " << actual_slice_idx << ", m_block_iter: " << m_block_iter
                            << ", chunk_idx: " << chunk_idx << ENDL();
 
+                    // Wait for all chunk_piece_idx tiles for this ring iteration to be written
+                    if (do_reduce) {
+                        DPRINT << "Waiting for the semaphore" << ENDL();
+                        DPRINT << "sem_target: " << sem_target << ENDL();
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                        sem_target++;
+                    }
+
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
                         DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " started" << ENDL();
-                        if (do_reduce) {
-                            DPRINT << "Waiting for the semaphore" << ENDL();
-                            DPRINT << "sem_target: " << sem_target << ENDL();
-                            noc_semaphore_wait_min(
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                            sem_target++;
-                        }
                         uint32_t first_tile_row_in_mm_M_block = 0;
                         uint32_t first_chunk_col_in_tiles = 0;
                         uint32_t first_mm_core_idx = 0;
