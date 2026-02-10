@@ -115,8 +115,10 @@ struct DRAMStreamingMatmul {
     // Op - the actual operation, templated on CTArgs and IsActiveCore
     // PopIn0: If true (default), pops in0 after compute. Set to false to reuse
     //         in0 for multiple matmuls (e.g., gate_proj and up_proj).
-    // ResetCBIn1: If true, resets cb_in1 read/write pointers before starting.
-    //             Use when reusing a shared CB from a previous matmul.
+    // ResetCBIn1: If true, uses CB-boundary wrapping so the write address
+    //             correctly wraps within [CBIn1ResetAddr, CBIn1ResetAddr+CB_size)
+    //             across loop iterations. No CB pointer reset needed — fifo_wr_ptr
+    //             and fifo_rd_ptr naturally wrap at the same boundary via cb_push/pop.
     // ========================================================================
     template <
         typename CTArgs,
@@ -135,11 +137,6 @@ struct DRAMStreamingMatmul {
     private:
         void impl() {
 #if defined(COMPILE_FOR_NCRISC)
-            // Reset shared CB write pointer if reusing from a previous matmul
-            if constexpr (ResetCBIn1) {
-                get_local_cb_interface(CTArgs::cb_in1).fifo_wr_ptr = CBIn1ResetAddr;
-            }
-
             // ================================================================
             // NCRISC: Stream in1 from DRAM with pipelining (uses NOC_0)
             // ================================================================
@@ -190,10 +187,17 @@ struct DRAMStreamingMatmul {
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
 
-            cb_reserve_back(CTArgs::cb_in1, num_free_blocks_in_buffer);
-            uint32_t l1_write_addr_in1_offset = 0;
-            uint32_t l1_write_addr_in1_start = get_write_ptr(CTArgs::cb_in1);
-            l1_write_addr_in1 = l1_write_addr_in1_start;
+            cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
+            l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
+
+            // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
+            uint32_t cb_in1_base;
+            if constexpr (ResetCBIn1) {
+                cb_in1_base = CBIn1ResetAddr;
+            } else {
+                cb_in1_base = l1_write_addr_in1;  // fresh kernel: get_write_ptr == CB base
+            }
+            uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
 
             // Read in1: for each N column, read num_subblocks_k K subblocks
             for (uint32_t n = 0; n < num_iterations; ++n) {
@@ -215,14 +219,11 @@ struct DRAMStreamingMatmul {
                     num_free_blocks_in_buffer -= 1;
                 }
 
-                if (curr_block_trid == num_buffers) {
-                    l1_write_addr_in1_offset = 0;
-                    curr_block_trid = 1;
-                } else {
-                    l1_write_addr_in1_offset += CTArgs::in1_block_size_bytes;
-                    curr_block_trid += 1;
+                curr_block_trid = (curr_block_trid == num_buffers) ? 1 : (curr_block_trid + 1);
+                // Address naturally advanced by inner page loop; wrap at CB boundary
+                if (l1_write_addr_in1 >= cb_in1_end) {
+                    l1_write_addr_in1 = cb_in1_base;
                 }
-                l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
             }
 
             // Push remaining blocks
@@ -233,11 +234,6 @@ struct DRAMStreamingMatmul {
             }
 
 #elif defined(COMPILE_FOR_TRISC)
-            // Reset shared CB read pointer if reusing from a previous matmul (UNPACK only)
-            if constexpr (ResetCBIn1) {
-                UNPACK(({ get_local_cb_interface(CTArgs::cb_in1).fifo_rd_ptr = CBIn1ResetAddr >> cb_addr_shift; }));
-            }
-
             // ================================================================
             // TRISC: Matmul compute with optional fused SiLU
             // ================================================================
