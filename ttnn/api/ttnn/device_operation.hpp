@@ -237,7 +237,11 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
+        mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    } else {
+        mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    }
 
     auto& cached_program_factory = program_cache.get(program_hash);
     auto program_factory_index = cached_program_factory.program_factory_index;
