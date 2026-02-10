@@ -14,6 +14,7 @@ from common import find_cpp_sources
 SKIP_FILES = {
     "fabric_edm_packet_header.hpp",
     "dev_msgs.h",
+    "dataflow_buffer.hpp",  # TODO: #37324: remove once dataflow buffer has proper host-dev interface
 }
 
 # Mapping from tt-metalium experimental tensor headers to their TTNN forward headers.

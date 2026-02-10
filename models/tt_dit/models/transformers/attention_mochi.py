@@ -8,11 +8,14 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ...layers.linear import ColParallelLinear
+from ...layers.module import Module
 from ...layers.normalization import RMSNorm
-from ...utils.substate import substate
+from ...parallel.config import DiTParallelConfig
+from ...parallel.manager import CCLManager
+from ...utils.substate import pop_substate, rename_substate
 
 
-class MochiAttention:
+class MochiAttention(Module):
     # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
     sdpa_chunk_size_map = {
         (False, 2, 4): (128, 512),
@@ -24,23 +27,25 @@ class MochiAttention:
 
     def __init__(
         self,
-        query_dim,
-        added_kv_proj_dim,
-        heads,
-        head_dim,
-        bias=False,
-        added_proj_bias=True,
-        out_dim=None,
-        out_context_dim=None,
-        out_bias=True,
-        context_pre_only=False,
-        eps=1e-5,
-        mesh_device=None,
-        init=False,
-        ccl_manager=None,
-        parallel_config=None,
-        is_fsdp=False,
-    ):
+        *,
+        query_dim: int,
+        added_kv_proj_dim: int,
+        heads: int,
+        head_dim: int,
+        bias: bool = False,
+        added_proj_bias: bool = True,
+        out_dim: int | None = None,
+        out_context_dim: int | None = None,
+        out_bias: bool = True,
+        context_pre_only: bool = False,
+        eps: float = 1e-5,
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager | None = None,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool = False,
+    ) -> None:
+        super().__init__()
+
         self.inner_dim = out_dim if out_dim is not None else head_dim * heads
         self.out_dim = out_dim if out_dim is not None else query_dim
         self.out_context_dim = out_context_dim if out_context_dim else query_dim
@@ -174,60 +179,7 @@ class MochiAttention:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        cache_dict = {}
-
-        # Cache normalization layers
-        norm_q_cache = self.norm_q.to_cached_state_dict(path_prefix + "norm_q.")
-        norm_k_cache = self.norm_k.to_cached_state_dict(path_prefix + "norm_k.")
-        norm_added_q_cache = self.norm_added_q.to_cached_state_dict(path_prefix + "norm_added_q.")
-        norm_added_k_cache = self.norm_added_k.to_cached_state_dict(path_prefix + "norm_added_k.")
-
-        # Add norm prefixes to all keys
-        for key, value in norm_q_cache.items():
-            cache_dict[f"norm_q.{key}"] = value
-        for key, value in norm_k_cache.items():
-            cache_dict[f"norm_k.{key}"] = value
-        for key, value in norm_added_q_cache.items():
-            cache_dict[f"norm_added_q.{key}"] = value
-        for key, value in norm_added_k_cache.items():
-            cache_dict[f"norm_added_k.{key}"] = value
-
-        # Cache linear layers
-        to_qkv_cache = self.to_qkv.to_cached_state_dict(path_prefix + "to_qkv.")
-        add_qkv_proj_cache = self.add_qkv_proj.to_cached_state_dict(path_prefix + "add_qkv_proj.")
-        to_out_cache = self.to_out.to_cached_state_dict(path_prefix + "to_out.")
-
-        # Add linear layer prefixes to all keys
-        for key, value in to_qkv_cache.items():
-            cache_dict[f"to_qkv.{key}"] = value
-        for key, value in add_qkv_proj_cache.items():
-            cache_dict[f"add_qkv_proj.{key}"] = value
-        for key, value in to_out_cache.items():
-            cache_dict[f"to_out.{key}"] = value
-
-        # Cache optional to_add_out layer
-        if not self.context_pre_only:
-            to_add_out_cache = self.to_add_out.to_cached_state_dict(path_prefix + "to_add_out.")
-            for key, value in to_add_out_cache.items():
-                cache_dict[f"to_add_out.{key}"] = value
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.norm_q.from_cached_state_dict(substate(cache_dict, "norm_q"))
-        self.norm_k.from_cached_state_dict(substate(cache_dict, "norm_k"))
-        self.norm_added_q.from_cached_state_dict(substate(cache_dict, "norm_added_q"))
-        self.norm_added_k.from_cached_state_dict(substate(cache_dict, "norm_added_k"))
-
-        self.to_qkv.from_cached_state_dict(substate(cache_dict, "to_qkv"))
-        self.add_qkv_proj.from_cached_state_dict(substate(cache_dict, "add_qkv_proj"))
-        self.to_out.from_cached_state_dict(substate(cache_dict, "to_out"))
-
-        if not self.context_pre_only:
-            self.to_add_out.from_cached_state_dict(substate(cache_dict, "to_add_out"))
-
-    def load_state_dict(self, state_dict):
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def reshape_and_merge_qkv(q_state, k_state, v_state):
             # Rearrange QKV projections such column-fracturing shards the heads
             def _merge_tensors(q, k, v):
@@ -252,26 +204,33 @@ class MochiAttention:
                 out_state["bias"] = bias
             return out_state
 
-        self.norm_q.load_torch_state_dict(substate(state_dict, "norm_q"))
-        self.norm_k.load_torch_state_dict(substate(state_dict, "norm_k"))
-        self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
-        self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
-
         qkv_state = reshape_and_merge_qkv(
-            substate(state_dict, "to_q"), substate(state_dict, "to_k"), substate(state_dict, "to_v")
+            pop_substate(state, "to_q"), pop_substate(state, "to_k"), pop_substate(state, "to_v")
         )
-        self.to_qkv.load_torch_state_dict(qkv_state)
+        state["to_qkv.weight"] = qkv_state["weight"]
+        if "bias" in qkv_state:
+            state["to_qkv.bias"] = qkv_state["bias"]
 
         add_qkv_state = reshape_and_merge_qkv(
-            substate(state_dict, "add_q_proj"), substate(state_dict, "add_k_proj"), substate(state_dict, "add_v_proj")
+            pop_substate(state, "add_q_proj"),
+            pop_substate(state, "add_k_proj"),
+            pop_substate(state, "add_v_proj"),
         )
-        self.add_qkv_proj.load_torch_state_dict(add_qkv_state)
+        state["add_qkv_proj.weight"] = add_qkv_state["weight"]
+        if "bias" in add_qkv_state:
+            state["add_qkv_proj.bias"] = add_qkv_state["bias"]
 
-        self.to_out.load_torch_state_dict(substate(state_dict, "to_out.0"))
-        if not self.context_pre_only:
-            self.to_add_out.load_torch_state_dict(substate(state_dict, "to_add_out"))
+        rename_substate(state, "to_out.0", "to_out")
 
-    def __call__(self, spatial_1BND, prompt_1BLP, N, rope_cos, rope_sin, trans_mat):
+    def forward(
+        self,
+        spatial_1BND: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        N: int,
+        rope_cos: ttnn.Tensor,
+        rope_sin: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """
         spatial_1BND: fractured N on SP, replicated D on TP
         prompt_1BLP: replicated on SP, replicated D on TP
