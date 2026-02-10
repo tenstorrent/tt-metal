@@ -231,32 +231,9 @@ while attempting to start process rank 0.
 
 **Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.sh`), they don't use containers.
 
-**Key distinction**:
-| Script Type | Requires Build? | Uses Docker? |
-|-------------|----------------|--------------|
-| `recover_*.sh` | **Yes** | No |
-| `run_validation.sh` | No | Yes |
-| `run_fabric_tests.sh` | No | Yes |
-| `run_dispatch_tests.sh` | No | Yes |
-
-**Solution**: Build tt-metal before running recovery scripts:
-
-```bash
-# From your tt-metal repo directory
-./create_venv.sh
-source python_env/bin/activate
-./build_metal.sh --build-metal-tests
-
-# Now the recovery script will work
-./tools/scaleout/exabox/recover_4x32.sh <hosts>
-```
-
-**Alternative - Use Docker-based validation instead**: If you don't need a local build, use the Docker-based validation script which doesn't require building:
-
-```bash
-# This doesn't require a build - it uses Docker
-./tools/scaleout/exabox/run_validation.sh --hosts <hosts> --image <docker-image>
-```
+**Solution**: 
+- **Build tt-metal first** - See [Quick Health Check](./README.md#quick-health-check-for-developers) for build instructions
+- **Or use Docker-based validation** - Run `./run_validation.sh --hosts <hosts> --image <docker-image>` which doesn't require a build
 
 **Common confusion**: People often confuse the `recover_*.sh` scripts (developer tools, require build) with the `run_validation.sh` script (operator tool, uses Docker). For hardware qualification, use the Docker-based scripts.
 

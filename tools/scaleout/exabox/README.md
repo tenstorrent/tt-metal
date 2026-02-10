@@ -170,24 +170,7 @@ The script parses the test log and provides:
 
 **Important: Host Ordering Matters for 4x32 Clusters**
 
-For 4x32 topology, you **must** specify hosts in physical connectivity order. The 4 Galaxies are connected in a ring (`1 <-> 2 <-> 3 <-> 4 <-> 1`), and MPI rank assignment depends on the order you pass hosts.
-
-If you see this error:
-```
-TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology
-```
-
-This can mean one of two things:
-
-1. **Physical validation reported missing connections** - Run physical validation first to check cluster health
-2. **Hosts passed in wrong order** - Only if physical validation passed, fix by:
-   - Identifying which host is "Host 1" in your pod
-   - Logging onto that host
-   - Passing hosts in ring order: `host1,host2,host3,host4`
-
-See [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for details.
-
-**Note:** These topology-specific scripts will eventually be replaced with a unified cluster-level descriptor approach that handles host ordering automatically.
+For 4x32 topology, you **must** specify hosts in physical connectivity order. The 4 Galaxies are connected in a ring (`1 <-> 2 <-> 3 <-> 4 <-> 1`). If you see `TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology`, see [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for diagnosis and resolution.
 
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
@@ -223,9 +206,7 @@ source python_env/bin/activate
 ./tools/scaleout/exabox/recover_4x32.sh <hosts>
 ```
 
-Look for `All Detected Links are healthy` in the output.
-
-**If you see "could not access or execute an executable"**: You haven't built tt-metal. Either build it (see above) or use the Docker-based `run_validation.sh` script instead (run with `--help` for usage), which doesn't require a build.
+Look for `All Detected Links are healthy` in the output. If you see `could not access or execute an executable`, see [Recovery Script Fails](./TROUBLESHOOTING.md#recovery-script-fails-with-could-not-access-or-execute-an-executable).
 
 ## Troubleshooting
 
