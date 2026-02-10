@@ -27,7 +27,7 @@ function(setup_metal_pipeline_test target_name test_source)
     )
 endfunction()
 
-# Metal-level migrated send/recv test
-setup_metal_pipeline_test(unit_tests_mesh_send_recv test_mesh_send_recv.cpp)
-# Metal-level pipeline test (closet box + single galaxy)
-setup_metal_pipeline_test(unit_tests_pipeline socket_fwd_pipeline.cpp)
+# Metal-level single-host loopback pipeline test
+setup_metal_pipeline_test(unit_tests_single_host_pipeline single_host_pipeline_tests.cpp)
+# Metal-level multi-host pipeline test (closet box + single galaxy)
+setup_metal_pipeline_test(unit_tests_pipeline multi_host_pipeline.cpp)

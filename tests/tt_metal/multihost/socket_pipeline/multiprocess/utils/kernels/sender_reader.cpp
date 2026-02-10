@@ -12,7 +12,8 @@
 ///////////////////////////////////////////////////
 constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
-constexpr uint32_t input_args_cta_idx = 2;
+constexpr uint32_t num_loop_iterations = get_compile_time_arg_val(2);
+constexpr uint32_t input_args_cta_idx = 3;
 constexpr uint32_t input_args_crta_idx = 0;
 
 void kernel_main() {
@@ -24,7 +25,7 @@ void kernel_main() {
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr, input_page_size);
 
-    for (int i = 0; i < 1000000; i++) {
+    for (uint32_t i = 0; i < num_loop_iterations; i++) {
         auto noc_read_addr = input_addr_gen.get_noc_addr(0);
         cb_reserve_back(cb0_id, 1);
         auto l1_write_addr = get_write_ptr(cb0_id);

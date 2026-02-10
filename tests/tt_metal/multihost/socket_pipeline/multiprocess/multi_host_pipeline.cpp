@@ -17,7 +17,10 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <chrono>
 #include <iomanip>
+#include <numeric>
+#include <optional>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
@@ -101,8 +104,16 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
 
 // Pipeline type enum to toggle between different pipeline configurations.
 enum class PipelineType {
-    CLOSET_BOX,    // Existing multi-host pipeline (48 stages across dual galaxy closet box)
-    SINGLE_GALAXY  // Single-galaxy pipeline (4 stages, 9 hops across 4 trays)
+    SINGLE_GALAXY,  // Single-galaxy pipeline (4 stages, 9 hops across 4 trays)
+    DUAL_GALAXY,
+    QUAD_GALAXY,
+    SUPERPOD_4
+};
+
+// Sender device for pipeline start (injector), when separate from stage entry/exit.
+struct SenderPhysicalConfig {
+    uint32_t tray_id;
+    uint32_t asic_location;
 };
 
 // Get physical pipeline stage configs for the specified pipeline type.
@@ -115,93 +126,17 @@ std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineTy
                 {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
                 {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
             };
-        case PipelineType::CLOSET_BOX:
-        default:
-            // The CLOSET_BOX config is the 48-stage pipeline defined inline in build_pipeline().
-            // To use a different config for the multi-host test, update build_pipeline() to call this function.
-            return {};
+        default: return {};
     }
 }
 
-// For testing/benchmaring purposes only - build a pipeline on a Dual BH Galaxy.
-// Each pipeline stage corresponds to a single tray. Pipeline stages are connected
-// via intermediate sockets. We try to minimize turns as much as possible, to maximize throughput.
-std::vector<LogicalPipelineStageConfig> build_pipeline(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
-    // Setup pipeline stages in physical space (Host rank, Tray ID, ASIC Location)
-    std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = {
-        {.tray_id = 3, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 1, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 3, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 2, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 4, .entry_node_asic_location = 2, .exit_node_asic_location = 5},
-        {.tray_id = 3, .entry_node_asic_location = 5, .exit_node_asic_location = 2},
-        {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
-        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 1},
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 4},
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 1},
-
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
-
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 4},
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 1},
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 4},
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
-        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 5},
-        {.tray_id = 3, .entry_node_asic_location = 5, .exit_node_asic_location = 2},
-        {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
-        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 1},
-
-        {.tray_id = 3, .entry_node_asic_location = 1, .exit_node_asic_location = 7}};
-
-    const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
-    std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
-    for (auto stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
-        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
-        auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
-            stage_hostname,
-            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].tray_id),
-            tt::tt_metal::ASICLocation(physical_pipeline_stage_configs[stage_index].entry_node_asic_location));
-        auto exit_node_asic_id = physical_system_descriptor.get_asic_id(
-            stage_hostname,
-            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].tray_id),
-            tt::tt_metal::ASICLocation(physical_pipeline_stage_configs[stage_index].exit_node_asic_location));
-        logical_pipeline_stage_configs.emplace_back(LogicalPipelineStageConfig{
-            .stage_index = stage_index,
-            .entry_node_coord = asic_id_to_mesh_coord.at(entry_node_asic_id),
-            .exit_node_coord = asic_id_to_mesh_coord.at(exit_node_asic_id)});
+// Get sender (injector) device for pipeline start when it is separate from stage nodes. Returns nullopt to use
+// stage 0 entry as the sender.
+std::optional<SenderPhysicalConfig> get_sender_physical_config(PipelineType type) {
+    switch (type) {
+        case PipelineType::SINGLE_GALAXY: return SenderPhysicalConfig{.tray_id = 1, .asic_location = 2};
+        default: return std::nullopt;
     }
-    return logical_pipeline_stage_configs;
 }
 
 // Overloaded build_pipeline that accepts an external physical pipeline config.
@@ -269,8 +204,10 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 // Pipeline path (9 hops):
 //   T1D2(send) -> T1D6(fwd) -> T3D6(fwd) -> T3D4(fwd) -> T4D4(fwd) ->
 //   T4D7(fwd) -> T2D7(fwd) -> T2D4(fwd) -> T1D4(fwd) -> T1D2(recv)
-void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_device, bool enable_correctness_check) {
-    constexpr uint32_t XFER_SIZE = 14 * 1024;
+// This is to benchmark pipeline functionality for Deepseek Decode
+void run_single_galaxy_pipeline(
+    std::shared_ptr<distributed::MeshDevice>& mesh_device, PipelineType pipeline_type, bool enable_correctness_check) {
+    constexpr uint32_t XFER_SIZE = 14 * 1024;  // size of data being moved across pipeline stages for the workload
     constexpr uint32_t NUM_ITERATIONS = 100;
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
@@ -282,13 +219,21 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
     auto physical_system_descriptor = create_physical_system_descriptor();
     auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
 
-    // Build pipeline from the SINGLE_GALAXY config (4 stages, one per tray)
-    auto physical_config = get_physical_pipeline_config(PipelineType::SINGLE_GALAXY);
+    // Build pipeline from the given pipeline type (e.g. 4 stages, one per tray for SINGLE_GALAXY)
+    auto physical_config = get_physical_pipeline_config(pipeline_type);
     auto pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
 
     const uint32_t num_stages = pipeline_stages.size();
     const uint32_t upstream_rank = (my_rank + num_stages - 1) % num_stages;
     const uint32_t downstream_rank = (my_rank + 1) % num_stages;
+
+    const auto& global_bindings =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+    const tt::tt_fabric::MeshId my_mesh_id = std::get<0>(global_bindings.at(distributed::multihost::Rank(my_rank)));
+    const tt::tt_fabric::MeshId upstream_mesh_id =
+        std::get<0>(global_bindings.at(distributed::multihost::Rank(upstream_rank)));
+    const tt::tt_fabric::MeshId downstream_mesh_id =
+        std::get<0>(global_bindings.at(distributed::multihost::Rank(downstream_rank)));
 
     const distributed::SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
 
@@ -347,42 +292,37 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
 
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
 
-    distributed::MeshCoordinate start_coord = distributed::MeshCoordinate(0, 0);
-
+    // Sender (injector) coord for pipeline start: from config when present, else stage 0 entry.
+    distributed::MeshCoordinate start_coord = pipeline_stages[0].entry_node_coord;
     if (is_pipeline_start) {
-        // Resolve sender device T1D2 using physical system descriptor.
-        // The sender device is separate from the pipeline stage entry/exit nodes.
-        auto sender_hostname = physical_system_descriptor.get_hostname_for_rank(0);
-        auto sender_asic_id = physical_system_descriptor.get_asic_id(
-            sender_hostname, tt::tt_metal::TrayID(1), tt::tt_metal::ASICLocation(2));
-        start_coord = asic_id_to_mesh_coord.at(sender_asic_id);
+        auto sender_config = get_sender_physical_config(pipeline_type);
+        if (sender_config.has_value()) {
+            auto sender_hostname = physical_system_descriptor.get_hostname_for_rank(0);
+            auto sender_asic_id = physical_system_descriptor.get_asic_id(
+                sender_hostname,
+                tt::tt_metal::TrayID(sender_config->tray_id),
+                tt::tt_metal::ASICLocation(sender_config->asic_location));
+            start_coord = asic_id_to_mesh_coord.at(sender_asic_id);
+        } else {
+            start_coord = pipeline_stages[0].entry_node_coord;
+        }
 
-        // Outbound: start_coord (T1D2) -> my_exit (T1D6)
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_exit);
 
-        // Cross-mesh send: my_exit (T1D6) -> downstream_entry (T3D6)
         auto fwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(my_exit, logical_coord),
             distributed::MeshCoreCoord(downstream_entry, logical_coord));
         auto send_socket_config = distributed::SocketConfig(
-            {fwd_connection},
-            socket_mem_config,
-            distributed_context->rank(),
-            distributed::multihost::Rank(downstream_rank));
+            {fwd_connection}, socket_mem_config, my_mesh_id, downstream_mesh_id, distributed_context);
         auto send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
 
-        // Cross-mesh recv: upstream_exit (T2D4) -> my_entry (T1D4)
         auto bwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(upstream_exit, logical_coord),
             distributed::MeshCoreCoord(my_entry, logical_coord));
         auto recv_socket_config = distributed::SocketConfig(
-            {bwd_connection},
-            socket_mem_config,
-            distributed::multihost::Rank(upstream_rank),
-            distributed_context->rank());
+            {bwd_connection}, socket_mem_config, upstream_mesh_id, my_mesh_id, distributed_context);
         auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
 
-        // Inbound: my_entry (T1D4) -> start_coord (T1D2)
         auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_entry, start_coord);
 
         // Create device buffer using metal-level API
@@ -398,9 +338,7 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
 
         // Initialize buffer with data (arange equivalent: 0, 1, 2, ..., num_elems-1)
         std::vector<uint32_t> host_data(num_elems);
-        for (uint32_t i = 0; i < num_elems; i++) {
-            host_data[i] = i;
-        }
+        std::iota(host_data.begin(), host_data.end(), 0u);
 
         // Write data to device buffer
         distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
@@ -433,10 +371,7 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
             distributed::MeshCoreCoord(upstream_exit, logical_coord),
             distributed::MeshCoreCoord(my_entry, logical_coord));
         auto recv_socket_config = distributed::SocketConfig(
-            {bwd_connection},
-            socket_mem_config,
-            distributed::multihost::Rank(upstream_rank),
-            distributed_context->rank());
+            {bwd_connection}, socket_mem_config, upstream_mesh_id, my_mesh_id, distributed_context);
         auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
 
         // Cross-mesh send to downstream: my_exit -> downstream_entry
@@ -444,10 +379,7 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
             distributed::MeshCoreCoord(my_exit, logical_coord),
             distributed::MeshCoreCoord(downstream_entry, logical_coord));
         auto send_socket_config = distributed::SocketConfig(
-            {fwd_connection},
-            socket_mem_config,
-            distributed_context->rank(),
-            distributed::multihost::Rank(downstream_rank));
+            {fwd_connection}, socket_mem_config, my_mesh_id, downstream_mesh_id, distributed_context);
         auto send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
 
         // Local intermed: my_entry -> my_exit
@@ -482,12 +414,15 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
             sizeof(uint64_t) * NUM_ITERATIONS,
             tt_cxy_pair(start_device_id, start_core_coord),
             base_addr);
+        // Skip first iteration (often an outlier due to cold start)
+        constexpr uint32_t LATENCY_ITERATIONS_FOR_AVG = NUM_ITERATIONS > 1 ? NUM_ITERATIONS - 1 : 1;
         double avg_latency_cycles = 0.0;
-        for (auto latency : latencies) {
-            avg_latency_cycles += static_cast<double>(latency);
+        for (uint32_t i = 1; i < NUM_ITERATIONS; i++) {
+            avg_latency_cycles += static_cast<double>(latencies[i]);
         }
-        avg_latency_cycles /= NUM_ITERATIONS;
-        double avg_latency_us = (avg_latency_cycles / (1.35e9)) * 1e6;
+        avg_latency_cycles /= LATENCY_ITERATIONS_FOR_AVG;
+        double freq_mhz = static_cast<double>(cluster.get_device_aiclk(start_device_id));
+        double avg_latency_us = (avg_latency_cycles / (freq_mhz * 1e6)) * 1e6;
         std::cout << std::fixed << std::setprecision(2);
         std::cout << "Average latency in cycles: " << avg_latency_cycles << std::endl;
         std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
@@ -495,11 +430,11 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
 }
 
 TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
-    run_single_galaxy_pipeline(mesh_device_, /*enable_correctness_check=*/false);
+    run_single_galaxy_pipeline(mesh_device_, PipelineType::SINGLE_GALAXY, /*enable_correctness_check=*/false);
 }
 
 TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxyWithCorrectnessCheck) {
-    run_single_galaxy_pipeline(mesh_device_, /*enable_correctness_check=*/true);
+    run_single_galaxy_pipeline(mesh_device_, PipelineType::SINGLE_GALAXY, /*enable_correctness_check=*/true);
 }
 
 }  // namespace tt::tt_metal

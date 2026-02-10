@@ -18,13 +18,11 @@
 
 namespace tt::tt_metal {
 
-// Test using migrated code (metal-level APIs) from multiprocess utils
-// This test mirrors the SRTest from test_send_recv_ops.cpp in the ccl directory
-// but uses MeshBuffer and metal-level send_async/socket_forward
-// Uses GenericMeshDeviceFabric2DFixture to open all devices (fabric requires all devices active)
-class FabricSendRecvMigratedFixture : public GenericMeshDeviceFabric2DFixture {};
+// Single-host loopback pipeline test using metal-level APIs (send_async/socket_forward).
+// Uses GenericMeshDeviceFabric2DFixture to open all devices (fabric requires all devices active).
+class SingleHostLoopbackPipelineFixture : public GenericMeshDeviceFabric2DFixture {};
 
-void run_sr_test_migrated(
+void run_single_host_loopback_pipeline(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, bool enable_correctness_check) {
     using namespace tt::tt_metal::distributed;
 
@@ -33,6 +31,7 @@ void run_sr_test_migrated(
     auto copy_logical_coord = CoreCoord(0, 0);
 
     constexpr uint32_t XFER_SIZE = 14 * 1024;
+    // When using sender_reader kernel, pass num_loop_iterations as compile-time arg index 2 (e.g. 100000).
     auto socket_fifo_size = XFER_SIZE * 16;
 
     auto start_device_coord = MeshCoordinate(0, 0);
@@ -41,11 +40,11 @@ void run_sr_test_migrated(
     auto intermed_device_coord_3 = MeshCoordinate(0, 1);
     auto end_device_coord = MeshCoordinate(0, 0);
 
-    std::cout << "Start Device ID: " << mesh_device->get_device(start_device_coord)->id() << std::endl;
-    std::cout << "Intermed Device ID: " << mesh_device->get_device(intermed_device_coord)->id() << std::endl;
-    std::cout << "Intermed Device 2 ID: " << mesh_device->get_device(intermed_device_coord_2)->id() << std::endl;
-    std::cout << "Intermed Device 3 ID: " << mesh_device->get_device(intermed_device_coord_3)->id() << std::endl;
-    std::cout << "End Device ID: " << mesh_device->get_device(end_device_coord)->id() << std::endl;
+    log_info(tt::LogTest, "Start Device ID: {}", mesh_device->get_device(start_device_coord)->id());
+    log_info(tt::LogTest, "Intermed Device ID: {}", mesh_device->get_device(intermed_device_coord)->id());
+    log_info(tt::LogTest, "Intermed Device 2 ID: {}", mesh_device->get_device(intermed_device_coord_2)->id());
+    log_info(tt::LogTest, "Intermed Device 3 ID: {}", mesh_device->get_device(intermed_device_coord_3)->id());
+    log_info(tt::LogTest, "End Device ID: {}", mesh_device->get_device(end_device_coord)->id());
 
     // Create connections for:
     // Stage 0 -> 1
@@ -73,9 +72,8 @@ void run_sr_test_migrated(
 
     SocketConfig socket_config_34 = SocketConfig({socket_connection_34}, socket_mem_config);
 
-    // Calculate buffer size from tensor spec equivalent
-    constexpr uint32_t num_elems = 3584;
-    constexpr uint32_t buffer_size = num_elems * sizeof(uint32_t);
+    constexpr uint32_t num_elems = XFER_SIZE / sizeof(uint32_t);
+    constexpr uint32_t buffer_size = XFER_SIZE;
 
     auto [send_socket_0, recv_socket_1] = MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_01);
 
@@ -186,12 +184,12 @@ void run_sr_test_migrated(
     std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
 }
 
-TEST_F(FabricSendRecvMigratedFixture, SRTestMigrated) {
-    run_sr_test_migrated(get_mesh_device(), /*enable_correctness_check=*/false);
+TEST_F(SingleHostLoopbackPipelineFixture, SingleHostLoopbackPipeline) {
+    run_single_host_loopback_pipeline(get_mesh_device(), /*enable_correctness_check=*/false);
 }
 
-TEST_F(FabricSendRecvMigratedFixture, SRTestMigratedWithCorrectnessCheck) {
-    run_sr_test_migrated(get_mesh_device(), /*enable_correctness_check=*/true);
+TEST_F(SingleHostLoopbackPipelineFixture, SingleHostLoopbackPipelineWithCorrectnessCheck) {
+    run_single_host_loopback_pipeline(get_mesh_device(), /*enable_correctness_check=*/true);
 }
 
 }  // namespace tt::tt_metal

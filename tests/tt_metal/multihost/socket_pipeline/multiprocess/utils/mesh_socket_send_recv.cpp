@@ -21,6 +21,7 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/cluster.hpp>
 
 using namespace tt::constants;
 
@@ -34,41 +35,33 @@ tt::tt_metal::Program create_send_async_program(
     const std::optional<tt::tt_metal::distributed::MeshSocket>& recv_socket,
     const Buffer* input_buffer,
     DataFormat input_data_format,
-    const tt::tt_metal::distributed::MeshCoordinate& mesh_coordinate,
     distributed::MeshDevice* mesh_device,
     uint32_t latency_measurement_address,
     uint32_t num_iterations,
     bool enable_correctness_check) {
-    tt::tt_metal::Program program{};
-    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
+    TT_FATAL(
+        tt::tt_metal::GetClusterType() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
+        "Socket pipeline send/recv only supports BLACKHOLE_GALAXY cluster");
+
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
+    TT_FATAL(socket_connection_config.size() == 1, "Socket send/recv expects exactly one connection");
 
-    CoreCoord sender_core_coord;
-    CoreCoord receiver_core_coord;
-    tt::tt_fabric::FabricNodeId sender_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
-    tt::tt_fabric::FabricNodeId receiver_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
-
-    IDevice* target_device = mesh_device->get_device(mesh_coordinate);
-    TT_FATAL(target_device != nullptr, "Target device not found for mesh coordinate");
+    const auto& connection = socket_connection_config[0];
+    CoreCoord sender_core_coord = connection.sender_core.core_coord;
+    CoreCoord receiver_core_coord = connection.receiver_core.core_coord;
+    tt::tt_fabric::FabricNodeId sender_fabric_node_id =
+        mesh_device->get_fabric_node_id(connection.sender_core.device_coord);
+    tt::tt_fabric::FabricNodeId receiver_fabric_node_id = mesh_socket.get_fabric_node_id(
+        tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
 
     tt::tt_fabric::FabricNodeId upstream_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     if (recv_socket.has_value()) {
-        auto upstream_device_coord =
-            recv_socket.value().get_config().socket_connection_config[0].sender_core.device_coord;
+        const auto& recv_conn = recv_socket.value().get_config().socket_connection_config[0];
         upstream_fabric_node_id = recv_socket.value().get_fabric_node_id(
-            tt::tt_metal::distributed::SocketEndpoint::SENDER, upstream_device_coord);
+            tt::tt_metal::distributed::SocketEndpoint::SENDER, recv_conn.sender_core.device_coord);
     }
 
-    for (const auto& connection : socket_connection_config) {
-        if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
-            sender_core_coord = connection.sender_core.core_coord;
-            receiver_core_coord = connection.receiver_core.core_coord;
-            sender_fabric_node_id = mesh_device->get_fabric_node_id(connection.sender_core.device_coord);
-            receiver_fabric_node_id = mesh_socket.get_fabric_node_id(
-                tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
-            break;
-        }
-    }
+    tt::tt_metal::Program program{};
 
     // Use mesh_device allocator - in practice all devices in a mesh share the same allocator configuration
     auto max_alignment = std::max(
@@ -92,6 +85,8 @@ tt::tt_metal::Program create_send_async_program(
     uint32_t socket_block_size = socket_aligned_page_size;
     uint32_t socket_fifo_size_in_pages =
         mesh_socket.get_config().socket_mem_config.fifo_size / socket_aligned_page_size;
+    // Notify upstream every half buffer to increase fabric utilization (compile-time ack granularity).
+    uint32_t notify_sender_every_n_iterations = socket_fifo_size_in_pages / 2;
 
     uint32_t cb_num_pages = socket_fifo_size_in_pages;
     uint32_t cb_page_size = socket_block_size;
@@ -133,6 +128,7 @@ tt::tt_metal::Program create_send_async_program(
         latency_measurement_address,  // credit_address (reused for credit sync and latency measurements)
         num_iterations,               // num_iterations
         static_cast<uint32_t>(enable_correctness_check),  // enable_correctness_check
+        notify_sender_every_n_iterations,  // notify_sender_every_n_iterations (ack granularity, e.g. fifo_pages/2)
     };
     writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
@@ -190,36 +186,25 @@ void send_async(
     uint32_t latency_measurement_address,
     uint32_t num_iterations,
     bool enable_correctness_check) {
-    // Determine which mesh coordinates need programs based on socket configuration
-    // Create programs for all sender device coordinates in the socket configuration
     const auto& socket_connections = mesh_socket.get_config().socket_connection_config;
+    TT_FATAL(socket_connections.size() == 1, "Socket send/recv expects exactly one connection");
+
+    const auto& device_coord = socket_connections[0].sender_core.device_coord;
+    TT_FATAL(
+        mesh_device->get_device(device_coord) != nullptr,
+        "Sender device for socket connection is not local to this mesh device");
 
     distributed::MeshWorkload workload;
-
-    for (const auto& connection : socket_connections) {
-        const auto& device_coord = connection.sender_core.device_coord;
-
-        // Check if this device coordinate is local to this mesh device
-        // get_device returns nullptr if the coordinate is not local
-        auto* target_device = mesh_device->get_device(device_coord);
-        if (target_device != nullptr) {
-            auto program = create_send_async_program(
-                mesh_socket,
-                recv_socket,
-                input_buffer,
-                input_data_format,
-                device_coord,
-                mesh_device,
-                latency_measurement_address,
-                num_iterations,
-                enable_correctness_check);
-
-            workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
-        }
-    }
-
-    TT_FATAL(
-        !workload.get_programs().empty(), "No programs created for send_async workload - check socket configuration");
+    auto program = create_send_async_program(
+        mesh_socket,
+        recv_socket,
+        input_buffer,
+        input_data_format,
+        mesh_device,
+        latency_measurement_address,
+        num_iterations,
+        enable_correctness_check);
+    workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
 
     // Enqueue the workload
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);

@@ -19,6 +19,8 @@ constexpr uint32_t num_whole_packets_link_0 = get_compile_time_arg_val(4);
 constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(5);
 constexpr uint32_t credit_address = get_compile_time_arg_val(6);
 constexpr uint32_t num_iterations = get_compile_time_arg_val(7);
+// Send cumulative ack upstream every N iterations (e.g. fifo_size_in_pages/2 for half-buffer acks).
+constexpr uint32_t notify_sender_every_n_iterations = get_compile_time_arg_val(8);
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -142,7 +144,7 @@ void kernel_main() {
         // Notify Upstream and Downstream that data has been consumed or produced
         socket_push_pages(send_socket, 1);
         socket_pop_pages(recv_socket, 1);
-        if ((i & 7) == 0) {
+        if (notify_sender_every_n_iterations != 0 && (i % notify_sender_every_n_iterations) == 0) {
             fabric_socket_notify_sender_stateful(
                 recv_socket,
                 upstream_fabric_connection,

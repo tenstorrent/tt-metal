@@ -17,6 +17,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/cluster.hpp>
 
 namespace tt::tt_metal {
 
@@ -31,6 +32,10 @@ tt::tt_metal::Program create_socket_forward_program(
     distributed::MeshDevice* mesh_device,
     uint32_t latency_measurement_address,
     uint32_t num_iterations) {
+    TT_FATAL(
+        tt::tt_metal::GetClusterType() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
+        "Socket forward only supports BLACKHOLE_GALAXY cluster");
+
     tt::tt_metal::Program program{};
 
     const auto& send_socket_conn = send_socket.get_config().socket_connection_config[0];
@@ -91,6 +96,11 @@ tt::tt_metal::Program create_socket_forward_program(
 
     CreateCircularBuffer(program, my_core_coord, cb_packet_header_config);
 
+    // Notify upstream every half buffer to increase fabric utilization (compile-time ack granularity).
+    uint32_t socket_fifo_size_in_pages =
+        send_socket.get_config().socket_mem_config.fifo_size / socket_aligned_page_size;
+    uint32_t notify_sender_every_n_iterations = socket_fifo_size_in_pages / 2;
+
     std::vector<uint32_t> compile_args = {
         packet_header_cb_index,
         socket_block_size,
@@ -100,6 +110,7 @@ tt::tt_metal::Program create_socket_forward_program(
         num_whole_packets_link_1,
         latency_measurement_address,
         num_iterations,
+        notify_sender_every_n_iterations,
     };
 
     auto kernel_id = tt::tt_metal::CreateKernel(
