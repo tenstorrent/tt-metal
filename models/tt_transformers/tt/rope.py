@@ -723,6 +723,8 @@ class HfRotarySetup(LightweightModule):
         rope_scaling: Optional[RopeScaling] = None,
         use_qk_fused: bool = False,
         datatype: ttnn.DataType = ttnn.bfloat16,
+        shard_batch_to_mesh_dim: Optional[int] = 1,  # Those are kept for API compatibility with RotarySetup
+        prefetcher: Optional[Prefetcher] = None,
     ) -> None:
         super().__init__()
         if use_qk_fused:
@@ -730,6 +732,7 @@ class HfRotarySetup(LightweightModule):
         self.batch_size = batch_size
         self.head_dim = head_dim
 
+        self.device = device
         # Generate the cos/sin matrices in HF format (no Meta permutation)
         # Generate for max_seq_len to allow slicing in prepare_inputs_prefill
         self.cos_matrix, self.sin_matrix = get_rot_mats_hf(
@@ -740,6 +743,16 @@ class HfRotarySetup(LightweightModule):
             rope_scaling=rope_scaling,
             datatype=datatype,
         )
+
+        self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats_hf(
+            head_dim=head_dim,
+            device=device,
+            seq_len=max_seq_len,
+            theta=rope_theta,
+            rope_scaling=rope_scaling,
+            datatype=datatype,
+        )
+
         self.transformation_mat = None
         self.transformation_mat_prefill = None
 
