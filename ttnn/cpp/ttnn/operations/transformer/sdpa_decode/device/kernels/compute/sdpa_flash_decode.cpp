@@ -177,33 +177,26 @@ void kernel_main() {
         return;
     }
 
-    // Determine which children actually have data (based on chunk allocation)
-    // A child at core_num has data if core_num < k_num_chunks
-    uint32_t actual_num_children = 0;
-    uint32_t actual_children_per_round[MAX_TREE_REDUCTION_ROUNDS];
-    uint32_t actual_my_active_rounds = 0;
+    // Determine which children actually participate in reduction (based on chunk allocation)
+    // A child at core_num is active or has data if core_num < k_num_chunks
+    // E.g. k_num_chunks = 2, num_cores_per_head = 4
+    // | core 0 | core 1 | core 2 | core 3 |
+    //   chunk 0  chunk 1   NA       NA
+    // core 0 would have core 1 and core 2 as children, but only core 1 is active to perform reduction with
+    uint32_t num_active_children = 0;
+    uint32_t active_children_per_round[MAX_TREE_REDUCTION_ROUNDS];
+    uint32_t num_active_rounds = 0;
 
     for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
         uint32_t child_id = children_per_round[r];
         if (child_id != UINT32_MAX && child_id < k_num_chunks) {
             // This child has data
-            actual_children_per_round[r] = child_id;
-            actual_num_children++;
-            actual_my_active_rounds = r + 1;
+            active_children_per_round[r] = child_id;
+            num_active_children++;
+            num_active_rounds = r + 1;
         } else {
-            actual_children_per_round[r] = UINT32_MAX;
+            active_children_per_round[r] = UINT32_MAX;
         }
-    }
-
-    // Determine if we have an actual parent (parent must have data too, but root always has data)
-    // Actually, we only need to check if WE should send - parent will handle receiving
-    // We send if we have a parent AND we have data (which we do if we reach here)
-    const bool should_send_to_parent = has_parent;
-
-    // Get number of worker cores to wait for
-    uint32_t num_cores_to_wait = num_cores_per_head - 1;
-    if (num_cores_per_head > k_num_chunks) {
-        num_cores_to_wait = k_num_chunks - 1;
     }
 
     // We tilize input Q if it is in ROW MAJOR layout
@@ -492,7 +485,7 @@ void kernel_main() {
 
         // After FA loop completes, prepare buffers for tree reduction or output
         // Results are in: cb_out_accumulate_im (O), cb_cur_max (M), cb_cur_sum (L)
-        if (actual_num_children > 0 || should_send_to_parent) {
+        if (num_active_children > 0 || has_parent) {
             // Tree reduction will happen - move cur to prev buffers
             reconfig_data_format(cb_cur_max, cb_cur_max);
             pack_reconfig_data_format(cb_prev_max);
@@ -523,10 +516,10 @@ void kernel_main() {
         //   - cb_prev_max: local M (max of logits)
         //   - cb_prev_sum: local L (sum of exp)
         // Only receive from children that actually have data
-        if (actual_num_children > 0) {
+        if (num_active_children > 0) {
             // Iterate through each round and receive from child if one exists AND has data
-            for (uint32_t round = 0; round < actual_my_active_rounds; ++round) {
-                uint32_t child_id = actual_children_per_round[round];
+            for (uint32_t round = 0; round < num_active_rounds; ++round) {
+                uint32_t child_id = active_children_per_round[round];
                 if (child_id != UINT32_MAX) {
                     // Writer kernel handles the semaphore wait and data transfer to cb_m_in, cb_l_in, cb_out_o
                     // Data arrives in order: l, m, o
@@ -584,7 +577,7 @@ void kernel_main() {
 
             // Select the correct sum buffer based on whether tree reduction happened
             // If tree reduction happened, sum is in cb_prev_sum; otherwise it's in cb_cur_sum
-            uint32_t sum_cb = (actual_num_children > 0) ? cb_prev_sum : cb_cur_sum;
+            uint32_t sum_cb = (num_active_children > 0) ? cb_prev_sum : cb_cur_sum;
 
             /* SUM = 1.0 / SUM */
             reconfig_data_format(sum_cb, sum_cb);
@@ -593,7 +586,7 @@ void kernel_main() {
             // Handle attention sink here
             if constexpr (use_attention_sink) {
                 // Use appropriate max buffer based on tree reduction
-                uint32_t max_cb_for_sink = (actual_num_children > 0) ? cb_prev_max : cb_cur_max;
+                uint32_t max_cb_for_sink = (num_active_children > 0) ? cb_prev_max : cb_cur_max;
 
                 // m_new
                 max_block<vector_mode>(cb_attention_sink, max_cb_for_sink, cb_cur_max, Sq_chunk_t);
@@ -632,16 +625,16 @@ void kernel_main() {
             // Pop the max buffer that still has data
             if constexpr (use_attention_sink) {
                 // In attention sink path:
-                // - If actual_num_children > 0: max_cb_for_sink = cb_prev_max, cb_cur_max was popped
+                // - If num_active_children > 0: max_cb_for_sink = cb_prev_max, cb_cur_max was popped
                 //   So we need to pop cb_prev_max
-                // - If actual_num_children == 0: max_cb_for_sink = cb_cur_max, cb_cur_max was popped
+                // - If num_active_children == 0: max_cb_for_sink = cb_cur_max, cb_cur_max was popped
                 //   Nothing left to pop
-                if (actual_num_children > 0) {
+                if (num_active_children > 0) {
                     cb_pop_front(cb_prev_max, Sq_chunk_t);
                 }
             } else {
                 // No attention sink: the max buffer was never popped
-                uint32_t max_cb = (actual_num_children > 0) ? cb_prev_max : cb_cur_max;
+                uint32_t max_cb = (num_active_children > 0) ? cb_prev_max : cb_cur_max;
                 cb_pop_front(max_cb, Sq_chunk_t);
             }
 
@@ -672,7 +665,7 @@ void kernel_main() {
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
             }
 
-        } else if (should_send_to_parent) {
+        } else if (has_parent) {
             // Non-root node with parent: send intermediate results
             // We have data (checked at function start), so send it
             // After tree reduction (if any), results are in:

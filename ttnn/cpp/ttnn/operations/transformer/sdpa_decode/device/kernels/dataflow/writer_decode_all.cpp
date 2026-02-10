@@ -129,21 +129,21 @@ void kernel_main() {
         return;
     }
 
-    // Determine which children actually have data (based on chunk allocation)
+    // Determine which children actually participate in reduction (based on chunk allocation)
     // A child at core_num has data if core_num < k_num_chunks
-    uint32_t actual_num_children = 0;
-    uint32_t actual_children_per_round[MAX_TREE_REDUCTION_ROUNDS];
-    uint32_t actual_my_active_rounds = 0;
+    uint32_t num_active_children = 0;
+    uint32_t active_children_per_round[MAX_TREE_REDUCTION_ROUNDS];
+    uint32_t num_active_rounds = 0;
 
     for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
         uint32_t child_id = children_per_round[r];
         if (child_id != UINT32_MAX && child_id < k_num_chunks) {
             // This child has data
-            actual_children_per_round[r] = child_id;
-            actual_num_children++;
-            actual_my_active_rounds = r + 1;
+            active_children_per_round[r] = child_id;
+            num_active_children++;
+            num_active_rounds = r + 1;
         } else {
-            actual_children_per_round[r] = UINT32_MAX;
+            active_children_per_round[r] = UINT32_MAX;
         }
     }
 
@@ -235,12 +235,12 @@ void kernel_main() {
         // Each round, we wait for one child (if any), read remote_sum, remote_max, remote_output, and push to CBs
         // The compute kernel processes each child's data before we move to the next round
         // Only receive from children that actually have data
-        if (actual_num_children > 0) {
+        if (num_active_children > 0) {
             ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers
 
             // Process each round sequentially
-            for (uint32_t round = 0; round < actual_my_active_rounds; ++round) {
-                uint32_t child_id = actual_children_per_round[round];
+            for (uint32_t round = 0; round < num_active_rounds; ++round) {
+                uint32_t child_id = active_children_per_round[round];
 
                 if (child_id != UINT32_MAX) {
                     // Wait for this specific child to send its results
