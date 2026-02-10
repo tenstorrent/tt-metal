@@ -412,16 +412,6 @@ class ModelArgs(TTModelArgs):
         layer = model.vision_tower.vision_model.encoder
         return layer
 
-    # def reference_decoder(self, i=0):
-    #     model = self.reference_transformer(wrap=False)
-    #     layer = model.model.layers[i]
-    #     rotary_emb = model.model.rotary_emb
-
-    #     rotary_emb_local = model.model.rotary_emb_local
-    #     wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
-
-    #     return wrapper
-
     def reference_decoder_text(self, i=0):
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0]
