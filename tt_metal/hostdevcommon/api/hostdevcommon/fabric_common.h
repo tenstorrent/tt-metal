@@ -363,9 +363,10 @@ template <typename HopMaskType>
 inline void encode_1d_sparse_multicast(HopMaskType hop_mask, uint32_t& buffer) {
     using LowLatencyFields = RoutingFieldsConstants::LowLatency;
 
-    static_assert(
-        std::is_unsigned_v<HopMaskType> && (sizeof(HopMaskType) == sizeof(uint16_t)),
-        "hop_mask must be an unsigned integer and currently only supports uint16_t, tracked in #36581");
+// Currently, hop_mask must be an unsigned integer and currently only supports uint16_t, tracked in #36581
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+    ASSERT(std::is_unsigned_v<HopMaskType> && (sizeof(HopMaskType) == sizeof(uint16_t)));
+#endif
 
     auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
         const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
