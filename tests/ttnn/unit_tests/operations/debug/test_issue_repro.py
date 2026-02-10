@@ -297,15 +297,47 @@ def test_issue_6849_repro(device):
     num_cores_y = 4
     num_cores_x = 2
 
-    # Create tensors matching MLIR shapes
-    # Buffer shapes from MLIR: 4x2x1x1 and 4x2x3x1 tiles
-    shape_1x1 = [1, 1, 32, 32]  # 1x1 tile
-    shape_3x1 = [1, 3, 32, 32]  # 3x1 tiles
+    # MLIR shows buffers are shaped 4x2x...x... (grid_height x grid_width x ...)
+    # This represents sharded data across the 4x2 grid
+    # For single core data: 1 tile = 32x32, so:
+    # - 4x2x1x1 tiles = 4 rows * 2 cols * 1 * 1 = 8 tiles total
+    # - 4x2x3x1 tiles = 4 rows * 2 cols * 3 * 1 = 24 tiles total
 
-    # Input data
-    input_f32_data = torch.randn(shape_1x1, dtype=torch.float32)
-    input_si32_data = torch.randint(-100, 100, shape_3x1, dtype=torch.int32)
-    output_f32_data = torch.zeros(shape_3x1, dtype=torch.float32)
+    # Per MLIR operands: we need 5 tensors matching (%0, %0, %1, %3, %3)
+    # %0 = 4x2x1x1 f32 tiles (address 103712)
+    # %1 = 4x2x3x1 si32 tiles (address 106304)
+    # %3 = 4x2x3x1 f32 tiles (address 118592)
+
+    # Create shapes for the entire sharded buffer
+
+    # 4x2x1x1 -> [128, 64] size tensor
+    tensor_shape_4x2x1x1 = [128, 64]
+    # 4x2x3x1 -> [384, 64] size tensor
+    tensor_shape_4x2x3x1 = [384, 64]
+
+    # Input data - %0: f32 buffer (used twice as operands 0 and 1)
+    input_f32_data = torch.randn(tensor_shape_4x2x1x1, dtype=torch.float32)
+
+    # Input data - %1: si32 buffer (operand 2)
+    input_si32_data = torch.randint(-100, 100, tensor_shape_4x2x3x1, dtype=torch.int32)
+
+    # Output data - %3: f32 buffer (used twice as operands 3 and 4)
+    output_f32_data = torch.zeros(tensor_shape_4x2x3x1, dtype=torch.float32)
+
+    # Create sharded memory configs
+    tensor_4x2x1x1_mem_cfg = ttnn.create_sharded_memory_config(
+        tensor_shape_4x2x1x1,
+        ttnn.CoreGrid(y=4, x=2),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=False,
+    )
+
+    tensor_4x2x3x1_mem_cfg = ttnn.create_sharded_memory_config(
+        tensor_shape_4x2x3x1,
+        ttnn.CoreGrid(y=4, x=2),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=False,
+    )
 
     # Create tensors on device
     tensor_f32 = ttnn.from_torch(
@@ -313,7 +345,7 @@ def test_issue_6849_repro(device):
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=tensor_4x2x1x1_mem_cfg,
     )
 
     tensor_si32 = ttnn.from_torch(
@@ -321,7 +353,7 @@ def test_issue_6849_repro(device):
         dtype=ttnn.int32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=tensor_4x2x3x1_mem_cfg,
     )
 
     tensor_f32_output = ttnn.from_torch(
@@ -329,7 +361,7 @@ def test_issue_6849_repro(device):
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=tensor_4x2x3x1_mem_cfg,
     )
 
     # Core grid 4x2
@@ -337,7 +369,7 @@ def test_issue_6849_repro(device):
     end_core = ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1)
     core_range = ttnn.CoreRangeSet([ttnn.CoreRange(start_core, end_core)])
 
-    # CB configuration matching MLIR cb_ports = [31, 0, 1, 2, 3]
+    # CB configuration, cb_ports = [31, 0, 1, 2, 3]
     cb_31 = 31  # f32
     cb_0 = 0  # f32
     cb_1 = 1  # si32
@@ -412,17 +444,15 @@ def test_issue_6849_repro(device):
         format_descriptors=[cb_3_format],
     )
 
-    # DataFlow0 kernel: ct_args = [cb_port[1], cb_port[2]] = [cb_0, cb_1]
-    reader_ct_args = [cb_0, cb_1]
+    # DataFlow0 kernel: ct_args = [cb_port[1], buffer_address[operand_2]]
+    reader_ct_args = [cb_0]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(tensor_si32).get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
     for y in range(num_cores_y):
         for x in range(num_cores_x):
-            reader_rt_args[x][y] = [
-                tensor_si32.buffer_address(),
-                0,
-            ]
+            # Kernel is empty but we still need to provide proper args structure
+            reader_rt_args[x][y] = []
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source="tt_metal/kernels/dataflow/issue_6849_dataflow_0_kernel.cpp",
@@ -475,7 +505,7 @@ def test_issue_6849_repro(device):
         cbs=[cb_31_desc, cb_0_desc, cb_1_desc, cb_2_desc, cb_3_desc],
     )
 
-    output = ttnn.generic_op([tensor_f32, tensor_si32, tensor_f32_output], program_descriptor)
+    ttnn.generic_op([tensor_f32, tensor_f32, tensor_si32, tensor_f32_output, tensor_f32_output], program_descriptor)
 
     ttnn.synchronize_device(device)
     logger.info("Completed test_issue_6849_repro")
