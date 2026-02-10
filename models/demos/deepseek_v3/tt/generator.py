@@ -24,6 +24,8 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+MAX_SEQ_LEN = 2048
+
 
 @dataclass(frozen=True)
 class SamplingParams:
@@ -83,6 +85,7 @@ class DeepseekGenerator:
         dense_layers: int | None = None,
         override_num_layers: int | None = None,
         single_layer: str | None = None,
+        max_seq_len: int | None = None,
         enable_trace: bool = False,
         enable_mem_profile: bool = False,
         signpost: bool = False,
@@ -97,8 +100,11 @@ class DeepseekGenerator:
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
-        # self._ensure_max_seq_len(self.hf_config)
-        self.hf_config.max_seq_len = 1024
+        # Hard-code the context length to keep KV cache + RoPE tables bounded.
+        # (Avoid env var overrides; long-context runs should change this constant in code.)
+        if max_seq_len is not None and int(max_seq_len) != MAX_SEQ_LEN:
+            logger.warning(f"Ignoring requested max_seq_len={max_seq_len}; using MAX_SEQ_LEN={MAX_SEQ_LEN}.")
+        self.hf_config.max_seq_len = MAX_SEQ_LEN
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -173,14 +179,22 @@ class DeepseekGenerator:
         if getattr(hf_config, "max_seq_len", None) is not None:
             return
         try:
+            max_pos = getattr(hf_config, "max_position_embeddings", None)
+            scaled = None
             if getattr(hf_config, "rope_scaling", None):
                 factor = hf_config.rope_scaling.get("factor")
                 orig = hf_config.rope_scaling.get("original_max_position_embeddings")
                 if factor and orig:
-                    hf_config.max_seq_len = int(factor * orig)
-                    return
-            if getattr(hf_config, "max_position_embeddings", None):
-                hf_config.max_seq_len = int(hf_config.max_position_embeddings)
+                    scaled = int(factor * orig)
+            if max_pos is not None and scaled is not None:
+                # Prefer the larger of the declared max_position_embeddings and the rope-scaled length.
+                hf_config.max_seq_len = int(max(max_pos, scaled))
+                return
+            if scaled is not None:
+                hf_config.max_seq_len = int(scaled)
+                return
+            if max_pos is not None:
+                hf_config.max_seq_len = int(max_pos)
                 return
         except Exception:
             pass
