@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 
 
-class MatmulSingleCore:
+class Matmul:
     """
     Single-core matmul implementation using ttnn.generic_op.
 
@@ -84,34 +84,46 @@ class MatmulSingleCore:
         """
         # Some basic shape checks on input
         a_shape = input_a.shape
+        a_shard_shape = input_a.memory_config().shard_spec.shape
         b_shape = input_b.shape
+        b_shard_shape = input_b.memory_config().shard_spec.shape
         in0_tile = input_a.get_tile()
         in1_tile = input_b.get_tile()
+
+        # Get core grid from input tensor (single core)
+        all_cores = input_a.memory_config().shard_spec.grid
+
         assert (
-            a_shape[0] // in0_tile.tile_shape[0] == 1
-        ), f"M ({a_shape[0]}) must be a single tile with height same as tile_height ({in0_tile.tile_shape[0]})"
+            a_shard_shape[0] // in0_tile.tile_shape[0] == 1
+        ), f"M ({a_shard_shape[0]}) must be a single tile with height same as tile_height ({in0_tile.tile_shape[0]})"
         assert (
-            a_shape[1] % in0_tile.tile_shape[1] == 0
-        ), f"K ({a_shape[1]}) must be divisible by tile_width ({in0_tile.tile_shape[1]})"
+            a_shard_shape[1] % in0_tile.tile_shape[1] == 0
+        ), f"K ({a_shard_shape[1]}) must be divisible by tile_width ({in0_tile.tile_shape[1]})"
+        assert (
+            a_shape[0] // a_shard_shape[0]
+        ) == all_cores.num_cores(), f"M ({a_shape[0]}) must be divisible by M ({a_shard_shape[0]}) and equal to number of cores ({all_cores.num_cores()})"
         if transpose:
             assert a_shape[1] == b_shape[1], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[1]})"
+            assert (
+                b_shape[0] // b_shard_shape[0]
+            ) == all_cores.num_cores(), f"K ({b_shape[0]}) must be divisible by K ({b_shard_shape[0]}) and equal to number of cores ({all_cores.num_cores()})"
         else:
             assert a_shape[1] == b_shape[0], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[0]})"
+            assert (
+                b_shape[1] // b_shard_shape[1]
+            ) == all_cores.num_cores(), f"N ({b_shape[1]}) must be divisible by N ({b_shard_shape[1]}) and equal to number of cores ({all_cores.num_cores()})"
         num_tiles_k = a_shape[1] // in0_tile.tile_shape[1]
 
         # Some basic shape checks on output
         out_shape = output_tensor.shape
+        out_shard_shape = output_tensor.memory_config().shard_spec.shape
         out_tile = output_tensor.get_tile()
         assert (
             out_shape[0] // out_tile.tile_shape[0] == 1
         ), f"M ({out_shape[0]}) must be a single tile with height same as tile_height ({out_tile.tile_shape[0]})"
 
         # Calculate output width in tiles
-        out_w = out_shape[1] // out_tile.tile_shape[1]
-
-        # Get core grid from input tensor (single core)
-        all_cores = input_a.memory_config().shard_spec.grid
-        assert all_cores.num_cores() == 1, f"Only single core is supported"
+        out_w = out_shard_shape[1] // out_tile.tile_shape[1]
 
         # CB indices
         in0_cb = 0  # Input A
@@ -137,11 +149,11 @@ class MatmulSingleCore:
 
         # Determine fused activation value
         if fused_activation is None:
-            fused_activation_val = MatmulSingleCore.ACTIVATION_NONE
+            fused_activation_val = Matmul.ACTIVATION_NONE
         elif fused_activation.lower() == "sigmoid":
-            fused_activation_val = MatmulSingleCore.ACTIVATION_SIGMOID
+            fused_activation_val = Matmul.ACTIVATION_SIGMOID
         elif fused_activation.lower() == "silu":
-            fused_activation_val = MatmulSingleCore.ACTIVATION_SILU
+            fused_activation_val = Matmul.ACTIVATION_SILU
         else:
             raise ValueError(f"Unknown activation: {fused_activation}. Supported: 'sigmoid', 'silu', or None")
 

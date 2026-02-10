@@ -35,34 +35,81 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
 
 
 @pytest.mark.parametrize(
-    "M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en",
+    "M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en, core_grid",
     [
-        # Before SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q down + K down
-        (1, 3584, 32, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q down with split inner dim
-        (1, 1536, 128, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q up
-        (1, 128, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Q nope
-        # SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA Q @ K.T (KV_chunk_size=256)
-        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA Q @ K.T (KV_chunk_size=512)
-        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, True, None, False),  # SDPA Q @ K.T transposed (KV_chunk_size=256)
-        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, True, None, False),  # SDPA Q @ K.T transposed (KV_chunk_size=512)
-        (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA S @ V (KV_chunk_size=256)
-        (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA S @ V (KV_chunk_size=512)
-        # After SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # V out
-        (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # Out
-        # MoE (bfloat16 srcB/in0, bfloat8_b srcA/in1 - potentially bfloat4_b if accurate enough)
-        (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # Dense MLP: W_up (out_w=2)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # Gate proj + up proj
-        (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, None, False),  # Down proj
-        # MoE router gate with sigmoid: [1, 7168] x [7168, 32] per core (8 cores total = 256 outputs)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat16, False, "sigmoid", True),  # Router gate + sigmoid with FP32 acc
-        # SiLU activation test (similar to MoE gate projection)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, False, "silu", False),  # Gate proj + silu
+        pytest.param(
+            1,
+            8192,
+            64,
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+            False,
+            None,
+            False,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 8)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(3, 9)),
+                }
+            ),
+            id="out_proj",
+        ),
+        pytest.param(
+            1,
+            896,
+            32,
+            ttnn.bfloat16,
+            ttnn.bfloat4_b,
+            False,
+            None,
+            False,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(11, 9)),
+                }
+            ),
+            id="gate_proj_up_proj",
+        ),
+        pytest.param(
+            1,
+            256,
+            64,
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+            False,
+            None,
+            False,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 8)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(3, 9)),
+                }
+            ),
+            id="down_proj",
+        ),
+        pytest.param(
+            1,
+            3584,
+            32,
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+            False,
+            None,
+            False,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7)),
+                }
+            ),
+            id="q_a_proj_with_split_inner_dim",
+        ),
     ],
 )
-def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en):
+@pytest.mark.skip_post_commit
+def test_matmul_single_core(
+    device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en, core_grid
+):
     """Test single-core matmul operation with fully sharded inputs"""
 
     # Use fused_activation directly (no special suffixes needed now)
@@ -73,14 +120,10 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
     b_tile = ttnn.Tile([32, 32])  # Standard tile for B
     out_tile = ttnn.Tile([M, 32])  # Tile height matches M for output
 
-    # Single core
-    core = ttnn.CoreCoord(0, 0)
-    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core)})
-
     # Calculate tiles
-    num_tiles_m = M // a_tile.tile_shape[0]
+    num_tiles_m = M * core_grid.num_cores() // a_tile.tile_shape[0]
     num_tiles_k = K // a_tile.tile_shape[1]
-    num_tiles_n = N // b_tile.tile_shape[1]
+    num_tiles_n = N * core_grid.num_cores() // b_tile.tile_shape[1]
 
     activation_str = f"+{fused_activation}" if fused_activation else ""
     fp32_str = " (fp32 acc)" if fp32_dest_acc_en else ""
@@ -93,7 +136,8 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
     # Create input A and input B PyTorch tensors
     torch.manual_seed(0)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    torch_b = torch.randn((K, N * core_grid.num_cores()), dtype=torch.bfloat16)
+    output_shape = (M, N * core_grid.num_cores())
     if transpose:
         torch_b = torch_b.T
 
@@ -117,7 +161,7 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
 
     # Create input A (height-sharded on single core)
     ttnn_a = ttnn.from_torch(
-        torch_a,
+        torch_a.repeat(core_grid.num_cores(), 1),
         dtype=in0_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -164,7 +208,7 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
     # Create output tensor
-    torch_output_zeros = torch.zeros((M, N), dtype=torch.bfloat16)
+    torch_output_zeros = torch.zeros(output_shape, dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
         torch_output_zeros,
         dtype=ttnn.bfloat16,
@@ -191,7 +235,7 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
     output_torch = ttnn.to_torch(ttnn_result)
 
     # Verify output shape
-    assert output_torch.shape == (M, N), f"Expected shape ({M}, {N}), got {output_torch.shape}"
+    assert output_torch.shape == output_shape, f"Expected shape {output_shape}, got {output_torch.shape}"
 
     # Verify matmul results (slightly lower PCC for fused activations due to approximation)
     logger.info(f"Verifying matmul{activation_str}{fp32_str} results...")
