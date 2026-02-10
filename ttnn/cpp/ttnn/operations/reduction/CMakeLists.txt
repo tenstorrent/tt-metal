@@ -14,6 +14,7 @@ set_target_properties(
 file(
     GLOB_RECURSE kernels
     accumulation/device/kernels/*
+    accumulation/ema/kernels/*
     argmax/device/kernels/*
     generic/device/kernels/*
     moe/device/kernels/*
