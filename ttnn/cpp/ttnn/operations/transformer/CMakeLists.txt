@@ -16,6 +16,7 @@ file(
     sdpa/device/kernels/*
     sdpa_decode/device/kernels/*
     sdpa_windowed/device/kernels/*
+    sdpa_prefill/device/kernels/*
 )
 target_sources(
     ttnn_op_transformer
@@ -48,6 +49,8 @@ target_sources(
         sdpa_windowed/device/sdpa_windowed_program_factory.cpp
         sdpa_windowed/sdpa_windowed.cpp
         split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.cpp
+        sdpa_prefill/device/distributed_mla_device_operation.cpp
+        sdpa_prefill/distributed_mla.cpp
 )
 
 target_include_directories(ttnn_op_transformer PRIVATE ${FixmeOpIncDirs})

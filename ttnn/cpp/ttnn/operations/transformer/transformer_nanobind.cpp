@@ -17,6 +17,7 @@
 #include "sdpa_decode/sdpa_decode_nanobind.hpp"
 #include "sdpa_windowed/sdpa_windowed_nanobind.hpp"
 #include "split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
+#include "sdpa_prefill/distributed_mla_nanobind.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -52,6 +53,10 @@ void py_module(nb::module_& mod) {
     bind_sdpa(mod);
     bind_sdpa_decode(mod);
     bind_sdpa_windowed(mod);
+
+    // Create submodule for sdpa_prefill
+    auto submodule_sdpa_prefill = mod.def_submodule("sdpa_prefill", "SDPA prefill operations");
+    ttnn::operations::transformer::sdpa_prefill::bind_distributed_mla(submodule_sdpa_prefill);
 }
 
 }  // namespace ttnn::operations::transformer
