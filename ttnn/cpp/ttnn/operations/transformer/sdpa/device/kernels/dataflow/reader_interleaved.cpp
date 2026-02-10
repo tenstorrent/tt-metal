@@ -75,14 +75,15 @@ void kernel_main() {
     constexpr uint32_t block_size_t = get_compile_time_arg_val(20);
     constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(21);
     constexpr uint32_t use_attention_sink = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(23);
 
     // Semaphore IDs for KV chain forwarding (non-causal only, but always present in compile args)
-    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(23);
-    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(24);
-    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(25);
-    constexpr bool mcast_enabled = get_compile_time_arg_val(26) == 1;
+    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(24);
+    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(25);
+    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(26);
+    constexpr bool mcast_enabled = get_compile_time_arg_val(27) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<27>();
+    constexpr auto q_args = TensorAccessorArgs<28>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -216,6 +217,8 @@ void kernel_main() {
     constexpr uint32_t attention_sink_tile_bytes = use_attention_sink ? get_tile_size(cb_attention_sink) : 0;
 
     constexpr uint32_t q_heads_per_kv = NQH / NKH;
+    constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
+    constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
@@ -344,9 +347,22 @@ void kernel_main() {
                     const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
                     const uint32_t q_row_end_tile = std::min(q_row_start_tile + Sq_chunk_t, valid_Sqt);
                     const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
-                    const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
-                    read_chunk_with_padding<q_tile_bytes>(
-                        q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                    uint32_t q_read_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
+
+                    // Q read is deferred into the K loop (k_chunk==0) for subblock interleaving.
+                    // When use_q_subblock_push is false, Q is read in full before the K loop (original behavior).
+                    if constexpr (!use_q_subblock_push) {
+                        read_chunk_with_padding<q_tile_bytes>(
+                            q_reader,
+                            cb_q_in,
+                            q_read_tile_id,
+                            q_row_tile_count,
+                            DHt,
+                            Sq_chunk_t,
+                            DHt,
+                            barrier_threshold);
+                    }
+
                     q_chunk = chunked_q_chunk_offset + q_chunk;
                     uint32_t q_low_idx =
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
@@ -507,6 +523,30 @@ void kernel_main() {
                                 } else {
                                     noc_async_writes_flushed();
                                     noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                                }
+                            }
+                        }
+
+                        // Q subblock push: K is fully forwarded, now push Q one subblock at
+                        // a time. Compute waits for K first (cb_wait_front(cb_k_in, K*N)),
+                        // then waits for Q subblocks incrementally (accumulating cb_wait_front).
+                        // Each push unblocks the next QK subblock computation.
+                        // Placed after K forward complete so no outstanding NOC writes remain
+                        // (noc_async_read_barrier inside read_q_subblock deadlocks on BH
+                        // when NOC writes are in-flight).
+                        if constexpr (use_q_subblock_push) {
+                            if (k_chunk == 0) {
+                                for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                                    read_q_subblock<q_tile_bytes>(
+                                        q_reader,
+                                        cb_q_in,
+                                        q_read_tile_id,
+                                        q_sub * qk_subblock_h,
+                                        qk_subblock_h,
+                                        q_row_tile_count,
+                                        DHt,
+                                        DHt,
+                                        barrier_threshold);
                                 }
                             }
                         }
