@@ -55,6 +55,7 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     const DataFormat srca_format = static_cast<DataFormat>(unpack_dst_format[srca_operand_id]);
     const DataFormat srcb_format = static_cast<DataFormat>(unpack_dst_format[srcb_operand_id]);
 
+    // TODO: AM; introduce dest mode enum, issue #37483
     // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST_FORMAT
     if (EN_32BIT_DEST_FORMAT && is_src_fmt_fp32_dest_compatible(srca_format) &&
         is_src_fmt_fp32_dest_compatible(srcb_format)) {
