@@ -56,7 +56,8 @@ struct BernoulliDeviceOperation {
 
     using program_factory_t = std::variant<ProgramFactory>;
 
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    // select_program_factory is not needed: single-variant program_factory_t is auto-selected by framework.
+
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
