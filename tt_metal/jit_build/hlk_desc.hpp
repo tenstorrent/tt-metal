@@ -16,6 +16,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/reflection.hpp>
 
+#include "common/stable_hash.hpp"
+
 namespace tt {
 /**
  * @brief A descriptor of the high-level kernel. Contains circular buffer formats, HLK filename, HLK args ptr/size.
@@ -105,7 +107,28 @@ public:
 };  // tt_hlk_desc
 }  // namespace tt
 
-// Hash for hlk_args
+// Stable hash for cache paths. Same logical inputs as std::hash<tt_hlk_desc> but deterministic.
+inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
+    tt::FNV1a hasher;
+    for (size_t i = 0; i < obj.buf_dataformat_arr.size(); i++) {
+        hasher.update(static_cast<uint64_t>(obj.get_buf_dataformat(i)));
+        hasher.update(static_cast<uint64_t>(obj.get_buf_tile_r_dim(i)));
+        hasher.update(static_cast<uint64_t>(obj.get_buf_tile_c_dim(i)));
+    }
+    hasher.update(static_cast<uint64_t>(obj.get_hlk_math_fidelity()));
+    hasher.update(obj.get_hlk_math_approx_mode() ? 1u : 0u);
+    void* hlk_args = obj.get_hlk_args();
+    size_t hlk_args_size = obj.get_hlk_args_size();
+    if (hlk_args != nullptr && hlk_args_size > 0) {
+        const char* raw = reinterpret_cast<const char*>(hlk_args);
+        hasher.update(raw, raw + hlk_args_size);
+    } else if (hlk_args != nullptr || hlk_args_size != 0) {
+        TT_THROW("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
+    }
+    return hasher.digest();
+}
+
+// Hash for hlk_args (used by std::hash<tt_hlk_desc> only)
 inline void hash_hlk_args(size_t& seed, void* hlk_args, size_t hlk_args_size) {
     // C++20 standard, section 7.2.1, paragraph 11:
     // If a program attempts to access the stored value of an object through a glvalue whose type is not

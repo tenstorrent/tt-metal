@@ -14,6 +14,7 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include "common/stable_hash.hpp"
 #include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "firmware_capability.hpp"
@@ -161,7 +162,7 @@ void MetalContext::initialize(
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
-    const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
+    const size_t fw_compile_hash = static_cast<size_t>(tt::stable_hash_string(rtoptions_.get_compile_hash_string()));
     validate_worker_l1_size(worker_l1_size, *hal_);
     if (initialized_) {
         if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or

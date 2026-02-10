@@ -299,7 +299,7 @@ void JitBuildEnv::init(
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
-    jit_build::utils::FNV1a hasher;
+    FNV1a hasher;
     hasher.update(build_key);
     hasher.update(enchantum::to_underlying(this->arch_));
     hasher.update(cflags_.begin(), cflags_.end());

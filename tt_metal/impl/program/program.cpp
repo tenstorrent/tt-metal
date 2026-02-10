@@ -44,7 +44,9 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "data_types.hpp"
+#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
+#include "jit_build/hlk_desc.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
@@ -165,21 +167,22 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
-    std::string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
-        build_key,
-        std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-        kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-    size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
+    tt::FNV1a hasher;
+    hasher.update(build_key);
+    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
+    hasher.update(kernel->compute_hash());
+    const std::string& compile_hash_string =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string();
+    hasher.update(compile_hash_string);
+    size_t compile_hash = static_cast<size_t>(hasher.digest());
 
 #ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
+          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
           << std::flush;
     }
 #endif
