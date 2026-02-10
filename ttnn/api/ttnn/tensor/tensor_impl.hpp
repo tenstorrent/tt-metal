@@ -45,11 +45,21 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 
 Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 
+// TODO: Move this to tt_metal
+HostTensor to_host(distributed::MeshCommandQueue& queue, const DeviceTensor& tensor, bool blocking = true);
+
 void copy_to_host(
     const Tensor& device_tensor,
     Tensor& host_tensor,
     bool blocking = true,
     std::optional<QueueId> cq_id = std::nullopt);
+
+// TODO: Move this to tt_metal
+void copy_to_host(
+    distributed::MeshCommandQueue& queue,
+    const DeviceTensor& device_tensor,
+    HostTensor& host_tensor,
+    bool blocking = true);
 
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
@@ -64,7 +74,16 @@ Tensor to_device(
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
     std::optional<QueueId> cq_id = std::nullopt);
 
+// TODO: Move this to tt_metal
+DeviceTensor to_device(
+    distributed::MeshCommandQueue& queue,
+    const HostTensor& tensor,
+    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
+
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
+
+// TODO: Move this to tt_metal
+void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, DeviceTensor& device_tensor);
 
 void copy_to_device(
     distributed::MeshCommandQueue& queue,
@@ -77,8 +96,6 @@ void copy_to_device(
 // ======================================================================================
 
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
-
-Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .pad() and .unpad()
