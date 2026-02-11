@@ -97,10 +97,10 @@ void bind_reduction_topk_operation(nb::module_& mod) {
             nb::arg("largest") = true,
             nb::arg("sorted") = true,
             nb::kw_only(),
-            nb::arg("output_tensor") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("indices_tensor") = nb::none()));
+            nb::arg("indices_tensor") = nb::none(),
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::detail
