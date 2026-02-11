@@ -28,7 +28,7 @@ void bind_ternary_composite_float(
     const ternary_operation_t& operation,
     const std::string& description,
     const std::string& math,
-    const std::string& supported_dtype = "BFLOAT16") {
+    const std::string& supported_dtype = "BFLOAT16, FLOAT32") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -108,17 +108,15 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B, FLOAT32, INT32
                  - TILE
-                 - 1, 2, 3, 4, 5
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
         )doc",
@@ -205,17 +203,15 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                 :header-rows: 1
 
                 * - Dtypes
                   - Layouts
-                  - Ranks
-                * - BFLOAT16, BFLOAT8_B
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
                   - TILE
-                  - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
@@ -255,10 +251,18 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
 }
 
 template <typename ternary_operation_t>
-void bind_ternary_addcmul(nb::module_& mod, const ternary_operation_t& operation, const std::string& description) {
+void bind_ternary_addc_operation(
+    nb::module_& mod,
+    const ternary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
             {2}
+
+        .. math::
+            {3}
 
         Args:
             input_a (ttnn.Tensor): the first input tensor.
@@ -266,7 +270,7 @@ void bind_ternary_addcmul(nb::module_& mod, const ternary_operation_t& operation
             input_c (ttnn.Tensor): the third input tensor.
 
         Keyword Args:
-            value (float, optional): scalar value to multiply with input_b * input_c. Defaults to 1.0.
+            value (float, optional): scalar value used in the operation. Defaults to 1.0.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
@@ -274,23 +278,23 @@ void bind_ternary_addcmul(nb::module_& mod, const ternary_operation_t& operation
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - FLOAT32, BFLOAT16, BFLOAT8_B, INT32
                  - TILE
-                 - 2, 3, 4
 
             Only TTT (tensor-tensor-tensor) variant is supported.
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        math,
+        supported_dtype);
 
     bind_registered_operation(
         mod,
@@ -333,17 +337,15 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE
-                 - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
         )doc",
@@ -388,18 +390,25 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
 
 void py_module(nb::module_& mod) {
     // new imported
-    bind_ternary_addcmul(mod, ttnn::addcmul, R"doc(Computes addcmul: output = input_a + value * input_b * input_c)doc");
+    bind_ternary_addc_operation(
+        mod,
+        ttnn::addcmul,
+        R"doc(Multiplies :attr:`input_tensor_b` by a scalar, multiplies the result
+            element-wise by :attr:`input_tensor_c`, and adds it to
+            :attr:`input_tensor_a`.
+            Returns a tensor with the same layout as :attr:`input_tensor_a`.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + (value * \mathrm{input\_tensor\_b}_i * \mathrm{input\_tensor\_c}_i))doc",
+        "FLOAT32, BFLOAT16, BFLOAT8_B, INT32");
 
-    bind_ternary_composite_float(
+    bind_ternary_addc_operation(
         mod,
         ttnn::addcdiv,
         R"doc(Multiplies :attr:`input_tensor_b` by a scalar, divides the result
-        element-wise by :attr:`input_tensor_c`, and adds it to
-        :attr:`input_tensor_a`.
-        Returns a tensor with the same layout as :attr:`input_tensor_a`.)doc",
+            element-wise by :attr:`input_tensor_c`, and adds it to
+            :attr:`input_tensor_a`.
+            Returns a tensor with the same layout as :attr:`input_tensor_a`.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \frac{(value * \mathrm{input\_tensor\_b}_i)}{\mathrm{input\_tensor\_c}_i})doc",
         "FLOAT32, BFLOAT16, BFLOAT8_B");
-
     bind_ternary_where(
         mod,
         ttnn::where,

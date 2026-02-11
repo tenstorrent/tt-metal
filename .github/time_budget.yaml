@@ -75,6 +75,7 @@ ttnn:
     bh_galaxy: 40
   integration:
     wh_llmbox: 30
+    wh_galaxy: 350
 
 fabric:
   unit:
@@ -84,7 +85,7 @@ fabric:
   e2e:
     wh_llmbox: 165
     wh_galaxy: 100
-    bh_galaxy: 50
+    bh_galaxy: 60
 
 scaleout:
   e2e:
@@ -103,5 +104,7 @@ models:
     wh_llmbox: 422
   perf:
     wh_llmbox: 685
+    wh_galaxy: 260
   demo:
     wh_llmbox: 1090
+    wh_galaxy: 270

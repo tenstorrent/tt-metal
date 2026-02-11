@@ -99,6 +99,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_MULTI_AERISC,          // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,             // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,          // Disable use of SFPLOADMACRO instructions
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -123,7 +124,7 @@ enum class EnvVarID {
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
-    TT_METAL_DEVICE_DEBUG_DUMP_ENABLED,            // Enable experimental debug dump mode for profiler
+    TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
 
     // ========================================
@@ -655,6 +656,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_DISABLE_SFPLOADMACRO
+        // Disable use of SFPLOADMACRO instructions.
+        // Default: 0 (use SFPLOADMACRO instructions)
+        // Usage: export TT_METAL_DISABLE_SFPLOADMACRO=1
+        case EnvVarID::TT_METAL_DISABLE_SFPLOADMACRO: this->disable_sfploadmacro = is_env_enabled(value); break;
+
         // ========================================
         // PROFILING & PERFORMANCE
         // ========================================
@@ -847,13 +854,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
-        // TT_METAL_DEVICE_DEBUG_DUMP_ENABLED
-        // Enable and sets the polling interval in seconds for experimental debug dump mode for profiler. In this mode,
-        // the profiler infrastructure will be used to continuously dump debug packets to a file. Default: false (debug
-        // dump mode disabled) Usage: export TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1
-        case EnvVarID::TT_METAL_DEVICE_DEBUG_DUMP_ENABLED: {
+        // TT_METAL_NOC_DEBUG_DUMP
+        // Enable experimental NOC debug dump mode. In this mode,
+        // the profiler infrastructure will be used to continuously dump NOC debug packets to a file. Default: false
+        // (debug dump mode disabled) Usage: export TT_METAL_NOC_DEBUG_DUMP=1
+        case EnvVarID::TT_METAL_NOC_DEBUG_DUMP: {
             if (is_env_enabled(value)) {
-                this->set_experimental_device_debug_dump_enabled(true);
+                this->set_experimental_noc_debug_dump_enabled(true);
             }
             break;
         }
@@ -1697,15 +1704,15 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     return dispatch_core_config;
 }
 
-void RunTimeOptions::set_experimental_device_debug_dump_enabled(bool enabled) {
+void RunTimeOptions::set_experimental_noc_debug_dump_enabled(bool enabled) {
     if (enabled) {
         profiler_enabled = true;
         profiler_noc_events_enabled = true;
-        experimental_device_debug_dump_enabled = true;
+        experimental_noc_debug_dump_enabled = true;
     } else {
         profiler_enabled = false;
         profiler_noc_events_enabled = false;
-        experimental_device_debug_dump_enabled = false;
+        experimental_noc_debug_dump_enabled = false;
     }
 }
 

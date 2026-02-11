@@ -67,6 +67,8 @@ class KVCacheBranch:
         sin_tensor,
         trans_mat_tensor,
         output_tensor,
+        kv_cache_tensor,
+        kv_cache_write_index,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
     ):
@@ -79,6 +81,8 @@ class KVCacheBranch:
             gamma_tensor: Gamma tensor (must be sharded)
             cos_tensor: Cos tensor (must be sharded)
             sin_tensor: Sin tensor (must be sharded)
+            kv_cache_tensor: Optional KV cache tensor in DRAM (interleaved) to write results to
+            kv_cache_write_index: Sequence position index to write to in KV cache
             epsilon: Epsilon for RMSNorm
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
 
@@ -118,6 +122,13 @@ class KVCacheBranch:
         kv_scalar_packed = float_to_uint32(inv_sqrt_numel)
         epsilon_packed = float_to_uint32(epsilon)
 
+        # KV Cache tensor setup
+        # Tile size is now derived from output CB in kernel using get_tile_size()
+        kv_cache_buffer_addr = kv_cache_tensor.buffer_address()
+        kv_cache_tile = kv_cache_tensor.get_tile()
+        # Calculate starting tile ID based on write index
+        # KV cache shape is [1, 1, seq_len, kv_dim], tiles are [32, 32]
+
         # CB indices
         # CONSOLIDATE!!!!!!!!!
         # Tile sizes: 1x32 = 64 bytes (BF16), 16x32 = 1024 bytes (BF16), 32x32 = 2048 bytes (BF16)
@@ -148,9 +159,7 @@ class KVCacheBranch:
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
         ]
-        dkv_matmul_brisc_named_compile_time_args = [
-            ("dkv_matmul_out", dkv_matmul_output_cb),
-        ]
+
         dkv_matmul_trisc_named_compile_time_args = [
             ("dkv_matmul_in0", dkv_matmul_input_cb),
             ("dkv_matmul_in1", dkv_matmul_weights_cb),
@@ -166,6 +175,11 @@ class KVCacheBranch:
             ("rmsnorm_rsqrt_fast_approx", 0),
         ]
 
+        kv_rmsnorm_brisc_named_compile_time_args = [
+            ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
+            ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
+        ]
+
         kv_rmsnorm_ncrisc_named_compile_time_args = [
             ("kv_rmsnorm_input_cb", kv_rmsnorm_input_cb),
             ("kv_rmsnorm_gamma_cb", kv_rmsnorm_gamma_cb),
@@ -179,6 +193,7 @@ class KVCacheBranch:
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
         ]
 
+        # KV cache tile size is now derived from output CB in kernel using get_tile_size()
         # ========================================================================
         # Gather setup: k nope matmul cores (senders) -> kv rmsnorm core (receiver)
         # Sender runs on NCRISC (NOC_0 default), Receiver runs on BRISC (NOC_1 default)
@@ -240,6 +255,11 @@ class KVCacheBranch:
         ]
 
         # ROPE
+        krope_brisc_named_compile_time_args = [
+            ("k_rope_output_cb", k_rope_output_cb),
+            ("Wt", 1),  # Needed for KV Cache update
+            ("Ht", 1),  # Needed for KV Cache update
+        ]
         krope_ncrisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
             ("cos_cb", cos_cb),
@@ -264,23 +284,8 @@ class KVCacheBranch:
         # Create tile descriptor for proper tile dimensions
 
         # CB X: DKV Matmul input buffer (1x7168 with 1x32 tiles = 224 tiles)
-        # matmul_input_total_size = 14336  # 224 * 64 bytes
-        # matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-        # dkv_matmul_input_total_size = matmul_input_total_size
-        # dkv_matmul_input_page_size = 64
-        # dkv_matmul_input_cb_format = ttnn.CBFormatDescriptor(
-        #    buffer_index=dkv_matmul_input_cb,
-        #    data_format=data_format,
-        #    page_size=dkv_matmul_input_page_size,
-        #    tile=matmul_input_tile_descriptor,
-        # )
-        # dkv_matmul_input_cb_core_ranges = input_core_grid
-        # dkv_matmul_input_cb_descriptor = ttnn.CBDescriptor(
-        #    total_size=dkv_matmul_input_total_size,
-        #    format_descriptors=[dkv_matmul_input_cb_format],
-        # )
         dkv_matmul_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(dkv_matmul_input_cb, input_tensor)
-        # CB X: DKV Matmul output buffer (1x224 with 1x32 tiles = 7 tiles)
+        # CB X: DKV Matmul output buffers
         dkv_matmul_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         dkv_matmul_output_page_size = TILE_1x32.get_tile_size(data_format)
         dkv_matmul_output_cb_format = ttnn.CBFormatDescriptor(
@@ -429,7 +434,13 @@ class KVCacheBranch:
             + krope_ncrisc_named_compile_time_args,
             # BRISC named compile-time args
             brisc_named_compile_time_args=dkv_gather_receiver_named_compile_time_args
-            + dkv_matmul_brisc_named_compile_time_args,
+            + kv_rmsnorm_brisc_named_compile_time_args
+            + krope_brisc_named_compile_time_args,
+            # BRISC common runtime args: KV cache buffer address and write position
+            brisc_common_runtime_args=[
+                kv_cache_buffer_addr,
+                kv_cache_write_index,
+            ],
             # TRISC named compile-time args
             trisc_named_compile_time_args=kv_rmsnorm_trisc_named_compile_time_args
             + dkv_matmul_trisc_named_compile_time_args
@@ -477,7 +488,7 @@ class KVCacheBranch:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 dkv_matmul_input_cb_descriptor,
                 dkv_matmul_output_cb_descriptor,
@@ -507,6 +518,7 @@ class KVCacheBranch:
             cos_tensor,
             sin_tensor,
             trans_mat_tensor,
+            kv_cache_tensor,
             output_tensor,
         ]
         output = ttnn.generic_op(io_tensors, program_descriptor)

@@ -32,14 +32,13 @@ run_quad_galaxy_unit_tests() {
   fi
 }
 
-run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
-    fail=0
-
-    # Run dual galaxy tests on quad galaxy since this is the only available machine
-    local RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
-    local HOSTS="g05glx01,g05glx02"
-    local RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
+# Common setup for dual galaxy tests on quad galaxy
+setup_dual_galaxy_env() {
+    export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+    export HOSTS="g05glx01,g05glx02"
+    export RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
     mkdir -p logs
+    mkdir -p generated/artifacts
 
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
@@ -50,31 +49,88 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
         exit 1
     fi
 
-    local DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
-    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
-    local MESH_DEVICE="DUAL"
+    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
+    export DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
+    export MESH_DEVICE="DUAL"
+}
+
+# Run deepseek v3 module tests (models/demos/deepseek_v3/tests)
+run_quad_galaxy_deepseekv3_module_tests() {
+    fail=0
+    setup_dual_galaxy_env
 
     local TEST_CASE="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/tests"
-    local TEST_TEACHER_FORCED="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
         bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
 
-    # Run test_demo_dual test on DUAL galaxy setup
-    local TEST_DEMO_DUAL="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual"
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+# Run teacher forced accuracy test and save metrics to artifacts
+run_quad_galaxy_teacher_forced_test() {
+    fail=0
+    setup_dual_galaxy_env
+
+    local TEST_TEACHER_FORCED="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/teacher_forced_output.log"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
-        bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_DEMO_DUAL" ; fail+=$?
+        bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_TEACHER_FORCED" ; fail+=$?
 
-    tt-run --rank-binding "$RANK_BINDING_YAML" \
-        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
-        bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_TEACHER_FORCED" ; fail+=$?
+    # Extract accuracy metrics from logs and save to artifact file
+    if [[ -f generated/artifacts/teacher_forced_output.log ]]; then
+        echo "Extracting accuracy metrics from test output..."
+        grep -E "Top-1 accuracy:|Top-5 accuracy:" generated/artifacts/teacher_forced_output.log > generated/artifacts/teacher_forced_accuracy.txt || true
+        echo "Accuracy metrics saved to generated/artifacts/teacher_forced_accuracy.txt"
+    fi
 
     if [[ $fail -ne 0 ]]; then
         exit 1
     fi
+}
+
+# Run dual demo test (256 prompts, 1 batch) - full_demo variant
+run_quad_galaxy_dual_demo_test() {
+    fail=0
+    setup_dual_galaxy_env
+
+    local TEST_DEMO="source ./python_env/bin/activate && pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log"
+
+    tt-run --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
+        bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_DEMO" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+# Run stress dual demo test (56 prompts, 20 batches) - stress_demo variant
+run_quad_galaxy_dual_demo_stress_test() {
+    fail=0
+    setup_dual_galaxy_env
+
+    local TEST_DEMO_STRESS="source ./python_env/bin/activate && pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
+
+    tt-run --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
+        bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_DEMO_STRESS" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+# Legacy function that runs all dual galaxy tests on quad galaxy
+run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
+    run_quad_galaxy_deepseekv3_module_tests
+    run_quad_galaxy_teacher_forced_test
+    run_quad_galaxy_dual_demo_test
+    run_quad_galaxy_dual_demo_stress_test
 }
 
 run_quad_galaxy_deepseekv3_unit_tests() {
@@ -104,7 +160,6 @@ run_quad_galaxy_tests() {
   run_dual_galaxy_deepseekv3_tests_on_quad_galaxy
 }
 
-fail=0
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
   if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
@@ -122,15 +177,44 @@ main() {
     exit 1
   fi
 
-  # Run all tests
+  # Run tests
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
 
-  run_quad_galaxy_tests
+  # Support running specific test function via argument
+  local test_function="${1:-all}"
 
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  case "$test_function" in
+    "unit_tests")
+      run_quad_galaxy_unit_tests
+      ;;
+    "deepseekv3_unit_tests")
+      run_quad_galaxy_deepseekv3_unit_tests
+      ;;
+    "deepseekv3_module_tests")
+      run_quad_galaxy_deepseekv3_module_tests
+      ;;
+    "teacher_forced")
+      run_quad_galaxy_teacher_forced_test
+      ;;
+    "dual_demo")
+      run_quad_galaxy_dual_demo_test
+      ;;
+    "dual_demo_stress")
+      run_quad_galaxy_dual_demo_stress_test
+      ;;
+    "deepseekv3_integration_tests")
+      run_dual_galaxy_deepseekv3_tests_on_quad_galaxy
+      ;;
+    "all")
+      run_quad_galaxy_tests
+      ;;
+    *)
+      echo "Unknown test function: $test_function" 1>&2
+      echo "Available options: unit_tests, deepseekv3_unit_tests, deepseekv3_module_tests, teacher_forced, dual_demo, dual_demo_stress, deepseekv3_integration_tests, all" 1>&2
+      exit 1
+      ;;
+  esac
 }
 
 main "$@"

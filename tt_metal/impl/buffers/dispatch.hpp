@@ -9,7 +9,6 @@
 #include <atomic>
 #include <memory>
 #include <variant>
-#include <vector>
 
 #include "buffer.hpp"
 #include "core_coord.hpp"
@@ -109,13 +108,15 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     CoreCoord core;
 };
 
-void write_to_device_buffer(
+// Returns true if pinned memory was used for the transfer
+bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids);
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);

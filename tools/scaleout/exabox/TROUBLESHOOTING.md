@@ -15,6 +15,7 @@ Real issues encountered and their solutions.
   - [Hanging on PCIe Device Lock](#hanging-on-pcie-device-lock)
 - [Reset & Power Issues](#reset--power-issues)
   - [tt-smi Reset Fails with ARC Timeout](#tt-smi-reset-fails-with-arc-timeout)
+  - [AICLK Timeout During Chip Initialization](#aiclk-timeout-during-chip-initialization)
   - [Machine Won't Power On After BMC Power Cycle](#machine-wont-power-on-after-bmc-power-cycle)
   - [Machine Rebooted with PCIe Errors](#machine-rebooted-with-pcie-errors)
   - [Tensix Stall Issue (Requires Power Cycle)](#tensix-stall-issue-requires-power-cycle)
@@ -23,6 +24,7 @@ Real issues encountered and their solutions.
   - [Missing ASIC After Reboot](#missing-asic-after-reboot)
   - [Do NOT Update Firmware on Cluster Machines](#do-not-update-firmware-on-cluster-machines)
 - [Ethernet & Connectivity](#ethernet--connectivity)
+  - [Hostname Not Found in FSD](#hostname-not-found-in-fsd)
   - [UMD Firmware Version Mismatch - Links Not Detected](#umd-firmware-version-mismatch---links-not-detected)
   - [QSFP Connections Missing Between Hosts](#qsfp-connections-missing-between-hosts)
   - [Transient Ethernet Connectivity Loss](#transient-ethernet-connectivity-loss)
@@ -115,22 +117,31 @@ When you encounter issues that require escalation, use the following contacts an
 
 **Analyzing validation logs:**
 
-After running `run_validation_*.sh`, use the analysis script:
+After running `run_validation.sh`, use the analysis script:
 ```bash
-./tools/scaleout/exabox/analyze_validation_results.sh validation_output/
+python3 tools/scaleout/exabox/analyze_validation_results.py validation_output/
 ```
 
-The script categorizes each log file and gives you a summary with success rate. Here's what each category means and where to look next:
+For additional details (host summary, error messages, timeline):
+```bash
+python3 tools/scaleout/exabox/analyze_validation_results.py validation_output/ --all
+```
+
+The script categorizes each log file and gives you a summary with success rate, plus actionable recommendations. Here's what each category means and where to look next:
 
 | Category | What it means | Next steps |
 |----------|---------------|------------|
 | **Healthy links** | All links passed validation | Good to go |
 | **Unhealthy links** | Data mismatch, CRC errors, or retrains detected | Check the FAULTY LINKS REPORT in the log. Same channel failing repeatedly = bad cable. Scattered failures = try power cycle. See [Data Mismatch During Traffic Tests](#data-mismatch-during-traffic-tests) |
-| **Timeout issues** | Cores hung waiting for response | Power cycle the cluster. See [Tensix Stall Issue](#tensix-stall-issue-requires-power-cycle) |
-| **Missing connections** | Links in FSD not found in discovered state | Check cables are seated. Verify correct FSD file. See [QSFP Connections Missing](#qsfp-connections-missing-between-hosts) or [UMD Firmware Version Mismatch](#umd-firmware-version-mismatch---links-not-detected) |
-| **Extra connections** | Unexpected links found | System has been cabled up incorrectly with FSD file for your topology. Verify you're using the correct FSD file (8x16 vs 4x32) |
+| **Missing connections** | Links in FSD not found (port or channel level) | Check cables are seated. Verify correct FSD file. See [QSFP Connections Missing](#qsfp-connections-missing-between-hosts) or [UMD Firmware Version Mismatch](#umd-firmware-version-mismatch---links-not-detected) or [Hostname Not Found in FSD](#hostname-not-found-in-fsd) |
+| **Extra connections** | Unexpected links found | FSD doesn't match actual cabling. Verify you're using the correct FSD file (8x16 vs 4x32) |
+| **Workload timeout** | Traffic tests timed out | Cores hung waiting for response. Power cycle the cluster. See [Tensix Stall Issue](#tensix-stall-issue-requires-power-cycle) |
 | **DRAM training failures** | Chip memory failed to initialize | Hardware issue. See [GDDR Issue on Chip](#gddr-issue-on-chip). Contact syseng |
-| **Indeterminate** | Log incomplete (test crashed/hung) | Check if machine rebooted (`uptime`). May need power cycle |
+| **ARC timeout** | ARC communication issues | Try reset with `tt-smi -r`. If persistent, may need power cycle. See [tt-smi Reset Fails with ARC Timeout](#tt-smi-reset-fails-with-arc-timeout) |
+| **AICLK timeout** | AICLK failed to settle during chip init | Possible bad firmware or hardware. See [AICLK Timeout During Chip Initialization](#aiclk-timeout-during-chip-initialization). Escalate to syseng |
+| **MPI error** | Lost connection between hosts during test | Check network connectivity. Verify SSH agent forwarding. See [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi) |
+| **SSH error** | Authentication failed (publickey) | SSH agent not forwarded or key not added. See [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi) |
+| **Inconclusive** | Log incomplete or unrecognized error | Check if machine rebooted (`uptime`). Review raw log for details. May need power cycle |
 
 **Interpreting success rate:**
 
@@ -274,6 +285,35 @@ If this issue persists, report to infra team to fix group synchronization.
 
 ---
 
+## AICLK Timeout During Chip Initialization
+
+**Symptom**: Validation or chip initialization fails with a message like:
+```
+Waiting for AICLK value to settle failed on timeout after <timeout_ms>. Expected to see <target_aiclk>, last value observed <aiclk>. This can be due to possible overheating of the chip or other issues. ASIC temperature: <temp>
+```
+
+This error originates from UMD during chip initialization (`tt_metal/third_party/umd/device/chip/chip.cpp`).
+
+**Cause**: The AICLK (AI Clock) failed to stabilize to the expected frequency. This has been observed across multiple systems and can indicate:
+- Bad firmware state on the affected chip
+- Hardware issues with the ASIC
+- Chip overheating (check the reported ASIC temperature)
+
+**Resolution steps**:
+1. Check the ASIC temperature in the error message - if abnormally high, allow cooldown
+2. Try a reset with `tt-smi -r`
+3. If issue persists, try a soft reboot of the host
+4. If still failing after reboot, escalate to Systems Engineering
+
+**Escalation**: This issue should be escalated to **Systems Engineering** as it often indicates:
+- Bad firmware requiring reflash
+- Hardware issues requiring further diagnosis
+- Potential need for UBB tray replacement
+
+Report the error message (including the expected AICLK, observed value, and temperature) when escalating.
+
+---
+
 ## Machine Won't Power On After BMC Power Cycle
 
 **Symptom**: After remote power cycle, machine doesn't come back up. BMC shows it going back to "Off" state immediately.
@@ -384,6 +424,34 @@ tt-smi -l  # should show 32 devices
 ---
 
 # Ethernet & Connectivity
+
+## Hostname Not Found in FSD
+
+**Symptom**: Validation crashes with a `std::runtime_error` indicating a hostname is not found in the Factory System Descriptor (FSD):
+```
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  Hostname not found in FSD: bh-glx-d03u02
+[bh-glx-d04u08:00001] *** Process received signal ***
+[bh-glx-d04u08:00001] Signal: Aborted (6)
+```
+
+This error typically appears across multiple MPI ranks with the same hostname mentioned.
+
+**Cause**: The FSD file being used doesn't include all the hosts in the current cluster topology. This happens when:
+- Running validation on a different cluster than the FSD was created for
+- The FSD file wasn't updated after cluster reconfiguration
+- Using a template FSD without customizing hostnames
+
+**Resolution steps**:
+1. Verify which FSD file is being used (check the validation script arguments or environment)
+2. Open the FSD file and check if the missing hostname is present
+3. Either:
+   - Use the correct FSD file for your cluster topology, or
+   - Update the FSD to include all hosts in your cluster
+
+**Note**: This is a configuration error, not a hardware issue. Ensure the FSD matches your actual cluster topology before running validation.
+
+---
 
 ## UMD Firmware Version Mismatch - Links Not Detected
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_distributed_sdpa_program_factory.hpp"
+#include "sdpa_subblock_utils.hpp"
 
 #include <cmath>
 #include <optional>
@@ -164,18 +165,8 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t qk_in0_block_w = DHt;
-    // max of Sk_chunk_t and dst_size
-    uint32_t qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
-    // If qk_out_subblock_w is full row of output, scale subblock_h so volume = dst_size. Otherwise it's 1 to maintain
-    // row-major intermediate buffer.
-    uint32_t qk_out_subblock_h =
-        (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
-
-    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0) {
-        // Hacky, try to get 2x4 output subblock if possible to optimize matmul util.
-        qk_out_subblock_w = qk_out_subblock_w / 2;
-        qk_out_subblock_h = 2;
-    }
+    auto [qk_out_subblock_h, qk_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
@@ -183,57 +174,20 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
-    const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == vDHt) ? (std::min(Sq_chunk_t, dst_size / out_out_subblock_w)) : 1;
+
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // Determine granularity for statistics computation
-    const uint32_t stats_granularity = std::min(Sq_chunk_t, dst_size);
-    // Find log2 of stats_granularity using std
-    const uint32_t log2_stats_granularity = std::log2(stats_granularity);
-    // Assert that this is a power of 2
-    TT_FATAL(
-        stats_granularity == (1 << log2_stats_granularity),
-        "stats_granularity must be a power of 2. Got {}.",
-        stats_granularity);
-
-    const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
-    const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-    TT_FATAL(
-        sub_exp_granularity == (1 << log2_sub_exp_granularity),
-        "sub_exp_granularity must be a power of 2. Got {}.",
-        sub_exp_granularity);
-
-    const uint32_t mul_bcast_granularity = std::min(Sq_chunk_t * Sk_chunk_t, dst_size);
-    const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-    TT_FATAL(
-        mul_bcast_granularity == (1 << log2_mul_bcast_granularity),
-        "mul_bcast_granularity must be a power of 2. Got {}.",
-        mul_bcast_granularity);
-
-    uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = std::log2(dht_granularity);
-    // Sometimes DHt is not a power of 2, so granularity should be 1
-    if (dht_granularity != (1 << log2_dht_granularity)) {
-        dht_granularity = 1;
-        log2_dht_granularity = 0;
-    }
-    TT_FATAL(
-        dht_granularity == (1 << log2_dht_granularity),
-        "dht_granularity must be a power of 2. Got {}.",
-        dht_granularity);
-
-    // Reduce ops can use granularity of dst_size/2
-    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
-    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
-    TT_FATAL(
-        reduce_granularity == (1 << log2_reduce_granularity),
-        "reduce_granularity must be a power of 2. Got {}.",
-        reduce_granularity);
+    // Each granularity must evenly divide its tile count to avoid dropping tiles
+    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
+    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
+    const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
+    const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
+    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -271,6 +225,11 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         page_table_stick_size,
         0  // use_attention_sink
     };
+    // Semaphore placeholders (not used in ring, but kernel expects them at indices 23-25)
+    reader_compile_time_args.push_back(0);  // sender_semaphore_id
+    reader_compile_time_args.push_back(0);  // receiver_semaphore_id
+    reader_compile_time_args.push_back(0);  // valid_semaphore_id
+
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
@@ -278,6 +237,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr)
         .append_to(reader_compile_time_args);                  // page table
     TensorAccessorArgs().append_to(reader_compile_time_args);  // attention sink (not used in ring)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -341,15 +301,10 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
     defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel = (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0);
     if (balanced_q_parallel) {
@@ -522,7 +477,8 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
              v_addr,
              0,  // mask_addr,
              page_table_addr,
-             0,  // attention sink addr,
+             0,  // attention_sink_addr,
+             0,  // chunk_start_idx_addr (ring has no chunk_start_idx_tensor)
              i,
              local_batch_start,
              local_batch_end,
@@ -548,6 +504,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
              local_q_start,
              local_q_end,
              2,
+             0,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
              write_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
@@ -564,6 +521,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
              local_q_start,
              local_q_end,
              2,
+             0,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
              chunked_q_chunk_offset_phase_2});
     }
@@ -700,6 +658,7 @@ void RingDistributedSdpaMeshWorkloadFactory::override_runtime_arguments(
             reader_args[1] = k_addr;
             reader_args[2] = v_addr;
             reader_args[4] = page_table_addr;  // Update page_table_addr (index 4 is after mask_addr)
+            reader_args[6] = 0;                // chunk_start_idx_addr (ring has no chunk_start_idx_tensor)
 
             writer_args[0] = out_addr;
         }

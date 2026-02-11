@@ -6,6 +6,7 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/tensor.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "modules/positional_embeddings.hpp"
@@ -466,6 +467,8 @@ TEST_F(RoPETest, ForwardTest) {
 }
 
 TEST_F(RoPETest, BackwardTest) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // Head dim must be a multiple of TILE_WIDTH
     // Head dim must be <= 256
     // Input query tensor

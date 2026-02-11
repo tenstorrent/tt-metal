@@ -14,6 +14,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
+from models.common.utility_functions import is_watcher_enabled
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device):
@@ -191,6 +192,83 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
 @pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
 @pytest.mark.parametrize("seed", [2024, 11, 123])
 def test_sampling_callback(shape, k, p, seed, device):
+    if (
+        is_watcher_enabled()
+        and seed == 2024
+        and p
+        == [
+            0.0,
+            0.3,
+            0.5,
+            0.7,
+            0.9,
+            0.0,
+            0.3,
+            0.5,
+            0.7,
+            0.9,
+            0.0,
+            0.3,
+            0.5,
+            0.7,
+            0.9,
+            0.0,
+            0.3,
+            0.5,
+            0.7,
+            0.9,
+            0.0,
+            0.3,
+            0.5,
+            0.7,
+            0.9,
+            0.0,
+            0.3,
+            0.5,
+            0.7,
+            0.9,
+            0.1,
+            0.8,
+        ]
+        and k
+        == [
+            10,
+            15,
+            20,
+            25,
+            30,
+            10,
+            15,
+            20,
+            25,
+            30,
+            10,
+            15,
+            20,
+            25,
+            30,
+            10,
+            15,
+            20,
+            25,
+            30,
+            10,
+            15,
+            20,
+            25,
+            30,
+            10,
+            15,
+            20,
+            25,
+            30,
+            10,
+            20,
+        ]
+        and shape == [1, 1, 32, 256]
+    ):
+        pytest.skip("Test is not passing with watcher enabled, github issue #29020")
+
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):

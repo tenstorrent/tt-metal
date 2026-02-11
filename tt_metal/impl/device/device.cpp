@@ -387,12 +387,6 @@ void Device::configure_fabric() {
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
-// backward compatibility
-void Device::init_fabric() {
-    this->compile_fabric();
-    this->configure_fabric();
-}
-
 bool Device::initialize(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
@@ -487,6 +481,10 @@ uint32_t Device::l1_size_per_core() const {
 }
 uint32_t Device::dram_size_per_channel() const {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).dram_view_size;
+}
+
+int Device::get_clock_rate_mhz() const {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(id_);
 }
 
 CoreCoord Device::grid_size() const {
