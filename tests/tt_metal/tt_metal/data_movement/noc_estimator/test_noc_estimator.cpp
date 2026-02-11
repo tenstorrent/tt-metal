@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
@@ -125,6 +126,7 @@ static vector<uint32_t> make_writer_compile_args(
         (uint32_t)cfg.mechanism,    // 16
         (uint32_t)cfg.pattern,      // 17
         (uint32_t)cfg.same_axis,    // 18
+        (uint32_t)cfg.loopback,     // 19
     };
 }
 
@@ -147,6 +149,7 @@ static vector<uint32_t> make_reader_compile_args(
         (uint32_t)cfg.mechanism,    // 9
         (uint32_t)cfg.pattern,      // 10
         (uint32_t)cfg.same_axis,    // 11
+        (uint32_t)cfg.loopback,     // 12
     };
 }
 
@@ -266,9 +269,15 @@ static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_devi
     CoreCoord sub_start = cfg.sub_start_coord;
     CoreCoord sub_end = CoreCoord(sub_start.x + cfg.sub_grid_size.x - 1, sub_start.y + cfg.sub_grid_size.y - 1);
     CoreRangeSet sub_set({CoreRange(sub_start, sub_end)});
-    if (!cfg.loopback) {
+
+    bool is_multicast = (cfg.mechanism == NocMechanism::MULTICAST || cfg.mechanism == NocMechanism::MULTICAST_LINKED);
+    if (!is_multicast) {
+        // For unicast: master sends to each subordinate individually, exclude itself
         sub_set = sub_set.subtract(mst_set);
     }
+    // For multicast: master placement determines loopback behavior.
+    //   loopback=true  → master inside rectangle, INCLUDE_SRC
+    //   loopback=false → master outside rectangle, EXCLUDE_SRC
     uint32_t num_subs = sub_set.num_cores();
     auto sub_core_list = corerange_to_cores(sub_set);
 
@@ -282,8 +291,6 @@ static bool run_one_to_many(const shared_ptr<distributed::MeshDevice>& mesh_devi
     uint32_t sub_l1_addr = cfg.loopback ? mst_l1_addr : mst_l1_addr + (uint32_t)bytes_per_txn;
 
     if (is_write) {
-        bool is_multicast =
-            (cfg.mechanism == NocMechanism::MULTICAST || cfg.mechanism == NocMechanism::MULTICAST_LINKED);
         uint32_t writer_mode;
 
         if (is_multicast) {
@@ -625,6 +632,9 @@ static void packet_sizes_sweep(const shared_ptr<distributed::MeshDevice>& mesh_d
             EXPECT_TRUE(run_dm(mesh_device, base_cfg));
         }
     }
+
+    // Flush profiler DRAM buffer to prevent overflow across many sweep iterations
+    ReadMeshDeviceProfilerResults(*mesh_device);
 }
 
 // ============ SWEEP FUNCTIONS ============
@@ -670,23 +680,53 @@ static void sweep_one_to_all(const shared_ptr<distributed::MeshDevice>& mesh_dev
     };
     vector<GridConfig> grids = {{{2, 2}}, {{5, 5}}, {device_grid}};
 
-    vector<NocMechanism> mechanisms = {
-        NocMechanism::UNICAST,
-        NocMechanism::MULTICAST,
-        NocMechanism::MULTICAST_LINKED,
-    };
+    for (auto& grid : grids) {
+        bool is_full_grid = (grid.size.x >= device_grid.x && grid.size.y >= device_grid.y);
 
-    for (auto mechanism : mechanisms) {
-        for (auto& grid : grids) {
-            for (bool loopback : {true, false}) {
+        // Unicast: master outside the sub grid (no loopback concept for unicast)
+        // For full device grid, master must be inside since there's no core outside
+        {
+            NocEstimatorConfig cfg = {
+                .test_id = test_id,
+                .pattern = NocPattern::ONE_TO_ALL,
+                .mechanism = NocMechanism::UNICAST,
+                .memory_type = MemoryType::L1,
+                .master_start_coord = is_full_grid ? CoreCoord(0, 0) : CoreCoord(grid.size.x, 0),
+                .sub_start_coord = {0, 0},
+                .sub_grid_size = grid.size,
+            };
+            packet_sizes_sweep(mesh_device, cfg);
+        }
+
+        // Multicast and multicast linked: sweep loopback
+        for (auto mechanism : {NocMechanism::MULTICAST, NocMechanism::MULTICAST_LINKED}) {
+            // Loopback = true: master inside the multicast rectangle (INCLUDE_SRC)
+            {
                 NocEstimatorConfig cfg = {
                     .test_id = test_id,
                     .pattern = NocPattern::ONE_TO_ALL,
                     .mechanism = mechanism,
                     .memory_type = MemoryType::L1,
+                    .master_start_coord = {0, 0},
                     .sub_start_coord = {0, 0},
                     .sub_grid_size = grid.size,
-                    .loopback = loopback,
+                    .loopback = true,
+                };
+                packet_sizes_sweep(mesh_device, cfg);
+            }
+
+            // Loopback = false: master outside the multicast rectangle (EXCLUDE_SRC)
+            // Skip for full device grid since there is no core outside the rectangle
+            if (!is_full_grid) {
+                NocEstimatorConfig cfg = {
+                    .test_id = test_id,
+                    .pattern = NocPattern::ONE_TO_ALL,
+                    .mechanism = mechanism,
+                    .memory_type = MemoryType::L1,
+                    .master_start_coord = CoreCoord(grid.size.x, 0),
+                    .sub_start_coord = {0, 0},
+                    .sub_grid_size = grid.size,
+                    .loopback = false,
                 };
                 packet_sizes_sweep(mesh_device, cfg);
             }

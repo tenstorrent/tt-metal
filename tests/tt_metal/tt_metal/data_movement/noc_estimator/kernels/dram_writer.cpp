@@ -41,5 +41,5 @@ void kernel_main() {
     }
 
     log_estimator_metadata(
-        test_id, noc_index, num_of_transactions, bytes_per_transaction, memory_type, mechanism, pattern, 0, 0, 0);
+        test_id, noc_index, num_of_transactions, bytes_per_transaction, memory_type, mechanism, pattern, 0, 0, 0, 0);
 }

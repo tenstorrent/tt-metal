@@ -40,6 +40,7 @@ void kernel_main() {
     constexpr uint32_t mechanism = get_compile_time_arg_val(16);
     constexpr uint32_t pattern = get_compile_time_arg_val(17);
     constexpr uint32_t same_axis = get_compile_time_arg_val(18);
+    constexpr uint32_t loopback_meta = get_compile_time_arg_val(19);
 
     experimental::Noc noc(noc_index);
     experimental::UnicastEndpoint unicast_ep;
@@ -63,6 +64,7 @@ void kernel_main() {
                         {.addr = src_addr},
                         {.noc_x = dest_x, .noc_y = dest_y, .addr = dst_addr});
                 }
+                noc.async_write_barrier();
             }
         } else {
             {
@@ -77,9 +79,9 @@ void kernel_main() {
                         {.noc_x = dest_x, .noc_y = dest_y, .addr = dst_addr},
                         vc);
                 }
+                noc.async_write_barrier();
             }
         }
-        noc.async_write_barrier();
 
         log_estimator_metadata(
             test_id,
@@ -91,7 +93,8 @@ void kernel_main() {
             pattern,
             0,
             same_axis,
-            stateful);
+            stateful,
+            loopback_meta);
     }
     // ============ MODE 1: UNICAST MULTI (one_to_all unicast, all_to_all) ============
     else if constexpr (mode == WRITER_MODE_UNICAST_MULTI) {
@@ -126,20 +129,21 @@ void kernel_main() {
                     }
                 }
             }
+            noc.async_write_barrier();
         }
-        noc.async_write_barrier();
 
         log_estimator_metadata(
             test_id,
             noc.get_noc_id(),
-            num_of_transactions * num_subordinates,
+            num_of_transactions,
             bytes_per_transaction,
             memory_type,
             mechanism,
             pattern,
             num_subordinates,
             same_axis,
-            stateful);
+            stateful,
+            loopback_meta);
     }
     // ============ MODE 2: MULTICAST (non-linked) ============
     else if constexpr (mode == WRITER_MODE_MULTICAST) {
@@ -171,8 +175,8 @@ void kernel_main() {
                      .noc_y_end = mcast_end_y,
                      .addr = dst_addr});
             }
+            noc.async_write_barrier();
         }
-        noc.async_write_barrier();
 
         log_estimator_metadata(
             test_id,
@@ -184,7 +188,8 @@ void kernel_main() {
             pattern,
             num_subordinates,
             same_axis,
-            stateful);
+            stateful,
+            loopback_meta);
     }
     // ============ MODE 3: MULTICAST LINKED ============
     else if constexpr (mode == WRITER_MODE_MULTICAST_LINKED) {
@@ -230,8 +235,8 @@ void kernel_main() {
                  .noc_x_end = mcast_end_x,
                  .noc_y_end = mcast_end_y,
                  .addr = dst_addr});
+            noc.async_write_barrier();
         }
-        noc.async_write_barrier();
 
         log_estimator_metadata(
             test_id,
@@ -243,6 +248,7 @@ void kernel_main() {
             pattern,
             num_subordinates,
             same_axis,
-            stateful);
+            stateful,
+            loopback_meta);
     }
 }

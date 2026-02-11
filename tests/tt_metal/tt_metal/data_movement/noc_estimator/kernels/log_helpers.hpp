@@ -43,7 +43,8 @@ FORCE_INLINE void log_estimator_metadata(
     uint32_t pattern,
     uint32_t num_subordinates,
     uint32_t same_axis,
-    uint32_t stateful) {
+    uint32_t stateful,
+    uint32_t loopback) {
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("Number of transactions", num_transactions);
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
@@ -54,4 +55,5 @@ FORCE_INLINE void log_estimator_metadata(
     DeviceTimestampedData("Number of subordinates", num_subordinates);
     DeviceTimestampedData("Same axis", same_axis);
     DeviceTimestampedData("Stateful", stateful);
+    DeviceTimestampedData("Loopback", loopback);
 }

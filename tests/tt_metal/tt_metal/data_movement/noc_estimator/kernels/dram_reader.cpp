@@ -42,5 +42,5 @@ void kernel_main() {
     noc_semaphore_set(sem_ptr, 1);
 
     log_estimator_metadata(
-        test_id, noc_index, num_of_transactions, bytes_per_transaction, memory_type, mechanism, pattern, 0, 0, 0);
+        test_id, noc_index, num_of_transactions, bytes_per_transaction, memory_type, mechanism, pattern, 0, 0, 0, 0);
 }

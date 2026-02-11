@@ -28,6 +28,7 @@ void kernel_main() {
     constexpr uint32_t mechanism = get_compile_time_arg_val(9);
     constexpr uint32_t pattern = get_compile_time_arg_val(10);
     constexpr uint32_t same_axis = get_compile_time_arg_val(11);
+    constexpr uint32_t loopback_meta = get_compile_time_arg_val(12);
 
     experimental::Noc noc(noc_index);
     experimental::UnicastEndpoint unicast_ep;
@@ -51,6 +52,7 @@ void kernel_main() {
                         {.noc_x = src_x, .noc_y = src_y, .addr = local_addr},
                         {.addr = local_addr});
                 }
+                noc.async_read_barrier();
             }
         } else {
             {
@@ -65,9 +67,9 @@ void kernel_main() {
                         {.addr = local_addr},
                         vc);
                 }
+                noc.async_read_barrier();
             }
         }
-        noc.async_read_barrier();
 
         log_estimator_metadata(
             test_id,
@@ -79,7 +81,8 @@ void kernel_main() {
             pattern,
             0,
             same_axis,
-            stateful);
+            stateful,
+            loopback_meta);
     }
     // ============ MODE 1: READ MULTI (one_from_all, all_from_all) ============
     else if constexpr (mode == READER_MODE_MULTI) {
@@ -114,8 +117,8 @@ void kernel_main() {
                     }
                 }
             }
+            noc.async_read_barrier();
         }
-        noc.async_read_barrier();
 
         log_estimator_metadata(
             test_id,
@@ -127,6 +130,7 @@ void kernel_main() {
             pattern,
             num_subordinates,
             same_axis,
-            stateful);
+            stateful,
+            loopback_meta);
     }
 }
