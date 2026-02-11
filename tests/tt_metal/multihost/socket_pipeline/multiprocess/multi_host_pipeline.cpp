@@ -7,6 +7,7 @@
 
 #include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_send_recv.hpp"
 #include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_forward.hpp"
+#include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_rate.hpp"
 
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -555,6 +556,238 @@ TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4) {
 
 TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4WithCorrectnessCheck) {
     run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4, /*enable_correctness_check=*/true);
+// ─── Rate (throughput) pipeline test ─────────────────────────────────────────
+// Linear pipeline (no loopback): data flows one-way through pipeline stages.
+// Measures sustained pipeline throughput by pushing data for many iterations.
+
+// Get physical pipeline config for rate testing (linear, no loopback).
+// Uses 4 stages across 4 trays; last stage does NOT loop back to the first.
+std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config_rate(PipelineType type) {
+    switch (type) {
+        case PipelineType::SINGLE_GALAXY:
+            return {
+                {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+                {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+                {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
+                {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+            };
+        default: return {};
+    }
+}
+
+// Multi-host rate pipeline test helper.
+// 4 stages, 4 ranks: sender on rank 0, fwd on ranks 1-2, receiver on rank 3.
+// Pipeline path (one-way): T1D2 -> T1D6 -> T3D6 -> T3D4 -> T4D4 -> T4D7 -> T2D7 -> T2D4
+// Timing is done on the host side using std::chrono, matching the original TTNN implementation.
+void run_single_galaxy_rate_pipeline(
+    std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    PipelineType pipeline_type,
+    uint32_t num_iterations,
+    bool enable_correctness_check) {
+    constexpr uint32_t XFER_SIZE = 14 * 1024;
+
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto my_rank = *distributed_context->rank();
+    const auto num_ranks = static_cast<uint32_t>(*distributed_context->size());
+
+    const auto logical_coord = CoreCoord(0, 0);
+    const uint32_t socket_fifo_size = XFER_SIZE * 16;
+
+    auto physical_system_descriptor = create_physical_system_descriptor();
+    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
+
+    auto physical_config = get_physical_pipeline_config_rate(pipeline_type);
+    auto pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
+
+    // Linear pipeline: stage i is on rank i. No loopback.
+    const uint32_t downstream_stage = my_rank + 1;
+    const uint32_t upstream_stage = my_rank - 1;  // wraps for rank 0, but unused there
+    const uint32_t downstream_rank = my_rank + 1;
+    const uint32_t upstream_rank = my_rank - 1;
+
+    const auto& global_bindings =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+    const tt::tt_fabric::MeshId my_mesh_id = std::get<0>(global_bindings.at(distributed::multihost::Rank(my_rank)));
+
+    const distributed::SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
+
+    const uint32_t num_elems = XFER_SIZE / sizeof(uint32_t);
+    const DeviceAddr buffer_size = XFER_SIZE;
+    const DeviceAddr page_size = XFER_SIZE;
+
+    auto create_intermed_socket_pair = [&](const distributed::MeshCoordinate& sender_coord,
+                                           const distributed::MeshCoordinate& recv_coord) {
+        auto connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(sender_coord, logical_coord),
+            distributed::MeshCoreCoord(recv_coord, logical_coord));
+        auto config = distributed::SocketConfig({connection}, socket_mem_config);
+        return distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, config);
+    };
+
+    auto barrier = [&]() {
+        Synchronize(mesh_device.get(), std::nullopt);
+        distributed_context->barrier();
+    };
+
+    const bool is_pipeline_start = (my_rank == 0);
+    const bool is_pipeline_end = (my_rank == num_ranks - 1);
+
+    auto my_entry = pipeline_stages[my_rank].entry_node_coord;
+    auto my_exit = pipeline_stages[my_rank].exit_node_coord;
+
+    // Host-side timing variable — each rank records its own start/end time
+    int64_t start_time = 0;
+    int64_t end_time = 0;
+
+    if (is_pipeline_start) {
+        // Sender: start_coord -> my_exit (local), then my_exit -> downstream_entry (cross-mesh)
+        auto start_coord = my_entry;
+        auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_rank, downstream_stage);
+
+        auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
+
+        const tt::tt_fabric::MeshId downstream_mesh_id =
+            std::get<0>(global_bindings.at(distributed::multihost::Rank(downstream_rank)));
+        auto fwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(my_sender, logical_coord),
+            distributed::MeshCoreCoord(downstream_recv, logical_coord));
+        auto send_socket_config = distributed::SocketConfig(
+            {fwd_connection}, socket_mem_config, my_mesh_id, downstream_mesh_id, distributed_context);
+        auto send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
+
+        // Create device buffer
+        distributed::DeviceLocalBufferConfig buffer_config = {
+            .page_size = page_size,
+            .buffer_type = BufferType::DRAM,
+            .sharding_args = BufferShardingArgs(std::nullopt, TensorMemoryLayout::INTERLEAVED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+        auto input_mesh_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device.get());
+        std::vector<uint32_t> host_data(num_elems);
+        std::iota(host_data.begin(), host_data.end(), 0u);
+        distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
+        Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
+
+        // Host-side timing: record start time just before launching kernels
+        start_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::high_resolution_clock::now().time_since_epoch())
+                         .count();
+
+        // Launch rate-mode kernels:
+        // - send_async_rate on start_coord: sends data to local intermed
+        // - socket_forward_rate on my_exit: forwards from local intermed to cross-mesh
+        tt::tt_metal::send_async_rate(
+            mesh_device.get(), input_buffer, tt::DataFormat::UInt32, intermed_send, num_iterations);
+        tt::tt_metal::socket_forward_rate(mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, num_iterations);
+    } else if (is_pipeline_end) {
+        // Receiver: upstream_exit -> my_entry (cross-mesh), then my_entry -> end_coord (local)
+        auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
+        auto end_coord = my_exit;
+
+        const tt::tt_fabric::MeshId upstream_mesh_id =
+            std::get<0>(global_bindings.at(distributed::multihost::Rank(upstream_rank)));
+        auto bwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(upstream_exit, logical_coord),
+            distributed::MeshCoreCoord(my_entry, logical_coord));
+        auto recv_socket_config = distributed::SocketConfig(
+            {bwd_connection}, socket_mem_config, upstream_mesh_id, my_mesh_id, distributed_context);
+        auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
+
+        auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_entry, end_coord);
+
+        // Host-side timing: record start time just before launching kernels
+        start_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::high_resolution_clock::now().time_since_epoch())
+                         .count();
+
+        // Launch rate-mode kernels:
+        // - socket_forward_rate on my_entry: forwards from cross-mesh recv to local intermed
+        // - recv_async_rate on end_coord: drains data from local intermed
+        tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, num_iterations);
+        tt::tt_metal::recv_async_rate(
+            mesh_device.get(), intermed_recv, XFER_SIZE, num_iterations, enable_correctness_check);
+    } else {
+        // Intermediate: upstream_exit -> my_entry (cross-mesh), local forward, my_exit -> downstream_entry (cross-mesh)
+        auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
+        auto downstream_entry = pipeline_stages[downstream_stage].entry_node_coord;
+
+        const tt::tt_fabric::MeshId upstream_mesh_id =
+            std::get<0>(global_bindings.at(distributed::multihost::Rank(upstream_rank)));
+        const tt::tt_fabric::MeshId downstream_mesh_id =
+            std::get<0>(global_bindings.at(distributed::multihost::Rank(downstream_rank)));
+
+        auto bwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(upstream_exit, logical_coord),
+            distributed::MeshCoreCoord(my_entry, logical_coord));
+        auto recv_socket_config = distributed::SocketConfig(
+            {bwd_connection}, socket_mem_config, upstream_mesh_id, my_mesh_id, distributed_context);
+        auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
+
+        auto fwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(my_exit, logical_coord),
+            distributed::MeshCoreCoord(downstream_entry, logical_coord));
+        auto send_socket_config = distributed::SocketConfig(
+            {fwd_connection}, socket_mem_config, my_mesh_id, downstream_mesh_id, distributed_context);
+        auto send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
+
+        auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_entry, my_exit);
+
+        // Launch rate-mode kernels: forward from upstream to downstream through local intermed
+        tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, num_iterations);
+        tt::tt_metal::socket_forward_rate(mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, num_iterations);
+    }
+    barrier();
+
+    // Host-side timing: record end time after barrier (all ranks synchronized)
+    end_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                   std::chrono::high_resolution_clock::now().time_since_epoch())
+                   .count();
+
+    // Report throughput from sender (rank 0)
+    if (is_pipeline_start) {
+        double elapsed_us = static_cast<double>(end_time - start_time);
+        double total_bytes = static_cast<double>(num_iterations) * XFER_SIZE;
+        double rate_gbps = (total_bytes * 8.0) / (elapsed_us * 1e3);
+
+        log_info(tt::LogTest, "Rate pipeline: {} iterations, {} bytes/iter", num_iterations, XFER_SIZE);
+        log_info(
+            tt::LogTest,
+            "Sender host-side elapsed: {:.2f} us, total bytes: {:.2f} MB, {:.4f} Gbps ({:.2f} Mbps)",
+            elapsed_us,
+            total_bytes / (1024.0 * 1024.0),
+            rate_gbps,
+            rate_gbps * 1e3);
+    }
+
+    // Report throughput from receiver (last rank)
+    if (is_pipeline_end) {
+        double elapsed_us = static_cast<double>(end_time - start_time);
+        double total_bytes = static_cast<double>(num_iterations) * XFER_SIZE;
+        double rate_gbps = (total_bytes * 8.0) / (elapsed_us * 1e3);
+
+        log_info(tt::LogTest, "Rate pipeline: {} iterations, {} bytes/iter", num_iterations, XFER_SIZE);
+        log_info(
+            tt::LogTest,
+            "Receiver host-side elapsed: {:.2f} us, total bytes: {:.2f} MB, {:.4f} Gbps ({:.2f} Mbps)",
+            elapsed_us,
+            total_bytes / (1024.0 * 1024.0),
+            rate_gbps,
+            rate_gbps * 1e3);
+    }
+}
+
+TEST_F(MeshDeviceSingleGalaxyPipelineFixture, RatePipelineSingleGalaxy) {
+    constexpr uint32_t NUM_ITERATIONS = 100000;
+    run_single_galaxy_rate_pipeline(
+        mesh_device_, PipelineType::SINGLE_GALAXY, NUM_ITERATIONS, /*enable_correctness_check=*/false);
+}
+
+TEST_F(MeshDeviceSingleGalaxyPipelineFixture, RatePipelineSingleGalaxyWithCorrectnessCheck) {
+    constexpr uint32_t NUM_ITERATIONS = 100;
+    run_single_galaxy_rate_pipeline(
+        mesh_device_, PipelineType::SINGLE_GALAXY, NUM_ITERATIONS, /*enable_correctness_check=*/true);
 }
 
 }  // namespace tt::tt_metal
