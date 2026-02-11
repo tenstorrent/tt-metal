@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -103,15 +104,18 @@ inline std::string get_core_descriptor_file(
 
 const core_descriptor_t& get_core_descriptor_config(
     ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    // {arch : {product : {dispatch core axis: {fabric tensix config: {num hardware command queues : config}}}}}
+    // {arch : {product : {dispatch core axis: {fabric tensix config: {num_hw_cqs : {fast_dispatch : config}}}}}}
     static std::unordered_map<
         ARCH,
         std::unordered_map<
             std::string,
             std::unordered_map<
                 tt_metal::DispatchCoreConfig,
-                std::unordered_map<tt_fabric::FabricTensixConfig, std::unordered_map<uint8_t, core_descriptor_t>>>>>
+                std::unordered_map<
+                    tt_fabric::FabricTensixConfig,
+                    std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>>>>>
         config_by_arch;
+    static std::mutex cache_mutex;
 
     ARCH arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
     uint32_t harvesting_mask = tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
@@ -138,11 +142,37 @@ const core_descriptor_t& get_core_descriptor_config(
 
     tt_fabric::FabricTensixConfig fabric_tensix_config =
         tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    std::unordered_map<uint8_t, core_descriptor_t>& config_by_num_cqs =
-        config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
-    if (config_by_num_cqs.contains(num_hw_cqs)) {
-        return config_by_num_cqs.at(num_hw_cqs);
+    bool fast_dispatch = tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+
+    // Lock the cache to prevent concurrent modification races
+    std::lock_guard<std::mutex> lock(cache_mutex);
+
+    // Try to find cached entry - use find() to avoid inserting empty entries during lookup
+    {
+        auto arch_it = config_by_arch.find(arch);
+        if (arch_it != config_by_arch.end()) {
+            auto product_it = arch_it->second.find(product_name);
+            if (product_it != arch_it->second.end()) {
+                auto dispatch_it = product_it->second.find(dispatch_core_config);
+                if (dispatch_it != product_it->second.end()) {
+                    auto fabric_it = dispatch_it->second.find(fabric_tensix_config);
+                    if (fabric_it != dispatch_it->second.end()) {
+                        auto num_cqs_it = fabric_it->second.find(num_hw_cqs);
+                        if (num_cqs_it != fabric_it->second.end()) {
+                            auto fd_it = num_cqs_it->second.find(fast_dispatch);
+                            if (fd_it != num_cqs_it->second.end()) {
+                                return fd_it->second;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    // Cache miss - create new entry (operator[] is safe here as we hold the lock)
+    std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>& config_by_num_cqs =
+        config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
 
     YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(arch, dispatch_core_config));
     YAML::Node desc_yaml =
@@ -194,9 +224,34 @@ const core_descriptor_t& get_core_descriptor_config(
             compute_with_storage_end[0].as<std::string>(),
             compute_with_storage_end[1].as<std::string>());
     }
-    CoreCoord compute_grid_size(
-        (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
-        (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1);
+    size_t end_x = compute_with_storage_end[0].as<size_t>();
+    size_t end_y = compute_with_storage_end[1].as<size_t>();
+    size_t start_x = compute_with_storage_start[0].as<size_t>();
+    size_t start_y = compute_with_storage_start[1].as<size_t>();
+    // When slow dispatch is on, expand compute grid by reclaiming the dispatch column/row
+    // The YAML already accounts for harvesting, so we just expand by 1 in the dispatch axis
+    // Only expand on Blackhole real hardware (not Wormhole, not simulation)
+    if (!fast_dispatch && arch == tt::ARCH::BLACKHOLE &&
+        !tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        if (dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::COL) {
+            // Expand by 1 column (reclaim dispatch column)
+            end_x += 1;
+            log_info(
+                tt::LogDevice,
+                "Slow dispatch mode: Expanding grid by 1 column to ({}, {})",
+                (end_x - start_x) + 1,
+                (end_y - start_y) + 1);
+        } else {
+            // Expand by 1 row (reclaim dispatch row)
+            end_y += 1;
+            log_info(
+                tt::LogDevice,
+                "Slow dispatch mode: Expanding grid by 1 row to ({}, {})",
+                (end_x - start_x) + 1,
+                (end_y - start_y) + 1);
+        }
+    }
+    CoreCoord compute_grid_size((end_x - start_x) + 1, (end_y - start_y) + 1);
 
     std::vector<RelativeCoreCoord> compute_cores;
     for (auto x = 0; x < compute_grid_size.x; x++) {
@@ -264,12 +319,15 @@ const core_descriptor_t& get_core_descriptor_config(
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
     std::vector<CoreCoord> logical_dispatch_cores;
-    logical_dispatch_cores.reserve(dispatch_cores.size());
-    std::transform(
-        dispatch_cores.cbegin(),
-        dispatch_cores.cend(),
-        std::back_inserter(logical_dispatch_cores),
-        [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
+    // In slow dispatch mode, no cores are reserved for dispatch
+    if (fast_dispatch) {
+        logical_dispatch_cores.reserve(dispatch_cores.size());
+        std::transform(
+            dispatch_cores.cbegin(),
+            dispatch_cores.cend(),
+            std::back_inserter(logical_dispatch_cores),
+            [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
+    }
 
     // Convert fabric mux cores to logical coordinates
     std::vector<CoreCoord> logical_fabric_mux_cores;
@@ -280,18 +338,17 @@ const core_descriptor_t& get_core_descriptor_config(
         std::back_inserter(logical_fabric_mux_cores),
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
-    auto [it, _] = config_by_num_cqs.emplace(std::make_pair(
-        num_hw_cqs,
-        core_descriptor_t{
-            .compute_grid_size = compute_grid_size,
-            .relative_compute_cores = std::move(compute_cores),
-            .relative_dispatch_cores = std::move(dispatch_cores),
-            .relative_fabric_mux_cores = std::move(fabric_mux_cores),
-            .logical_compute_cores = std::move(logical_compute_cores),
-            .logical_dispatch_cores = std::move(logical_dispatch_cores),
-            .logical_fabric_mux_cores = std::move(logical_fabric_mux_cores),
-        }));
-    return it->second;
+    core_descriptor_t config{
+        .compute_grid_size = compute_grid_size,
+        .relative_compute_cores = std::move(compute_cores),
+        .relative_dispatch_cores = std::move(dispatch_cores),
+        .relative_fabric_mux_cores = std::move(fabric_mux_cores),
+        .logical_compute_cores = std::move(logical_compute_cores),
+        .logical_dispatch_cores = std::move(logical_dispatch_cores),
+        .logical_fabric_mux_cores = std::move(logical_fabric_mux_cores),
+    };
+    config_by_num_cqs[num_hw_cqs][fast_dispatch] = std::move(config);
+    return config_by_num_cqs[num_hw_cqs].at(fast_dispatch);
 }
 
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(

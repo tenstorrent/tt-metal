@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <memory>
 #include <numeric>
+#include <set>
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -18,10 +20,13 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal::distributed::test {
 
@@ -31,7 +36,8 @@ TEST(DispatchContext, TestWritesAndWorkloads) {
     if (rt_options.get_fast_dispatch()) {
         GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
     }
-    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape(4, 8)));
+    const MeshShape system_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
 
     // Terminating without initializing should throw
     EXPECT_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get()), std::runtime_error);
@@ -88,6 +94,94 @@ TEST(DispatchContext, TestWritesAndWorkloads) {
 
     // Initializing again should throw
     EXPECT_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get()), std::runtime_error);
+}
+
+// After SD -> enable FD -> disable FD, verify NOC/L1 bank tables by using an L1 buffer across the mesh.
+// Test validates SD→FD→SD dispatch mode transitions with L1 buffer operations
+// Verifies that buffers remain accessible and new buffers can be created across mode transitions:
+// - Slow Dispatch (SD): Uses expanded grid by reclaiming dispatch column (11 cols → 12 cols on BH)
+// - Fast Dispatch (FD): Uses standard grid with reserved dispatch column (11 cols)
+// - Sharded L1 buffers verify dispatch kernels correctly write to L1 memory across transitions
+// This tests the full flow: initialize in SD → enable FD → load weights → disable FD → use SD
+TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    const uint32_t num_tiles = 64;
+
+    // Phase 1: SD→FD transition - Enable Fast Dispatch and create sharded L1 buffer
+    // Sharded buffers validate that dispatch kernels correctly write to L1 memory
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+
+    CoreRangeSet shard_grid(CoreRange({0, 0}, {1, 1}));
+    const uint32_t num_cores = 4;
+    const uint32_t tiles_per_shard = num_tiles / num_cores;
+    std::array<uint32_t, 2> shard_shape = {tiles_per_shard * single_tile_size, 1};
+    std::array<uint32_t, 2> page_shape = {single_tile_size, 1};
+    std::array<uint32_t, 2> tensor2d_shape = {num_tiles, 1};
+    ShardSpecBuffer shard_spec(shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
+
+    DeviceLocalBufferConfig fd_buffer_config{
+        .page_size = single_tile_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = true};
+    ReplicatedBufferConfig fd_global_config{.size = num_tiles * single_tile_size};
+    auto fd_buf = MeshBuffer::create(fd_global_config, fd_buffer_config, mesh_device_.get());
+
+    std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
+    std::iota(fd_src_vec.begin(), fd_src_vec.end(), 100);
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
+    Finish(mesh_device_->mesh_command_queue());
+
+    // Verify sharded buffer works correctly in FD mode
+    std::vector<uint32_t> fd_dst_vec = {};
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        ReadShard(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, coord);
+        EXPECT_EQ(fd_dst_vec, fd_src_vec) << "Sharded buffer readback failed in FD mode";
+    }
+
+    // Phase 2: FD→SD transition - Return to Slow Dispatch mode
+    // The grid re-expands (11 cols → 12 cols) when returning to SD
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+
+    // Verify the sharded buffer created in FD mode remains accessible after transition to SD
+    // This confirms buffer mappings persist correctly across grid reconfigurations
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> fd_buf_readback_in_sd = {};
+        ReadShard(mesh_device_->mesh_command_queue(), fd_buf_readback_in_sd, fd_buf, coord);
+        EXPECT_EQ(fd_buf_readback_in_sd, fd_src_vec)
+            << "Sharded buffer data mismatch after FD->SD transition";
+    }
+
+    // Phase 3: Create and verify new buffer operations in SD mode
+    // Validates that new buffers can be created using the expanded grid with reclaimed dispatch cores
+    DeviceLocalBufferConfig sd_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
+    ReplicatedBufferConfig sd_global_config{.size = num_tiles * single_tile_size};
+    auto sd_buf = MeshBuffer::create(sd_global_config, sd_buffer_config, mesh_device_.get());
+
+    std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
+    std::iota(sd_src_vec.begin(), sd_src_vec.end(), 200);
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
+    Finish(mesh_device_->mesh_command_queue());
+
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> sd_dst_vec = {};
+        ReadShard(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, coord);
+        EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed";
+    }
 }
 
 }  // namespace tt::tt_metal::distributed::test
