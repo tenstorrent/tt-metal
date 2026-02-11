@@ -62,26 +62,6 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
     PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, false>(ifrom_dst, icb, output_tile_index)));
 }
 
-
-
-// clang-format off
-/**
- * Initializes the packer with a specified tile count. This function configures the packer
- * to operate with a specific number of tiles in the destination register.
- *
- * Return value: None
- *
- * | Param Type | Name      | Description                                       | Type     | Valid Range | Required |
- * |------------|-----------|---------------------------------------------------|----------|-------------|----------|
- * | Function   | icb       | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
- * | Function   | num_tiles | Number of tiles to configure the packer for       | uint32_t | 1 to 8      | False    |
- */
-// clang-format on
-ALWI void pack_init(uint32_t icb, uint32_t num_tiles = 1) {
-    PACK((llk_pack_init<false, false, false>(icb, num_tiles)));
-}
-
-
 // clang-format off
 /**
  * Copies a block of tiles from the DEST register buffer starting at a specified index
