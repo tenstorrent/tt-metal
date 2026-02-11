@@ -169,22 +169,22 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
 
     log_debug(
         LogTest,
-        "Running WritePinnedMemorySharded Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: "
-        "{}",
+        "Running WriteSharded Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
         page_size,
         transfer_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         device_id);
 
-    // Compute sharding parameters
-    CoreCoord core_grid_size = mesh_device->compute_with_storage_grid_size();
+    // Compute sharding parameters based on buffer type
+    CoreCoord core_grid_size = (buffer_type == BufferType::DRAM) ? mesh_device->dram_grid_size()
+                                                                 : mesh_device->compute_with_storage_grid_size();
     uint64_t total_pages = transfer_size / page_size;
     uint64_t num_cores = core_grid_size.x * core_grid_size.y;
     uint64_t pages_per_core = total_pages / num_cores;
 
     // Skip if transfer size is too small for the grid
     if (pages_per_core == 0) {
-        state.SkipWithError("Transfer size too small for the compute grid");
+        state.SkipWithError("Transfer size too small for the core grid");
         return;
     }
 
@@ -210,38 +210,14 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
 
     auto device_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
 
-    // Allocate source host buffer with 64-byte alignment
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    constexpr int device_read_align{64};
-    TT_ASSERT(
-        device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0,
-        "Source vector alignment {} must be divisible by PCIE read alignment {}",
-        device_read_align,
-        hal.get_read_alignment(HalMemType::HOST));
+    std::vector<uint8_t> host_buffer(static_cast<std::size_t>(actual_buf_size));
 
-    auto src_storage = std::make_shared<std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>>(
-        static_cast<std::size_t>(actual_buf_size));
-
-    // Create HostBuffer on top of aligned memory
-    HostBuffer host_buffer(
-        tt::stl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(actual_buf_size)),
-        MemoryPin(src_storage));
-
-    // Pin the aligned host memory region for the shard
-    auto coord = MeshCoordinate(0, 0);
-    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-
-    // Create DistributedHostBuffer and emplace the shard
-    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device->shape());
-    distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
-    auto write_transfer = distributed::ShardDataTransfer(coord)
-                              .host_data(src_storage->data())
+    auto write_transfer = distributed::ShardDataTransfer(MeshCoordinate(0, 0))
+                              .host_data(host_buffer.data())
                               .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));
 
     for (auto _ : state) {
-        bool blocking = true;
-        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, blocking);
-        //mesh_device->mesh_command_queue().enqueue_write(device_buffer, distributed_host_buffer, blocking);
+        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/true);
     }
 
     state.SetBytesProcessed(actual_buf_size * state.iterations());
@@ -268,15 +244,16 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
         return;
     }
 
-    // Compute sharding parameters
-    CoreCoord core_grid_size = mesh_device->compute_with_storage_grid_size();
+    // Compute sharding parameters based on buffer type
+    CoreCoord core_grid_size = (buffer_type == BufferType::DRAM) ? mesh_device->dram_grid_size()
+                                                                 : mesh_device->compute_with_storage_grid_size();
     uint64_t total_pages = transfer_size / page_size;
     uint64_t num_cores = core_grid_size.x * core_grid_size.y;
     uint64_t pages_per_core = total_pages / num_cores;
 
     // Skip if transfer size is too small for the grid
     if (pages_per_core == 0) {
-        state.SkipWithError("Transfer size too small for the compute grid");
+        state.SkipWithError("Transfer size too small for the core grid");
         return;
     }
 
@@ -313,6 +290,7 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
 
     auto src_storage = std::make_shared<std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>>(
         static_cast<std::size_t>(actual_buf_size));
+    void* aligned_ptr = reinterpret_cast<void*>(src_storage->data());
 
     // Create HostBuffer on top of aligned memory
     HostBuffer host_buffer(
@@ -325,13 +303,14 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
     auto pinned_mem =
         experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
 
-    // Create DistributedHostBuffer and emplace the shard
-    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device->shape());
-    distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+    // Prepare the write transfer using pinned memory
+    auto write_transfer = distributed::ShardDataTransfer(coord)
+                              .host_data(aligned_ptr)
+                              .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));
+    experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_mem);
 
     for (auto _ : state) {
-        bool blocking = true;
-        mesh_device->mesh_command_queue().enqueue_write(device_buffer, distributed_host_buffer, blocking);
+        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/true);
     }
 
     state.SetBytesProcessed(actual_buf_size * state.iterations());
