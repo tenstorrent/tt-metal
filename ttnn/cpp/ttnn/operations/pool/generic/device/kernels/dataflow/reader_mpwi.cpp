@@ -499,11 +499,11 @@ void kernel_main() {
         fill_with_val(get_write_ptr(in_scalar_cb_id_0), FACE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id_0, 1);
     }
+    const uint32_t core_nhw_index = get_arg_val<uint32_t>(1);
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
-            uint32_t core_nhw_index = get_arg_val<uint32_t>(1);
             load_config_tensor_if_in_dram<
                 reader_dram_addr,
                 reader_page_size,

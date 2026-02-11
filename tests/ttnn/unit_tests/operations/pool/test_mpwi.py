@@ -155,18 +155,6 @@ def test_mpwi_large_kernel_sizes(device, ttnn_dtype, input_spec):
         ceil_mode,
     ) = input_spec
 
-    if (
-        is_watcher_enabled()
-        and ttnn_dtype == ttnn.bfloat16
-        and input_spec
-        in (
-            [2, 40, 100, 100, 3, 3, 2, 2, 0, 1, 2, 2, True],
-            [3, 56, 85, 85, 3, 3, 3, 3, 1, 0, 2, 2, False],
-            [4, 24, 56, 64, 3, 3, 2, 1, 1, 1, 3, 2, True],
-        )
-    ):
-        pytest.skip("Test is not passing with watcher enabled github issue #29024")
-
     run_max_pool2d_with_indices(
         in_n,
         in_c,
