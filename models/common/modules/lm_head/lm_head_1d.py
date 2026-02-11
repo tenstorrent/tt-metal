@@ -160,7 +160,6 @@ class LMHead1D(LightweightModule):
     def from_model_args(
         cls,
         mesh_device,
-        tt_ccl,
         args,
         state_dict,
         state_dict_prefix,
@@ -168,6 +167,7 @@ class LMHead1D(LightweightModule):
         max_columns_per_device,
         dtype=None,
         model_config=None,
+        tt_ccl=None,
     ):
         """Factory method for backward compatibility with ModelArgs.
 

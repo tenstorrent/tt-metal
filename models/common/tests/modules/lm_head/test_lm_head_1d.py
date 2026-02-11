@@ -109,7 +109,6 @@ def test_from_model_args_rejects_galaxy():
     with pytest.raises(ValueError, match="Galaxy"):
         LMHead1D.from_model_args(
             mesh_device=MagicMock(),
-            tt_ccl=MagicMock(),
             args=mock_args,
             state_dict={},
             state_dict_prefix="",
@@ -300,10 +299,6 @@ def test_lm_head_1d_vs_reference(
     tt_output_torch = to_torch_auto_compose(tt_output)
     ttnn.SetDefaultDevice(None)
 
-    # auto_compose concatenates per-device vocab shards on dim=-1, giving full padded vocab.
-    # For single-device: output is already full vocab.
-    padded_vocab = math.ceil(vocab_size / 32) * 32
-
     # Shape checks
     assert tt_output_torch.shape[-2] == batch_rows, f"Expected batch_rows={batch_rows}, got {tt_output_torch.shape[-2]}"
     assert tt_output_torch.shape[-1] >= vocab_size, (
@@ -336,7 +331,6 @@ def test_lm_head_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     """
     Test LMHead1D.from_model_args produces valid output.
     """
-    from models.tt_transformers.tt.ccl import TT_CCL
     from models.tt_transformers.tt.model_config import ModelArgs
 
     model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
@@ -351,12 +345,10 @@ def test_lm_head_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     def topology_aware_cache_path():
         return model_args.model_cache_path / f"tensor_cache_bfp8_{ttnn_mesh_device.shape}"
 
-    tt_ccl = TT_CCL(ttnn_mesh_device)
     max_columns = getattr(model_args, "max_columns_per_device_lm_head", 128256 // 4)
 
     tt_model = LMHead1D.from_model_args(
         mesh_device=ttnn_mesh_device,
-        tt_ccl=tt_ccl,
         args=model_args,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
@@ -385,7 +377,6 @@ def test_lm_head_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
 
     # Shape checks
     num_devices = ttnn_mesh_device.get_num_devices()
-    padded_vocab = math.ceil(model_args.vocab_size / 32) * 32
     assert tt_output_torch.shape[-2] == batch_rows, f"Expected batch_rows={batch_rows}, got {tt_output_torch.shape[-2]}"
     assert tt_output_torch.shape[-1] >= model_args.vocab_size, (
         f"Expected vocab cols>={model_args.vocab_size}, got {tt_output_torch.shape[-1]}. " f"num_devices={num_devices}"
