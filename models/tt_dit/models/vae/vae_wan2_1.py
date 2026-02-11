@@ -136,9 +136,14 @@ class WanAttentionBlock:
         if input_dtype != ttnn.bfloat16:
             # TODO: ttnn.typecast hangs on ROW_MAJOR tensors — must convert to TILE first.
             # File a bug to add a proper assert/error in ttnn.typecast for non-TILE inputs.
-            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
-            x_BTHWC = ttnn.typecast(x_BTHWC, ttnn.bfloat16)
-            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            # Reshape to 2D before TILE conversion to avoid 5D typecast data corruption
+            # when inner dims are not tile-aligned (e.g. W=26).
+            shape_5d = x_BTHWC.shape
+            x = ttnn.reshape(x_BTHWC, (shape_5d[0] * shape_5d[1] * shape_5d[2] * shape_5d[3], shape_5d[4]))
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            x = ttnn.typecast(x, ttnn.bfloat16)
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x_BTHWC = ttnn.reshape(x, shape_5d)
 
         residual_BTHWC = x_BTHWC
 
@@ -225,9 +230,13 @@ class WanAttentionBlock:
 
         if input_dtype != ttnn.bfloat16:
             # TODO: ttnn.typecast hangs on ROW_MAJOR tensors — must convert to TILE first.
-            result_BTHWC = ttnn.to_layout(result_BTHWC, ttnn.TILE_LAYOUT)
-            result_BTHWC = ttnn.typecast(result_BTHWC, input_dtype)
-            result_BTHWC = ttnn.to_layout(result_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            # Reshape to 2D to avoid 5D typecast data corruption (see entry typecast comment).
+            shape_5d = result_BTHWC.shape
+            r = ttnn.reshape(result_BTHWC, (shape_5d[0] * shape_5d[1] * shape_5d[2] * shape_5d[3], shape_5d[4]))
+            r = ttnn.to_layout(r, ttnn.TILE_LAYOUT)
+            r = ttnn.typecast(r, input_dtype)
+            r = ttnn.to_layout(r, ttnn.ROW_MAJOR_LAYOUT)
+            result_BTHWC = ttnn.reshape(r, shape_5d)
 
         return result_BTHWC
 

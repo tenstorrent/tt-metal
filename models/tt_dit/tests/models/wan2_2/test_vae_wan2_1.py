@@ -780,10 +780,16 @@ def test_wan_conv3d_float32(
     ],
     indirect=["mesh_device"],
 )
+@pytest.mark.parametrize(
+    "conv_dtype",
+    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
+    ids=["bf16", "f32"],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len, mean, std, h_axis, w_axis):
+def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len, mean, std, h_axis, w_axis, conv_dtype):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanResidualBlock as TorchWanResidualBlock
 
+    tt_input_dtype = ttnn.bfloat16 if conv_dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
     torch_model = TorchWanResidualBlock(
         in_dim=in_dim,
@@ -802,6 +808,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        conv_dtype=conv_dtype,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -811,7 +818,11 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
     tt_input_tensor = bf16_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+        tt_input_tensor,
+        mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        shard_mapping={h_axis: 2, w_axis: 3},
+        dtype=tt_input_dtype,
     )
     logger.info(f"torch_input_tensor.shape: {torch_input_tensor.shape}")
     logger.info(f"tt_input_tensor.shape: {tt_input_tensor.shape}")
@@ -827,10 +838,18 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         tt_cache_tensor_1, _ = conv_pad_height(tt_cache_tensor_1, parallel_config.height_parallel.factor)
         tt_cache_tensor_2, _ = conv_pad_height(tt_cache_tensor_2, parallel_config.height_parallel.factor)
         tt_cache_tensor_1 = bf16_tensor_2dshard(
-            tt_cache_tensor_1, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+            tt_cache_tensor_1,
+            mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={h_axis: 2, w_axis: 3},
+            dtype=tt_input_dtype,
         )
         tt_cache_tensor_2 = bf16_tensor_2dshard(
-            tt_cache_tensor_2, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+            tt_cache_tensor_2,
+            mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={h_axis: 2, w_axis: 3},
+            dtype=tt_input_dtype,
         )
         tt_feat_cache = [tt_cache_tensor_1, tt_cache_tensor_2]
         tt_feat_idx = [0]
@@ -912,12 +931,18 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     ],
     indirect=["mesh_device"],
 )
+@pytest.mark.parametrize(
+    "conv_dtype",
+    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
+    ids=["bf16", "f32"],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis):
+def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, conv_dtype):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanMidBlock as TorchWanMidBlock
 
     torch.manual_seed(0)
 
+    tt_input_dtype = ttnn.bfloat16 if conv_dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
     torch_model = TorchWanMidBlock(
         dim=dim,
@@ -934,6 +959,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        conv_dtype=conv_dtype,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -945,7 +971,11 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
     tt_input_tensor = bf16_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+        tt_input_tensor,
+        mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        shard_mapping={h_axis: 2, w_axis: 3},
+        dtype=tt_input_dtype,
     )
 
     torch_feat_cache = []
@@ -960,7 +990,11 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
             tt_cache_tensor = torch_cache_tensor.permute(0, 2, 3, 4, 1)
             tt_cache_tensor, _ = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor)
             tt_cache_tensor = bf16_tensor_2dshard(
-                tt_cache_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+                tt_cache_tensor,
+                mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                shard_mapping={h_axis: 2, w_axis: 3},
+                dtype=tt_input_dtype,
             )
             tt_feat_cache.append(tt_cache_tensor)
 
@@ -1198,12 +1232,20 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
     ],
     indirect=["mesh_device"],
 )
+@pytest.mark.parametrize(
+    "conv_dtype",
+    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
+    ids=["bf16", "f32"],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis):
+def test_wan_upblock(
+    mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis, conv_dtype
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanUpBlock as TorchWanUpBlock
 
     torch.manual_seed(0)
 
+    tt_input_dtype = ttnn.bfloat16 if conv_dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
     torch_model = TorchWanUpBlock(
         in_dim=in_dim,
@@ -1226,6 +1268,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        conv_dtype=conv_dtype,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -1246,7 +1289,11 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         if logical_h != tt_input_tensor.shape[2]:
             logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
         tt_input_tensor = bf16_tensor_2dshard(
-            tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+            tt_input_tensor,
+            mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={h_axis: 2, w_axis: 3},
+            dtype=tt_input_dtype,
         )
 
         logger.info(f"running torch model")
@@ -1318,6 +1365,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
                     mesh_device,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     shard_mapping={h_axis: 2, w_axis: 3},
+                    dtype=tt_input_dtype,
                 )
 
 
