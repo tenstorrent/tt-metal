@@ -312,7 +312,6 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
 
     {
         tile_regs_acquire();
-        uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t tile_index = global_row_base + i;
             sub_tiles(in0_cb, in1_cb, tile_index, tile_index, i /*dst_index*/);
@@ -443,6 +442,7 @@ void sub_exp_block_bcast_cols_inplace(
     // Initialize operation
     sub_bcast_cols_init_short(in0_cb, in1_cb);
     // exp_packthread_tile_init<true, true, scale_fp32>();  // todo: move outside.
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
     // Wait for tiles:
     // - in0_cb: cumulative wait since we never pop it
@@ -494,7 +494,6 @@ void sub_exp_block_bcast_cols_inplace(
     {
         SDPA_DeviceZoneScopedN_1("PACK SUB_EXP");
 
-        tile_regs_wait();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; ++j) {
@@ -523,10 +522,14 @@ void sub_exp_block_bcast_cols_inplace(
                 }
             }
         }
-        tile_regs_release();
-        if constexpr (do_reduce) {  // todo: move up?
-            PACK((llk_pack_reconfig_l1_acc(0)));
-        }
+    }
+
+    // Restore packer ReLU config after all exp operations complete
+    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+
+    tile_regs_release();
+    if constexpr (do_reduce) {  // todo: move up?
+        PACK((llk_pack_reconfig_l1_acc(0)));
     }
 }
 
@@ -668,7 +671,7 @@ void sdpa_inner_loop(
         // Initialize fast approximate exp with no input clamping for 1.3x speedup
         exp_packthread_tile_init<true, true, scale_fp32, InputClamping::None>();
         // Configure packer ReLU to clamp negative artifacts from approximate exp
-        PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+
         pack_reconfig_data_format(cb_qkt_im);
         reconfig_data_format(cb_kt_in, cb_q_in);
         cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
@@ -917,9 +920,6 @@ void sdpa_inner_loop(
             MATH(DPRINT << "Popping cb_qkt_im: " << Sq_chunk_t * Sk_chunk_t << " tiles" << ENDL());
             cb_pop_front(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
         }
-
-        // Restore packer ReLU config after all exp operations complete
-        PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 
         cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
 
