@@ -74,7 +74,7 @@ public:
 
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
-    const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id);
+    const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id) const;
 
     void reset();
 
@@ -86,7 +86,6 @@ private:
     std::unique_ptr<detail::ProgramCompileGroup> command_queue_compile_group_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> routing_cores_;
-    mutable std::unordered_map<ChipId, std::unordered_set<CoreCoord>> empty_cores_;
     std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> termination_info_;
 };
 

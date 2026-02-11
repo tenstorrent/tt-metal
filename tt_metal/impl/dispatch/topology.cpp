@@ -666,7 +666,6 @@ void DispatchTopology::create_cq_program(IDevice* device) {
         "Tried to create and compile CQ program on device {} without static args populated (need to run "
         "populate_cq_static_args())",
         device->id());
-    empty_cores_.clear();
     // Third pass, populate dependent configs, runtime configs, and create kernels for each node
     for (auto* node_and_kernel : node_id_to_kernel_) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
@@ -783,21 +782,24 @@ void DispatchTopology::configure_dispatch_cores(IDevice* device) {
 
 const std::unordered_set<CoreCoord>& DispatchTopology::get_virtual_dispatch_cores(ChipId dev_id) const {
     if (!dispatch_cores_.contains(dev_id)) {
-        return empty_cores_[dev_id];
+        static const std::unordered_set<CoreCoord> empty{};
+        return empty;
     }
     return dispatch_cores_.at(dev_id);
 }
 
 const std::unordered_set<CoreCoord>& DispatchTopology::get_virtual_dispatch_routing_cores(ChipId dev_id) const {
     if (!routing_cores_.contains(dev_id)) {
-        return empty_cores_[dev_id];
+        static const std::unordered_set<CoreCoord> empty{};
+        return empty;
     }
     return routing_cores_.at(dev_id);
 }
 
-const std::unordered_set<TerminationInfo>& DispatchTopology::get_registered_termination_cores(ChipId dev_id) {
+const std::unordered_set<TerminationInfo>& DispatchTopology::get_registered_termination_cores(ChipId dev_id) const {
     if (!termination_info_.contains(dev_id)) {
-        termination_info_[dev_id] = {};
+        static const std::unordered_set<TerminationInfo> empty{};
+        return empty;
     }
     return termination_info_.at(dev_id);
 }
@@ -810,7 +812,6 @@ void DispatchTopology::reset() {
     command_queue_compile_group_->clear();
     dispatch_cores_.clear();
     routing_cores_.clear();
-    empty_cores_.clear();
     termination_info_.clear();
 }
 
