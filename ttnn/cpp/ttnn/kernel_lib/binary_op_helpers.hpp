@@ -320,14 +320,20 @@ ALWI void binary_op(
                 cb_reserve_back(ocb, chunk_size);
             }
 
-            tile_regs_acquire();
+            // Per-tile path: each tile gets its own acquire/commit/wait/release cycle
+            // Per-chunk path: one acquire/commit/wait/release cycle for the whole chunk
+            if constexpr (!waits_per_tile(input_a_policy)) {
+                tile_regs_acquire();
+            }
 
             // Accumulator reload if needed
             if constexpr (is_accumulator_enabled<AccumT>()) {
-                cb_wait_front(accum.cb_accumulator, 1);
-                copy_tile(accum.cb_accumulator, 0, accum.dst_index);
-                cb_pop_front(accum.cb_accumulator, 1);
-                binary_init<op_type, bcast_dim>(icb_a, icb_b);
+                if constexpr (!waits_per_tile(input_a_policy)) {
+                    cb_wait_front(accum.cb_accumulator, 1);
+                    copy_tile(accum.cb_accumulator, 0, accum.dst_index);
+                    cb_pop_front(accum.cb_accumulator, 1);
+                    binary_init<op_type, bcast_dim>(icb_a, icb_b);
+                }
             }
 
             for (uint32_t wt = 0; wt < chunk_size; ++wt) {
@@ -373,13 +379,18 @@ ALWI void binary_op(
                     }
                 }
 
+                // Per-tile: acquire DEST for this tile
+                if constexpr (waits_per_tile(input_a_policy)) {
+                    tile_regs_acquire();
+                }
+
                 // Execute (unified LLK call)
                 binary_exec<op_type, bcast_dim>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
                 // Post-operation callback (e.g., rsqrt, recip)
                 post_op(dst_idx);
 
-                // Per-tile streaming
+                // Per-tile streaming: commit, wait, pack, release — complete handshake per tile
                 if constexpr (waits_per_tile(input_a_policy)) {
                     tile_regs_commit();
                     tile_regs_wait();
@@ -404,7 +415,7 @@ ALWI void binary_op(
                         }
                     }
 
-                    tile_regs_acquire();
+                    tile_regs_release();
                     tiles_processed++;
                 }
             }
@@ -445,7 +456,10 @@ ALWI void binary_op(
                 }
             }
 
-            tile_regs_release();
+            // Per-chunk: release after all tiles packed
+            if constexpr (!waits_per_tile(input_a_policy)) {
+                tile_regs_release();
+            }
         }
 
         // COL broadcast: pop input_b once per row (ht iteration).
