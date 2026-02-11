@@ -215,13 +215,6 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         tile=b_tile,
     )
 
-    # ── Bias ──
-    bias_shard = ttnn.ShardSpec(sender_core_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
-    bias_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, bias_shard)
-    ttnn_bias = ttnn.from_torch(
-        torch_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=bias_mem, tile=out_tile
-    )
-
     # ── Output ──
     out_shard = ttnn.ShardSpec(sender_core_grid, (M, N), ttnn.ShardOrientation.ROW_MAJOR)
     out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard)
@@ -240,7 +233,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, residual_mcast_dst_shard
     )
     ttnn_residual_mcast_dst = ttnn.from_torch(
-        torch.zeros((M, N), dtype=torch.bfloat16),
+        torch_bias,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -380,7 +373,6 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         "ttnn_activation": ttnn_activation,
         "ttnn_gate_up_weights": ttnn_gate_up_weights,
         "ttnn_down_weights": ttnn_down_weights,
-        "ttnn_bias": ttnn_bias,
         "ttnn_output": ttnn_output,
         "ttnn_residual_mcast_dst": ttnn_residual_mcast_dst,
         "ttnn_down_mcast_dst": ttnn_down_mcast_dst,
@@ -958,7 +950,6 @@ def test_moe_fused(device, use_hardcoded_expert_index):
             r["mul_scalar_buf_tensor"],
             # Shared expert tensors
             shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
-            shared_bias_tensor=s["ttnn_bias"],
             shared_residual_mcast_dst_tensor=s["ttnn_residual_mcast_dst"],
             shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
             shared_down_weights_tensor=s["ttnn_down_weights"],

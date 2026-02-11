@@ -261,14 +261,6 @@ void kernel_main() {
             using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ReaderCTArgs;
             deepseek_b1_ops::GatedReduce::ReaderArgs gated_reduce_args{};
 
-            // Residual Mcast — receiver
-            using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-            deepseek_b1_ops::Mcast::ReceiverArgs residual_mcast_args{
-                get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore"),
-                get_named_compile_time_arg_val("shared_residual_mcast_dst_cb"),
-                get_named_compile_time_arg_val("shared_residual_mcast_dst_num_pages"),
-            };
-
             // Down Mcast — receiver (gated reduce output → all 130 cores)
             using DownMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
             deepseek_b1_ops::Mcast::ReceiverArgs down_mcast_args{
@@ -322,11 +314,6 @@ void kernel_main() {
         constexpr uint32_t gate_input_indices_cb = get_named_compile_time_arg_val("gate_input_indices_cb");
         unified_kernels::setup_sharded_buffer(gate_bias_cb, 1);
         unified_kernels::setup_sharded_buffer(gate_input_indices_cb, 1);
-
-        constexpr uint32_t residual_mcast_src_cb = get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
-        constexpr uint32_t residual_mcast_src_num_pages =
-            get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
-        unified_kernels::setup_sharded_buffer(residual_mcast_src_cb, residual_mcast_src_num_pages);
     }
     if constexpr (Core::Routed::is_gate_mm_core) {
         constexpr uint32_t gate_mm_in1 = get_named_compile_time_arg_val("gate_mm_in1");
@@ -355,6 +342,11 @@ void kernel_main() {
         constexpr uint32_t shared_down_k = get_named_compile_time_arg_val("shared_down_matmul_k_num_tiles");
         constexpr uint32_t shared_down_w = get_named_compile_time_arg_val("shared_down_matmul_out_w_per_core");
         unified_kernels::setup_sharded_buffer(shared_down_in1, shared_down_k * shared_down_w);
+
+        // Residual/bias CB — pre-loaded on mcast grid, no mcast needed
+        constexpr uint32_t shared_residual_cb = get_named_compile_time_arg_val("shared_residual_cb");
+        constexpr uint32_t shared_residual_num_pages = get_named_compile_time_arg_val("shared_residual_num_pages");
+        unified_kernels::setup_sharded_buffer(shared_residual_cb, shared_residual_num_pages);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -501,22 +493,6 @@ void kernel_main() {
             // Gated Reduce (writer — no-op for BRISC)
             using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs;
             deepseek_b1_ops::GatedReduce::WriterArgs gated_reduce_args{};
-
-            // Residual Mcast — sender (reuse Routed::McastCTArgs: same grid, same persistent sender)
-            using ResidualMcastCTArgs = Routed::McastCTArgs;
-            deepseek_b1_ops::Mcast::SenderArgs residual_mcast_args{
-                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("shared_residual_mcast_data_sender_semaphore"),
-                get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore"),
-                get_named_compile_time_arg_val("shared_residual_mcast_data_size_bytes"),
-                get_named_compile_time_arg_val("shared_residual_mcast_src_cb"),
-                get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages"),
-                get_read_ptr(get_named_compile_time_arg_val("shared_residual_mcast_src_cb")),
-                get_write_ptr(get_named_compile_time_arg_val("shared_residual_mcast_dst_cb")),
-            };
 
             // Down Mcast — sender (reuse Routed::McastCTArgs: same grid, same persistent sender)
             using DownMcastCTArgs = Routed::McastCTArgs;
@@ -706,10 +682,6 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_gated_reduce_mcast_src_cb"),
             };
 
-            // Residual Mcast — compute no-op
-            using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
-            deepseek_b1_ops::Mcast::ComputeArgs residual_mcast_args{};
-
             // Down Mcast — compute no-op
             using DownMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
             deepseek_b1_ops::Mcast::ComputeArgs down_mcast_args{};
@@ -762,20 +734,6 @@ void kernel_main() {
     {
         DeviceZoneScopedN("MCAST");
         mcast(moe.routed.mcast_args);
-    }
-
-    // 1b. Shared: Residual Mcast — broadcast residual [1, N] from sender to 112 down-proj cores
-    //     Placed early so data is available by the time residual add runs
-    {
-        DeviceZoneScopedN("SHARED_RESIDUAL_MCAST");
-        deepseek_b1_ops::Mcast::Op<
-            Moe::Shared::ResidualMcastCTArgs,
-            Core::is_sender_core,
-            Core::is_mcast_grid_core,
-            Core::Shared::is_mcast_receiver_core,
-            true>
-            shared_residual_mcast;
-        shared_residual_mcast(moe.shared.residual_mcast_args);
     }
 
     // 2. Matmul + Activation: Routing matmul on gate_mm cores

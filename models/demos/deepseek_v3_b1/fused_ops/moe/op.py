@@ -149,8 +149,7 @@ class _MoeSharedExpertContext:
     group2_cb: int  # up gather dst (on sender)
     intermed_cb: int  # gated reduce intermediate (on sender)
     mcast_src_cb: int  # gated reduce output (on sender)
-    residual_mcast_src_cb: int
-    residual_mcast_dst_cb: int
+    residual_cb: int  # residual/bias (pre-loaded on mcast grid, no mcast)
     down_mcast_dst_cb: int
 
     # Parallelism
@@ -180,22 +179,20 @@ class _MoeSharedExpertContext:
     bg_dummy_tensor: Any
     ag_receiver_data_addr: int
     bg_receiver_data_addr: int
-    residual_mcast_dst_dummy_tensor: Any
     down_mcast_dst_dummy_tensor: Any
     output_gather_dst_dummy_tensor: Any
 
     # Setup result dicts (grouped by operation)
     gu_matmul_params: dict  # from setup_kn_sliced_matmul
     gated_reduce_params: dict  # from setup_gated_reduce
-    residual_mcast_params: dict  # from setup_mcast
     down_mcast_params: dict  # down mcast dimensions + CB descriptor
     down_matmul_params: dict  # down proj matmul dimensions + CB descriptors
     residual_add_params: dict  # residual add dimensions + CB descriptor
     output_gather_params: dict  # output gather dimensions + CB descriptor
     output_mcast_params: dict  # output mcast dimensions
 
-    # Residual mcast source CB descriptor
-    residual_mcast_src_cb_descriptor: Any
+    # Residual CB descriptor (pre-loaded bias)
+    residual_cb_descriptor: Any
 
     # Per-core values
     gu_k_offset_core_values: list
@@ -1698,7 +1695,6 @@ class MoeSharedExpertOp:
     def _setup_dimensions(
         device,
         shared_gate_up_weights_tensor,
-        shared_bias_tensor,
         shared_residual_mcast_dst_tensor,
         shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
@@ -1727,8 +1723,7 @@ class MoeSharedExpertOp:
         Args:
             device: TT device (single chip)
             shared_gate_up_weights_tensor: Gate/Up weights tensor for shared expert
-            shared_bias_tensor: Bias/residual tensor [1, N] on sender core
-            shared_residual_mcast_dst_tensor: Destination tensor for residual mcast (on mcast grid)
+            shared_residual_mcast_dst_tensor: Residual/bias tensor [1, N] pre-loaded on mcast grid
             shared_down_mcast_dst_tensor: Destination tensor for down mcast (on mcast grid)
             shared_down_weights_tensor: Down projection weights tensor
             shared_output_tensor: Output tensor for shared expert
@@ -1764,13 +1759,12 @@ class MoeSharedExpertOp:
         shared_group2_cb = 29  # up gather dst on sender
         shared_intermed_cb = 30  # gated reduce intermediate on sender
         shared_mcast_src_cb = 31  # gated reduce output on sender
-        shared_residual_mcast_src_cb = 32  # residual mcast source on sender
-        shared_residual_mcast_dst_cb = 33  # residual mcast destination on 112 matmul cores
-        shared_down_mcast_dst_cb = 34  # down mcast destination (gated reduce output → all 130 cores)
-        shared_down_matmul_in1_cb = 35  # down proj weights (112 matmul cores, tensor-backed)
-        shared_down_matmul_out_cb = 36  # down proj matmul output (112 matmul cores, tensor-backed)
-        shared_residual_add_out_cb = 37  # residual add output (112 matmul cores, tensor-backed)
-        shared_output_gather_dst_cb = 38  # output gather destination (sender core, tensor-backed)
+        shared_residual_cb = 32  # residual/bias on 112 matmul cores (pre-loaded, no mcast)
+        shared_down_mcast_dst_cb = 33  # down mcast destination (gated reduce output → all 130 cores)
+        shared_down_matmul_in1_cb = 34  # down proj weights (112 matmul cores, tensor-backed)
+        shared_down_matmul_out_cb = 35  # down proj matmul output (112 matmul cores, tensor-backed)
+        shared_residual_add_out_cb = 36  # residual add output (112 matmul cores, tensor-backed)
+        shared_output_gather_dst_cb = 37  # output gather destination (sender core, tensor-backed)
 
         # ==================================================================
         # Dimensions
@@ -1842,30 +1836,10 @@ class MoeSharedExpertOp:
         )
 
         # ==================================================================
-        # Residual Mcast
+        # Residual CB (bias pre-loaded on mcast grid, no mcast needed)
         # ==================================================================
-        bias_shard_spec = shared_bias_tensor.memory_config().shard_spec
-        bias_shard_shape = bias_shard_spec.shape
-        bias_tile = shared_bias_tensor.get_tile()
-        residual_mcast_dst_num_pages = (bias_shard_shape[0] * bias_shard_shape[1]) // (
-            bias_tile.tile_shape[0] * bias_tile.tile_shape[1]
-        )
-        residual_mcast_data_size_bytes = residual_mcast_dst_num_pages * bias_tile.get_tile_size(data_format)
-
-        residual_mcast_params = MoeOp.setup_mcast(
-            device=device,
-            sender_core=sender_core,
-            mcast_grid=shared_residual_mcast_dst_tensor.memory_config().shard_spec.grid,
-            src_cb=shared_residual_mcast_src_cb,
-            src_tensor=shared_bias_tensor,
-            dst_cb=shared_residual_mcast_dst_cb,
-            dst_tensor=shared_residual_mcast_dst_tensor,
-            sender_semaphore_id=shared_mcast_sender_semaphore_id,
-            receiver_semaphore_id=shared_mcast_receiver_semaphore_id,
-            data_size_bytes=residual_mcast_data_size_bytes,
-        )
-        residual_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            shared_residual_mcast_src_cb, shared_bias_tensor
+        residual_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            shared_residual_cb, shared_residual_mcast_dst_tensor
         )
 
         # ==================================================================
@@ -1965,8 +1939,7 @@ class MoeSharedExpertOp:
             group2_cb=shared_group2_cb,
             intermed_cb=shared_intermed_cb,
             mcast_src_cb=shared_mcast_src_cb,
-            residual_mcast_src_cb=shared_residual_mcast_src_cb,
-            residual_mcast_dst_cb=shared_residual_mcast_dst_cb,
+            residual_cb=shared_residual_cb,
             down_mcast_dst_cb=shared_down_mcast_dst_cb,
             # Parallelism
             n_parallel=n_parallel,
@@ -1992,20 +1965,18 @@ class MoeSharedExpertOp:
             bg_dummy_tensor=shared_bg_gather_dst_tensor,
             ag_receiver_data_addr=ag_receiver_data_addr,
             bg_receiver_data_addr=bg_receiver_data_addr,
-            residual_mcast_dst_dummy_tensor=shared_residual_mcast_dst_tensor,
             down_mcast_dst_dummy_tensor=shared_down_mcast_dst_tensor,
             output_gather_dst_dummy_tensor=shared_output_tensor,
             # Setup result dicts
             gu_matmul_params=gu_matmul_params,
             gated_reduce_params=gated_reduce_params,
-            residual_mcast_params=residual_mcast_params,
             down_mcast_params=down_mcast_params,
             down_matmul_params=down_matmul_params,
             residual_add_params=residual_add_params,
             output_gather_params=output_gather_params,
             output_mcast_params=output_mcast_params,
-            # Residual mcast source CB descriptor
-            residual_mcast_src_cb_descriptor=residual_mcast_src_cb_descriptor,
+            # Residual CB descriptor (pre-loaded bias)
+            residual_cb_descriptor=residual_cb_descriptor,
             # Per-core values
             gu_k_offset_core_values=gu_k_offset_core_values,
             ag_sender_idx_core_values=ag_sender_idx_core_values,
@@ -2046,13 +2017,9 @@ class MoeSharedExpertOp:
             ("shared_bg_src_cb", shared_ctx.gu_out_cb),
             ("shared_bg_src_num_pages", 1),
             ("shared_bg_receiver_data_addr", shared_ctx.bg_receiver_data_addr),
-            # Residual mcast receiver
-            ("shared_residual_mcast_data_receiver_semaphore", shared_ctx.shared_mcast_receiver_semaphore_id),
-            ("shared_residual_mcast_dst_cb", shared_ctx.residual_mcast_dst_cb),
-            ("shared_residual_mcast_dst_num_pages", shared_ctx.residual_mcast_params["dst_num_pages"]),
-            # Residual mcast src (needed for setup_sharded_buffer on sender)
-            ("shared_residual_mcast_src_cb", shared_ctx.residual_mcast_src_cb),
-            ("shared_residual_mcast_src_num_pages", shared_ctx.residual_mcast_params["src_num_pages"]),
+            # Residual CB (pre-loaded bias, setup_sharded_buffer on matmul cores)
+            ("shared_residual_cb", shared_ctx.residual_cb),
+            ("shared_residual_num_pages", shared_ctx.residual_add_params["total_in1_tiles"]),
             # Down mcast receiver
             ("shared_down_mcast_data_receiver_semaphore", shared_ctx.shared_mcast_receiver_semaphore_id),
             ("shared_down_mcast_dst_cb", shared_ctx.down_mcast_dst_cb),
@@ -2086,13 +2053,6 @@ class MoeSharedExpertOp:
             ("shared_bg_noc1_receiver_semaphore_id", shared_ctx.bg_noc1_receiver_semaphore_id),
             ("shared_bg_dst_cb", shared_ctx.group2_cb),
             ("shared_bg_dst_num_pages", shared_ctx.gated_reduce_params["kernel_tiles_per_k"]),
-            # Residual mcast sender (CTArgs reused from routed mcast; only need semaphores, CBs, sizes)
-            ("shared_residual_mcast_data_sender_semaphore", shared_ctx.shared_mcast_sender_semaphore_id),
-            ("shared_residual_mcast_data_receiver_semaphore", shared_ctx.shared_mcast_receiver_semaphore_id),
-            ("shared_residual_mcast_data_size_bytes", shared_ctx.residual_mcast_params["data_size_bytes"]),
-            ("shared_residual_mcast_src_cb", shared_ctx.residual_mcast_src_cb),
-            ("shared_residual_mcast_src_num_pages", shared_ctx.residual_mcast_params["src_num_pages"]),
-            ("shared_residual_mcast_dst_cb", shared_ctx.residual_mcast_dst_cb),
             # Down mcast sender (CTArgs reused from routed mcast; only need semaphores, CBs, sizes)
             ("shared_down_mcast_data_sender_semaphore", shared_ctx.shared_mcast_sender_semaphore_id),
             ("shared_down_mcast_data_receiver_semaphore", shared_ctx.shared_mcast_receiver_semaphore_id),
@@ -2136,7 +2096,7 @@ class MoeSharedExpertOp:
             ("shared_down_matmul_out_w_per_core", shared_ctx.down_matmul_params["out_w"]),
             # Residual add
             ("shared_residual_add_in0", shared_ctx.down_matmul_params["out_cb"]),  # matmul output
-            ("shared_residual_add_in1", shared_ctx.residual_mcast_dst_cb),  # residual from mcast
+            ("shared_residual_add_in1", shared_ctx.residual_cb),  # residual (pre-loaded bias)
             ("shared_residual_add_out", shared_ctx.residual_add_params["out_cb"]),
             ("shared_residual_add_out_w", shared_ctx.down_matmul_params["out_w"]),
             ("shared_residual_add_total_in1_tiles", shared_ctx.residual_add_params["total_in1_tiles"]),
@@ -2153,8 +2113,7 @@ class MoeSharedExpertOp:
             shared_ctx.gated_reduce_params["cb_group2_descriptor"],
             shared_ctx.gated_reduce_params["cb_intermed_descriptor"],
             shared_ctx.gated_reduce_params["cb_out_descriptor"],
-            shared_ctx.residual_mcast_src_cb_descriptor,
-            shared_ctx.residual_mcast_params["dst_cb_descriptor"],
+            shared_ctx.residual_cb_descriptor,
             shared_ctx.down_mcast_params["dst_cb_descriptor"],
             shared_ctx.down_matmul_params["weights_cb_descriptor"],
             shared_ctx.down_matmul_params["output_cb_descriptor"],
@@ -2596,7 +2555,6 @@ class MoeOp:
         mul_scalar_buf_tensor,
         # Shared expert tensors
         shared_gate_up_weights_tensor,
-        shared_bias_tensor,
         shared_residual_mcast_dst_tensor,
         shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
@@ -2663,7 +2621,6 @@ class MoeOp:
         shared_ctx = MoeSharedExpertOp._setup_dimensions(
             device=routed_ctx.device,
             shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
-            shared_bias_tensor=shared_bias_tensor,
             shared_residual_mcast_dst_tensor=shared_residual_mcast_dst_tensor,
             shared_down_mcast_dst_tensor=shared_down_mcast_dst_tensor,
             shared_down_weights_tensor=shared_down_weights_tensor,
@@ -2813,7 +2770,6 @@ class MoeOp:
             shared_gate_up_weights_tensor,
             shared_ag_gather_dst_tensor,
             shared_bg_gather_dst_tensor,
-            shared_bias_tensor,
             shared_residual_mcast_dst_tensor,
             shared_down_mcast_dst_tensor,
             shared_down_weights_tensor,
