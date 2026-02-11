@@ -18,9 +18,6 @@ from models.common.utility_functions import skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOneB1
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-# CoreRangeSet for CCL operations (subset of compute grid)
-CCL_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7))])
-
 
 def setup_reduce_to_one_test(mesh_device):
     """Common setup for reduce_to_one tests. Returns test configuration."""
@@ -141,7 +138,9 @@ def setup_reduce_to_one_test(mesh_device):
     ref_output = ReduceToOneB1.golden(data_per_device)
 
     # Create 4 semaphores for reduce_to_one (round1, round2, round3, exit)
-    semaphores = [ttnn.create_global_semaphore(submesh_device, CCL_CRS, 0) for _ in range(4)]
+    num_cores = compute_grid.x * compute_grid.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
+    semaphores = [ttnn.create_global_semaphore(submesh_device, available_cores, 0) for _ in range(4)]
 
     return {
         "submesh_device": submesh_device,

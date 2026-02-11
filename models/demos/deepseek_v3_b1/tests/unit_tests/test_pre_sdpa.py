@@ -544,10 +544,11 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    ccl_cores = ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)})
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, ccl_cores, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, ccl_cores, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, ccl_cores, 0)
+    num_cores = device_grid_size.x * device_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
+    out_ready_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    barrier_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
     semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
 
     # ========================================================================

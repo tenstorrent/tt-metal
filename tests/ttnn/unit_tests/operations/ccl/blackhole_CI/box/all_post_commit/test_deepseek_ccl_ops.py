@@ -21,10 +21,6 @@ To run only these deepseek tests:
 # Import tests from deepseek_v3_b1 test modules
 # pytest will automatically discover and run these imported test functions
 
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_reduce_to_one_b1 import (
-    test_reduce_to_one_2d,
-)
-
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast import (
     test_ccl_broadcast_dual_axis,
 )
@@ -33,9 +29,14 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce import (
     test_ccl_all_reduce,
 )
 
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_reduce_to_one_b1 import (
+    test_reduce_to_one_2d,
+)
+
+
 # Re-export for pytest discovery
 __all__ = [
-    "test_reduce_to_one_2d",
     "test_ccl_broadcast_dual_axis",
     "test_ccl_all_reduce",
+    "test_reduce_to_one_2d",
 ]
