@@ -464,7 +464,7 @@ class ModelArgs:
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
         prefetcher=None,
-        use_hf_rope=False,
+        use_hf_rope=False,  # Choose HF or mllama RoPE (default: mllama, previously, only that one was used). mllama will be removed, only HF will remain (Issue #37605).
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
