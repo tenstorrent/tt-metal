@@ -409,6 +409,7 @@ void kernel_main() {
                 volatile tt_l1_ptr uint32_t* src_f0 =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_tile + row * scatter_row_face_size);
                 volatile tt_l1_ptr uint32_t* dst_f0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile);
+#pragma GCC unroll 8
                 for (uint32_t w = 0; w < row_face_words; w++) {
                     dst_f0[w] = src_f0[w];
                 }
@@ -418,6 +419,7 @@ void kernel_main() {
                     src_tile + scatter_face_size + row * scatter_row_face_size);
                 volatile tt_l1_ptr uint32_t* dst_f1 =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile + scatter_row_face_size);
+#pragma GCC unroll 8
                 for (uint32_t w = 0; w < row_face_words; w++) {
                     dst_f1[w] = src_f1[w];
                 }
