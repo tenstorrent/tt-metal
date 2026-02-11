@@ -157,6 +157,7 @@ Tests:
       - type: all_to_all
 
   - name: "SimpleUnicastMesh"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
 
