@@ -1,4 +1,4 @@
-name: "Build Docker Python venv images"
+name: "[internal] Build Docker Python venv images"
 
 # Reusable workflow that checks and builds Python venv images (ci-build-venv, ci-test-venv).
 # Called by build-docker-artifact.yaml. Venv images are pushed to GHCR.
@@ -15,16 +15,18 @@ on:
     outputs:
       ci-build-venv-tag:
         description: "Docker tag for ci-build venv image"
-        value: ${{ jobs.check-python-venv-images.outputs.ci-build-venv-tag }}
+        value: ${{ jobs.tags.outputs.ci-build-venv-tag }}
       ci-test-venv-tag:
         description: "Docker tag for ci-test venv image"
-        value: ${{ jobs.check-python-venv-images.outputs.ci-test-venv-tag }}
+        value: ${{ jobs.tags.outputs.ci-test-venv-tag }}
       ubuntu-version:
         description: "Ubuntu version (e.g. 22.04) for build args"
-        value: ${{ jobs.check-python-venv-images.outputs.ubuntu-version }}
+        value: ${{ jobs.tags.outputs.ubuntu-version }}
 
 jobs:
-  check-python-venv-images:
+  # Compute content-addressed tags and check which venv images already exist
+  tags:
+    name: "📋 Compute venv tags"
     runs-on: ubuntu-latest
     outputs:
       ci-build-venv-tag: ${{ steps.tags.outputs.ci-build-venv-tag }}
@@ -87,10 +89,11 @@ jobs:
 
           echo "any-missing=${any_missing}" >> $GITHUB_OUTPUT
 
-  build-python-venv-images:
-    name: "Build Python venv images"
-    needs: check-python-venv-images
-    if: needs.check-python-venv-images.outputs.any-missing == 'true'
+  # Build any venv images that don't exist yet
+  build:
+    name: "🐍 Build missing venvs"
+    needs: tags
+    if: needs.tags.outputs.any-missing == 'true'
     timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
@@ -107,29 +110,29 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ci-build-venv image
-        if: needs.check-python-venv-images.outputs.ci-build-venv-exists != 'true'
+        if: needs.tags.outputs.ci-build-venv-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.python
           target: ci-build-venv
           push: true
-          tags: ${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
+          tags: ${{ needs.tags.outputs.ci-build-venv-tag }}
           build-args: |
-            UBUNTU_VERSION=${{ needs.check-python-venv-images.outputs.ubuntu-version }}
+            UBUNTU_VERSION=${{ needs.tags.outputs.ubuntu-version }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push ci-test-venv image
-        if: needs.check-python-venv-images.outputs.ci-test-venv-exists != 'true'
+        if: needs.tags.outputs.ci-test-venv-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.python
           target: ci-test-venv
           push: true
-          tags: ${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
+          tags: ${{ needs.tags.outputs.ci-test-venv-tag }}
           build-args: |
-            UBUNTU_VERSION=${{ needs.check-python-venv-images.outputs.ubuntu-version }}
+            UBUNTU_VERSION=${{ needs.tags.outputs.ubuntu-version }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true

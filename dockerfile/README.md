@@ -52,17 +52,25 @@ flowchart TD
     end
 
     subgraph Tools [build-docker-tools.yaml]
-        Tags[📋 tags]
-        Build[🔧 build]
-        Tags -->|missing?| Build
-        Tags -->|outputs| TT[tool-tags JSON]
+        ToolTags[📋 tags]
+        ToolBuild[🔧 build]
+        ToolTags -->|missing?| ToolBuild
+        ToolTags -->|outputs| TT[tool-tags JSON]
+    end
+
+    subgraph Venvs [build-docker-python-venvs.yaml]
+        VenvTags[📋 tags]
+        VenvBuild[🐍 build]
+        VenvTags -->|missing?| VenvBuild
     end
 
     subgraph DockerArtifact [build-docker-artifact.yaml]
+        DATools[🔧 tools]
+        DAVenvs[🐍 venvs]
         ImgTags[📋 image-tags]
-        Venvs[🐍 venvs]
         Ubuntu[🐳 ubuntu]
         ML[🐳 manylinux]
+        TagLatest[🏷️ tag-latest]
     end
 
     subgraph CompositeAction [setup-tool-buildargs action]
@@ -71,17 +79,28 @@ flowchart TD
 
     MG --> AD
     AD --> Tools
-    Tools -->|tool-tags| ImgTags
-    Tools -->|tool-tags| Ubuntu
-    Tools -->|tool-tags| ML
+    Tools -->|tool-tags| DATools
+    DATools -.->|calls| Tools
+    DAVenvs -.->|calls| Venvs
+    DATools -->|tool-tags| Ubuntu
+    DATools -->|tool-tags| ML
     ImgTags --> Ubuntu
     ImgTags --> ML
-    Venvs --> Ubuntu
+    ImgTags --> TagLatest
+    DAVenvs --> Ubuntu
     Ubuntu -.->|uses| CA
     ML -.->|uses| CA
 ```
 
 **Job naming convention:** Short job IDs (e.g., `tags`, `ubuntu`) with descriptive `name:` fields for the GitHub UI (e.g., "📋 Compute image tags").
+
+| Emoji | Meaning |
+|-------|---------|
+| 📋 | Compute tags / check existence |
+| 🔧 | Build tools |
+| 🐍 | Python-related |
+| 🐳 | Docker image builds |
+| 🏷️ | Tagging / labeling |
 
 ### Tool Tags JSON Bundle
 
