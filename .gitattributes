@@ -1,2 +1,4 @@
-
 /cmake/version.cmake export-subst
+tensors/arg2.tensorbin filter=lfs diff=lfs merge=lfs -text
+tensors/arg0.tensorbin filter=lfs diff=lfs merge=lfs -text
+tensors/arg1.tensorbin filter=lfs diff=lfs merge=lfs -text
