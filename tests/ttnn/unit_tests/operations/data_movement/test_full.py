@@ -186,7 +186,7 @@ def test_full_nd_sharded(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
         ),
         (
-            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.TILE_LAYOUT,
             [64, 64, 64],
             [16, 16, 16],
             ttnn.BufferType.DRAM,
@@ -194,8 +194,15 @@ def test_full_nd_sharded(
         ),
         (
             ttnn.TILE_LAYOUT,
-            [64, 64, 64],
-            [16, 16, 16],
+            [8, 8, 8, 8, 8, 8, 8],
+            [4, 4, 4],
+            ttnn.BufferType.DRAM,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
+        ),
+        (
+            ttnn.TILE_LAYOUT,
+            [17, 19, 41, 3, 44],
+            [10, 11, 13],
             ttnn.BufferType.DRAM,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
         ),
@@ -203,13 +210,6 @@ def test_full_nd_sharded(
             # This test will create more pages than available in the card
             ttnn.TILE_LAYOUT,
             [3, 300, 1, 300],
-            [32, 32],
-            ttnn.BufferType.DRAM,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
-        ),
-        (
-            ttnn.TILE_LAYOUT,
-            [8192, 512],
             [32, 32],
             ttnn.BufferType.DRAM,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
