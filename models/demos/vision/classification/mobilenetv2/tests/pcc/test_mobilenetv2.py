@@ -6,6 +6,7 @@
 import pytest
 
 import ttnn
+from models.common.utility_functions import skip_with_watcher
 from models.demos.vision.classification.mobilenetv2.common import (
     MOBILENETV2_BATCH_SIZE,
     MOBILENETV2_L1_SMALL_SIZE,
@@ -36,6 +37,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         MOBILENETV2_BATCH_SIZE,
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled. See github issue #37097")
 def test_mobilenetv2(device, use_pretrained_weight, batch_size, reset_seeds, model_location_generator):
     if use_pretrained_weight:
         torch_model = Mobilenetv2()
