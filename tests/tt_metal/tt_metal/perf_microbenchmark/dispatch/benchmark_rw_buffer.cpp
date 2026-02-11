@@ -191,11 +191,15 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
     // Compute actual buffer size based on pages_per_core
     uint64_t actual_buf_size = pages_per_core * num_cores * page_size;
 
-    // Create ShardSpecBuffer for HEIGHT_SHARDED layout
+    // Create ShardSpecBuffer for BLOCK_SHARDED layout with 1 page width per core.
+    // This makes each core's host pages non-contiguous (strided by grid_x * page_size),
+    // preventing the dispatch layer from coalescing into one big copy per core and making
+    // performance dependent on page_size.
     CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
     std::array<uint32_t, 2> shard_shape = {static_cast<uint32_t>(pages_per_core), static_cast<uint32_t>(page_size)};
     std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
-    std::array<uint32_t, 2> tensor2d_shape_in_pages = {static_cast<uint32_t>(total_pages), 1};
+    std::array<uint32_t, 2> tensor2d_shape_in_pages = {
+        static_cast<uint32_t>(pages_per_core * core_grid_size.y), static_cast<uint32_t>(core_grid_size.x)};
 
     ShardSpecBuffer shard_spec(
         core_sets, shard_shape, ShardOrientation::ROW_MAJOR, page_shape_array, tensor2d_shape_in_pages);
@@ -203,7 +207,7 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = page_size,
         .buffer_type = buffer_type,
-        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED),
         .bottom_up = false};
 
     ReplicatedBufferConfig global_buffer_config{.size = actual_buf_size};
@@ -260,11 +264,15 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
     // Compute actual buffer size based on pages_per_core
     uint64_t actual_buf_size = pages_per_core * num_cores * page_size;
 
-    // Create ShardSpecBuffer for HEIGHT_SHARDED layout
+    // Create ShardSpecBuffer for BLOCK_SHARDED layout with 1 page width per core.
+    // This makes each core's host pages non-contiguous (strided by grid_x * page_size),
+    // preventing the dispatch layer from coalescing into one big copy per core and making
+    // performance dependent on page_size.
     CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
     std::array<uint32_t, 2> shard_shape = {static_cast<uint32_t>(pages_per_core), static_cast<uint32_t>(page_size)};
     std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
-    std::array<uint32_t, 2> tensor2d_shape_in_pages = {static_cast<uint32_t>(total_pages), 1};
+    std::array<uint32_t, 2> tensor2d_shape_in_pages = {
+        static_cast<uint32_t>(pages_per_core * core_grid_size.y), static_cast<uint32_t>(core_grid_size.x)};
 
     ShardSpecBuffer shard_spec(
         core_sets, shard_shape, ShardOrientation::ROW_MAJOR, page_shape_array, tensor2d_shape_in_pages);
@@ -272,7 +280,7 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = page_size,
         .buffer_type = buffer_type,
-        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED),
         .bottom_up = false};
 
     ReplicatedBufferConfig global_buffer_config{.size = actual_buf_size};
