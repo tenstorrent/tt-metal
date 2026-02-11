@@ -226,14 +226,14 @@ void kernel_main() {
 
                 // Read m/s (packed in single tile)
                 cb_reserve_back(cb_ms_in, 1);
-                noc_async_read(intermed_l1_read_addr, get_read_ptr(cb_ms_in), ms_write_size);
+                noc_async_read(intermed_l1_read_addr, get_write_ptr(cb_ms_in), ms_write_size);
                 intermed_l1_read_addr += ms_write_size;
                 noc_async_read_barrier();
                 cb_push_back(cb_ms_in, 1);
 
                 // Read O
                 cb_reserve_back(cb_out_o, out_chunk_tiles);
-                noc_async_read(intermed_l1_read_addr, get_read_ptr(cb_out_o), o_write_size);
+                noc_async_read(intermed_l1_read_addr, get_write_ptr(cb_out_o), o_write_size);
                 noc_async_read_barrier();
                 cb_push_back(cb_out_o, out_chunk_tiles);
             }

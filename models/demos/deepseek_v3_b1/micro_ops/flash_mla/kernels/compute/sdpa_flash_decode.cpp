@@ -69,11 +69,6 @@ void kernel_main() {
     tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_tree_reduction_steps * 2;
 
-    // Idle core check
-    if (get_arg_val<uint32_t>(0) == 65) {
-        return;
-    }
-
     // Get cur_pos from position tensor (MLA decode is always causal)
     uint32_t cur_pos;
     {

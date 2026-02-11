@@ -456,7 +456,6 @@ class FlashMLADecode:
         math_fidelity = compute_kernel_config.math_fidelity
         math_approx_mode = compute_kernel_config.math_approx_mode
         fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en
-        packer_l1_acc = compute_kernel_config.packer_l1_acc
 
         # =========================================================================
         # Shape extraction (matching C++ lines 70-114)
