@@ -96,21 +96,29 @@ ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_
 /**
  * Please refer to documentation for any_init.
  *
- * Template scale parameter is used when aprox and fast_and_approx are true and exp_tile is called with scale_en set to
+ * Template scale parameter is used when approx and fast_and_approx are true and exp_tile is called with scale_en set to
  * true.
  *
  */
-template <bool approx = false, bool fast_and_approx = true, uint32_t scale = 0x3F800000>
+template <
+    bool approx = false,
+    bool fast_and_approx = true,
+    uint32_t scale = 0x3F800000,
+    InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_packthread_tile_init() {
-    PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, approx, fast_and_approx, scale));
+    PACK(SFPU_TEMPLATE_INIT_KERNEL(
+        exponential,
+        sfpu::exp_init,
+        approx,
+        fast_and_approx,
+        scale,
+        (input_clamping == InputClamping::ClampToNegative)));
 }
 
 // clang-format off
 /**
  * Performs element-wise computation of exponential on each element of a tile
- * in the DST register. The DST register buffer must be in an
- * acquired state via an *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
+ * in the DST register, running on the pack thread instead of the math thread.
  *
  * Return value: None
  *
@@ -120,6 +128,7 @@ ALWI void exp_packthread_tile_init() {
  * | fast_and_approx         | If approx is true, enable fast approximation.                  | bool     | true, false      | true   |
  * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
  * | skip_positive_check     | Skip large-positive input check                                | bool     | true, false      | false   |
+ * | input_clamping          | If approx && fast_and_approx, controls whether very negative inputs are clamped to prevent incorrect outputs | InputClamping | ClampToNegative, None | ClampToNegative |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
  *
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
@@ -134,6 +143,7 @@ template <
     bool fast_and_approx = true,
     bool scale_en = false,
     bool skip_positive_check = false,
+    InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8>
 ALWI void exp_packthread_tile(
     uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
@@ -144,6 +154,7 @@ ALWI void exp_packthread_tile(
         DST_ACCUM_MODE,
         scale_en,
         skip_positive_check,
+        (input_clamping == InputClamping::ClampToNegative),
         iterations,
         idst,
         vector_mode,
