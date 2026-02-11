@@ -84,7 +84,6 @@ on:
       - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
       - "Profiler CI"
-      - "(APC) Select and Run Post-Commit Tests"
       - "Git bisect dispatch"
       - "Custom test dispatch"
     types:
