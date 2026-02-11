@@ -746,12 +746,56 @@ void add_kernel_descriptors(
     const WorkerDistribution& workers,
     const GridParams& grid,
     KernelConfig&& kernel_config) {
+    // Named compile-time args for CB indices - enables kernel chaining/fusion
+    KernelDescriptor::NamedCompileTimeArgs reader_cb_named_args = {
+        {"cb_ex_partial", tt::CBIndex::c_8},
+        {"cb_ex", tt::CBIndex::c_9},
+        {"cb_ex_external", tt::CBIndex::c_10},
+        {"cb_ex_partial2", tt::CBIndex::c_11},
+        {"cb_ex2", tt::CBIndex::c_12},
+        {"cb_ex_external2", tt::CBIndex::c_13},
+        {"cb_ex_global", tt::CBIndex::c_15},
+        {"cb_ex2pe", tt::CBIndex::c_20},
+    };
+
+    KernelDescriptor::NamedCompileTimeArgs writer_cb_named_args = {
+        {"cb_gamma", tt::CBIndex::c_5},
+        {"cb_beta", tt::CBIndex::c_6},
+        {"cb_out", tt::CBIndex::c_16},
+        {"cb_out_resharded", tt::CBIndex::c_17},
+        {"cb_in_2", tt::CBIndex::c_2},
+        {"cb_eps", tt::CBIndex::c_3},
+        {"cb_in_4", tt::CBIndex::c_4},
+    };
+
+    KernelDescriptor::NamedCompileTimeArgs compute_cb_named_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_scaler", tt::CBIndex::c_2},
+        {"cb_eps", tt::CBIndex::c_3},
+        {"cb_scaler_global", tt::CBIndex::c_4},
+        {"cb_gamma", tt::CBIndex::c_5},
+        {"cb_beta", tt::CBIndex::c_6},
+        {"cb_ex_partial", tt::CBIndex::c_8},
+        {"cb_ex", tt::CBIndex::c_9},
+        {"cb_ex_external", tt::CBIndex::c_10},
+        {"cb_ex_partial2", tt::CBIndex::c_11},
+        {"cb_ex2", tt::CBIndex::c_12},
+        {"cb_ex_external2", tt::CBIndex::c_13},
+        {"cb_ex_global", tt::CBIndex::c_15},
+        {"cb_out", tt::CBIndex::c_16},
+        {"cb_xmm", tt::CBIndex::c_18},
+        {"cb_ex2pe", tt::CBIndex::c_20},
+        {"cb_x", tt::CBIndex::c_24},
+    };
+
     // Reader sender kernel
     KernelDescriptor reader_sender_kernel_desc;
     reader_sender_kernel_desc.kernel_source = kernel_config.reader_sender_path;
     reader_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_sender_kernel_desc.core_ranges = core_ranges.sender_cores;
     reader_sender_kernel_desc.compile_time_args = std::move(kernel_config.reader_sender_ct_args);
+    reader_sender_kernel_desc.named_compile_time_args = reader_cb_named_args;
     reader_sender_kernel_desc.defines = std::move(kernel_config.reader_sender_defines);
     reader_sender_kernel_desc.runtime_args = std::move(kernel_config.reader_sender_rt_args);
     reader_sender_kernel_desc.config = DataMovementConfigDescriptor{
@@ -768,6 +812,7 @@ void add_kernel_descriptors(
         reader_receiver_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_workers_except_sender;
         reader_receiver_all_to_all_kernel_desc.compile_time_args =
             std::move(kernel_config.reader_receiver_all_to_all_ct_args);
+        reader_receiver_all_to_all_kernel_desc.named_compile_time_args = reader_cb_named_args;
         reader_receiver_all_to_all_kernel_desc.defines = kernel_config.reader_receiver_defines;
         reader_receiver_all_to_all_kernel_desc.runtime_args =
             std::move(kernel_config.reader_receiver_all_to_all_rt_args);
@@ -785,6 +830,7 @@ void add_kernel_descriptors(
         reader_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         reader_receiver_kernel_desc.compile_time_args = std::move(kernel_config.reader_receiver_ct_args);
+        reader_receiver_kernel_desc.named_compile_time_args = reader_cb_named_args;
         reader_receiver_kernel_desc.defines = std::move(kernel_config.reader_receiver_defines);
         reader_receiver_kernel_desc.runtime_args = std::move(kernel_config.reader_receiver_rt_args);
         reader_receiver_kernel_desc.config = DataMovementConfigDescriptor{
@@ -800,6 +846,7 @@ void add_kernel_descriptors(
     writer_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_sender_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
     writer_sender_kernel_desc.compile_time_args = std::move(kernel_config.writer_sender_ct_args);
+    writer_sender_kernel_desc.named_compile_time_args = writer_cb_named_args;
     writer_sender_kernel_desc.defines = kernel_config.writer_defines;
     writer_sender_kernel_desc.runtime_args = std::move(kernel_config.writer_sender_rt_args);
     writer_sender_kernel_desc.config = DataMovementConfigDescriptor{
@@ -815,6 +862,7 @@ void add_kernel_descriptors(
         writer_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         writer_receiver_kernel_desc.compile_time_args = std::move(kernel_config.writer_receiver_ct_args);
+        writer_receiver_kernel_desc.named_compile_time_args = writer_cb_named_args;
         writer_receiver_kernel_desc.defines = std::move(kernel_config.writer_defines);
         writer_receiver_kernel_desc.runtime_args = std::move(kernel_config.writer_receiver_rt_args);
         writer_receiver_kernel_desc.config = DataMovementConfigDescriptor{
@@ -830,6 +878,7 @@ void add_kernel_descriptors(
     compute_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
     compute_all_to_all_kernel_desc.compile_time_args = std::move(kernel_config.compute_all_to_all_ct_args);
+    compute_all_to_all_kernel_desc.named_compile_time_args = compute_cb_named_args;
     compute_all_to_all_kernel_desc.defines = kernel_config.compute_defines;
     compute_all_to_all_kernel_desc.runtime_args = std::move(kernel_config.compute_all_to_all_rt_args);
     compute_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
@@ -845,6 +894,7 @@ void add_kernel_descriptors(
         compute_not_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_not_all_to_all_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         compute_not_all_to_all_kernel_desc.compile_time_args = std::move(kernel_config.compute_not_all_to_all_ct_args);
+        compute_not_all_to_all_kernel_desc.named_compile_time_args = compute_cb_named_args;
         compute_not_all_to_all_kernel_desc.defines = std::move(kernel_config.compute_defines);
         compute_not_all_to_all_kernel_desc.runtime_args = std::move(kernel_config.compute_not_all_to_all_rt_args);
         compute_not_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
@@ -1110,16 +1160,26 @@ void add_cb_descriptors(
 CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx) {
     CoreIndices idx;
 
+    // Convert absolute core coordinates to grid-relative coordinates.
+    // Core ranges use absolute coordinates (e.g., cores 2,0-3,1 for a non-zero-based grid),
+    // but width_index/height_index must be relative to the grid start (0-based) for correct
+    // sender/receiver classification and tile offset calculations.
+    CoreCoord rel_core = core;
+    if (ctx.grid.grid_offset.has_value()) {
+        rel_core.x -= ctx.grid.grid_offset->x;
+        rel_core.y -= ctx.grid.grid_offset->y;
+    }
+
     if (ctx.grid.mcast_1d) {
         idx.height_index = 0;
         idx.width_index = core_idx;
     } else {
         if (ctx.grid.row_wise) {
-            idx.height_index = core.y;
-            idx.width_index = core.x;
+            idx.height_index = rel_core.y;
+            idx.width_index = rel_core.x;
         } else {
-            idx.height_index = core.x;
-            idx.width_index = core.y;
+            idx.height_index = rel_core.x;
+            idx.width_index = rel_core.y;
         }
     }
 

@@ -72,14 +72,14 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // CB definitions
     // ---------------------------------------------------------------------------
-    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
-    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_20;
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
+    constexpr uint32_t cb_ex_partial = get_named_compile_time_arg_val("cb_ex_partial");
+    constexpr uint32_t cb_ex = get_named_compile_time_arg_val("cb_ex");
+    constexpr uint32_t cb_ex_external = get_named_compile_time_arg_val("cb_ex_external");
+    constexpr uint32_t cb_ex_partial2 = get_named_compile_time_arg_val("cb_ex_partial2");
+    constexpr uint32_t cb_ex2 = get_named_compile_time_arg_val("cb_ex2");
+    constexpr uint32_t cb_ex_external2 = get_named_compile_time_arg_val("cb_ex_external2");
+    constexpr uint32_t cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");
+    constexpr uint32_t cb_ex_global = get_named_compile_time_arg_val("cb_ex_global");  // E[x] global reduce
 
     // ---------------------------------------------------------------------------
     // Set up constants for the kernel

@@ -385,6 +385,21 @@ void py_module_types(nb::module_& mod) {
 
                 Use this when creating intermediate CBs in fused kernels where the CB
                 should not be pinned to any specific tensor's L1 address.
+            )pbdoc")
+        .def(
+            "buffer_address",
+            [](const tt::tt_metal::CBDescriptor& self) -> std::optional<uint32_t> {
+                if (self.buffer != nullptr) {
+                    return self.buffer->address();
+                }
+                return std::nullopt;
+            },
+            R"pbdoc(
+                Get the L1 address of the pinned buffer, or None if no buffer exists.
+
+                Returns the base L1 address where this CB's data resides. For sharded
+                tensors, this address is the same on all cores (each core has different
+                data at the same L1 address).
             )pbdoc");
 
     // Helper function for creating CBDescriptor from sharded tensor

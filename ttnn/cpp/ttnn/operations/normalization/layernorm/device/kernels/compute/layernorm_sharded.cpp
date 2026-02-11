@@ -57,30 +57,31 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
-    constexpr uint32_t cb_x = tt::CBIndex::c_24;  // x minus mean
+    constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("cb_scaler");
+    constexpr uint32_t cb_eps = get_named_compile_time_arg_val("cb_eps");
+    constexpr uint32_t cb_scaler_global = get_named_compile_time_arg_val("cb_scaler_global");
+    constexpr uint32_t cb_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t cb_beta = get_named_compile_time_arg_val("cb_beta");
+    constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");  // x minus mean
 #if defined RMSNORM and not defined FUSE_PRE_ADD
     constexpr uint32_t cb_xmm = cb_in0;  // x minus mean
 #else
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_18;  // x minus mean
+    constexpr uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
 #endif
-    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // E[x] global reduce
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;  // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;          // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
+    constexpr uint32_t cb_ex_partial = get_named_compile_time_arg_val("cb_ex_partial");  // E[x] partial reduce
+    constexpr uint32_t cb_ex = get_named_compile_time_arg_val("cb_ex");                  // E[x] global reduce
+    constexpr uint32_t cb_ex_external = get_named_compile_time_arg_val("cb_ex_external");
+    constexpr uint32_t cb_ex_partial2 =
+        get_named_compile_time_arg_val("cb_ex_partial2");                  // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t cb_ex2 = get_named_compile_time_arg_val("cb_ex2");  // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex_external2 = get_named_compile_time_arg_val("cb_ex_external2");
+    constexpr uint32_t cb_ex_global = get_named_compile_time_arg_val("cb_ex_global");  // E[x] global reduce
     constexpr uint32_t cb_xmm2 = cb_x;                    // xmm^2
-    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_20;      // E[(x-E[x])^2]+eps
-    constexpr uint32_t cb_fusion = tt::CBIndex::c_18;     // stream gamma/beta
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");  // E[(x-E[x])^2]+eps
+    constexpr uint32_t cb_fusion = get_named_compile_time_arg_val("cb_xmm");   // stream gamma/beta (alias of cb_xmm)
+    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
 
