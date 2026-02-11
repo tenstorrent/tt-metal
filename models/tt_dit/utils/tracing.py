@@ -408,7 +408,7 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
             msg = f"types of '{path_label}' should be the same: {type(x)} != {type(y)}"
             raise TypeError(msg)
 
-    if isinstance(x, tuple):
+    if isinstance(x, tuple) and all(isinstance(y, tuple) for y in xs):
         for y in xs:
             if len(x) != len(y):
                 msg = f"tuple lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
@@ -418,7 +418,7 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
             _tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))
         )
 
-    if isinstance(x, list):
+    if isinstance(x, list) and all(isinstance(y, list) for y in xs):
         for y in xs:
             if len(x) != len(y):
                 msg = f"list lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
@@ -426,7 +426,7 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
 
         return [_tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))]
 
-    if isinstance(x, dict):
+    if isinstance(x, dict) and all(isinstance(y, dict) for y in xs):
         for y in xs:
             if x.keys() != y.keys():
                 msg = f"dict keys of '{path_label}' should be the same: {x.keys()} != {y.keys()}"
