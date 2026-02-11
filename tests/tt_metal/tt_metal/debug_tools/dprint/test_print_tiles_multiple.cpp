@@ -111,7 +111,8 @@ void RunTest(
     distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord, true);
     fixture->RunProgram(mesh_device, workload);
 
-    const auto* filename = "generated/dprint/device-0_worker-core-0-0_BRISC.txt";
+    auto filename = tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() +
+        "generated/dprint/device-0_worker-core-0-0_BRISC.txt";
     auto expected_output = expected_output_write + expected_output_read;
 
     EXPECT_TRUE(FilesMatchesString(filename, expected_output));
