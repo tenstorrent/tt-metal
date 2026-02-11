@@ -164,9 +164,9 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoFile) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
 }
 
-TEST(MeshGraphDescriptorTests, ParsesDualPod32x4QuadBhGalaxyTorusXY) {
+TEST(MeshGraphDescriptorTests, ParsesBhGalaxySp4TorusXY) {
     const std::filesystem::path text_proto_file_path =
-        "tt_metal/fabric/mesh_graph_descriptors/dual_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
+        "tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto";
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
 }
 

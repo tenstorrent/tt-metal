@@ -8,7 +8,7 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      num_links: 1
+      num_links: 2
 
     parametrization_params:
       ftype: [unicast]
@@ -27,7 +27,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      num_links: 1
+      num_links: 2
 
     parametrization_params:
       ftype: [unicast]
@@ -45,7 +45,7 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      num_links: 1
+      num_links: 2
 
     parametrization_params:
       ftype: [unicast]
@@ -64,7 +64,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      num_links: 1
+      num_links: 2
 
     parametrization_params:
       ftype: [unicast]
