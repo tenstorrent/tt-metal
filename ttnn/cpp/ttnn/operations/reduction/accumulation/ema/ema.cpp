@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::reduction::accumulation {
 
-Tensor EmaOperation::invoke(
+Tensor ema_impl(
     const Tensor& input_tensor,
     const float& alpha,
     std::optional<Tensor> optional_out,
@@ -29,3 +29,18 @@ Tensor EmaOperation::invoke(
 }
 
 }  // namespace ttnn::operations::reduction::accumulation
+
+namespace ttnn {
+
+Tensor ema(
+    const Tensor& input_tensor,
+    const float& alpha,
+    std::optional<Tensor> optional_out,
+    std::optional<CoreGrid> core_grid,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    return operations::reduction::accumulation::ema_impl(
+        input_tensor, alpha, std::move(optional_out), core_grid, memory_config, compute_kernel_config);
+}
+
+}  // namespace ttnn
