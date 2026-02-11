@@ -520,9 +520,8 @@ def load_data():
                         if result:
                             config_id = result[0]
                             config_cache[config_hash] = config_id
-                        continue
 
-                # Link this execution's model to the config via junction table
+                # Link this execution's model to the config via junction table (even if config existed)
                 if model_id is not None:
                     cur.execute(
                         """

@@ -151,7 +151,7 @@ def create_tensor_on_mesh(
             shard_dims = re.findall(r"PlacementShard\((\d+)\)", placement_str)
             shard_dim = int(shard_dims[-1]) if shard_dims else -1
 
-            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dim=shard_dim)
+            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, shard_dim)
         else:
             # Default to replicate if placement not recognized
             mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)

@@ -401,7 +401,6 @@ def update_master_file(master_file_path, operations, test_source):
         except Exception as e:
             print(f"⚠️ Warning: Could not load existing master JSON: {e}")
             print(f"   Starting with empty master data")
-            pass
 
     # Find the current max config_id
     max_config_id = 0
@@ -858,9 +857,9 @@ def fix_infinity_in_json_file(json_file):
         with open(json_file, "r") as f:
             content = f.read()
 
-        # Count occurrences
-        infinity_count = content.count("-Infinity") + content.count(": Infinity")
-        nan_count = content.count(": NaN")
+        # Count occurrences (use same patterns as replacements)
+        infinity_count = len(re.findall(r":\s*-Infinity\b", content)) + len(re.findall(r":\s*Infinity\b", content))
+        nan_count = len(re.findall(r":\s*NaN\b", content))
 
         if infinity_count == 0 and nan_count == 0:
             print(f"   No infinity/nan values to fix")
@@ -989,7 +988,6 @@ Examples (Import existing traces):
             print(f"❌ Error: Trace directory not found: {args.load}")
             return 1
         trace_dir = args.load
-        test_source = os.path.basename(args.load)
         # Find all JSON files in the trace directory, excluding metadata
         trace_files = [
             os.path.join(trace_dir, f)

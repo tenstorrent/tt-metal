@@ -942,7 +942,6 @@ class MasterConfigLoader:
         input_dtypes = []
         input_layouts = []
         input_memory_configs = []
-        output_memory_configs = []
 
         for config in configs:
             try:

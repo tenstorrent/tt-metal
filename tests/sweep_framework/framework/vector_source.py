@@ -341,24 +341,6 @@ class VectorExportSource(VectorSource):
         return all_vectors
 
     def get_available_suites(self, module_name: str) -> list[str]:
-        """Get available suites for a module"""
-        module_files = self._find_module_files(module_name)
-        if not module_files:
-            return []
-
-        suites = set()
-        for module_file in module_files:
-            try:
-                with open(module_file, "r") as file:
-                    data = json.load(file)
-                    suites.update(data.keys())
-            except (json.JSONDecodeError, IOError) as e:
-                logger.warning(f"Failed to load vectors from {module_file}: {e}")
-                continue
-
-        return all_vectors
-
-    def get_available_suites(self, module_name: str) -> list[str]:
         """Get list of available suites for a module from vectors_export directory (including mesh variants)"""
         module_files = self._find_module_files(module_name)
         if not module_files:
