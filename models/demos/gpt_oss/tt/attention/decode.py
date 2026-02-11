@@ -102,7 +102,8 @@ def decode_forward(
 
     tt_k.deallocate(True)
     tt_v.deallocate(True)
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    # grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)
     batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
 
     # Calculate padded heads (must be tile-aligned, e.g., 32)
