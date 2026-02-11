@@ -33,7 +33,9 @@ jobs:
     timeout-minutes: 30
     runs-on: >-
       ${{
-        (format('tt-ubuntu-2204-{0}-stable', inputs.runner))
+        (github.workflow == 'Blackhole post-commit tests' && github.ref_name == 'main' && inputs.runner == 'P150b-viommu')
+          && 'tt-ubuntu-2204-p150b-viommu-post-commit'
+          || format('tt-ubuntu-2204-{0}-stable', inputs.runner)
       }}
     container:
       image: ${{ (inputs.docker-image && (contains(inputs.runner, 'dedicated-merge-gate') && inputs.docker-image || format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image))) || 'docker-image-unresolved!' }}
