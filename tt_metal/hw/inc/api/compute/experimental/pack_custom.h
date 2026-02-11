@@ -16,7 +16,6 @@ namespace ckernel {
  * to handle the specified number of tiles (typically the full destination bank size).
  *
  * NOTE: This function alters the behavior of the packer only on Blachole.
-
  * Return value: None
  *
  * | Param Type | Name      | Description                                       | Type     | Valid Range | Required |
@@ -26,6 +25,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void pack_block_init_custom(uint32_t icb, uint32_t num_tiles) {
+// TODO NC: Should be removed as a custom functionality as a part of tt-metal#37671
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<false, false, false>(icb, num_tiles)));
 #else
