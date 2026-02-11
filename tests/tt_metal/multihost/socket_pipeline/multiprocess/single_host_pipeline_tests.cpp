@@ -172,8 +172,10 @@ void run_single_host_loopback_pipeline(
     avg_latency_cycles /= LATENCY_ITERATIONS_FOR_AVG;
     double freq_mhz = static_cast<double>(cluster.get_device_aiclk(start_device_id));
     double avg_latency_us = (avg_latency_cycles / (freq_mhz * 1e6)) * 1e6;
+    double avd_latency_per_stage_us = avg_latency_us / 5.0;
     log_info(tt::LogTest, "Average latency in cycles: {:.2f}", avg_latency_cycles);
     log_info(tt::LogTest, "Average latency in microseconds: {:.2f}", avg_latency_us);
+    log_info(tt::LogTest, "Average latency per stage in microseconds: {:.2f}", avd_latency_per_stage_us);
 }
 
 TEST_F(SingleHostLoopbackPipelineFixture, SingleHostLoopbackPipeline) {

@@ -106,6 +106,12 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
     channels { count: 8 policy: RELAXED }
   }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    channels { count: 8 policy: RELAXED }
+  }
 }
 
 # --- Instantiation ----------------------------------------------------------

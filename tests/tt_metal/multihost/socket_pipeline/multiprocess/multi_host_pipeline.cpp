@@ -28,11 +28,38 @@ namespace tt::tt_metal {
 // Set TT_FABRIC_MESH_GRAPH_DESC_PATH to bh_galaxy_4x2_mesh_graph_descriptor.textproto when running.
 class MeshDeviceSingleGalaxyPipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {};
 
+// Fixture for Superpod 4 pipeline tests (16 ranks; 17 stages with loopback on rank 0).
+// Requires 16 processes and mesh graph with 16 mesh IDs.
+// Set TT_FABRIC_MESH_GRAPH_DESC_PATH to the superpod 4 mesh graph when running.
+class MeshDeviceSuperpod4PipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {
+public:
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping: Superpod 4 pipeline requires 16 ranks and matching mesh graph.";
+        }
+        tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::TearDown();
+        }
+    }
+
+    bool system_supported() {
+        if (not tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::system_supported()) {
+            return false;
+        }
+        return *tt::tt_metal::MetalContext::instance().global_distributed_context().size() == 16u;
+    }
+};
+
 // Pipeline config structs.
 
 // User builds a pipeline in physical space (Host Ranks, Tray IDs, ASIC Locations)
 struct PhysicalPipelineStageConfig {
-    uint32_t tray_id;
+    uint32_t entry_node_tray_id;
+    uint32_t exit_node_tray_id;
     uint32_t entry_node_asic_location;
     uint32_t exit_node_asic_location;
 };
@@ -116,11 +143,102 @@ std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineTy
     switch (type) {
         case PipelineType::SINGLE_GALAXY:
             return {
-                {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-                {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
-                {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
-                {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-                {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 3,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 2},
+            };
+        case PipelineType::SUPERPOD_4:
+            return {
+                // First Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Second Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Third Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Fourth Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Wrap-around
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 1},
             };
         default: return {};
     }
@@ -136,8 +254,8 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
     const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
     const std::size_t num_stages = physical_pipeline_stage_configs.size();
     const bool last_stage_loopback =
-        (num_stages > 1u &&
-         physical_pipeline_stage_configs.back().tray_id == physical_pipeline_stage_configs[0].tray_id);
+        (num_stages > 1u && physical_pipeline_stage_configs.back().exit_node_tray_id ==
+                                physical_pipeline_stage_configs[0].entry_node_tray_id);
     std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
     for (std::size_t stage_index = 0; stage_index < num_stages; stage_index++) {
         uint32_t rank_for_host = (last_stage_loopback && stage_index == num_stages - 1u)
@@ -147,11 +265,11 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
         const auto& phys = physical_pipeline_stage_configs[stage_index];
         auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
-            tt::tt_metal::TrayID(phys.tray_id),
+            tt::tt_metal::TrayID(phys.entry_node_tray_id),
             tt::tt_metal::ASICLocation(phys.entry_node_asic_location));
         auto exit_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
-            tt::tt_metal::TrayID(phys.tray_id),
+            tt::tt_metal::TrayID(phys.exit_node_tray_id),
             tt::tt_metal::ASICLocation(phys.exit_node_asic_location));
         logical_pipeline_stage_configs.emplace_back(LogicalPipelineStageConfig{
             .stage_index = stage_index,
@@ -199,7 +317,7 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 void run_single_galaxy_pipeline(
     std::shared_ptr<distributed::MeshDevice>& mesh_device, PipelineType pipeline_type, bool enable_correctness_check) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;  // size of data being moved across pipeline stages for the workload
-    constexpr uint32_t NUM_ITERATIONS = 100;
+    constexpr uint32_t NUM_ITERATIONS = 500;
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto my_rank = *distributed_context->rank();
@@ -415,8 +533,10 @@ void run_single_galaxy_pipeline(
         avg_latency_cycles /= LATENCY_ITERATIONS_FOR_AVG;
         double freq_mhz = static_cast<double>(cluster.get_device_aiclk(start_device_id));
         double avg_latency_us = (avg_latency_cycles / (freq_mhz * 1e6)) * 1e6;
+        double avd_latency_per_stage_us = avg_latency_us / static_cast<double>(num_stages);
         log_info(tt::LogTest, "Average latency in cycles: {:.2f}", avg_latency_cycles);
         log_info(tt::LogTest, "Average latency in microseconds: {:.2f}", avg_latency_us);
+        log_info(tt::LogTest, "Average latency per stage in microseconds: {:.2f}", avd_latency_per_stage_us);
     }
 }
 
@@ -426,6 +546,15 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
 
 TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxyWithCorrectnessCheck) {
     run_single_galaxy_pipeline(mesh_device_, PipelineType::SINGLE_GALAXY, /*enable_correctness_check=*/true);
+}
+
+// SUPERPOD_4: 17 stages (4 pods × 4 stages + 1 wrap-around), 16 ranks; loopback stage on rank 0.
+TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4) {
+    run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4, /*enable_correctness_check=*/false);
+}
+
+TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4WithCorrectnessCheck) {
+    run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4, /*enable_correctness_check=*/true);
 }
 
 }  // namespace tt::tt_metal
