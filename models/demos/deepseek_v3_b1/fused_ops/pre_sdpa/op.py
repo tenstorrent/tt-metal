@@ -156,7 +156,8 @@ class PreSDPA:
         input_tensor_mesh,
         intermediate_tensor_mesh,
         gamma_tensor,
-        matmul_weights_tensor,
+        matmul_weights_half0_tensor,
+        matmul_weights_half1_tensor,
         rmsnorm2_gamma_tensor,
         matmul2_weights_tensor,
         matmul3_weights_tensor,
@@ -185,7 +186,8 @@ class PreSDPA:
             input_tensor_mesh: Input mesh tensor (must be sharded on single core per device)
             intermediate_tensor_mesh: Intermediate mesh tensor for CCL broadcast destination
             gamma_tensor: Gamma/weight tensor (must be sharded, same shape as input)
-            matmul_weights_tensor: Matmul weights tensor (must be width sharded)
+            matmul_weights_half0_tensor: Matmul half0 weights tensor (must be width sharded)
+            matmul_weights_half1_tensor: Matmul half1 weights tensor (must be width sharded)
             rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (1536 elements = 3 tiles of 16x32)
             matmul2_weights_tensor: Matmul2 weights tensor (width sharded, shuffled for interleaved output)
             matmul3_weights_tensor: Matmul3 weights tensor (height sharded on Qnope grid, [128, 512] per core)
@@ -219,7 +221,8 @@ class PreSDPA:
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
         gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor)
-        matmul_weights_tensors_per_device = ttnn.get_device_tensors(matmul_weights_tensor)
+        matmul_weights_half0_tensors_per_device = ttnn.get_device_tensors(matmul_weights_half0_tensor)
+        matmul_weights_half1_tensors_per_device = ttnn.get_device_tensors(matmul_weights_half1_tensor)
         rmsnorm2_gamma_tensors_per_device = ttnn.get_device_tensors(rmsnorm2_gamma_tensor)
         matmul2_weights_tensors_per_device = ttnn.get_device_tensors(matmul2_weights_tensor)
         matmul3_weights_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor)
@@ -295,17 +298,46 @@ class PreSDPA:
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
 
-        # Get matmul weights core grid (48 cores for width sharding)
-        matmul_weights_sample = matmul_weights_tensors_per_device[0]
-        matmul_weights_memory_config = matmul_weights_sample.memory_config()
-        matmul_weights_core_grid = matmul_weights_memory_config.shard_spec.grid
+        # Get matmul core grids from half0/half1 weight shard specs (source of truth from test setup)
+        matmul_weights_half0_sample = matmul_weights_half0_tensors_per_device[0]
+        matmul_weights_half1_sample = matmul_weights_half1_tensors_per_device[0]
+        matmul_weights_half0_memory_config = matmul_weights_half0_sample.memory_config()
+        matmul_weights_half1_memory_config = matmul_weights_half1_sample.memory_config()
+        matmul_half0_core_grid = matmul_weights_half0_memory_config.shard_spec.grid
+        matmul_half1_core_grid = matmul_weights_half1_memory_config.shard_spec.grid
+        matmul_half0_bbox = matmul_half0_core_grid.bounding_box()
+        matmul_half1_bbox = matmul_half1_core_grid.bounding_box()
+
+        if matmul_half0_bbox.start.y != matmul_half1_bbox.start.y or matmul_half0_bbox.end.y != matmul_half1_bbox.end.y:
+            raise ValueError("matmul half grids must have identical Y ranges")
+        if matmul_half1_bbox.start.x != matmul_half0_bbox.end.x + 1:
+            raise ValueError("matmul half1 grid must start immediately after half0 grid in X")
+
+        matmul_weights_core_grid = matmul_half0_core_grid.merge(matmul_half1_core_grid)
+        matmul_bbox = matmul_weights_core_grid.bounding_box()
+        matmul_grid_size = matmul_bbox.grid_size()
+        if matmul_grid_size.x % 2 != 0:
+            raise ValueError(f"matmul core grid x-dimension must be even for half split, got {matmul_grid_size.x}")
+        if matmul_grid_size.x * matmul_grid_size.y != 96:
+            raise ValueError(
+                f"matmul core grid must have 96 cores for this K-split path, got {matmul_grid_size.x * matmul_grid_size.y}"
+            )
 
         # Calculate per-core width in tiles for matmul1 (from shard spec)
         # Get shard width directly from shard_spec and divide by tile width from tensor
-        matmul_weights_tile = matmul_weights_sample.get_tile()
-        matmul_weights_shard_shape = matmul_weights_memory_config.shard_spec.shape
-        matmul_weights_shard_width = matmul_weights_shard_shape[1]  # Width dimension
-        matmul1_out_w = matmul_weights_shard_width // matmul_weights_tile.tile_shape[1]  # Per-core width in tiles
+        matmul_weights_half0_tile = matmul_weights_half0_sample.get_tile()
+        matmul_weights_half1_tile = matmul_weights_half1_sample.get_tile()
+        matmul_weights_half0_shard_shape = matmul_weights_half0_memory_config.shard_spec.shape
+        matmul_weights_half1_shard_shape = matmul_weights_half1_memory_config.shard_spec.shape
+        matmul_weights_half0_shard_width = matmul_weights_half0_shard_shape[1]  # Width dimension
+        matmul_weights_half1_shard_width = matmul_weights_half1_shard_shape[1]  # Width dimension
+        if matmul_weights_half0_shard_width != matmul_weights_half1_shard_width:
+            raise ValueError("matmul half0/half1 shard widths must match")
+        if matmul_weights_half0_tile.tile_shape != matmul_weights_half1_tile.tile_shape:
+            raise ValueError("matmul half0/half1 tile shapes must match")
+        matmul_out_w = (
+            matmul_weights_half0_shard_width // matmul_weights_half0_tile.tile_shape[1]
+        )  # Per-core width in tiles
 
         # Calculate per-core width in tiles for matmul2 (from shard spec)
         matmul2_weights_sample = matmul2_weights_tensors_per_device[0]
@@ -461,6 +493,9 @@ class PreSDPA:
         # Only use noc0 semaphore since senders are on NOC_0 (default for NCRISC)
         gather_noc0_receiver_semaphore_id = 2
         gather_noc1_receiver_semaphore_id = 3
+        # Gather-reduce for matmul path reuses gather semaphore IDs
+        gather_reduce_noc0_receiver_semaphore_id = gather_noc0_receiver_semaphore_id
+        gather_reduce_noc1_receiver_semaphore_id = gather_noc1_receiver_semaphore_id
 
         # Semaphore ID for gather heads synchronization (QNOPE/QROPE -> SDPA)
         # Reuse gather_noc0_receiver_semaphore_id (ID 2)
@@ -485,7 +520,7 @@ class PreSDPA:
         input_cb = 0
         gamma_cb = 1
         rmsnorm_output_cb = 2
-        matmul_weights_cb = 3
+        matmul_half0_weights_cb = 3
         matmul_output_cb = 4
         matmul_input_cb = 5
         rmsnorm2_gamma_cb = 6  # New gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
@@ -512,6 +547,7 @@ class PreSDPA:
         krope_output_cb = 27  # Output CB for KV Cache Branch RoPE
         krope_cos_cb = 28  # Cos CB for RoPE
         krope_sin_cb = 29  # Sin CB for RoPE
+        matmul_half1_weights_cb = 31  # Dedicated half1 weights CB for first matmul
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -577,28 +613,39 @@ class PreSDPA:
             ("mcast_dst_num_pages", mcast_dst_num_pages),
         ]
 
-        # Calculate matmul parameters
-        # num_tiles_k = number of 1x32 tiles in the input (same as mcast_dst_num_pages)
-        matmul_num_tiles_k = mcast_dst_num_pages
+        # Calculate matmul1 K-split parameters
+        # act_total_tiles = number of 1x32 tiles in full activation (same as mcast_dst_num_pages)
+        matmul_act_total_tiles = mcast_dst_num_pages
+        # Split K=7168 into 2 halves: each half has 112 tiles
+        matmul_k_per_core = matmul_act_total_tiles // 2
+        matmul_k_offset_half1 = matmul_k_per_core
+        matmul_cols_per_half = matmul_half0_bbox.grid_size().x
+        # matmul_half_boundary_col is a logical-x threshold used directly in kernel
+        matmul_half_boundary_col = matmul_half1_bbox.start.x
 
         # Matmul compile-time args (different per RISC, only pass what's used)
-        # NCRISC: in1, num_tiles
+        # NCRISC: in1, k_per_core (for setup_sharded_buffer)
         matmul_ncrisc_named_compile_time_args = [
-            ("matmul_in1", matmul_weights_cb),
-            ("matmul_k_num_tiles", matmul_num_tiles_k),
-            ("matmul_out_w_per_core", matmul1_out_w),
+            ("matmul_half0_in1", matmul_half0_weights_cb),
+            ("matmul_half1_in1", matmul_half1_weights_cb),
+            ("matmul_k_per_core", matmul_k_per_core),
+            ("matmul_out_w_per_core", matmul_out_w),
         ]
         # BRISC: out
         matmul_brisc_named_compile_time_args = [
             ("matmul_out", matmul_output_cb),
         ]
-        # TRISC: in0, in1, out, num_tiles, out_w_per_core
+        # TRISC: KNSlicedMatmul args
         matmul_trisc_named_compile_time_args = [
             ("matmul_in0", matmul_input_cb),
-            ("matmul_in1", matmul_weights_cb),
+            ("matmul_half0_in1", matmul_half0_weights_cb),
+            ("matmul_half1_in1", matmul_half1_weights_cb),
             ("matmul_out", matmul_output_cb),
-            ("matmul_k_num_tiles", matmul_num_tiles_k),
-            ("matmul_out_w_per_core", matmul1_out_w),
+            ("matmul_half_boundary_col", matmul_half_boundary_col),
+            ("matmul_k_offset_half1", matmul_k_offset_half1),
+            ("matmul_k_per_core", matmul_k_per_core),
+            ("matmul_act_total_tiles", matmul_act_total_tiles),
+            ("matmul_out_w_per_core", matmul_out_w),
         ]
 
         # Matmul2 compile-time args (different per RISC)
@@ -778,66 +825,57 @@ class PreSDPA:
         ]
 
         # ========================================================================
-        # Gather setup: matmul cores (senders) -> rmsnorm core (receiver)
+        # Gather-reduce setup: matmul cores (senders) -> rmsnorm core (receiver/reducer)
         # Sender runs on NCRISC (NOC_0 default), Receiver runs on BRISC (NOC_1 default)
         # ========================================================================
-        gather_receiver_core = rmsnorm_core
-        gather_sender_grid = matmul_weights_core_grid
+        gather_reduce_receiver_core = rmsnorm_core
+        gather_reduce_sender_grid = matmul_weights_core_grid
 
         # Get NOC coordinates for gather destination (receiver core)
-        gather_dest_noc_core = device.worker_core_from_logical_core(gather_receiver_core)
+        gather_reduce_dest_noc_core = device.worker_core_from_logical_core(gather_reduce_receiver_core)
 
         # Calculate gather data size (matmul output size per core = 1 tile of 1x32)
         # Note: matmul_input_page_size == matmul_output_page_size (both are 1x32 tiles)
-        gather_data_size_bytes = matmul_input_page_size
+        gather_reduce_data_size_bytes = matmul_input_page_size
 
         # Get number of sender cores (matmul grid)
-        gather_sender_cores_list = ttnn.corerange_to_cores(gather_sender_grid, row_wise=True)
-        gather_num_senders = len(gather_sender_cores_list)
+        gather_reduce_sender_cores_list = ttnn.corerange_to_cores(gather_reduce_sender_grid, row_wise=True)
+        gather_reduce_num_senders = len(gather_reduce_sender_cores_list)
 
         # All senders use NOC_0 (default for NCRISC), so noc0_num_senders = all, noc1_num_senders = 0
-        gather_noc0_num_senders = gather_num_senders
-        gather_noc1_num_senders = 0
-
-        # Get sender grid dimensions for computing per-core offset in kernel
-        # Use logical coordinates since kernel uses UnifiedCoreDescriptor with my_logical_x_/y_
-        gather_sender_grid_ranges = list(gather_sender_grid.ranges())
-        gather_sender_grid_range = gather_sender_grid_ranges[0]
-        gather_sender_grid_start_x = gather_sender_grid_range.start.x
-        gather_sender_grid_start_y = gather_sender_grid_range.start.y
-        gather_sender_grid_end_x = gather_sender_grid_range.end.x
-        gather_sender_grid_end_y = gather_sender_grid_range.end.y
+        gather_reduce_noc0_num_senders = gather_reduce_num_senders
+        gather_reduce_noc1_num_senders = 0
 
         # Gather sender compile-time args (named args for NCRISC on matmul cores)
         # SenderCTArgs: dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id
-        # Plus grid info for computing per-core offset
-        gather_src_num_pages = 1  # Matmul output tiles per core (single 1x32 tile)
-        gather_sender_named_compile_time_args = [
-            ("gather_dest_noc_x", gather_dest_noc_core.x),
-            ("gather_dest_noc_y", gather_dest_noc_core.y),
-            ("gather_data_size_bytes", gather_data_size_bytes),
-            ("gather_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
-            ("gather_src_cb", matmul_output_cb),  # Source CB for gather (matmul output)
-            ("gather_src_num_pages", gather_src_num_pages),
-            ("gather_sender_grid_start_x", gather_sender_grid_start_x),
-            ("gather_sender_grid_start_y", gather_sender_grid_start_y),
-            ("gather_sender_grid_end_x", gather_sender_grid_end_x),
-            ("gather_sender_grid_end_y", gather_sender_grid_end_y),
-            ("gather_row_major", 1),  # 1 = row-major linearization
-            ("gather_dst_cb", rmsnorm2_input_cb),  # Destination CB: write directly to rmsnorm2_input_cb
+        # Grid-based destination and sender index are computed in kernel from my_logical_x_/y_.
+        gather_reduce_src_num_pages = 1  # Matmul output tiles per core (single 1x32 tile)
+        gather_reduce_sender_named_compile_time_args = [
+            ("gather_reduce_dest_noc_x", gather_reduce_dest_noc_core.x),
+            ("gather_reduce_dest_noc_y", gather_reduce_dest_noc_core.y),
+            ("gather_reduce_data_size_bytes", gather_reduce_data_size_bytes),
+            ("gather_reduce_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
+            ("gather_reduce_src_cb", matmul_output_cb),
+            ("gather_reduce_src_num_pages", gather_reduce_src_num_pages),
+            ("matmul_half_boundary_col", matmul_half_boundary_col),
+            ("matmul_cols_per_half", matmul_cols_per_half),
+            ("gather_reduce_half0_cb_id", rmsnorm2_input_cb),
+            # Reuse CB8 as half1 gather destination scratch; TRISC reduction consumes it before RMSNorm2 writes output.
+            ("gather_reduce_half1_cb_id", rmsnorm2_output_cb),
         ]
 
         # Gather receiver compile-time args (named args for BRISC on rmsnorm core)
         # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
         # Plus destination CB info for reserve/push
         # Writes directly to rmsnorm2_input_cb (3 tiles of 16x32 = 3072 bytes)
-        gather_receiver_named_compile_time_args = [
-            ("gather_noc0_num_senders", gather_noc0_num_senders),
-            ("gather_noc1_num_senders", gather_noc1_num_senders),
-            ("gather_noc0_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
-            ("gather_noc1_receiver_semaphore_id", gather_noc1_receiver_semaphore_id),
-            ("gather_dst_cb", rmsnorm2_input_cb),
-            ("gather_dst_num_pages", rmsnorm2_num_tiles),  # 3 pages of 16x32 tiles
+        gather_reduce_receiver_named_compile_time_args = [
+            ("gather_reduce_noc0_num_senders", gather_reduce_noc0_num_senders),
+            ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
+            ("gather_reduce_noc0_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
+            ("gather_reduce_noc1_receiver_semaphore_id", gather_reduce_noc1_receiver_semaphore_id),
+            ("gather_reduce_half0_dst_cb", rmsnorm2_input_cb),
+            ("gather_reduce_half1_dst_cb", rmsnorm2_output_cb),
+            ("gather_reduce_dst_num_tiles", rmsnorm2_num_tiles),
         ]
 
         # KV Cache Branch
@@ -1004,7 +1042,8 @@ class PreSDPA:
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
                 gamma_tensor_device = gamma_tensors_per_device[device_idx]
-                matmul_weights_tensor_device = matmul_weights_tensors_per_device[device_idx]
+                matmul_weights_half0_tensor_device = matmul_weights_half0_tensors_per_device[device_idx]
+                matmul_weights_half1_tensor_device = matmul_weights_half1_tensors_per_device[device_idx]
                 rmsnorm2_gamma_tensor_device = rmsnorm2_gamma_tensors_per_device[device_idx]
                 matmul2_weights_tensor_device = matmul2_weights_tensors_per_device[device_idx]
                 matmul3_weights_tensor_device = matmul3_weights_tensors_per_device[device_idx]
@@ -1147,11 +1186,16 @@ class PreSDPA:
                     page_size=rmsnorm2_page_size,
                     tile=rmsnorm2_tile_descriptor,
                 )
+                rmsnorm2_output_cb_core_ranges = matmul_weights_core_grid.merge(rmsnorm_core_grid)
                 rmsnorm2_output_cb_descriptor = ttnn.CBDescriptor(
                     total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,  # 3 tiles
-                    core_ranges=rmsnorm_core_grid,
+                    core_ranges=rmsnorm2_output_cb_core_ranges,
                     format_descriptors=[rmsnorm2_output_cb_format],
                 )
+                # CB8 lifecycle:
+                # 1) gather_reduce half1 writes partials here
+                # 2) TRISC reduction consumes CB8 while producing reduced output in CB7
+                # 3) RMSNorm2 writes its final normalized output back into CB8
 
                 # CB: RMSNorm output buffer (dynamically created)
                 rmsnorm_output_cb_format = ttnn.CBFormatDescriptor(
@@ -1166,9 +1210,13 @@ class PreSDPA:
                     format_descriptors=[rmsnorm_output_cb_format],
                 )
 
-                # CB: Matmul weights (created from sharded tensor) - not used yet
-                matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul_weights_cb, matmul_weights_tensor_device
+                # CB: Matmul half0 weights (created from sharded tensor)
+                matmul_half0_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    matmul_half0_weights_cb, matmul_weights_half0_tensor_device
+                )
+                # CB: Matmul half1 weights (created from sharded tensor)
+                matmul_half1_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    matmul_half1_weights_cb, matmul_weights_half1_tensor_device
                 )
 
                 # CB: Matmul input buffer (1x32 tiles, receives mcast data)
@@ -1538,12 +1586,12 @@ class PreSDPA:
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
                     core_ranges=full_device_grid,
-                    # NCRISC named compile-time args: bcast reader + rmsnorm reader + mcast receiver + matmul + gather sender + rmsnorm2 + matmul2 + mcast2 + matmul3 + unicast receiver + dkv_matmul + dkv_gather_sender + kv_rmsnorm
+                    # NCRISC named compile-time args: bcast reader + rmsnorm reader + mcast receiver + matmul + gather_reduce sender + rmsnorm2 + matmul2 + mcast2 + matmul3 + unicast receiver + dkv_matmul + dkv_gather_sender + kv_rmsnorm
                     ncrisc_named_compile_time_args=bcast_ncrisc_named_compile_time_args
                     + rmsnorm_reader_named_compile_time_args
                     + mcast_receiver_named_compile_time_args
                     + matmul_ncrisc_named_compile_time_args
-                    + gather_sender_named_compile_time_args
+                    + gather_reduce_sender_named_compile_time_args
                     + rmsnorm2_ncrisc_named_compile_time_args
                     + matmul2_ncrisc_named_compile_time_args
                     + mcast2_ncrisc_named_compile_time_args
@@ -1556,12 +1604,12 @@ class PreSDPA:
                     + krope_ncrisc_named_compile_time_args,
                     # NCRISC common runtime args:
                     ncrisc_common_runtime_args=ncrisc_bcast_common_args,
-                    # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather receiver + matmul2 + mcast2 + matmul3 + qrope + gather_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
+                    # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather_reduce receiver + matmul2 + mcast2 + matmul3 + qrope + gather_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
                     brisc_named_compile_time_args=bcast_brisc_named_compile_time_args
                     + rmsnorm_reader_named_compile_time_args
                     + mcast_sender_named_compile_time_args
                     + matmul_brisc_named_compile_time_args
-                    + gather_receiver_named_compile_time_args
+                    + gather_reduce_receiver_named_compile_time_args
                     + matmul2_brisc_named_compile_time_args
                     + mcast2_brisc_named_compile_time_args
                     + matmul3_brisc_named_compile_time_args
@@ -1606,7 +1654,7 @@ class PreSDPA:
                         ),
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_matmul_core",
-                            core_range=matmul_weights_core_grid,  # 48 matmul cores
+                            core_range=matmul_weights_core_grid,  # 96 matmul cores (12x8)
                             value=1,
                             other_value=0,
                         ),
@@ -1678,7 +1726,8 @@ class PreSDPA:
                     in_cb_descriptor,
                     gamma_cb_descriptor,
                     rmsnorm_output_cb_descriptor,
-                    matmul_weights_cb_descriptor,
+                    matmul_half0_weights_cb_descriptor,
+                    matmul_half1_weights_cb_descriptor,
                     matmul_output_cb_descriptor,
                     matmul_input_cb_descriptor,
                     rmsnorm2_gamma_cb_descriptor,  # CB 6: RMSNorm2 gamma
@@ -1742,7 +1791,8 @@ class PreSDPA:
                 input_tensor_mesh,
                 intermediate_tensor_mesh,
                 gamma_tensor,
-                matmul_weights_tensor,
+                matmul_weights_half0_tensor,
+                matmul_weights_half1_tensor,
                 rmsnorm2_gamma_tensor,
                 matmul2_weights_tensor,
                 matmul3_weights_tensor,
