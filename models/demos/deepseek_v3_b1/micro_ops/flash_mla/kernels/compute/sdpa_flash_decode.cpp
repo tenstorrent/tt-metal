@@ -4,16 +4,14 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
 #include "../rt_args_common.hpp"
 #include "compute_common.hpp"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // Compile time arguments
 
     // Input dimensions in tiles
@@ -44,25 +42,20 @@ void MAIN {
     // 22: q_tile_height (unused by compute)
     // 23: scale_fp32 (unused by simplified compute)
     constexpr uint32_t num_tree_reduction_steps = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_ms_in = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_index_id = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(29);
+    constexpr uint32_t cb_out_im = get_compile_time_arg_val(30);
+    constexpr uint32_t cb_out_accumulate_im = get_compile_time_arg_val(31);
+    constexpr uint32_t cb_out_o = get_compile_time_arg_val(32);
+    constexpr uint32_t cb_out_ms = get_compile_time_arg_val(33);
+    constexpr uint32_t cb_out_final = get_compile_time_arg_val(34);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-
-    // CB index definitions (only those actually used)
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
-    constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
-
-    constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
-    constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
-    constexpr uint32_t cb_out_accumulate_im = tt::CBIndex::c_26;
-
-    constexpr uint32_t cb_out_o = tt::CBIndex::c_16;
-    constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
-    constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
-    constexpr uint32_t cb_out_final = tt::CBIndex::c_20;
 
     // Runtime arguments
     uint32_t arg_idx = 0;
@@ -84,7 +77,6 @@ void MAIN {
     // Get cur_pos from position tensor (MLA decode is always causal)
     uint32_t cur_pos;
     {
-        constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
         cb_wait_front(cb_index_id, 1);
         cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
         cb_pop_front(cb_index_id, 1);
@@ -181,11 +173,9 @@ void MAIN {
                 if (!(k_chunk < k_chunk_end - 1 || do_reduce)) {
                     // Last chunk overall and not reducing: write to output CBs
                     move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
-                    // Push dummy tiles for m and l (writer expects them)
-                    cb_reserve_back(cb_out_m, Sq_chunk_t);
-                    cb_push_back(cb_out_m, Sq_chunk_t);
-                    cb_reserve_back(cb_out_l, Sq_chunk_t);
-                    cb_push_back(cb_out_l, Sq_chunk_t);
+                    // Push dummy m/s tile (m and s packed into single tile)
+                    cb_reserve_back(cb_out_ms, Sq_chunk_t);
+                    cb_push_back(cb_out_ms, Sq_chunk_t);
                 }
             }
         }
@@ -194,11 +184,9 @@ void MAIN {
         if (do_reduce) {
             if (num_cores_to_wait > 0) {
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    // Pop unused m and l from sender
-                    cb_wait_front(cb_m_in, Sq_chunk_t);
-                    cb_pop_front(cb_m_in, Sq_chunk_t);
-                    cb_wait_front(cb_l_in, Sq_chunk_t);
-                    cb_pop_front(cb_l_in, Sq_chunk_t);
+                    // Pop unused m/s tile from sender (m and s packed into single tile)
+                    cb_wait_front(cb_ms_in, Sq_chunk_t);
+                    cb_pop_front(cb_ms_in, Sq_chunk_t);
 
                     // Add sender's output to accumulator
                     reconfig_data_format(cb_out_accumulate_im, cb_out_o);
@@ -210,11 +198,9 @@ void MAIN {
             if (is_sender_after_reduce) {
                 // Intermediate node: write accumulated output for next receiver
                 move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
-                // Push dummy tiles for m and l (writer expects them)
-                cb_reserve_back(cb_out_m, Sq_chunk_t);
-                cb_push_back(cb_out_m, Sq_chunk_t);
-                cb_reserve_back(cb_out_l, Sq_chunk_t);
-                cb_push_back(cb_out_l, Sq_chunk_t);
+                // Push dummy m/s tile (m and s packed into single tile)
+                cb_reserve_back(cb_out_ms, Sq_chunk_t);
+                cb_push_back(cb_out_ms, Sq_chunk_t);
                 return;
             }
 
@@ -227,4 +213,3 @@ void MAIN {
     // Free up cb_q_in after Q chunks
     cb_pop_front(cb_q_in, q_chunk_tiles);
 }
-}  // namespace NAMESPACE

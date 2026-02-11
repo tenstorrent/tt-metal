@@ -43,9 +43,12 @@ void kernel_main() {
     constexpr uint32_t k_num_pages = get_compile_time_arg_val(9);
     constexpr uint32_t ncrisc_brisc_sync_semaphore_id = get_compile_time_arg_val(10);
     constexpr uint32_t receiver_ready_semaphore_id = get_compile_time_arg_val(11);
+    constexpr uint32_t cb_index_id = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(14);
 
     // TensorAccessorArgs for K (KV cache in DRAM) and pos tensor
-    constexpr auto k_args = TensorAccessorArgs<12>();
+    constexpr auto k_args = TensorAccessorArgs<15>();
     constexpr auto pos_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     uint32_t arg_idx = 0;
@@ -68,7 +71,6 @@ void kernel_main() {
     // With single batch, cur_pos is at index 0
     uint32_t cur_pos;
     {
-        constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
         cb_reserve_back(cb_index_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
 
@@ -94,9 +96,6 @@ void kernel_main() {
     // PNHt = 1, so q_chunk_tiles = DHt
     constexpr uint32_t q_chunk_tiles = DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
-
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
 
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
 

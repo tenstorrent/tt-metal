@@ -17,18 +17,7 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
-
-
-def pack_two_bfloat16_into_uint32(val: float) -> int:
-    """Pack a float value into two bfloat16 values in a uint32."""
-    import struct
-
-    # Convert float to bfloat16 (truncate lower 16 bits of float32)
-    float_bytes = struct.pack("f", val)
-    float_int = struct.unpack("I", float_bytes)[0]
-    bfloat16_val = float_int >> 16
-    # Pack two bfloat16 values into uint32
-    return (bfloat16_val << 16) | bfloat16_val
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
 def get_noc_max_page_size() -> int:
@@ -583,7 +572,6 @@ class FlashMLADecode:
         qk_tiles = PNHt * Sk_chunk_t
         out_im_tiles = PNHt * vDHt
         out0_t = PNHt * vDHt
-        scale_tiles = 1
         statistics_tiles = PNHt
 
         # =========================================================================
@@ -610,8 +598,6 @@ class FlashMLADecode:
         # =========================================================================
         q_df = input_tensor_q.dtype
         k_df = input_tensor_k.dtype
-        out_df = output_tensor.dtype
-        scalar_df = ttnn.bfloat16
         im_df = ttnn.bfloat16
         stats_df = ttnn.bfloat16
 
@@ -620,37 +606,44 @@ class FlashMLADecode:
         q_tiny_tile = ttnn.Tile((Q_TILE_HEIGHT, TILE_WIDTH))
         full_tile = ttnn.Tile((K_TILE_HEIGHT, TILE_WIDTH))
 
-        # All intermediate/stats/scalar tiles use tiny tile dimensions (same as Q)
+        # All intermediate/stats tiles use tiny tile dimensions (same as Q)
         im_tile = q_tiny_tile
         stats_tile = q_tiny_tile
-        scalar_tile = q_tiny_tile
-        mask_tile = q_tiny_tile
-        # K, col_identity use full tiles (V read from K directly)
+        # K uses full tiles (V read from K directly)
         k_tile_obj = full_tile
 
         # Create tile descriptors for CB setup
         q_tile_descriptor = ttnn.TileDescriptor(q_tiny_tile)
         im_tile_descriptor = ttnn.TileDescriptor(im_tile)
         stats_tile_descriptor = ttnn.TileDescriptor(stats_tile)
-        scalar_tile_descriptor = ttnn.TileDescriptor(scalar_tile)
-        mask_tile_descriptor = ttnn.TileDescriptor(mask_tile)
-        full_tile_descriptor = ttnn.TileDescriptor(full_tile)
 
         # Tile sizes - use tile.get_tile_size(dtype) for proper sizing
         q_tile_size = q_tiny_tile.get_tile_size(q_df)
         k_tile_size = k_tile_obj.get_tile_size(k_df)
-        scalar_tile_size = scalar_tile.get_tile_size(scalar_df)
         im_tile_size = im_tile.get_tile_size(im_df)
         stats_tile_size = stats_tile.get_tile_size(stats_df)
-        mask_tile_size = mask_tile.get_tile_size(im_df)
-        col_identity_tile_size = full_tile.get_tile_size(scalar_df)
+
+        # =========================================================================
+        # CB IDs - used by both CB descriptors and kernel compile-time args
+        # =========================================================================
+        cb_q_in = 0  # Q input
+        cb_k_in = 1  # K/V cache input
+        cb_ms_in = 6  # m/s stats input (from sender in tree reduction)
+        cb_index_id = 8  # cur_pos tensor
+        cb_out_o = 16  # output O from compute
+        cb_out_ms = 17  # output m/s stats from compute
+        cb_intermed_out = 19  # intermediate output for tree reduction
+        cb_out_final = 20  # final sharded output
+        cb_qk_im = 24  # QK intermediate
+        cb_out_im = 25  # output intermediate
+        cb_out_accumulate_im = 26  # output accumulate intermediate
 
         # Intermediate output tiles for tree reduction
         # With tree reduction, senders can complete their steps out of order (e.g., S5 may send
         # in step 3 before S3 sends in step 2). To prevent data corruption, each tree reduction
         # step uses a separate buffer slot. This requires num_tree_reduction_steps * per_step_tiles.
-        # Each transfer contains: output tiles (out0_t) + max stats (PNHt) + sum stats (PNHt)
-        per_step_tiles = out0_t + 2 * PNHt
+        # Each transfer contains: output tiles (out0_t) + m/s stats (PNHt, packed into single tile)
+        per_step_tiles = out0_t + PNHt
         intermed_output_tiles = per_step_tiles * grid.NUM_TREE_REDUCTION_STEPS
 
         # =========================================================================
@@ -665,12 +658,6 @@ class FlashMLADecode:
         # Index stick size for position tensor (C++ lines 429-445)
         index_stick_size = B * 4  # int32 = 4 bytes per element
         index_stick_size = ((index_stick_size + 31) // 32) * 32  # Align to 32 bytes
-
-        # =========================================================================
-        # Packed constants (matching C++ lines 658-670)
-        # =========================================================================
-        packed_identity_scalar = pack_two_bfloat16_into_uint32(1.0)
-        packed_zero_scalar = pack_two_bfloat16_into_uint32(0.0)
 
         # =========================================================================
         # Create output core lists (matching C++ lines 671-721)
@@ -698,6 +685,15 @@ class FlashMLADecode:
         # Q chunk size bytes (PNHt=1, so q_tiles = DHt)
         q_chunk_size_bytes = q_tiles * q_tile_size
 
+        # =========================================================================
+        # Semaphore IDs (used in both descriptors and compile-time args)
+        # =========================================================================
+        reducer_semaphore_id = 0
+        output_semaphore_id = 1
+        mcast_semaphore_id = 2
+        ncrisc_brisc_sync_semaphore_id = 3
+        receiver_ready_semaphore_id = 4
+
         # Reader compile time args (simplified - V is read from K by compute kernel)
         reader_compile_time_args = [
             St,  # 0: full sequence length in tiles
@@ -707,11 +703,14 @@ class FlashMLADecode:
             k_chunk_size,  # 4: K chunk size
             q_chunk_size_bytes,  # 5: Q chunk size in bytes
             num_mcast_dests,  # 6: multicast destinations (7)
-            2,  # 7: mcast_semaphore_id
+            mcast_semaphore_id,  # 7: mcast_semaphore_id
             k_page_size,  # 8: page size for DRAM streaming
             k_num_pages,  # 9: pages per K chunk
-            3,  # 10: ncrisc_brisc_sync_semaphore_id
-            4,  # 11: receiver_ready_semaphore_id (for double-buffer sync)
+            ncrisc_brisc_sync_semaphore_id,  # 10: ncrisc_brisc_sync_semaphore_id
+            receiver_ready_semaphore_id,  # 11: receiver_ready_semaphore_id (for double-buffer sync)
+            cb_index_id,  # 12: cur_pos tensor CB index
+            cb_q_in,  # 13: Q input CB index
+            cb_k_in,  # 14: K input CB index
         ]
         # TensorAccessorArgs for K (KV cache) and pos tensor
         reader_compile_time_args.extend(get_tensor_accessor_args(kv_cache_tensor))  # K
@@ -723,20 +722,24 @@ class FlashMLADecode:
         writer_compile_time_args = [
             vDHt,  # 0: V head dim in tiles
             Sk_chunk_t,  # 1: tiles per K chunk
-            packed_identity_scalar,  # 2
-            packed_zero_scalar,  # 3
-            num_cores_per_head,  # 4: cores for seq len parallelism (8)
-            0,  # 5: reducer_semaphore_id
-            k_chunk_size,  # 6: K chunk size
-            Q_TILE_HEIGHT,  # 7: Q tile height
-            DHt,  # 8: head dim in tiles
-            num_mcast_dests,  # 9: multicast destinations (7)
-            2,  # 10: mcast_semaphore_id
-            3,  # 11: ncrisc_brisc_sync_semaphore_id
-            k_page_size,  # 12: page size for pipelining
-            k_num_pages,  # 13: pages per K chunk
-            grid.NUM_TREE_REDUCTION_STEPS,  # 14: tree reduction steps (3)
-            4,  # 15: receiver_ready_semaphore_id (for double-buffer sync)
+            num_cores_per_head,  # 2: cores for seq len parallelism (8)
+            reducer_semaphore_id,  # 3: reducer_semaphore_id
+            k_chunk_size,  # 4: K chunk size
+            Q_TILE_HEIGHT,  # 5: Q tile height
+            DHt,  # 6: head dim in tiles
+            num_mcast_dests,  # 7: multicast destinations (7)
+            mcast_semaphore_id,  # 8: mcast_semaphore_id
+            ncrisc_brisc_sync_semaphore_id,  # 9: ncrisc_brisc_sync_semaphore_id
+            k_page_size,  # 10: page size for pipelining
+            k_num_pages,  # 11: pages per K chunk
+            grid.NUM_TREE_REDUCTION_STEPS,  # 12: tree reduction steps (3)
+            receiver_ready_semaphore_id,  # 13: receiver_ready_semaphore_id (for double-buffer sync)
+            cb_index_id,  # 14: cur_pos tensor CB index
+            cb_k_in,  # 15: K input CB index
+            cb_ms_in,  # 16: m/s stats input CB index
+            cb_out_o,  # 17: output O CB index
+            cb_out_ms,  # 18: output m/s stats CB index
+            cb_intermed_out,  # 19: intermediate output CB index
         ]
 
         # Compute compile time args (keep existing interface for compute kernel)
@@ -764,8 +767,18 @@ class FlashMLADecode:
             num_heads_per_core,  # 20 (always 1)
             B,  # 21: q_heads_parallel_factor
             Q_TILE_HEIGHT,  # 22: Q tile height
-            0,  # 23: scale_fp32 (unused by simplified compute)
+            float_to_uint32(scale),  # scale_fp32 (unused by simplified compute)
             grid.NUM_TREE_REDUCTION_STEPS,  # 24: tree reduction steps (3)
+            cb_q_in,  # 25: Q input CB index
+            cb_k_in,  # 26: K input CB index
+            cb_ms_in,  # 27: m/s stats input CB index
+            cb_index_id,  # 28: cur_pos tensor CB index
+            cb_qk_im,  # 29: QK intermediate CB index
+            cb_out_im,  # 30: output intermediate CB index
+            cb_out_accumulate_im,  # 31: output accumulate intermediate CB index
+            cb_out_o,  # 32: output O CB index
+            cb_out_ms,  # 33: output m/s stats CB index
+            cb_out_final,  # 34: final sharded output CB index
         ]
 
         # No compute defines needed for simplified kernel (no softmax)
@@ -775,168 +788,128 @@ class FlashMLADecode:
         # =========================================================================
         cb_descriptors = []
 
-        # c_0: Q input (tiny tile)
+        # cb_q_in: Q input (tiny tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=q_tiles * q_tile_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(0, q_df, q_tile_size, q_tile_descriptor)],
+                format_descriptors=[ttnn.CBFormatDescriptor(cb_q_in, q_df, q_tile_size, q_tile_descriptor)],
             )
         )
 
-        # c_1: K input (full tile)
+        # cb_k_in: K input (full tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=k_tiles * k_tile_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(1, k_df, k_tile_size)],
+                format_descriptors=[ttnn.CBFormatDescriptor(cb_k_in, k_df, k_tile_size)],
             )
         )
 
         # V is read directly from K buffer (strided matmul) - no separate V CB needed
 
-        # c_3: attn_mask input (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=qk_tiles * mask_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(3, im_df, mask_tile_size, mask_tile_descriptor)],
-            )
-        )
-
-        # c_5: identity scale input (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=scale_tiles * scalar_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(5, scalar_df, scalar_tile_size, scalar_tile_descriptor)],
-            )
-        )
-
-        # c_6: cb_m_in (tiny tile)
+        # cb_ms_in: m/s stats input (m and s are packed into single tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(6, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_7: cb_l_in (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(7, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_8: cur_pos input
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=index_stick_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(8, ttnn.int32, index_stick_size)],
-            )
-        )
-
-        # c_11: cb_col_identity (full tile - always 32x32)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=scale_tiles * col_identity_tile_size,
                 core_ranges=core_grid,
                 format_descriptors=[
-                    ttnn.CBFormatDescriptor(11, scalar_df, col_identity_tile_size, full_tile_descriptor)
+                    ttnn.CBFormatDescriptor(cb_ms_in, stats_df, stats_tile_size, stats_tile_descriptor)
                 ],
             )
         )
 
-        # c_12: cb zero config (tiny tile)
+        # cb_index_id: cur_pos input
         cb_descriptors.append(
             ttnn.CBDescriptor(
-                total_size=scale_tiles * scalar_tile_size,
+                total_size=index_stick_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(12, scalar_df, scalar_tile_size, scalar_tile_descriptor)],
+                format_descriptors=[ttnn.CBFormatDescriptor(cb_index_id, ttnn.int32, index_stick_size)],
             )
         )
 
-        # c_24: cb_qk_im (tiny tile)
+        # cb_qk_im: QK intermediate (tiny tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=qk_tiles * im_tile_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(24, im_df, im_tile_size, im_tile_descriptor)],
+                format_descriptors=[ttnn.CBFormatDescriptor(cb_qk_im, im_df, im_tile_size, im_tile_descriptor)],
             )
         )
 
-        # c_25: cb_out_im (tiny tile)
+        # cb_out_im: output intermediate (tiny tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=out_im_tiles * im_tile_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(25, im_df, im_tile_size, im_tile_descriptor)],
+                format_descriptors=[ttnn.CBFormatDescriptor(cb_out_im, im_df, im_tile_size, im_tile_descriptor)],
             )
         )
 
-        # c_26: cb_out_accumulate_im (tiny tile)
+        # cb_out_accumulate_im: output accumulate intermediate (tiny tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=out_im_tiles * im_tile_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(26, im_df, im_tile_size, im_tile_descriptor)],
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(cb_out_accumulate_im, im_df, im_tile_size, im_tile_descriptor)
+                ],
             )
         )
 
-        # c_16: cb_out_o (tiny tile)
+        # cb_out_o: output O (tiny tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=out0_t * stats_tile_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(16, stats_df, stats_tile_size, stats_tile_descriptor)],
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(cb_out_o, stats_df, stats_tile_size, stats_tile_descriptor)
+                ],
             )
         )
 
-        # c_17: cb_out_m (tiny tile)
+        # cb_out_ms: output m/s stats (tiny tile, shared for both m and s)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=statistics_tiles * stats_tile_size,
                 core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(17, stats_df, stats_tile_size, stats_tile_descriptor)],
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(cb_out_ms, stats_df, stats_tile_size, stats_tile_descriptor)
+                ],
             )
         )
 
-        # c_18: cb_out_l (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(18, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_19: cb_intermed_out (tiny tile, only if intermed_output_tiles > 0)
+        # cb_intermed_out: tree reduction intermediate (tiny tile, only if intermed_output_tiles > 0)
         if intermed_output_tiles > 0:
             cb_descriptors.append(
                 ttnn.CBDescriptor(
                     total_size=intermed_output_tiles * stats_tile_size,
                     core_ranges=core_grid,
-                    format_descriptors=[ttnn.CBFormatDescriptor(19, stats_df, stats_tile_size, stats_tile_descriptor)],
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(cb_intermed_out, stats_df, stats_tile_size, stats_tile_descriptor)
+                    ],
                 )
             )
 
-        # c_20: cb_out_final (always sharded output)
-        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(20, output_tensor)
+        # cb_out_final: final sharded output
+        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_final, output_tensor)
         cb_descriptors.append(cb_out_descriptor)
 
         # =========================================================================
         # Create semaphore descriptors (matching C++ lines 724-725)
         # =========================================================================
         semaphore_descriptors = [
-            ttnn.SemaphoreDescriptor(0, ttnn.CoreType.WORKER, core_grid, 0),  # reducer_semaphore
-            ttnn.SemaphoreDescriptor(1, ttnn.CoreType.WORKER, core_grid, 0),  # output_semaphore
-            ttnn.SemaphoreDescriptor(2, ttnn.CoreType.WORKER, core_grid, 0),  # mcast_semaphore for KV cache
-            ttnn.SemaphoreDescriptor(3, ttnn.CoreType.WORKER, core_grid, 0),  # brisc_ncrisc_sync for DRAM/mcast overlap
-            ttnn.SemaphoreDescriptor(4, ttnn.CoreType.WORKER, core_grid, 0),  # receiver_ready for double-buffer sync
+            ttnn.SemaphoreDescriptor(reducer_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0),  # reducer_semaphore
+            ttnn.SemaphoreDescriptor(output_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0),  # output_semaphore
+            ttnn.SemaphoreDescriptor(
+                mcast_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0
+            ),  # mcast_semaphore for KV cache
+            ttnn.SemaphoreDescriptor(
+                ncrisc_brisc_sync_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0
+            ),  # brisc_ncrisc_sync for DRAM/mcast overlap
+            ttnn.SemaphoreDescriptor(
+                receiver_ready_semaphore_id, ttnn.CoreType.WORKER, core_grid, 0
+            ),  # receiver_ready for double-buffer sync
         ]
 
         # =========================================================================
@@ -946,7 +919,6 @@ class FlashMLADecode:
         q_addr = q_tensor.buffer_address()
         k_addr = kv_cache_tensor.buffer_address()
         pos_addr = cur_pos_tensor.buffer_address()
-        out_addr = output_tensor.buffer_address()
 
         # Create single RuntimeArgs objects for all cores (matching C++ pattern)
         reader_rtargs = ttnn.RuntimeArgs()
@@ -1006,7 +978,6 @@ class FlashMLADecode:
 
             # Writer runtime args (simplified)
             writer_runtime_args = [
-                out_addr,
                 cur_batch,
                 core_num_in_reduce,
                 is_mcast_sender,
