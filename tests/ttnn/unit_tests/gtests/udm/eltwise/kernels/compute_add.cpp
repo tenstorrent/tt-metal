@@ -23,8 +23,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Get number of tiles to process from runtime args
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
@@ -74,4 +73,3 @@ void MAIN {
         cb_pop_front(cb_in1, 1);
     }
 }
-}  // namespace NAMESPACE

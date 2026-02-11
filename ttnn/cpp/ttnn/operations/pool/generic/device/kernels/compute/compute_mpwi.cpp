@@ -30,9 +30,7 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
@@ -283,5 +281,3 @@ void MAIN {
         cb_pop_front(clear_value_cb_id, 1);
     }
 }
-
-}  // namespace NAMESPACE
