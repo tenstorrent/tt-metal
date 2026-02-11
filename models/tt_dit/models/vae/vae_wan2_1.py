@@ -68,7 +68,7 @@ class WanAttentionBlock:
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -80,14 +80,14 @@ class WanAttentionBlock:
         )
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -252,9 +252,9 @@ class WanCausalConv3d:
         padding=0,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
-        self.conv_dtype = conv_dtype
+        self.dtype = dtype
         self.unpadded_in_channels = in_channels
         self.unpadded_out_channels = out_channels
         self.TILE_WIDTH = 32
@@ -291,13 +291,13 @@ class WanCausalConv3d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            conv_dtype,
+            dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,  # Do not use HiFi4.
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # Do not use HiFi4.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -321,7 +321,7 @@ class WanCausalConv3d:
             padded_weight,
             padded_bias,
             self.conv_config,
-            dtype=self.conv_dtype,
+            dtype=self.dtype,
         )
 
     def get_cached_mask(self, x_BTHWC, logical_h):
@@ -338,7 +338,7 @@ class WanCausalConv3d:
                 mask,
                 device=self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=self.conv_dtype,
+                dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=mapper_dims
@@ -430,7 +430,7 @@ class WanCausalConv3d:
             stride=self.stride,
             padding=self.internal_padding,
             padding_mode="zeros",
-            dtype=self.conv_dtype,
+            dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -451,7 +451,7 @@ class WanResidualBlock:
         mesh_device,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -463,7 +463,7 @@ class WanResidualBlock:
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
-            dtype=conv_dtype,
+            dtype=dtype,
         )
         self.conv1 = WanCausalConv3d(
             in_channels=in_dim,
@@ -473,7 +473,7 @@ class WanResidualBlock:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
         self.norm2 = RMSNorm(
             embedding_dim=out_dim,
@@ -481,7 +481,7 @@ class WanResidualBlock:
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
-            dtype=conv_dtype,
+            dtype=dtype,
         )
         self.conv2 = WanCausalConv3d(
             in_channels=out_dim,
@@ -491,7 +491,7 @@ class WanResidualBlock:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
 
         if in_dim != out_dim:
@@ -499,14 +499,14 @@ class WanResidualBlock:
                 in_features=in_dim,
                 out_features=out_dim,
                 mesh_device=mesh_device,
-                dtype=conv_dtype,
+                dtype=dtype,
             )
         else:
             self.conv_shortcut = None
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,  # Do not use HiFi4.
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # Do not use HiFi4.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -629,7 +629,7 @@ class WanMidBlock:
         ccl_manager=None,
         parallel_config=None,
         num_layers=1,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
         self.dim = dim
         self.mesh_device = mesh_device
@@ -643,7 +643,7 @@ class WanMidBlock:
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
-                conv_dtype=conv_dtype,
+                dtype=dtype,
             )
         )
 
@@ -663,7 +663,7 @@ class WanMidBlock:
                     mesh_device=mesh_device,
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
-                    conv_dtype=conv_dtype,
+                    dtype=dtype,
                 )
             )
 
@@ -730,9 +730,9 @@ class WanConv2d:
         parallel_config=None,
         stride=1,
         padding=0,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
-        self.conv_dtype = conv_dtype
+        self.dtype = dtype
         self.in_channels = in_channels
         self.unpadded_out_channels = out_channels
         self.TILE_WIDTH = 32
@@ -766,14 +766,14 @@ class WanConv2d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            conv_dtype,
+            dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
         logger.info(f"Loaded conv_config: {self.conv_config}")
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -793,7 +793,7 @@ class WanConv2d:
             reshaped_weight,
             state_dict["bias"],
             self.conv_config,
-            dtype=self.conv_dtype,
+            dtype=self.dtype,
         )
 
     def get_cached_mask(self, x_BTHWC, logical_h):
@@ -810,7 +810,7 @@ class WanConv2d:
                 mask,
                 device=self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=self.conv_dtype,
+                dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=mapper_dims
@@ -883,7 +883,7 @@ class WanConv2d:
             stride=self.stride,
             padding=self.internal_padding,
             padding_mode="zeros",
-            dtype=self.conv_dtype,
+            dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -905,7 +905,7 @@ class WanResample:
         ccl_manager=None,
         parallel_config=None,
         resample_out_dim=None,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
         self.dim = dim
         self.mode = mode
@@ -922,7 +922,7 @@ class WanResample:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
 
         self.is_upsample = "upsample" in mode
@@ -938,7 +938,7 @@ class WanResample:
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
-                conv_dtype=conv_dtype,
+                dtype=dtype,
             )
 
     def load_state_dict(self, state_dict):
@@ -1031,7 +1031,7 @@ class WanUpBlock:
         ccl_manager=None,
         parallel_config=None,
         upsample_mode=None,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -1053,7 +1053,7 @@ class WanUpBlock:
                     mesh_device=mesh_device,
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
-                    conv_dtype=conv_dtype,
+                    dtype=dtype,
                 )
             )
             current_dim = out_dim
@@ -1067,7 +1067,7 @@ class WanUpBlock:
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
-                conv_dtype=conv_dtype,
+                dtype=dtype,
             )
 
     def load_state_dict(self, state_dict):
@@ -1100,7 +1100,7 @@ class WanDecoder3d:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
         assert not is_residual, "is_residual is not supported"
         self.dim = dim
@@ -1125,7 +1125,7 @@ class WanDecoder3d:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
 
         # middle blocks
@@ -1135,7 +1135,7 @@ class WanDecoder3d:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
 
         # upsample blocks
@@ -1164,7 +1164,7 @@ class WanDecoder3d:
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
-                conv_dtype=conv_dtype,
+                dtype=dtype,
             )
             self.up_blocks.append(up_block)
 
@@ -1175,7 +1175,7 @@ class WanDecoder3d:
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
-            dtype=conv_dtype,
+            dtype=dtype,
         )
         self.conv_out = WanCausalConv3d(
             out_dim,
@@ -1185,7 +1185,7 @@ class WanDecoder3d:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
 
     def load_state_dict(self, state_dict):
@@ -1293,7 +1293,7 @@ class WanDecoder:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
         assert not is_residual, "is_residual is not supported"
         self.z_dim = z_dim
@@ -1310,7 +1310,7 @@ class WanDecoder:
             in_features=aligned_channels(z_dim),
             out_features=aligned_channels(z_dim),
             mesh_device=mesh_device,
-            dtype=conv_dtype,
+            dtype=dtype,
         )
 
         self.decoder = WanDecoder3d(
@@ -1325,7 +1325,7 @@ class WanDecoder:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
 
         self.cached_conv_count = count_convs(self.decoder)
@@ -1383,7 +1383,7 @@ class WanEncoder3D:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
         assert not is_residual, "is_residual is not supported"
         self.dim = dim
@@ -1409,7 +1409,7 @@ class WanEncoder3D:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
 
         # downsample blocks.
@@ -1423,7 +1423,7 @@ class WanEncoder3D:
                         mesh_device=mesh_device,
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
-                        conv_dtype=conv_dtype,
+                        dtype=dtype,
                     )
                 )
                 if scale in attn_scales:
@@ -1447,7 +1447,7 @@ class WanEncoder3D:
                         mesh_device=mesh_device,
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
-                        conv_dtype=conv_dtype,
+                        dtype=dtype,
                     )
                 )
                 scale /= 2.0
@@ -1459,7 +1459,7 @@ class WanEncoder3D:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
 
         # output blocks
@@ -1469,7 +1469,7 @@ class WanEncoder3D:
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
-            dtype=conv_dtype,
+            dtype=dtype,
         )
         self.conv_out = WanCausalConv3d(
             out_dim,
@@ -1479,7 +1479,7 @@ class WanEncoder3D:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
 
     def load_state_dict(self, state_dict):
@@ -1555,7 +1555,7 @@ class WanEncoder:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     ):
         self.z_dim = z_dim
         self.out_channels = z_dim * 2  # Mean and logvar
@@ -1571,14 +1571,14 @@ class WanEncoder:
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
-            conv_dtype=conv_dtype,
+            dtype=dtype,
         )
         # Linear for quant_conv
         self.quant_conv = Linear(
             in_features=aligned_channels(self.out_channels),
             out_features=aligned_channels(self.out_channels),
             mesh_device=mesh_device,
-            dtype=conv_dtype,
+            dtype=dtype,
         )
         self.cached_conv_count = count_convs(self.encoder)
 

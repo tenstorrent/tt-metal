@@ -682,7 +682,7 @@ def test_wan_conv3d_float32(
         padding=padding,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        dtype=ttnn.DataType.BFLOAT16,
     )
     tt_model_bf16.load_state_dict(torch_model.state_dict())
 
@@ -695,7 +695,7 @@ def test_wan_conv3d_float32(
         padding=padding,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        conv_dtype=ttnn.DataType.FLOAT32,
+        dtype=ttnn.DataType.FLOAT32,
     )
     tt_model_f32.load_state_dict(torch_model.state_dict())
 
@@ -781,15 +781,15 @@ def test_wan_conv3d_float32(
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "conv_dtype",
+    "dtype",
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len, mean, std, h_axis, w_axis, conv_dtype):
+def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanResidualBlock as TorchWanResidualBlock
 
-    tt_input_dtype = ttnn.bfloat16 if conv_dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
+    tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
     torch_model = TorchWanResidualBlock(
         in_dim=in_dim,
@@ -808,7 +808,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        conv_dtype=conv_dtype,
+        dtype=dtype,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -932,17 +932,17 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "conv_dtype",
+    "dtype",
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, conv_dtype):
+def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanMidBlock as TorchWanMidBlock
 
     torch.manual_seed(0)
 
-    tt_input_dtype = ttnn.bfloat16 if conv_dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
+    tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
     torch_model = TorchWanMidBlock(
         dim=dim,
@@ -959,7 +959,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        conv_dtype=conv_dtype,
+        dtype=dtype,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -1233,19 +1233,17 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "conv_dtype",
+    "dtype",
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_upblock(
-    mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis, conv_dtype
-):
+def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis, dtype):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanUpBlock as TorchWanUpBlock
 
     torch.manual_seed(0)
 
-    tt_input_dtype = ttnn.bfloat16 if conv_dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
+    tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
     torch_model = TorchWanUpBlock(
         in_dim=in_dim,
@@ -1268,7 +1266,7 @@ def test_wan_upblock(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        conv_dtype=conv_dtype,
+        dtype=dtype,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -1383,7 +1381,7 @@ def test_wan_upblock(
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("check_cache", [True])
 @pytest.mark.parametrize(
-    "conv_dtype",
+    "dtype",
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
@@ -1404,11 +1402,11 @@ def test_wan_upblock(
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache, conv_dtype):
+def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache, dtype):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
 
     torch.manual_seed(0)
-    tt_input_dtype = ttnn.bfloat16 if conv_dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
+    tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
 
     torch_dtype = torch.float32
     base_dim = 96
@@ -1457,7 +1455,7 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        conv_dtype=conv_dtype,
+        dtype=dtype,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -1597,7 +1595,7 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
 @pytest.mark.parametrize(
-    "conv_dtype",
+    "dtype",
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
@@ -1626,13 +1624,11 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder(
-    mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check, conv_dtype
-):
+def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check, dtype):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch.manual_seed(0)
-    tt_input_dtype = ttnn.bfloat16 if conv_dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
+    tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
 
     torch_dtype = torch.float32
     base_dim = 96
@@ -1678,7 +1674,7 @@ def test_wan_decoder(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        conv_dtype=conv_dtype,
+        dtype=dtype,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
