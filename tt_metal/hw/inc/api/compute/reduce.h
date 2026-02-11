@@ -120,14 +120,8 @@ ALWI void reduce_uninit(uint32_t icb = 0) {
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
-    MATH((llk_math_reduce<
-          reduce_type,
-          reduce_dim,
-          DST_ACCUM_MODE,
-          MATH_FIDELITY,
-          false,
-          enforce_fp32_accumulation,
-          false /* tilize_AB_support_en */>(icb, icb_scaler, idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
+        icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 }
 
@@ -146,13 +140,7 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
-    MATH((llk_math_reduce<
-          reduce_type,
-          reduce_dim,
-          DST_ACCUM_MODE,
-          MATH_FIDELITY,
-          false,
-          enforce_fp32_accumulation,
-          true /* tilize_AB_support_en */>(idst, num_faces)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
+        idst, num_faces)));
 }
 }  // namespace ckernel
