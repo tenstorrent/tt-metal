@@ -159,11 +159,10 @@ TEST_F(MeshTensorTest, ToDeviceMemoryConfigOverride) {
     EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
     EXPECT_EQ(input_host_tensor.tensor_spec().memory_config().buffer_type(), BufferType::L1);
 
-    Tensor device_tensor_default = tensor_impl::to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor_default = to_device(input_host_tensor, mesh_device_.get());
     EXPECT_EQ(device_tensor_default.tensor_spec().memory_config().buffer_type(), BufferType::L1);
 
-    Tensor device_tensor_dram =
-        tensor_impl::to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{BufferType::DRAM});
+    Tensor device_tensor_dram = to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{BufferType::DRAM});
     EXPECT_EQ(device_tensor_dram.tensor_spec().memory_config().buffer_type(), BufferType::DRAM);
 }
 
@@ -181,7 +180,7 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
     EXPECT_EQ(input_host_tensor.tensor_spec().logical_shape(), shape);
 
     // Write host tensor to device.
-    Tensor device_tensor = tensor_impl::to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{});
+    Tensor device_tensor = to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{});
     EXPECT_EQ(device_tensor.tensor_spec().logical_shape(), shape);
     EXPECT_EQ(
         device_tensor.tensor_topology(),
@@ -212,7 +211,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
 
-    Tensor device_tensor = tensor_impl::to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor = to_device(input_host_tensor, mesh_device_.get());
     const auto& device_storage = device_tensor.device_storage();
     EXPECT_NE(device_storage.mesh_buffer, nullptr);
     EXPECT_THAT(device_storage.coords, SizeIs(mesh_device_->num_devices()));
@@ -247,8 +246,8 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
 
-    Tensor device_tensor1 = tensor_impl::to_device(input_host_tensor, mesh_device_.get());
-    Tensor device_tensor2 = tensor_impl::to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor1 = to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor2 = to_device(input_host_tensor, mesh_device_.get());
 
     auto device_tensors1 = get_device_tensors(device_tensor1);
     auto device_tensors2 = get_device_tensors(device_tensor2);
@@ -336,10 +335,10 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     auto device_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
             Tensor device_tensor = create_device_tensor(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
-            tensor_impl::copy_to_device(input_host_tensor_sharded, device_tensor);
+            copy_to_device(input_host_tensor_sharded, device_tensor);
             return device_tensor;
         }
-        return tensor_impl::to_device(input_host_tensor_sharded, mesh_device_.get());
+        return to_device(input_host_tensor_sharded, mesh_device_.get());
     }();
 
     EXPECT_EQ(device_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
@@ -350,7 +349,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     auto output_host_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
             Tensor host_tensor = allocate_tensor_on_host(device_tensor.tensor_spec(), mesh_device_.get());
-            tensor_impl::copy_to_host(device_tensor, host_tensor, /*blocking=*/true);
+            copy_to_host(device_tensor, host_tensor, /*blocking=*/true);
             return host_tensor;
         }
         return device_tensor.cpu();

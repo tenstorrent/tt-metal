@@ -88,7 +88,7 @@ Tensor full_impl(
     Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
 
     if (optional_output_tensor.has_value()) {
-        tt::tt_metal::tensor_impl::copy_to_device(host_tensor, *optional_output_tensor);
+        copy_to_device(host_tensor, *optional_output_tensor);
         return *optional_output_tensor;
     }
     if (device != nullptr) {

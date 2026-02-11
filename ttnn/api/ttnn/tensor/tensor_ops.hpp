@@ -33,8 +33,8 @@ tt::tt_metal::DeviceTensor allocate_tensor_on_device(
 tt::tt_metal::Tensor to_device(
     const tt::tt_metal::Tensor& input_tensor,
     distributed::MeshDevice* mesh_device,
-    ttsl::optional_reference<const MemoryConfig> mem_config,
-    std::optional<QueueId> cq_id);
+    ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
+    std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
@@ -50,6 +50,12 @@ void copy_to_host(
     std::byte* dst,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
+
+void copy_to_host(
+    const Tensor& device_tensor,
+    Tensor& host_tensor,
+    bool blocking = true,
+    std::optional<QueueId> cq_id = std::nullopt);
 
 Tensor to_layout(const Tensor& input_tensor, tt::tt_metal::Layout target_layout);
 
