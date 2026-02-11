@@ -159,7 +159,6 @@ void kernel_main() {
                 out_cb_id,
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
                 compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
                 out_num_tiles,
                 1);

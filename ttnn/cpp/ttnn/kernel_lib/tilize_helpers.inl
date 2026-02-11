@@ -10,15 +10,68 @@
  * This file contains the implementation details for the tilize() function.
  * It should only be included by tilize_helpers.hpp.
  */
+#if __has_include("chlkc_pack_tile_dims.h")
+#include "chlkc_pack_tile_dims.h"
+#define PACK_TILE_DIMS_AVAILABLE
+#endif
+
+#if __has_include("chlkc_unpack_data_format.h")
+#include "chlkc_unpack_data_format.h"
+#define UNPACK_DATA_FORMAT_AVAILABLE
+#endif
 
 namespace compute_kernel_lib {
+
+// =============================================================================
+// Internal Helper Implementations
+// =============================================================================
+
+template <uint32_t cb_id>
+constexpr bool has_32x32_tiles() {
+#ifdef PACK_TILE_DIMS_AVAILABLE
+    // Access pack tile dimensions at compile time
+    constexpr uint32_t tile_r_dim = pack_tile_r_dim[cb_id];
+    constexpr uint32_t tile_c_dim = pack_tile_c_dim[cb_id];
+
+    // Fast tilize requires 32x32 tiles
+    return tile_r_dim == 32 && tile_c_dim == 32;
+#else
+    // If header not available, assume 32x32 tiles (conservative)
+    // fast_tilize already falls back to standard tilize on Blackhole
+    return true;
+#endif
+}
+
+template <uint32_t input_cb>
+constexpr bool has_supported_fast_tilize_format() {
+#ifdef UNPACK_DATA_FORMAT_AVAILABLE
+    // Fast tilize only supports Float32 (0) and Float16_b/bfp16 (5)
+    // DataFormat enum values: Float32 = 0, Float16_b = 5, Int32 = 8, etc.
+    constexpr std::int32_t format = unpack_src_format[input_cb];
+    return format == 0 || format == 5;  // Float32 or Float16_b (bfp16)
+#else
+    // If header not available, conservatively disallow fast_tilize
+    // Only enable fast_tilize when we can confirm the format is supported
+    return false;
+#endif
+}
+
+template <uint32_t input_cb, uint32_t output_cb>
+constexpr bool can_use_fast_tilize() {
+    return has_32x32_tiles<output_cb>() &&
+           !get_dst_full_sync_enabled() &&
+           has_supported_fast_tilize_format<input_cb>();
+}
+
+// =============================================================================
+// Main Function Implementation
+// =============================================================================
 
 template <
     uint32_t input_cb,
     uint32_t output_cb,
     tilize_config::InitUninitMode init_uninit_mode,
     tilize_config::WaitMode wait_mode,
-    tilize_config::TilizeSpeedMode speed_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
 ALWI void tilize(
     uint32_t block_width_tiles,
@@ -37,8 +90,8 @@ ALWI void tilize(
     ASSERT(block_width_tiles > 0);
     ASSERT(num_blocks > 0);
 
-    // Determine if we're using fast tilize mode (explicit, NOT auto-detected)
-    constexpr bool use_fast = (speed_mode == tilize_config::TilizeSpeedMode::Fast);
+    // Determine if we're using fast tilize mode (automatic detection based on tile size, sync mode, and data format)
+    constexpr bool use_fast = can_use_fast_tilize<input_cb, output_cb>();
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
