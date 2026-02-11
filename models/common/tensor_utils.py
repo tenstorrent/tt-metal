@@ -37,6 +37,27 @@ def pad_dim_to_size(x: "torch.Tensor", dim: int, size: int) -> "torch.Tensor":
     return torch.nn.functional.pad(x, pad, mode="constant", value=0)
 
 
+def get_rot_transformation_mat(dhead: int) -> torch.Tensor:
+    """Build the rotation transformation matrix for RoPE.
+
+    Constructs a permutation matrix that pairs adjacent dimensions with
+    signs (+1, -1) for the RoPE rotation:
+        [0, 1] → +1 at (0,1), -1 at (1,0)
+        [2, 3] → +1 at (2,3), -1 at (3,2)
+        ...
+
+    Args:
+        dhead: Matrix dimension. Use TILE_SIZE for decode, head_dim for prefill.
+
+    Returns:
+        torch.Tensor of shape [1, 1, dhead, dhead].
+    """
+    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+    return rot_emb_matrix
+
+
 def pad_to_shape(x: "torch.Tensor", target_shape: tuple[int, ...], pad_value: float = 0.0) -> "torch.Tensor":
     """Pad tensor to target_shape in a single F.pad call (more efficient than per-dim padding)."""
     if x.shape == target_shape:

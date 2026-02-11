@@ -5,11 +5,14 @@
 Tests for the RotarySetup1D module (1D mesh topology: N150, N300, T3K).
 
 This test suite verifies:
-1. Unit tests for config dataclass and RotaryEmbedding reference implementations
-2. RotarySetup1D init + API methods (get_both_trans_mats, get_rot_idxs, get_rot_mats)
-3. from_model_args backward compatibility
+1. Unit tests for config dataclass and transformation matrix utility
+2. RotarySetup1D init + API methods (get_both_trans_mats, get_rot_idxs, get_rot_mats, forward)
+3. Numerical correctness vs TTTv1 RotarySetup
+4. from_model_args backward compatibility
 """
 
+import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -17,20 +20,20 @@ from loguru import logger
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
-from models.common.modules.rope.rope_1d import (
-    RotarySetup1D,
-    RotarySetup1DConfig,
-    _compute_cos_sin_matrices,
-    _get_rot_transformation_mat,
-)
+from models.common.modules.lazy_weight import LazyWeight
+from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prepare_rot_idxs
+from models.common.tensor_utils import get_rot_transformation_mat
 from models.common.utility_functions import comp_pcc
 
-# RopeScaling helpers (import from common.py for test setup)
+# RopeScaling helpers (import from TTTv1 for test setup)
 from models.tt_transformers.tt.common import RopeScalingLlama3, RopeScalingType
+from models.tt_transformers.tt.rope import compute_gather_cos_sin
 
 # ============================================================================
-# Constants from rope_1d_init_test_cases.csv
+# Test helpers
 # ============================================================================
+
+_slow = pytest.mark.slow
 
 
 def _llama3_scaling():
@@ -44,55 +47,66 @@ def _llama3_scaling():
     )
 
 
-_slow = pytest.mark.slow
-
-
 # ============================================================================
 # Unit Tests - No device required
 # ============================================================================
 
 
 def test_rope_1d_config_creation():
-    """Test that RotarySetup1DConfig can be created with all required fields."""
-    from unittest.mock import MagicMock
+    """Test that Rope1DConfig can be created with required fields."""
+    cos_source = torch.randn(1, 1, 8192, 128)
+    sin_source = torch.randn(1, 1, 8192, 128)
+    cos_lw = LazyWeight(source=cos_source)
+    sin_lw = LazyWeight(source=sin_source)
 
-    config = RotarySetup1DConfig(
-        device=MagicMock(),
-        batch_size=32,
-        head_dim=128,
-        max_seq_len=8192,
-        rope_theta=500000.0,
+    config = Rope1DConfig(
+        cos_matrix=cos_lw,
+        sin_matrix=sin_lw,
+        max_batch_size=32,
     )
-    assert config.batch_size == 32
-    assert config.head_dim == 128
-    assert config.max_seq_len == 8192
-    assert config.rope_theta == 500000.0
+    assert config.max_batch_size == 32
+    assert config.head_dim is None  # derived later
     assert config.use_qk_fused is False
     assert config.datatype == ttnn.bfloat16
-    assert config.rope_scaling is None
 
 
-def test_rope_1d_config_with_scaling():
-    """Test config with rope_scaling."""
+def test_rope_1d_config_with_options():
+    """Test config with all optional fields set."""
     from unittest.mock import MagicMock
 
-    scaling = _llama3_scaling()
-    config = RotarySetup1DConfig(
+    cos_source = torch.randn(1, 1, 8192, 64)
+    sin_source = torch.randn(1, 1, 8192, 64)
+    cos_lw = LazyWeight(source=cos_source)
+    sin_lw = LazyWeight(source=sin_source)
+
+    config = Rope1DConfig(
+        cos_matrix=cos_lw,
+        sin_matrix=sin_lw,
+        max_batch_size=1,
+        head_dim=64,
         device=MagicMock(),
-        batch_size=1,
-        head_dim=128,
-        max_seq_len=8192,
-        rope_theta=500000.0,
-        rope_scaling=scaling,
         use_qk_fused=True,
+        datatype=ttnn.bfloat8_b,
     )
-    assert config.rope_scaling is scaling
+    assert config.head_dim == 64
     assert config.use_qk_fused is True
+    assert config.datatype == ttnn.bfloat8_b
 
 
-def test_compute_cos_sin_matrices_no_scaling():
+def test_rope_1d_from_model_args_rejects_galaxy():
+    """Test that from_model_args raises for Galaxy devices."""
+    from unittest.mock import MagicMock
+
+    args = MagicMock()
+    args.is_galaxy = True
+
+    with pytest.raises(ValueError, match="Galaxy"):
+        RotarySetup1D.from_model_args(device=MagicMock(), args=args)
+
+
+def test_compute_cos_sin_no_scaling():
     """Test cos/sin computation without scaling (Mistral/Qwen-style)."""
-    cos, sin = _compute_cos_sin_matrices(head_dim=128, max_seq_len=8192, rope_theta=1000000.0)
+    cos, sin = compute_gather_cos_sin(dhead=128, end=2 * 8192, theta=1000000.0, rope_scaling=None)
     assert cos.shape == (1, 1, 8192, 128)
     assert sin.shape == (1, 1, 8192, 128)
     # cos/sin values should be in [-1, 1]
@@ -100,19 +114,17 @@ def test_compute_cos_sin_matrices_no_scaling():
     assert sin.abs().max() <= 1.0 + 1e-6
 
 
-def test_compute_cos_sin_matrices_llama3_scaling():
+def test_compute_cos_sin_llama3_scaling():
     """Test cos/sin computation with Llama-3.x scaling."""
     scaling = _llama3_scaling()
-    cos, sin = _compute_cos_sin_matrices(head_dim=128, max_seq_len=8192, rope_theta=500000.0, rope_scaling=scaling)
+    cos, sin = compute_gather_cos_sin(dhead=128, end=2 * 8192, theta=500000.0, rope_scaling=scaling)
     assert cos.shape == (1, 1, 8192, 128)
     assert sin.shape == (1, 1, 8192, 128)
 
 
 def test_compute_cos_sin_head_dim_64():
     """Test cos/sin computation with head_dim=64 (Llama-3.2-1B)."""
-    cos, sin = _compute_cos_sin_matrices(
-        head_dim=64, max_seq_len=8192, rope_theta=500000.0, rope_scaling=_llama3_scaling()
-    )
+    cos, sin = compute_gather_cos_sin(dhead=64, end=2 * 8192, theta=500000.0, rope_scaling=_llama3_scaling())
     assert cos.shape == (1, 1, 8192, 64)
     assert sin.shape == (1, 1, 8192, 64)
 
@@ -146,7 +158,7 @@ def _list_init_test_cases() -> list[pytest.param]:
         pytest.param((1, 1), 32, 64, 2048, 500000.0, "llama3", True, id="1x1-b32-hd64-llama3-fused", marks=_slow),
         pytest.param((1, 1), 32, 128, 2048, 500000.0, "llama3", True, id="1x1-b32-hd128-llama3-fused-8B", marks=_slow),
         pytest.param((1, 1), 32, 128, 2048, 1000000.0, "none", True, id="1x1-b32-hd128-none-fused-Mistral", marks=_slow),
-        # (1,1) hd=128, llama3, batch=1 (missing from original — Llama-3.2-3B, 3.1-8B on N150)
+        # (1,1) hd=128, llama3, batch=1 (Llama-3.2-3B, 3.1-8B on N150)
         pytest.param((1, 1), 1, 128, 8192, 500000.0, "llama3", True, id="1x1-b1-hd128-llama3-fused-8B", marks=_slow),
         pytest.param((1, 1), 1, 128, 1024, 500000.0, "llama3", True, id="1x1-b1-hd128-llama3-fused-seqlen1024", marks=_slow),
         pytest.param((1, 1), 32, 128, 1024, 500000.0, "llama3", True, id="1x1-b32-hd128-llama3-fused-seqlen1024", marks=_slow),
@@ -233,94 +245,103 @@ def test_rope_1d_init_and_api(
     use_qk_fused,
 ):
     """
-    Test RotarySetup1D initialization and all 3 API methods.
+    Test RotarySetup1D initialization and all API methods.
 
     Verifies:
     1. Construction succeeds with given parameters
-    2. get_both_trans_mats() returns valid tensors
+    2. get_both_trans_mats() returns valid tensors with correct PCC
     3. get_rot_idxs() produces correct shape
-    4. get_rot_mats() produces cos/sin with correct shapes
+    4. get_rot_mats() produces cos/sin with correct shapes and PCC vs reference
+    5. forward() with ttnn.Tensor input matches torch-input path
     """
     rope_scaling = _llama3_scaling() if rope_scaling_str == "llama3" else None
 
-    rope = RotarySetup1D(
-        device=ttnn_mesh_device,
-        batch_size=batch_size,
-        head_dim=head_dim,
-        max_seq_len=max_seq_len,
-        rope_theta=rope_theta,
-        rope_scaling=rope_scaling,
-        use_qk_fused=use_qk_fused,
+    cos_torch, sin_torch = compute_gather_cos_sin(
+        dhead=head_dim, end=2 * max_seq_len, theta=rope_theta, rope_scaling=rope_scaling
     )
+    scaling_tag = type(rope_scaling).__name__ if rope_scaling else "none"
+    tag = f"theta{rope_theta}_{scaling_tag}"
+    cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/rope_1d"))
+    cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"cos_{tag}"))
+    sin_lw = LazyWeight(source=sin_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"sin_{tag}"))
 
+    # Use __init__ (happy path) when defaults suffice, from_config (power path) otherwise.
+    # This exercises both constructors across the test matrix.
+    if not use_qk_fused:
+        rope = RotarySetup1D(cos_lw, sin_lw, max_batch_size=batch_size)
+    else:
+        config = Rope1DConfig(
+            cos_matrix=cos_lw,
+            sin_matrix=sin_lw,
+            max_batch_size=batch_size,
+            head_dim=head_dim,
+            device=ttnn_mesh_device,
+            use_qk_fused=use_qk_fused,
+        )
+        rope = RotarySetup1D.from_config(config)
+
+    # --- get_both_trans_mats ---
     trans_mats = rope.get_both_trans_mats()
     assert "decode" in trans_mats
     assert "prefill" in trans_mats
 
-    # Prefill trans mat: _get_rot_transformation_mat(head_dim) → 32x32 (dhead forced to TILE_SIZE)
-    prefill_ref = _get_rot_transformation_mat(dhead=head_dim)  # [1, 1, 32, 32]
+    # Prefill trans mat PCC: TTTv2 uses head_dim x head_dim
+    prefill_ref = get_rot_transformation_mat(dhead=head_dim)  # [1, 1, head_dim, head_dim]
     prefill_tt = to_torch_auto_compose(trans_mats["prefill"])
-    # Trim TT output to match ref shape (replicated, same on all devices)
     prefill_tt_trimmed = prefill_tt[:1, :1, : prefill_ref.shape[2], : prefill_ref.shape[3]]
     pcc_prefill, msg_prefill = comp_pcc(prefill_ref.to(torch.bfloat16), prefill_tt_trimmed.to(torch.bfloat16), 0.9999)
     assert pcc_prefill, f"prefill trans_mat PCC failed: {msg_prefill}"
 
-    # Decode trans mat: same base matrix repeated batch_size_per_device_group times on dim 2
+    # Decode trans mat PCC
     effective_batch = batch_size * 2 if use_qk_fused else batch_size
-    decode_ref = _get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, effective_batch, 1)
+    decode_ref = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, effective_batch, 1)
     decode_tt = to_torch_auto_compose(trans_mats["decode"])
     decode_tt_trimmed = decode_tt[:1, :1, : decode_ref.shape[2], : decode_ref.shape[3]]
     pcc_decode, msg_decode = comp_pcc(decode_ref.to(torch.bfloat16), decode_tt_trimmed.to(torch.bfloat16), 0.9999)
     assert pcc_decode, f"decode trans_mat PCC failed: {msg_decode}"
 
-    # Test get_rot_idxs
+    # --- get_rot_idxs ---
     position_idxs = torch.arange(batch_size)
     rot_idxs = rope.get_rot_idxs(position_idxs, on_host=True)
     assert isinstance(rot_idxs, ttnn.Tensor)
 
-    # Test get_rot_mats
-    pos_batch = batch_size
-    if use_qk_fused:
-        # For fused ops, get_rot_idxs doubles internally; get_rot_mats with torch input calls get_rot_idxs
-        pass
+    # --- get_rot_mats (torch input) ---
     rot_mats = rope.get_rot_mats(position_idxs)
     assert len(rot_mats) == 2
     cos, sin = rot_mats
     assert isinstance(cos, ttnn.Tensor)
     assert isinstance(sin, ttnn.Tensor)
 
-    # Test get_rot_mats with return_rot_idxs
+    # --- get_rot_mats with return_rot_idxs ---
     result = rope.get_rot_mats(position_idxs, return_rot_idxs=True)
     assert len(result) == 2
     rot_mats_2, rot_idxs_2 = result
     assert len(rot_mats_2) == 2
     assert isinstance(rot_idxs_2, ttnn.Tensor)
 
-    # PCC check: use non-zero positions to avoid sin(0)=0 (PCC undefined for all-zero tensors)
-    pcc_position_idxs = torch.arange(42, 42 + batch_size)  # positions [42..42+batch-1], always non-zero sin
+    # --- PCC check: cos/sin vs torch reference ---
+    # Use non-zero positions to avoid sin(0)=0 (PCC undefined for all-zero tensors)
+    pcc_position_idxs = torch.arange(42, 42 + batch_size)
 
-    # Test production calling pattern: get_rot_idxs(on_host=True) → get_rot_mats(ttnn_input)
-    # This is how the API is used in real models (see rope_1d_api_test_cases.csv)
+    # Production calling pattern: get_rot_idxs(on_host=True) → get_rot_mats(ttnn_input)
     pcc_rot_idxs_host = rope.get_rot_idxs(pcc_position_idxs, on_host=True)
     pcc_rot_mats_via_ttnn = rope.get_rot_mats(pcc_rot_idxs_host)
     assert len(pcc_rot_mats_via_ttnn) == 2
 
-    # Also test the torch→internal path for comparison
+    # Also test torch→internal path for comparison
     pcc_rot_mats = rope.get_rot_mats(pcc_position_idxs)
 
-    cos_torch_ref, sin_torch_ref = _compute_cos_sin_matrices(
-        head_dim=head_dim,
-        max_seq_len=max_seq_len,
-        rope_theta=rope_theta,
+    cos_torch_ref, sin_torch_ref = compute_gather_cos_sin(
+        dhead=head_dim,
+        end=2 * max_seq_len,
+        theta=rope_theta,
         rope_scaling=rope_scaling,
     )
 
     cos_tt = to_torch_auto_compose(pcc_rot_mats[0])
     sin_tt = to_torch_auto_compose(pcc_rot_mats[1])
 
-    # Build expected cos/sin from torch reference for the chosen positions
-    effective_batch = batch_size * 2 if use_qk_fused else batch_size
-    # For fused: positions are [42..42+batch-1] repeated 2x → [42,..,42+b-1, 42,..,42+b-1]
+    # Build expected cos/sin from torch reference for chosen positions
     if use_qk_fused:
         ref_positions = list(range(42, 42 + batch_size)) * 2
     else:
@@ -345,7 +366,7 @@ def test_rope_1d_init_and_api(
     assert pcc_cos, f"cos PCC failed: {msg_cos}"
     assert pcc_sin, f"sin PCC failed: {msg_sin}"
 
-    # PCC check: ttnn-input path (production pattern) must match torch-input path
+    # --- PCC check: ttnn-input path must match torch-input path ---
     cos_tt_via_ttnn = to_torch_auto_compose(pcc_rot_mats_via_ttnn[0])
     sin_tt_via_ttnn = to_torch_auto_compose(pcc_rot_mats_via_ttnn[1])
     pcc_cos_path, msg_cos_path = comp_pcc(cos_tt, cos_tt_via_ttnn, 0.9999)
@@ -360,6 +381,72 @@ def test_rope_1d_init_and_api(
         f"head_dim={head_dim}, max_seq_len={max_seq_len}, rope_theta={rope_theta}, "
         f"scaling={rope_scaling_str}, fused={use_qk_fused}"
     )
+
+
+# ============================================================================
+# Standalone helper test: prepare_rot_idxs
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(1, 1), (1, 2)],
+    ids=["1x1", "1x2"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "batch_size,use_qk_fused",
+    [
+        pytest.param(1, False, id="b1-nofused"),
+        pytest.param(1, True, id="b1-fused"),
+        pytest.param(32, True, id="b32-fused"),
+    ],
+)
+def test_prepare_rot_idxs(
+    ttnn_mesh_device: ttnn.MeshDevice,
+    batch_size,
+    use_qk_fused,
+):
+    """Test prepare_rot_idxs standalone helper produces correct ttnn tensor."""
+    rope_scaling = _llama3_scaling()
+    cos_torch, sin_torch = compute_gather_cos_sin(dhead=128, end=2 * 8192, theta=500000.0, rope_scaling=rope_scaling)
+    scaling_tag = type(rope_scaling).__name__
+    tag = f"theta500000.0_{scaling_tag}"
+    cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/rope_1d"))
+    cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"cos_{tag}"))
+    sin_lw = LazyWeight(source=sin_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"sin_{tag}"))
+    config = Rope1DConfig(
+        cos_matrix=cos_lw,
+        sin_matrix=sin_lw,
+        max_batch_size=batch_size,
+        head_dim=128,
+        device=ttnn_mesh_device,
+        use_qk_fused=use_qk_fused,
+    )
+    rope = RotarySetup1D.from_config(config)
+
+    position_idxs = torch.arange(batch_size)
+
+    # Test on-device path
+    rot_idxs = prepare_rot_idxs(rope.config, position_idxs, on_host=False)
+    assert isinstance(rot_idxs, ttnn.Tensor)
+
+    # Test on-host path
+    rot_idxs_host = prepare_rot_idxs(rope.config, position_idxs, on_host=True)
+    assert isinstance(rot_idxs_host, ttnn.Tensor)
+
+    # Both paths should produce usable tensors for forward()
+    cos_sin_device = rope.forward(rot_idxs)
+    assert len(cos_sin_device) == 2
+
+    cos_sin_host = rope.get_rot_mats(rot_idxs_host)
+    assert len(cos_sin_host) == 2
+
+    # PCC: both paths should produce identical results
+    cos_d = to_torch_auto_compose(cos_sin_device[0])
+    cos_h = to_torch_auto_compose(cos_sin_host[0])
+    pcc_ok, msg = comp_pcc(cos_d, cos_h, 0.9999)
+    assert pcc_ok, f"on-device vs on-host cos mismatch: {msg}"
 
 
 # ============================================================================
@@ -403,15 +490,23 @@ def test_rope_1d_cos_sin_vs_reference(
     rope_scaling = _llama3_scaling() if rope_scaling_str == "llama3" else None
 
     # Build TTTv2
-    rope_v2 = RotarySetup1D(
-        device=ttnn_mesh_device,
-        batch_size=batch_size,
+    cos_torch, sin_torch = compute_gather_cos_sin(
+        dhead=head_dim, end=2 * max_seq_len, theta=rope_theta, rope_scaling=rope_scaling
+    )
+    scaling_tag = type(rope_scaling).__name__ if rope_scaling else "none"
+    tag = f"theta{rope_theta}_{scaling_tag}"
+    cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/rope_1d"))
+    cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"cos_{tag}"))
+    sin_lw = LazyWeight(source=sin_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"sin_{tag}"))
+    config = Rope1DConfig(
+        cos_matrix=cos_lw,
+        sin_matrix=sin_lw,
+        max_batch_size=batch_size,
         head_dim=head_dim,
-        max_seq_len=max_seq_len,
-        rope_theta=rope_theta,
-        rope_scaling=rope_scaling,
+        device=ttnn_mesh_device,
         use_qk_fused=use_qk_fused,
     )
+    rope_v2 = RotarySetup1D.from_config(config)
 
     # Build TTTv1 (for reference)
     rope_v1 = TTTv1RotarySetup(
@@ -425,12 +520,11 @@ def test_rope_1d_cos_sin_vs_reference(
         datatype=ttnn.bfloat16,
     )
 
-    # Compare get_rot_mats with non-zero position indices (avoid sin(0)=0 → PCC undefined)
+    # Compare get_rot_mats with non-zero positions (avoid sin(0)=0 → PCC undefined)
     position_idxs = torch.arange(42, 42 + batch_size)
     v2_cos_sin = rope_v2.get_rot_mats(position_idxs)
     v1_cos_sin = rope_v1.get_rot_mats(position_idxs)
 
-    # Replicated tensors: use auto_compose to get single-device view
     v2_cos_torch = to_torch_auto_compose(v2_cos_sin[0])
     v1_cos_torch = to_torch_auto_compose(v1_cos_sin[0])
     v2_sin_torch = to_torch_auto_compose(v2_cos_sin[1])
@@ -445,18 +539,30 @@ def test_rope_1d_cos_sin_vs_reference(
     assert pcc_cos, f"cos mismatch: {msg_cos}"
     assert pcc_sin, f"sin mismatch: {msg_sin}"
 
-    # Compare transformation matrices
+    # Compare decode transformation matrix (both use TILE_SIZE — should match exactly)
     v2_trans = rope_v2.get_both_trans_mats()
     v1_trans = rope_v1.get_both_trans_mats()
 
-    for key in ["decode", "prefill"]:
-        v2_t = to_torch_auto_compose(v2_trans[key])
-        v1_t = to_torch_auto_compose(v1_trans[key])
-        pcc_ok, msg = comp_pcc(v1_t, v2_t, 0.9999)
-        logger.info(f"trans_mat[{key}] PCC: {msg}")
-        assert pcc_ok, f"trans_mat[{key}] mismatch: {msg}"
+    v2_decode = to_torch_auto_compose(v2_trans["decode"])
+    v1_decode = to_torch_auto_compose(v1_trans["decode"])
+    pcc_decode, msg_decode = comp_pcc(v1_decode, v2_decode, 0.9999)
+    logger.info(f"trans_mat[decode] PCC: {msg_decode}")
+    assert pcc_decode, f"trans_mat[decode] mismatch: {msg_decode}"
 
-    logger.info(f"RotarySetup1D vs TTTv1: PASSED")
+    # Compare prefill transformation matrix
+    # Note: TTTv2 uses head_dim x head_dim (intentional fix), TTTv1 always uses 32x32.
+    # Compare the overlapping 32x32 block (the RoPE permutation pattern).
+    v2_prefill = to_torch_auto_compose(v2_trans["prefill"])
+    v1_prefill = to_torch_auto_compose(v1_trans["prefill"])
+    min_h = min(v1_prefill.shape[-2], v2_prefill.shape[-2])
+    min_w = min(v1_prefill.shape[-1], v2_prefill.shape[-1])
+    v1_prefill_trimmed = v1_prefill[:1, :1, :min_h, :min_w]
+    v2_prefill_trimmed = v2_prefill[:1, :1, :min_h, :min_w]
+    pcc_prefill, msg_prefill = comp_pcc(v1_prefill_trimmed, v2_prefill_trimmed, 0.9999)
+    logger.info(f"trans_mat[prefill] PCC (overlapping region): {msg_prefill}")
+    assert pcc_prefill, f"trans_mat[prefill] mismatch (overlapping region): {msg_prefill}"
+
+    logger.info("RotarySetup1D vs TTTv1: PASSED")
 
 
 # ============================================================================
@@ -511,7 +617,7 @@ def test_rope_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice)
         datatype=ttnn.bfloat16,
     )
 
-    # PCC check: get_rot_mats (use non-zero positions to avoid sin(0)=0 → PCC undefined)
+    # PCC check: get_rot_mats (use non-zero positions)
     position_idxs = torch.arange(42, 42 + model_args.max_batch_size)
     v2_cos_sin = rope_v2.get_rot_mats(position_idxs)
     v1_cos_sin = rope_v1.get_rot_mats(position_idxs)
@@ -530,15 +636,25 @@ def test_rope_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice)
     assert pcc_cos, f"from_model_args cos mismatch: {msg_cos}"
     assert pcc_sin, f"from_model_args sin mismatch: {msg_sin}"
 
-    # PCC check: transformation matrices
+    # PCC check: decode transformation matrix
     v2_trans = rope_v2.get_both_trans_mats()
     v1_trans = rope_v1.get_both_trans_mats()
 
-    for key in ["decode", "prefill"]:
-        v2_t = to_torch_auto_compose(v2_trans[key])
-        v1_t = to_torch_auto_compose(v1_trans[key])
-        pcc_ok, msg = comp_pcc(v1_t, v2_t, 0.9999)
-        logger.info(f"from_model_args trans_mat[{key}] PCC: {msg}")
-        assert pcc_ok, f"from_model_args trans_mat[{key}] mismatch: {msg}"
+    v2_decode = to_torch_auto_compose(v2_trans["decode"])
+    v1_decode = to_torch_auto_compose(v1_trans["decode"])
+    pcc_decode, msg_decode = comp_pcc(v1_decode, v2_decode, 0.9999)
+    logger.info(f"from_model_args trans_mat[decode] PCC: {msg_decode}")
+    assert pcc_decode, f"from_model_args trans_mat[decode] mismatch: {msg_decode}"
+
+    # PCC check: prefill transformation matrix (overlapping region)
+    v2_prefill = to_torch_auto_compose(v2_trans["prefill"])
+    v1_prefill = to_torch_auto_compose(v1_trans["prefill"])
+    min_h = min(v1_prefill.shape[-2], v2_prefill.shape[-2])
+    min_w = min(v1_prefill.shape[-1], v2_prefill.shape[-1])
+    v1_prefill_trimmed = v1_prefill[:1, :1, :min_h, :min_w]
+    v2_prefill_trimmed = v2_prefill[:1, :1, :min_h, :min_w]
+    pcc_prefill, msg_prefill = comp_pcc(v1_prefill_trimmed, v2_prefill_trimmed, 0.9999)
+    logger.info(f"from_model_args trans_mat[prefill] PCC (overlapping): {msg_prefill}")
+    assert pcc_prefill, f"from_model_args trans_mat[prefill] mismatch: {msg_prefill}"
 
     logger.info(f"RotarySetup1D.from_model_args vs TTTv1: PASSED for {model_args.model_name}")
