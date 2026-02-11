@@ -434,5 +434,5 @@ fi
 # Build libraries and cpp tests
 if [ "$configure_only" = "OFF" ]; then
     echo "INFO: Building Project"
-    time cmake --build $build_dir --target $target --parallel 32
+    cmake --build $build_dir --target $target
 fi
