@@ -103,16 +103,18 @@ The trace is stored on the device (trace region). Later, `ttnn.execute_trace()` 
 
 **What happens:** Run the trace 100 times to warm caches and stabilize timing.
 
-For each iteration, the test does:
+For each iteration, the test does the following. *(“Record event” = enqueue a sync point on that CQ; when the device reaches it and writes the event ID to the completion queue, the host can wait on that event and know all commands before it on that CQ have finished.)*
 
-1. Wait for CQ0’s previous write event (input from last iteration is ready).
-2. Reshard input into L1 for this run.
-3. Record event on CQ0, then `execute_trace(device, trace_id, cq_id=0, blocking=False)`.
-4. Wait for CQ0 read event (inference done).
-5. Move output to DRAM.
-6. Record event on CQ1, then start copying *next* batch from host to device (CQ1).
-7. Wait for CQ1’s previous completion, then read output from device (CQ1).
-8. Record CQ1 read event.
+1. **Wait for CQ0’s previous write event** — Block until the device has completed the “write event” from the *previous* iteration. That means the input for this iteration (copied to device in the previous iteration) is ready.
+2. **Reshard input into L1 for this run** — Copy/reshape the input from its current location into L1 so the trace can use it.
+3. **Record event on CQ0, then execute trace** — Enqueue on CQ0: (a) a “record event” command (sync point), then (b) “replay trace.” When the event completes, the device has reached that point; the trace runs after it. `execute_trace(..., blocking=False)` returns immediately; the trace runs asynchronously.
+4. **Wait for CQ0 read event** — Wait for the “read event” that was recorded on CQ0 (in a previous step, typically after the trace and any follow-up copies). When it completes, inference for this iteration is done (trace + any “move output to DRAM” on CQ0 have finished).
+5. **Move output to DRAM** — Enqueue on CQ0 (or as part of the trace) a command that copies the trace output from L1 into a DRAM buffer so it can be read back to host later.
+6. **Record event on CQ1, then start copying next batch** — Enqueue on CQ1: (a) a “record event” (sync point at the *start* of this iteration’s CQ1 work), then (b) the command to copy the *next* batch from host to device. So CQ1’s stream gets: sync point, then host→device copy. This event marks “we’ve submitted the next input copy.”
+7. **Wait for CQ1’s previous completion, then read output** — Wait for the event that was recorded in the *previous* iteration’s step 8 (“Record CQ1 read event”). That means the previous iteration’s device→host read-back is done and the output is in host memory. Then enqueue on CQ1 the command to read the *current* iteration’s output from device DRAM to host.
+8. **Record CQ1 read event** — Enqueue a “record event” on CQ1 *after* the read-back command from step 7. When this event completes (next iteration’s step 7), the host knows the read-back is done and the output is in host memory.
+
+*Difference between the two CQ1 events:* Step 6 records an event *before* the host→device copy (marks “start of this iteration’s CQ1 work”). Step 8 records an event *after* the device→host read-back (marks “read-back done”). The host waits for the step-8 event from the *previous* iteration (in step 7) to know when the previous output is back before using it or starting the next read.
 
 CQ0 and CQ1 overlap: while CQ0 runs the trace, CQ1 copies the next input and reads the previous output.
 
