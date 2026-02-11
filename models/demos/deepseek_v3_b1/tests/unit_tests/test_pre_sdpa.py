@@ -19,7 +19,11 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
-from models.demos.deepseek_v3_b1.utils import shuffle_weights_for_interleaved_qnope_qrope
+from models.demos.deepseek_v3_b1.utils import (
+    merge_width_sharded_weights,
+    shuffle_weights_for_interleaved_qnope_qrope,
+    tile_reshape,
+)
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -320,6 +324,94 @@ def test_pre_sdpa(
         memory_config=matmul2_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
+
+    # ========================================================================
+    # Merged matmul weights (matmul_weights + matmul2_weights in one buffer)
+    # ========================================================================
+    # matmul_weights:  (7168, 1536)  width-sharded 6x8 (48 cores), shard=(7168, 32)
+    # matmul2_weights: (1536, 12288) width-sharded 12x8 (96 cores), shard=(1536, 128)
+    #
+    # Merged on 12x8 grid, uniform shard width = 32:
+    #   - Cols 0-5  (48 cores): buffer1(7168,32) | buffer2 tile-reshaped (6144,32)
+    #   - Cols 6-11 (48 cores): padding(7168,32)  | buffer2 tile-reshaped (6144,32)
+    # Merged shard: (13312, 32)
+    matmul1_grid_x = 6  # tensor1 grid width (cols 0-5)
+
+    torch_merged_weights, merged_shard_shape = merge_width_sharded_weights(
+        torch_matmul_weights,
+        torch_matmul2_weights_shuffled,
+        tensor1_grid_x=matmul1_grid_x,
+        tensor2_grid_x=matmul2_grid_x,
+        grid_y=matmul2_grid_y,
+    )
+    merged_shard_h, merged_shard_w = merged_shard_shape
+
+    # Create merged tensor on device (width-sharded on 12x8 grid)
+    merged_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({matmul2_grid}),
+        merged_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    merged_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, merged_shard_spec)
+    ttnn_merged_weights = ttnn.from_torch(
+        torch_merged_weights,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=merged_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+    # Verification: read all three tensors back from device and compare per-shard
+    logger.info("Verifying merged tensor matches stitched buffer1|buffer2 per bank...")
+    torch_merged_back = ttnn.to_torch(ttnn_merged_weights, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    torch_t1_back = ttnn.to_torch(ttnn_matmul_weights, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    torch_t2_back = ttnn.to_torch(ttnn_matmul2_weights, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
+    # Take first device slice
+    torch_merged_back = torch_merged_back[:merged_shard_h, :]
+    torch_t1_back = torch_t1_back[: matmul_weights_shape[0], :]
+    torch_t2_back = torch_t2_back[: matmul2_weights_shape[0], :]
+
+    # Derived shard widths for verification
+    tensor1_shard_w = matmul_weights_shape[1] // num_matmul_cores  # 32
+    tensor2_shard_w = matmul2_weights_shape[1] // matmul2_num_cores  # 128
+    tensor2_reshaped_h = merged_shard_h - matmul_weights_shape[0]  # 6144
+
+    for shard_idx in range(matmul2_num_cores):
+        core_x = shard_idx % matmul2_grid_x
+        core_y = shard_idx // matmul2_grid_x
+
+        merged_col_start = shard_idx * merged_shard_w
+        merged_col_end = merged_col_start + merged_shard_w
+        merged_shard_data = torch_merged_back[:, merged_col_start:merged_col_end]
+
+        # Check tensor1 portion (rows 0 .. 7168)
+        t1_part = merged_shard_data[: matmul_weights_shape[0], :]
+        if core_x < matmul1_grid_x:
+            tensor1_shard_idx = core_y * matmul1_grid_x + core_x
+            t1_start = tensor1_shard_idx * tensor1_shard_w
+            t1_end = t1_start + tensor1_shard_w
+            expected_t1 = torch_t1_back[:, t1_start:t1_end]
+            assert torch.equal(t1_part, expected_t1), f"Tensor1 mismatch at shard {shard_idx} (core {core_x},{core_y})"
+        else:
+            assert torch.all(t1_part == 0), f"Expected zero padding at shard {shard_idx} (core {core_x},{core_y})"
+
+        # Check tensor2 portion (rows 7168 .. 13312)
+        t2_part = merged_shard_data[matmul_weights_shape[0] :, :]  # (6144, 32)
+        t2_start = shard_idx * tensor2_shard_w
+        t2_end = t2_start + tensor2_shard_w
+        expected_t2 = torch_t2_back[:, t2_start:t2_end]  # (1536, 128)
+        expected_t2_reshaped = tile_reshape(
+            expected_t2,
+            (matmul2_weights_shape[0], tensor2_shard_w),
+            (tensor2_reshaped_h, merged_shard_w),
+        )
+        assert torch.equal(
+            t2_part, expected_t2_reshaped
+        ), f"Tensor2 mismatch at shard {shard_idx} (core {core_x},{core_y})"
+
+    logger.info("Merged tensor verification passed - per-bank data matches original tensors!")
 
     # RMSNorm2 gamma tensor
     rmsnorm2_gamma_shard_spec = ttnn.ShardSpec(
