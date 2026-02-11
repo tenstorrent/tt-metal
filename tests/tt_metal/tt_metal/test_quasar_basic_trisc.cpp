@@ -44,11 +44,11 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarBasicTrisc) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
-    CreateKernel(
+    experimental::quasar::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         core,
-        ComputeConfig{.compile_args = {}});
+        experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1});
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
