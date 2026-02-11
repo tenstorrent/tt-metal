@@ -5,7 +5,7 @@
 import os
 import sys
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
+sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 
 import click
 import ttml
@@ -51,16 +51,16 @@ def main(config: str):
         device = autograd_ctx.get_device()
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
         values_before_all_reduce = tt_values.to_numpy(composer=composer)
-        assert np.all(
-            values_before_all_reduce == world_size * (world_size + 1) / 2
-        ), f"Values before all reduce do not match expected values: {values_before_all_reduce}"
+        assert np.all(values_before_all_reduce == world_size * (world_size + 1) / 2), (
+            f"Values before all reduce do not match expected values: {values_before_all_reduce}"
+        )
 
         tt_values_after_all_reduce = ttml.ops.distributed.all_reduce(tt_values)
         values_after_all_reduce = tt_values_after_all_reduce.to_numpy(composer=composer)
         num_devices = device_config.total_devices()
-        assert np.all(
-            values_after_all_reduce == world_size * (world_size + 1) / 2 * num_devices
-        ), f"Values after all reduce do not match expected values: {values_after_all_reduce}"
+        assert np.all(values_after_all_reduce == world_size * (world_size + 1) / 2 * num_devices), (
+            f"Values after all reduce do not match expected values: {values_after_all_reduce}"
+        )
 
     # Cleanup
     distributed_ctx.barrier()

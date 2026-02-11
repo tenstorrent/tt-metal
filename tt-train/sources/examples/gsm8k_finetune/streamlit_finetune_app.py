@@ -527,7 +527,7 @@ def main():
 
         # Show YAML file location if it exists
         if os.path.exists("training_overrides.yaml"):
-            st.caption(f"Config: training_overrides.yaml")
+            st.caption("Config: training_overrides.yaml")
 
         # Show training process info if running
         if is_running and hasattr(st.session_state, "training_pid"):
@@ -537,7 +537,7 @@ def main():
             script_dir = os.path.dirname(os.path.abspath(__file__))
             stdout_log = os.path.join(script_dir, "training_stdout.log")
             if os.path.exists(stdout_log):
-                st.caption(f"Log: training_stdout.log")
+                st.caption("Log: training_stdout.log")
 
         st.divider()
 
@@ -711,7 +711,7 @@ def main():
             if max_steps > 0:
                 progress = current_data["step"] / max_steps
                 st.progress(min(progress, 1.0))
-                st.caption(f"Progress: {current_data['step']:,} / {max_steps:,} steps ({progress*100:.1f}%)")
+                st.caption(f"Progress: {current_data['step']:,} / {max_steps:,} steps ({progress * 100:.1f}%)")
         else:
             metrics = [
                 ("Current Step", "N/A"),
@@ -773,7 +773,7 @@ def main():
 
                         # Format with appropriate units
                         if tokens_per_sec >= 1000:
-                            st.metric("Rate", f"{tokens_per_sec/1000:.2f}k tokens/s")
+                            st.metric("Rate", f"{tokens_per_sec / 1000:.2f}k tokens/s")
                         else:
                             st.metric("Rate", f"{tokens_per_sec:.2f} tokens/s")
                     else:

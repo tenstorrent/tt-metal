@@ -35,7 +35,7 @@ import os
 import sys
 import numpy as np
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
+sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 import ttml
 
 if __name__ == "__main__":
@@ -78,5 +78,7 @@ if __name__ == "__main__":
             6.0,
             7.0,
             8.0,
-        ], f"Rank {rank} received data: {tensor_data} does not match expected data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]"
+        ], (
+            f"Rank {rank} received data: {tensor_data} does not match expected data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]"
+        )
         print(f"Rank {rank} received data: {tensor_data}")

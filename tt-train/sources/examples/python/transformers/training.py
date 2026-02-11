@@ -7,10 +7,11 @@
 This script orchestrates the training of transformer models (GPT-2, Llama)
 using configurations specified in YAML files.
 """
+
 import os
 import sys
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
+sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 
 import ttml
 from ttml.common.config import get_config, DeviceConfig, TrainingConfig

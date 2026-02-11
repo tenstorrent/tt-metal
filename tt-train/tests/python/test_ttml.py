@@ -42,9 +42,9 @@ def test_recursive_import_top_level():
     # If a submodule exists in _ttml, it should be imported into ttml
     for submodule_name in expected_submodules:
         # If it exists in _ttml, it must be imported into ttml
-        assert hasattr(
-            ttml, submodule_name
-        ), f"ttml.{submodule_name} should exist if _ttml.{submodule_name} exists (recursive import failed)"
+        assert hasattr(ttml, submodule_name), (
+            f"ttml.{submodule_name} should exist if _ttml.{submodule_name} exists (recursive import failed)"
+        )
         # Verify it's actually a module
         assert inspect.ismodule(getattr(ttml, submodule_name)), f"ttml.{submodule_name} should be a module"
 
@@ -75,11 +75,11 @@ def test_nested_submodule_import():
         for submodule_name in nested_submodules:
             if hasattr(_ttml_ops, submodule_name):
                 # If it exists in _ttml.ops, it should be accessible via ttml.ops
-                assert hasattr(ttml, "ops"), f"ttml.ops should exist"
+                assert hasattr(ttml, "ops"), "ttml.ops should exist"
                 ttml_ops = getattr(ttml, "ops")
-                assert hasattr(
-                    ttml_ops, submodule_name
-                ), f"ttml.ops.{submodule_name} should be imported from _ttml.ops.{submodule_name}"
+                assert hasattr(ttml_ops, submodule_name), (
+                    f"ttml.ops.{submodule_name} should be imported from _ttml.ops.{submodule_name}"
+                )
 
 
 def test_python_override_precedence():
@@ -314,7 +314,7 @@ def test_submodule_imported(submodule_name):
     imported_attrs = [attr for attr in _ttml_attrs if hasattr(ttml_submodule, attr)]
 
     assert imported_attrs, (
-        f"Expected ttml.{submodule_name} to import at least one public symbol from " f"_ttml.{submodule_name}"
+        f"Expected ttml.{submodule_name} to import at least one public symbol from _ttml.{submodule_name}"
     )
 
 
@@ -435,9 +435,9 @@ class TestCppOptimizersWithPythonModules:
         params_after = model.parameters()
         for key in weight_keys:
             weight_after = params_after[key].to_numpy(ttnn.DataType.FLOAT32)
-            assert not np.allclose(
-                initial_weights[key], weight_after, atol=1e-6
-            ), f"AdamW optimizer should have updated {key}"
+            assert not np.allclose(initial_weights[key], weight_after, atol=1e-6), (
+                f"AdamW optimizer should have updated {key}"
+            )
 
     def test_optimizer_with_nested_python_modules(self):
         """Test optimizer works with nested Python modules (submodules)."""
@@ -493,9 +493,9 @@ class TestCppOptimizersWithPythonModules:
         params_after = model.parameters()
         for key in param_names:
             weight_after = params_after[key].to_numpy(ttnn.DataType.FLOAT32)
-            assert not np.allclose(
-                initial_weights[key], weight_after, atol=1e-6
-            ), f"Optimizer should have updated nested parameter {key}"
+            assert not np.allclose(initial_weights[key], weight_after, atol=1e-6), (
+                f"Optimizer should have updated nested parameter {key}"
+            )
 
     def test_optimizer_lr_adjustment(self):
         """Test that optimizer learning rate can be adjusted via set_lr."""
@@ -750,9 +750,9 @@ class TestModuleList:
         params_after = model.parameters()
         for key in initial_weights:
             weight_after = params_after[key].to_numpy(ttnn.DataType.FLOAT32)
-            assert not np.allclose(
-                initial_weights[key], weight_after, atol=1e-6
-            ), f"Optimizer should have updated parameter {key}"
+            assert not np.allclose(initial_weights[key], weight_after, atol=1e-6), (
+                f"Optimizer should have updated parameter {key}"
+            )
 
 
 class TestModuleDict:

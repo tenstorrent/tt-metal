@@ -172,7 +172,7 @@ def _set_param_array_autotensor(param, arr: np.ndarray):
         if cur.shape != arr.shape:
             print(f"[load] shape mismatch for param: {cur.shape} (model) vs {arr.shape} (ckpt). Assigning anyway.")
     except Exception:
-        logging.warning(f"Could not fetch current shape for param during load. Assigning anyway.")
+        logging.warning("Could not fetch current shape for param during load. Assigning anyway.")
 
     # Create source tensor in the required layout + dtype, then assign
     src = ttml.autograd.Tensor.from_numpy(

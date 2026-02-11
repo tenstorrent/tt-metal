@@ -10,7 +10,7 @@ This module contains the training logic for both 2-tier and 3-tier architectures
 - optimizer(): Applies optimizer updates (3-tier only)
 - aggregator_optimizer(): Combined aggregator+optimizer for 2-tier architecture
 """
-from time import time
+
 
 import numpy as np
 import ttml

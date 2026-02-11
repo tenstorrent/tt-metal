@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Training loop and batch preparation for pipeline parallel transformer models."""
+
 from time import time
 
 import numpy as np

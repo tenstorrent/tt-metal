@@ -144,13 +144,9 @@ class PythonLinearOp(Function):
         volume_without_features = ttnn_input.logical_volume() // in_features
 
         # Reshape input and grad_output to 2D
-        reshaped_input = ttnn.reshape(
-            ttnn_input, ttnn.Shape([volume_without_features, in_features])
-        )
+        reshaped_input = ttnn.reshape(ttnn_input, ttnn.Shape([volume_without_features, in_features]))
 
-        reshaped_grad_output = ttnn.reshape(
-            grad_output, ttnn.Shape([volume_without_features, out_features])
-        )
+        reshaped_grad_output = ttnn.reshape(grad_output, ttnn.Shape([volume_without_features, out_features]))
 
         # Compute weight gradient: grad_output.T @ input
         # Shape: [out_features, batch*seq] @ [batch*seq, in_features] = [out_features, in_features]
@@ -278,9 +274,7 @@ class PythonLinearLayer(ttml.modules.AbstractModuleBase):
     in tt-train's autograd system.
     """
 
-    def __init__(
-        self, in_features: int, out_features: int, has_bias: bool = True
-    ) -> None:
+    def __init__(self, in_features: int, out_features: int, has_bias: bool = True) -> None:
         """Initialize Python Linear layer.
 
         Args:
@@ -297,17 +291,13 @@ class PythonLinearLayer(ttml.modules.AbstractModuleBase):
         # Initialize weight with uniform distribution [-k, k] where k = sqrt(1/in_features)
         # Weight shape: [1, 1, out_features, in_features]
         init_k = math.sqrt(1.0 / in_features)
-        weight_data = np.random.uniform(
-            -init_k, init_k, (1, 1, out_features, in_features)
-        ).astype(np.float32)
+        weight_data = np.random.uniform(-init_k, init_k, (1, 1, out_features, in_features)).astype(np.float32)
         self.weight = Tensor.from_numpy(weight_data)
 
         # Initialize bias with same distribution
         # Bias shape: [1, 1, 1, out_features]
         if has_bias:
-            bias_data = np.random.uniform(
-                -init_k, init_k, (1, 1, 1, out_features)
-            ).astype(np.float32)
+            bias_data = np.random.uniform(-init_k, init_k, (1, 1, 1, out_features)).astype(np.float32)
             self.bias = Tensor.from_numpy(bias_data)
         else:
             self.bias = None
@@ -528,9 +518,7 @@ class TestCustomOperationsWithDevice:
         grad_tensor = input_tensor.get_grad_tensor()
         # Gradient should be 2.0 everywhere (since d/dx(2x) = 2)
         expected_grad = np.full_like(input_data, 2.0)
-        np.testing.assert_array_almost_equal(
-            grad_tensor.to_numpy(), expected_grad, decimal=5
-        )
+        np.testing.assert_array_almost_equal(grad_tensor.to_numpy(), expected_grad, decimal=5)
 
     def test_multiple_inputs(self):
         """Test custom operation with multiple inputs."""
@@ -656,9 +644,7 @@ class TestCustomOperationsWithDevice:
         np.testing.assert_array_almost_equal(output_data, expected, decimal=5)
 
         # Output should have node set (from autograd ops)
-        assert (
-            output.get_node() is not None
-        ), "Output should have node from autograd ops"
+        assert output.get_node() is not None, "Output should have node from autograd ops"
 
         # Backward should work automatically
         output.backward(retain_graph=False)
@@ -705,9 +691,7 @@ class TestCustomOperationsWithDevice:
         assert input_tensor.is_grad_initialized(), "Input should have gradient"
         grad_tensor = input_tensor.get_grad_tensor()
         expected_grad = np.full_like(input_data, 2.0)
-        np.testing.assert_array_almost_equal(
-            grad_tensor.to_numpy(), expected_grad, decimal=5
-        )
+        np.testing.assert_array_almost_equal(grad_tensor.to_numpy(), expected_grad, decimal=5)
 
     def test_auto_wrap_ttnn_tensor(self):
         """Test that ttnn tensors returned from forward are auto-wrapped."""
@@ -739,14 +723,10 @@ class TestCustomOperationsWithDevice:
         batch, seq_len, in_features, out_features = 2, 4, 32, 64
 
         # Input: [batch, seq_len, in_features]
-        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(
-            np.float32
-        )
+        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(np.float32)
 
         # Weight: [1, 1, out_features, in_features]
-        weight_data = (
-            np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
-        )
+        weight_data = np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
 
         # Bias: [1, 1, 1, out_features]
         bias_data = np.random.randn(1, 1, 1, out_features).astype(np.float32) * 0.1
@@ -785,14 +765,10 @@ class TestCustomOperationsWithDevice:
         batch, seq_len, in_features, out_features = 2, 4, 32, 64
 
         # Input: [batch, seq_len, in_features]
-        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(
-            np.float32
-        )
+        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(np.float32)
 
         # Weight: [1, 1, out_features, in_features]
-        weight_data = (
-            np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
-        )
+        weight_data = np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
 
         # Bias: [1, 1, 1, out_features]
         bias_data = np.random.randn(1, 1, 1, out_features).astype(np.float32) * 0.1
@@ -855,9 +831,7 @@ class TestCustomOperationsWithDevice:
 
         # Create shared weight and bias tensors (create once to ensure same data)
         np.random.seed(42)
-        weight_data = (
-            np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
-        )
+        weight_data = np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
         bias_data = np.random.randn(1, 1, 1, out_features).astype(np.float32) * 0.1
 
         # Create shared ttml tensors
@@ -873,9 +847,7 @@ class TestCustomOperationsWithDevice:
         cpp_layer = ttml.modules.LinearLayer(weight_tensor, bias_tensor)
 
         # Create input
-        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(
-            np.float32
-        )
+        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(np.float32)
 
         # Python forward
         input_py = ttml.autograd.Tensor.from_numpy(input_data)
@@ -904,9 +876,7 @@ class TestCustomOperationsWithDevice:
 
         # Create shared weight and bias tensors (create once to ensure same data)
         np.random.seed(42)
-        weight_data = (
-            np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
-        )
+        weight_data = np.random.randn(1, 1, out_features, in_features).astype(np.float32) * 0.1
         bias_data = np.random.randn(1, 1, 1, out_features).astype(np.float32) * 0.1
 
         # Create shared ttml tensors for Python layer
@@ -926,9 +896,7 @@ class TestCustomOperationsWithDevice:
         cpp_layer = ttml.modules.LinearLayer(weight_cpp, bias_cpp)
 
         # Create input
-        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(
-            np.float32
-        )
+        input_data = np.random.randn(1, 1, batch * seq_len, in_features).astype(np.float32)
 
         # Python forward + backward
         input_py = ttml.autograd.Tensor.from_numpy(input_data)
@@ -952,12 +920,8 @@ class TestCustomOperationsWithDevice:
         )
 
         # Compare weight gradients (convert to float32 to handle dtype differences)
-        weight_grad_py = (
-            python_layer.weight.get_grad_tensor().to_numpy().astype(np.float32)
-        )
-        weight_grad_cpp = (
-            cpp_layer.get_weight().get_grad_tensor().to_numpy().astype(np.float32)
-        )
+        weight_grad_py = python_layer.weight.get_grad_tensor().to_numpy().astype(np.float32)
+        weight_grad_cpp = cpp_layer.get_weight().get_grad_tensor().to_numpy().astype(np.float32)
         np.testing.assert_allclose(
             weight_grad_py,
             weight_grad_cpp,
@@ -989,40 +953,24 @@ class TestCustomOperationsWithDevice:
         kv_embedding_dim = head_dim * num_groups  # 64
 
         # qs shape: (B, 1, S, E)
-        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            np.float32
-        )
+        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(np.float32)
 
         # kvs shape: (B, 1, S, E_kv * 2)
-        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(
-            np.float32
-        )
+        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(np.float32)
 
         # Create tensors for Python implementation
-        qs_py = ttml.autograd.Tensor.from_numpy(
-            qs_data, new_type=ttnn.DataType.BFLOAT16
-        )
-        kvs_py = ttml.autograd.Tensor.from_numpy(
-            kvs_data, new_type=ttnn.DataType.BFLOAT16
-        )
+        qs_py = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
+        kvs_py = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
 
         # Create tensors for C++ implementation
-        qs_cpp = ttml.autograd.Tensor.from_numpy(
-            qs_data, new_type=ttnn.DataType.BFLOAT16
-        )
-        kvs_cpp = ttml.autograd.Tensor.from_numpy(
-            kvs_data, new_type=ttnn.DataType.BFLOAT16
-        )
+        qs_cpp = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
+        kvs_cpp = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
 
         # Python implementation forward
-        q_py, k_py, v_py = PythonGroupedHeadsCreationOp.apply(
-            qs_py, kvs_py, num_heads, num_groups
-        )
+        q_py, k_py, v_py = PythonGroupedHeadsCreationOp.apply(qs_py, kvs_py, num_heads, num_groups)
 
         # C++ implementation forward
-        q_cpp, k_cpp, v_cpp = ttml.ops.multi_head_utils.grouped_heads_creation(
-            qs_cpp, kvs_cpp, num_heads, num_groups
-        )
+        q_cpp, k_cpp, v_cpp = ttml.ops.multi_head_utils.grouped_heads_creation(qs_cpp, kvs_cpp, num_heads, num_groups)
 
         # Compare outputs
         q_py_np = q_py.to_numpy().astype(np.float32)
@@ -1087,35 +1035,21 @@ class TestCustomOperationsWithDevice:
         kv_embedding_dim = head_dim * num_groups
 
         # qs shape: (B, 1, S, E)
-        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            np.float32
-        )
+        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(np.float32)
 
         # kvs shape: (B, 1, S, E_kv * 2)
-        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(
-            np.float32
-        )
+        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(np.float32)
 
         # Create tensors for Python implementation
-        qs_py = ttml.autograd.Tensor.from_numpy(
-            qs_data, new_type=ttnn.DataType.BFLOAT16
-        )
-        kvs_py = ttml.autograd.Tensor.from_numpy(
-            kvs_data, new_type=ttnn.DataType.BFLOAT16
-        )
+        qs_py = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
+        kvs_py = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
 
         # Create tensors for C++ implementation
-        qs_cpp = ttml.autograd.Tensor.from_numpy(
-            qs_data, new_type=ttnn.DataType.BFLOAT16
-        )
-        kvs_cpp = ttml.autograd.Tensor.from_numpy(
-            kvs_data, new_type=ttnn.DataType.BFLOAT16
-        )
+        qs_cpp = ttml.autograd.Tensor.from_numpy(qs_data, new_type=ttnn.DataType.BFLOAT16)
+        kvs_cpp = ttml.autograd.Tensor.from_numpy(kvs_data, new_type=ttnn.DataType.BFLOAT16)
 
         # Python implementation forward + create loss for backward
-        q_py, k_py, v_py = PythonGroupedHeadsCreationOp.apply(
-            qs_py, kvs_py, num_heads, num_groups
-        )
+        q_py, k_py, v_py = PythonGroupedHeadsCreationOp.apply(qs_py, kvs_py, num_heads, num_groups)
 
         # Create a simple loss: mean of each output, then combine
         # (q, k, v may have different shapes when num_heads != num_groups)
@@ -1126,9 +1060,7 @@ class TestCustomOperationsWithDevice:
         loss_py.backward(retain_graph=False)
 
         # C++ implementation forward + backward
-        q_cpp, k_cpp, v_cpp = ttml.ops.multi_head_utils.grouped_heads_creation(
-            qs_cpp, kvs_cpp, num_heads, num_groups
-        )
+        q_cpp, k_cpp, v_cpp = ttml.ops.multi_head_utils.grouped_heads_creation(qs_cpp, kvs_cpp, num_heads, num_groups)
 
         loss_q_cpp = ttml.ops.unary.mean(q_cpp)
         loss_k_cpp = ttml.ops.unary.mean(k_cpp)
@@ -1169,12 +1101,8 @@ class TestCustomOperationsWithDevice:
         head_dim = embedding_dim // num_heads
         kv_embedding_dim = head_dim * num_groups
 
-        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            np.float32
-        )
-        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(
-            np.float32
-        )
+        qs_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(np.float32)
+        kvs_data = np.random.randn(batch_size, 1, seq_len, kv_embedding_dim * 2).astype(np.float32)
 
         qs = ttml.autograd.Tensor.from_numpy(qs_data)
         kvs = ttml.autograd.Tensor.from_numpy(kvs_data)

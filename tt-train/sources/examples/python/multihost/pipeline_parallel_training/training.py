@@ -7,10 +7,11 @@
 This script orchestrates the training of transformer models (GPT-2, Llama)
 using configurations specified in YAML files.
 """
+
 import os
 import sys
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
+sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 
 import ttml
 from ttml.common.config import get_config, DeviceConfig, TrainingConfig, MultiHostConfig
@@ -23,9 +24,7 @@ from trainer import train
 
 
 @click.command()
-@click.option(
-    "-c", "--config", type=str, default="training_shakespeare_llama7b_pp_fabric.yaml"
-)
+@click.option("-c", "--config", type=str, default="training_shakespeare_llama7b_pp_fabric.yaml")
 def main(config: str):
     """Main training function.
 
@@ -53,12 +52,10 @@ def main(config: str):
     world_size = distributed_ctx.size()
 
     assert multihost_config.enabled, "Multihost is not enabled"
-    assert (
-        world_size == multihost_config.num_workers
-    ), f"World size ({world_size}) must equal multihost_config.num_workers ({multihost_config.num_workers})"
-    assert (
-        world_size > 1
-    ), f"World size must be greater than 1, world size: {world_size}"
+    assert world_size == multihost_config.num_workers, (
+        f"World size ({world_size}) must equal multihost_config.num_workers ({multihost_config.num_workers})"
+    )
+    assert world_size > 1, f"World size must be greater than 1, world size: {world_size}"
 
     # adjust seed based on worker rank to make sure that each worker has a different seed
     set_seed(yaml_config["training_config"].get("seed", 42) + rank)

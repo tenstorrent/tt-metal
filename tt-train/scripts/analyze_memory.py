@@ -301,9 +301,9 @@ def analyze_memory_summary(
     Args:
         use_actual_sizes: If True, use measured values from logs for model/optimizer in visualization
     """
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"Section: {name}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
     if num_params:
         print(f"Number of parameters: {num_params:,}")
@@ -313,7 +313,7 @@ def analyze_memory_summary(
         model_actual_mb = metrics["MODEL_CREATION"]["segment_change"]
         model_expected_mb = bytes_to_mb(model_size_bytes) if model_size_bytes else 0.0
 
-        print(f"\n--- Model Size ---")
+        print("\n--- Model Size ---")
         print(f"  Actual (from logs):   {model_actual_mb:,.2f} MB")
         print(f"  Expected (input):     {model_expected_mb:,.2f} MB")
         if model_expected_mb > 0:
@@ -325,7 +325,7 @@ def analyze_memory_summary(
         optimizer_actual_mb = metrics["OPTIMIZER_CREATION"]["segment_change"]
         optimizer_expected_mb = bytes_to_mb(optimizer_size_bytes)
 
-        print(f"\n--- Optimizer State ---")
+        print("\n--- Optimizer State ---")
         print(f"  Actual (from logs):   {optimizer_actual_mb:,.2f} MB")
         print(f"  Expected (input):     {optimizer_expected_mb:,.2f} MB")
         diff_pct = calculate_percentage_diff(optimizer_actual_mb, optimizer_expected_mb)
@@ -334,7 +334,7 @@ def analyze_memory_summary(
     # Activations size (FORWARD_PASS Segment Change)
     if "FORWARD_PASS" in metrics:
         activations_mb = metrics["FORWARD_PASS"]["segment_change"]
-        print(f"\n--- Activations Size ---")
+        print("\n--- Activations Size ---")
         print(f"  Activations:          {activations_mb:,.2f} MB")
 
     # Gradients size (calculated from logs)
@@ -343,7 +343,7 @@ def analyze_memory_summary(
         optimizer_cumulative = metrics["OPTIMIZER_CREATION"]["cumulative_current"]
         gradients_actual_mb = backward_cumulative - optimizer_cumulative
 
-        print(f"\n--- Gradients Size ---")
+        print("\n--- Gradients Size ---")
         print(f"  Actual (from logs):   {gradients_actual_mb:,.2f} MB")
 
         if gradients_size_bytes is not None:
@@ -359,7 +359,7 @@ def analyze_memory_summary(
         device_memory_mb = bytes_to_mb(device_memory_bytes)
         usage_percentage = (peak_dram_mb / device_memory_mb) * 100.0
 
-        print(f"\n--- Peak DRAM Usage ---")
+        print("\n--- Peak DRAM Usage ---")
         print(f"  Peak DRAM:            {peak_dram_mb:,.2f} MB")
         print(f"  Device Memory:        {device_memory_mb:,.2f} MB")
         print(f"  Usage:                {usage_percentage:.2f}%")
@@ -506,9 +506,9 @@ def main():
         if breakdown:
             visualization_data.append((name, breakdown))
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("Analysis complete")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}\n")
 
     # Create visualization if requested
     if args.visualize_peak:

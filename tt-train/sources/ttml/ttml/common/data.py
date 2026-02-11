@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 def load_shakespeare_text():
     ds = load_dataset(
         "text",
-        data_files={"train": f'{os.environ["TT_METAL_HOME"]}/tt-train/data/shakespeare.txt'},
+        data_files={"train": f"{os.environ['TT_METAL_HOME']}/tt-train/data/shakespeare.txt"},
     )
     text = "\n".join(ds["train"]["text"])
     return text

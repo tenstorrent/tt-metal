@@ -128,9 +128,9 @@ def test_parameter_structure(sample_data):
     py_weight_shape = py_params[py_weight_key].to_numpy(ttnn.DataType.FLOAT32).shape
     py_bias_shape = py_params[py_bias_key].to_numpy(ttnn.DataType.FLOAT32).shape
 
-    assert (
-        cpp_weight_shape == py_weight_shape
-    ), f"Weight shape mismatch: C++ {cpp_weight_shape} vs Python {py_weight_shape}"
+    assert cpp_weight_shape == py_weight_shape, (
+        f"Weight shape mismatch: C++ {cpp_weight_shape} vs Python {py_weight_shape}"
+    )
     assert cpp_bias_shape == py_bias_shape, f"Bias shape mismatch: C++ {cpp_bias_shape} vs Python {py_bias_shape}"
 
 
@@ -422,9 +422,9 @@ def test_gradient_flow(sample_data):
     py_weight_after = py_params_after[py_weight_key].to_numpy(ttnn.DataType.FLOAT32)
 
     # Parameters should have changed
-    assert not np.allclose(
-        cpp_weight_before, cpp_weight_after, atol=1e-6
-    ), "C++ weight should have changed after training step"
-    assert not np.allclose(
-        py_weight_before, py_weight_after, atol=1e-6
-    ), "Python weight should have changed after training step"
+    assert not np.allclose(cpp_weight_before, cpp_weight_after, atol=1e-6), (
+        "C++ weight should have changed after training step"
+    )
+    assert not np.allclose(py_weight_before, py_weight_after, atol=1e-6), (
+        "Python weight should have changed after training step"
+    )

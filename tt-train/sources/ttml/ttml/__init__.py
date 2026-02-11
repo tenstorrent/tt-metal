@@ -59,8 +59,7 @@ def _initialize():
 
         if not lib_dir.exists():
             raise FileNotFoundError(
-                f"Library directory not found: {lib_dir}\n"
-                f"Make sure TT Metal libraries are built in {tt_metal_home}"
+                f"Library directory not found: {lib_dir}\nMake sure TT Metal libraries are built in {tt_metal_home}"
             )
 
         # Load required libraries
@@ -79,9 +78,7 @@ def _initialize():
             try:
                 ctypes.cdll.LoadLibrary(str(lib_path))
             except OSError as e:
-                raise RuntimeError(
-                    f"Failed to load library {filename}: {e}\n" f"Path: {lib_path}"
-                ) from e
+                raise RuntimeError(f"Failed to load library {filename}: {e}\nPath: {lib_path}") from e
 
     # Determine TT Metal home directory
     import os

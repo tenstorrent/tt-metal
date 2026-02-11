@@ -20,7 +20,6 @@ import os
 import sys
 import argparse
 from dataclasses import dataclass
-from typing import Tuple
 
 import numpy as np
 from sklearn import datasets
@@ -116,7 +115,7 @@ def train_ttml_linear_regression(
 
             if verbose:
                 loss_val = float(tt_loss.to_numpy(ttml.autograd.DataType.FLOAT32))
-                print(f"[epoch {epoch+1}/{cfg.epochs}] step_loss={loss_val:.6f}")
+                print(f"[epoch {epoch + 1}/{cfg.epochs}] step_loss={loss_val:.6f}")
 
             pos = end_pos
 

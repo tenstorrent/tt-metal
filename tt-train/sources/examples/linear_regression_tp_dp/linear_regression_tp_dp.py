@@ -86,22 +86,16 @@ class RowParallelLinear(ttml.modules.ModuleBase):
         # Initialize weight with uniform distribution matching C++ (with fixed seed for reproducibility)
         rng = np.random.default_rng(weight_seed)
         init_k = math.sqrt(1.0 / in_features)
-        weight_data = rng.uniform(
-            -init_k, init_k, (1, 1, out_features, in_features)
-        ).astype(np.float32)
+        weight_data = rng.uniform(-init_k, init_k, (1, 1, out_features, in_features)).astype(np.float32)
 
         # Create sharded weight tensor - shard along last dim (in_features)
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3, shard_dim)
-        self.weight = ttml.autograd.Tensor.from_numpy(
-            weight_data, ttnn.Layout.TILE, None, mapper
-        )
+        self.weight = ttml.autograd.Tensor.from_numpy(weight_data, ttnn.Layout.TILE, None, mapper)
 
         self.bias = None
         if has_bias:
             # Bias is replicated across TP devices, uniform init like C++ (using same rng for reproducibility)
-            bias_data = rng.uniform(-init_k, init_k, (1, 1, 1, out_features)).astype(
-                np.float32
-            )
+            bias_data = rng.uniform(-init_k, init_k, (1, 1, 1, out_features)).astype(np.float32)
             self.bias = ttml.autograd.Tensor.from_numpy(bias_data, ttnn.Layout.TILE)
 
         self.create_name("row_parallel_linear")
@@ -171,30 +165,18 @@ class ColumnParallelLinear(ttml.modules.ModuleBase):
         # Initialize weight with uniform distribution matching C++ (with fixed seed for reproducibility)
         rng = np.random.default_rng(weight_seed)
         init_k = math.sqrt(1.0 / in_features)
-        weight_data = rng.uniform(
-            -init_k, init_k, (1, 1, out_features, in_features)
-        ).astype(np.float32)
+        weight_data = rng.uniform(-init_k, init_k, (1, 1, out_features, in_features)).astype(np.float32)
 
         # Create sharded weight tensor - shard along out_features (dim 2)
-        weight_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-            device, 2, shard_dim
-        )
-        self.weight = ttml.autograd.Tensor.from_numpy(
-            weight_data, ttnn.Layout.TILE, None, weight_mapper
-        )
+        weight_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 2, shard_dim)
+        self.weight = ttml.autograd.Tensor.from_numpy(weight_data, ttnn.Layout.TILE, None, weight_mapper)
 
         self.bias = None
         if has_bias:
             # Bias shape: [1, 1, 1, out_features] - shard along last dim, uniform init like C++ (using same rng)
-            bias_data = rng.uniform(-init_k, init_k, (1, 1, 1, out_features)).astype(
-                np.float32
-            )
-            bias_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-                device, 3, shard_dim
-            )
-            self.bias = ttml.autograd.Tensor.from_numpy(
-                bias_data, ttnn.Layout.TILE, None, bias_mapper
-            )
+            bias_data = rng.uniform(-init_k, init_k, (1, 1, 1, out_features)).astype(np.float32)
+            bias_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3, shard_dim)
+            self.bias = ttml.autograd.Tensor.from_numpy(bias_data, ttnn.Layout.TILE, None, bias_mapper)
 
         self.create_name("column_parallel_linear")
         self.register_tensor(self.weight, "weight")
@@ -210,9 +192,7 @@ class ColumnParallelLinear(ttml.modules.ModuleBase):
 
         if self.gather_output:
             # All-gather output along TP dimension
-            x = ttml.ops.distributed.all_gather(
-                x, tensor.get_rank() - 1, self.shard_dim
-            )
+            x = ttml.ops.distributed.all_gather(x, tensor.get_rank() - 1, self.shard_dim)
 
         return x
 
@@ -271,9 +251,7 @@ def main():
         default="8x4",
         help="Logical mesh shape RxC (e.g. 8x4) where R=DP size, C=TP size",
     )
-    parser.add_argument(
-        "--epochs", type=int, default=10, help="Number of training epochs"
-    )
+    parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
     args = parser.parse_args()
 
     # Parse mesh shape
@@ -290,9 +268,7 @@ def main():
         return 1
 
     if mesh_rows * mesh_cols != 32:
-        print(
-            f"Error: mesh_rows and mesh_cols must be their product must be 32 (whole galaxy)."
-        )
+        print("Error: mesh_rows and mesh_cols must be their product must be 32 (whole galaxy).")
         return 1
 
     # Mesh configuration
@@ -319,9 +295,7 @@ def main():
     device = autograd_ctx.get_device()
 
     # Initialize parallelism context for TP+DP
-    autograd_ctx.initialize_parallelism_context(
-        DistributedConfig(enable_ddp=True, enable_tp=True)
-    )
+    autograd_ctx.initialize_parallelism_context(DistributedConfig(enable_ddp=True, enable_tp=True))
 
     # Get parallelism parameters from context
     pctx = autograd_ctx.get_parallelism_context()
@@ -331,22 +305,16 @@ def main():
 
     # Validate dimensions
     if num_features % tp_size != 0:
-        print(
-            f"Error: num_features ({num_features}) must be divisible by tp_size ({tp_size})"
-        )
+        print(f"Error: num_features ({num_features}) must be divisible by tp_size ({tp_size})")
         return 1
     if num_targets % tp_size != 0:
-        print(
-            f"Error: num_targets ({num_targets}) must be divisible by tp_size ({tp_size})"
-        )
+        print(f"Error: num_targets ({num_targets}) must be divisible by tp_size ({tp_size})")
         return 1
     if batch_size == 0:
         print("Error: batch_size must be > 0")
         return 1
     if batch_size % dp_size != 0:
-        print(
-            f"Error: batch_size ({batch_size}) must be divisible by dp_size ({dp_size})"
-        )
+        print(f"Error: batch_size ({batch_size}) must be divisible by dp_size ({dp_size})")
         return 1
 
     # Generate training dataset
@@ -410,12 +378,8 @@ def main():
         actual_batch_size = x_batch.shape[0]
 
         # Reshape to [batch, 1, 1, features] to match C++ convention
-        x_batch = x_batch.reshape(actual_batch_size, 1, 1, num_features).astype(
-            np.float32
-        )
-        y_batch = y_batch.reshape(actual_batch_size, 1, 1, num_targets).astype(
-            np.float32
-        )
+        x_batch = x_batch.reshape(actual_batch_size, 1, 1, num_features).astype(np.float32)
+        y_batch = y_batch.reshape(actual_batch_size, 1, 1, num_targets).astype(np.float32)
 
         # Configure data mapper based on parallelism type
         # Placements list: [DP placement, TP placement]
@@ -441,9 +405,7 @@ def main():
         data_mapper = ttnn.create_mesh_mapper(device, data_config)
 
         # Create data tensor using ttml.autograd.Tensor.from_numpy with mapper
-        data_tensor = ttml.autograd.Tensor.from_numpy(
-            x_batch, ttnn.Layout.TILE, None, data_mapper
-        )
+        data_tensor = ttml.autograd.Tensor.from_numpy(x_batch, ttnn.Layout.TILE, None, data_mapper)
 
         # Configure targets mapper based on parallelism type
         if use_row_parallel:
@@ -468,9 +430,7 @@ def main():
         targets_mapper = ttnn.create_mesh_mapper(device, targets_config)
 
         # Create targets tensor (no gradient needed for targets)
-        targets_tensor = ttml.autograd.Tensor.from_numpy(
-            y_batch, ttnn.Layout.TILE, None, targets_mapper
-        )
+        targets_tensor = ttml.autograd.Tensor.from_numpy(y_batch, ttnn.Layout.TILE, None, targets_mapper)
         targets_tensor.set_requires_grad(False)
 
         return data_tensor, targets_tensor

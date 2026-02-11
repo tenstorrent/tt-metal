@@ -1104,11 +1104,11 @@ def main():
             scheduler_fn, warmup_steps, decay_steps = create_warmup_linear_scheduler(
                 optimizer, training_config.max_steps
             )
-            print(f"   - Scheduler: warmup_linear")
+            print("   - Scheduler: warmup_linear")
             print(f"   - Warmup steps: {warmup_steps}")
             print(f"   - Decay steps: {decay_steps}")
         else:
-            print(f"   - Scheduler: identity (constant LR)")
+            print("   - Scheduler: identity (constant LR)")
 
     if inference_only:
         print("\n2. Creating attention mask...")

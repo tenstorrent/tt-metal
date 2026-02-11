@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Training loop and batch preparation for transformer models."""
+
 import numpy as np
 import ttnn
 import ttml

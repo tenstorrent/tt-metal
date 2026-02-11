@@ -9,10 +9,11 @@ This script orchestrates the training of transformer models using a 3-tier archi
 - Aggregator: Averages gradients from workers
 - Optimizer: Applies optimizer updates
 """
+
 import os
 import sys
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
+sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 
 import click
 import ttml
@@ -131,9 +132,7 @@ def main(config: str, worker_type: str):
     elif worker_type == "aggregator_optimizer":
         # Combined aggregator and optimizer for 2-tier architecture
         optimizer_instance = create_optimizer(model, yaml_config)
-        aggregator_optimizer(
-            model, training_cfg, optimizer_instance, device_config.enable_ddp
-        )
+        aggregator_optimizer(model, training_cfg, optimizer_instance, device_config.enable_ddp)
 
     # Cleanup
     distributed_ctx.barrier()

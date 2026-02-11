@@ -1234,11 +1234,11 @@ def main():
             scheduler_fn, warmup_steps, decay_steps = create_warmup_linear_scheduler(
                 optimizer, training_config.max_steps
             )
-            print(f"   - Scheduler: warmup_linear")
+            print("   - Scheduler: warmup_linear")
             print(f"   - Warmup steps: {warmup_steps}")
             print(f"   - Decay steps: {decay_steps}")
         else:
-            print(f"   - Scheduler: identity (constant LR)")
+            print("   - Scheduler: identity (constant LR)")
 
     # Create attention mask (needed for both training and inference)
     if inference_only:
@@ -1366,7 +1366,7 @@ def main():
         total_time = time.time() - start_time
         print()
         print("=" * 70)
-        print(f"Training completed!")
+        print("Training completed!")
         print(f"  - Total steps: {global_step}")
         print(f"  - Total time: {total_time:.2f} s")
         print(f"  - Average loss: {loss_meter.average():.6f}")
