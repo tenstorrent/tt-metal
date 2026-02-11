@@ -11,7 +11,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Initializes the packer for custom block packing operation. This function configures 
- * the packer to pack multiple tiles from the destination register bank to L1 memory.
+ * the packer to pack multiple contiguous tiles from the destination register bank to L1 memory.
  *
  * Call this function before using `pack_block_custom`. The function configures the packer
  * to handle the specified number of tiles (typically the full destination bank size).
@@ -30,7 +30,7 @@ ALWI void pack_block_init_custom(uint32_t icb, uint32_t num_tiles) {
 
 // clang-format off
 /**
- * Packs a custom block of tiles from the destination register bank to the output circular buffer.
+ * Packs a custom block of contiguous tiles from the destination register bank to the output circular buffer.
  * This function efficiently packs multiple tiles from the DEST register in a single operation.
  * 
  * Before calling this function:
@@ -42,7 +42,6 @@ ALWI void pack_block_init_custom(uint32_t icb, uint32_t num_tiles) {
  * Each call to `pack_block_custom` will pack the configured number of tiles (set via 
  * `pack_block_init_custom`) from the destination register to the output circular buffer.
  *
- * This call is blocking and is only available on the compute engine.
  *
  * Return value: None
  *
