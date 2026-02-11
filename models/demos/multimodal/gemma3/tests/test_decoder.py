@@ -12,7 +12,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.rope import RotarySetup
 
@@ -188,7 +188,7 @@ def test_decoder_inference(
             current_pos_tensor,
             rot_mats_global=rot_mats,
             rot_mats_local=rot_mats_local,
-            mode="decode",
+            mode=Mode.DECODE,
             page_table=page_table_tt,
         )
         tt_out = ttnn.to_torch(
