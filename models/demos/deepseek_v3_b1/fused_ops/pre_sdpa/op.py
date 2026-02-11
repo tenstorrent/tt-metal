@@ -263,7 +263,7 @@ class PreSDPA:
         num_pages_per_packet = packet_size_bytes // bcast_page_size_bytes
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
-        bcast_pkt_cb = 30  # Packet buffer for CCL broadcast
+        bcast_pkt_cb = 32  # Packet buffer for CCL broadcast
 
         # Interpret N 1x32 tiles as full 32x32 or 16x32 tiles
         # eg. [1, 7168] = 7 full 32x32 tiles
@@ -516,39 +516,42 @@ class PreSDPA:
         # Define circular buffer page size
         cb_page_size = tile_size
 
-        # CB indices
+        # CB indices (grouped by stage)
         input_cb = 0
         gamma_cb = 1
         rmsnorm_output_cb = 2
+        # Matmul1 + gather-reduce + RMSNorm2 path
         matmul_half0_weights_cb = 3
-        matmul_output_cb = 4
-        matmul_input_cb = 5
-        rmsnorm2_gamma_cb = 6  # New gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
-        rmsnorm2_input_cb = 7  # Separate input CB for RMSNorm2
-        rmsnorm2_output_cb = 8  # Separate output CB for RMSNorm2
-        matmul2_input_cb = 9  # Input CB for second matmul (1x1536 with 1x32 tiles)
-        matmul2_weights_cb = 10  # Weights CB for second matmul (width sharded, 4 tiles per core)
-        matmul2_output_cb = 11  # Output CB for second matmul ([64, 1, 128] + [64, 1, 64])
-        matmul3_weights_cb = 12  # Weights CB for third matmul (height sharded on Qnope grid)
-        matmul3_output_cb = 13  # Output CB for third matmul (Qnope final output)
-        qrope_output_cb = 14  # Output CB for Qrope (RoPE output)
-        gather_heads_out_cb = 15  # Output CB for gather_heads (linked to tensor, allocated on sender+receiver cores)
-        qrope_cos_cb = 16  # Cos CB for RoPE
-        qrope_sin_cb = 17  # Sin CB for RoPE
-        qrope_trans_mat_cb = 18  # Trans_mat CB for RoPE
-        qrope_rotated_input_interm_cb = 19  # Rotated input intermediate CB for RoPE
-        qrope_cos_interm_cb = 20  # Cos intermediate CB for RoPE
-        qrope_sin_interm_cb = 21  # Sin intermediate CB for RoPE
-        dkv_matmul_weights_cb = 22  # DKV Matmul weights CB
-        dkv_matmul_output_cb = 23  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
-        kv_rmsnorm_input_cb = 24  # Input CB for KV Cache Branch RMSNorm
-        kv_rmsnorm_gamma_cb = 25  # Gamma CB for KV Cache Branch RMSNorm
-        kv_rmsnorm_output_cb = 26  # Output CB for KV Cache Branch RMSNorm
-        krope_output_cb = 27  # Output CB for KV Cache Branch RoPE
-        krope_cos_cb = 28  # Cos CB for RoPE
-        krope_sin_cb = 29  # Sin CB for RoPE
-        matmul_half1_weights_cb = 31  # Dedicated half1 weights CB for first matmul
-        gather_reduce_half1_scratch_cb = 32  # Dedicated half1 scratch CB for gather_reduce
+        matmul_half1_weights_cb = 4
+        matmul_output_cb = 5
+        matmul_input_cb = 6
+        rmsnorm2_gamma_cb = 7  # Gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
+        rmsnorm2_input_cb = 8  # Input CB for RMSNorm2
+        gather_reduce_half1_scratch_cb = 9  # Dedicated half1 scratch CB for gather_reduce
+        rmsnorm2_output_cb = 10  # Output CB for RMSNorm2
+        # Matmul2 + Matmul3 + QRoPE/GatherHeads path
+        matmul2_input_cb = 11  # Input CB for second matmul (1x1536 with 1x32 tiles)
+        matmul2_weights_cb = 12  # Weights CB for second matmul (width sharded, 4 tiles per core)
+        matmul2_output_cb = 13  # Output CB for second matmul ([64, 1, 128] + [64, 1, 64])
+        matmul3_weights_cb = 14  # Weights CB for third matmul (height sharded on Qnope grid)
+        matmul3_output_cb = 15  # Output CB for third matmul (Qnope final output)
+        qrope_output_cb = 16  # Output CB for Qrope (RoPE output)
+        gather_heads_out_cb = 17  # Output CB for gather_heads (linked to tensor, allocated on sender+receiver cores)
+        qrope_cos_cb = 18  # Cos CB for RoPE
+        qrope_sin_cb = 19  # Sin CB for RoPE
+        qrope_trans_mat_cb = 20  # Trans_mat CB for RoPE
+        qrope_rotated_input_interm_cb = 21  # Rotated input intermediate CB for RoPE
+        qrope_cos_interm_cb = 22  # Cos intermediate CB for RoPE
+        qrope_sin_interm_cb = 23  # Sin intermediate CB for RoPE
+        # KV cache branch
+        dkv_matmul_weights_cb = 24  # DKV Matmul weights CB
+        dkv_matmul_output_cb = 25  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
+        kv_rmsnorm_input_cb = 26  # Input CB for KV Cache Branch RMSNorm
+        kv_rmsnorm_gamma_cb = 27  # Gamma CB for KV Cache Branch RMSNorm
+        kv_rmsnorm_output_cb = 28  # Output CB for KV Cache Branch RMSNorm
+        krope_output_cb = 29  # Output CB for KV Cache Branch RoPE
+        krope_cos_cb = 30  # Cos CB for RoPE
+        krope_sin_cb = 31  # Sin CB for RoPE
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -1289,7 +1292,7 @@ class PreSDPA:
                     matmul2_weights_cb, matmul2_weights_tensor_device
                 )
 
-                # CB 11: Matmul2 output buffer (dynamically allocated)
+                # CB 13: Matmul2 output buffer (dynamically allocated)
                 # On Qnope cores: intermediate buffer for matmul3 input (4 tiles of 1x32 = 128 elements per core/head)
                 # On Qrope cores: intermediate output for QRoPE (4 tiles of 1x32 = 128 elements per core, 2 tiles per head)
                 matmul2_output_total_size = matmul2_out_w * matmul_output_page_size  # 4 * 64 = 256 bytes per core
@@ -1305,12 +1308,12 @@ class PreSDPA:
                     format_descriptors=[matmul2_output_cb_format],
                 )
 
-                # CB 12: Matmul3 weights (created from sharded tensor on Qnope grid)
+                # CB 14: Matmul3 weights (created from sharded tensor on Qnope grid)
                 matmul3_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul3_weights_cb, matmul3_weights_tensor_device
                 )
 
-                # CB 13: Matmul3 output buffer (Qnope final output, intermediate CB on Qnope grid)
+                # CB 15: Matmul3 output buffer (Qnope final output, intermediate CB on Qnope grid)
                 # Each Qnope core outputs [1, 512] = 16 tiles of 1x32
                 matmul3_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 matmul3_output_page_size = TILE_1x32.get_tile_size(data_format)
@@ -1327,18 +1330,18 @@ class PreSDPA:
                     format_descriptors=[matmul3_output_cb_format],
                 )
 
-                # CB 16: Cos (sharded tensor)
+                # CB 18: Cos (sharded tensor)
                 qrope_cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_cos_cb, cos_tensor_device)
 
-                # CB 17: Sin (sharded tensor)
+                # CB 19: Sin (sharded tensor)
                 qrope_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_sin_cb, sin_tensor_device)
 
-                # CB 18: Trans_mat (sharded tensor)
+                # CB 20: Trans_mat (sharded tensor)
                 qrope_trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     qrope_trans_mat_cb, trans_mat_tensor_device
                 )
 
-                # CB 19: Rotated input intermediate CB
+                # CB 21: Rotated input intermediate CB
                 # Sized for one head (Wt tiles = 2 tiles), since RoPE processes one head at a time
                 qrope_interm_tile_size = qrope_head_dim_per_core_t * TILE_1x32.get_tile_size(data_format)
                 qrope_rotated_input_interm_cb_format = ttnn.CBFormatDescriptor(
@@ -1353,7 +1356,7 @@ class PreSDPA:
                     format_descriptors=[qrope_rotated_input_interm_cb_format],
                 )
 
-                # CB 20: Cos intermediate CB
+                # CB 22: Cos intermediate CB
                 qrope_cos_interm_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=qrope_cos_interm_cb,
                     data_format=data_format,
@@ -1366,7 +1369,7 @@ class PreSDPA:
                     format_descriptors=[qrope_cos_interm_cb_format],
                 )
 
-                # CB 21: Sin intermediate CB
+                # CB 23: Sin intermediate CB
                 qrope_sin_interm_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=qrope_sin_interm_cb,
                     data_format=data_format,
@@ -1379,7 +1382,7 @@ class PreSDPA:
                     format_descriptors=[qrope_sin_interm_cb_format],
                 )
 
-                # CB 19: Qrope output buffer (RoPE output on Qrope grid)
+                # CB 16: Qrope output buffer (RoPE output on Qrope grid)
                 # Each Qrope core outputs [1, 128] = 4 tiles of 1x32 (2 heads × 64 elements)
                 # RoPE reads from matmul2_output_cb and writes to this CB
                 qrope_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
@@ -1397,7 +1400,7 @@ class PreSDPA:
                     format_descriptors=[qrope_output_cb_format],
                 )
 
-                # CB 15: Gather heads output buffer (directly gather into output, no staging)
+                # CB 17: Gather heads output buffer (directly gather into output, no staging)
                 # Allocate CB on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
                 # The output tensor is only sharded on receiver cores (sdpa_input_grid)
                 # On sender cores: CB is allocated but not backed by tensor memory (just for get_write_ptr)
@@ -1590,6 +1593,32 @@ class PreSDPA:
                         num_connections,
                     ]
 
+                # TRISC common runtime args (shared by all cores)
+                trisc_base_common_runtime_args = [
+                    epsilon_packed,  # idx 0
+                    scalar_packed,  # idx 1
+                    scalar2_packed,  # idx 2
+                    kv_scalar_packed,  # idx 3
+                ]
+                trisc_matmul_common_runtime_args = [
+                    matmul_half_boundary_col,  # idx 4
+                    matmul_k_offset_half1,  # idx 5
+                    matmul_half0_weights_cb,  # idx 6
+                    matmul_half1_weights_cb,  # idx 7
+                    matmul_k_per_core,  # idx 8
+                    matmul_act_total_tiles,  # idx 9
+                ]
+                trisc_gather_reduce_common_runtime_args = [
+                    rmsnorm2_input_cb,  # idx 10 (half0 dst cb)
+                    gather_reduce_half1_scratch_cb,  # idx 11 (half1 dst cb)
+                    rmsnorm2_num_tiles,  # idx 12
+                ]
+                trisc_common_runtime_args = (
+                    trisc_base_common_runtime_args
+                    + trisc_matmul_common_runtime_args
+                    + trisc_gather_reduce_common_runtime_args
+                )
+
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
                     core_ranges=full_device_grid,
@@ -1638,26 +1667,8 @@ class PreSDPA:
                     + dkv_matmul_trisc_named_compile_time_args
                     + kv_rmsnorm_trisc_named_compile_time_args
                     + krope_trisc_named_compile_time_args,
-                    # TRISC common runtime args: epsilon (used by rmsnorm compute)
-                    trisc_common_runtime_args=[
-                        epsilon_packed,  # idx 0
-                        scalar_packed,  # idx 1
-                        scalar2_packed,  # idx 2
-                        kv_scalar_packed,  # idx 3
-                        # K-split matmul section
-                        0xCAFE0001,  # idx 4 - cookie
-                        matmul_half_boundary_col,  # idx 5
-                        matmul_k_offset_half1,  # idx 6
-                        matmul_half0_weights_cb,  # idx 7
-                        matmul_half1_weights_cb,  # idx 8
-                        matmul_k_per_core,  # idx 9
-                        matmul_act_total_tiles,  # idx 10
-                        # gather_reduce section
-                        0xCAFE0002,  # idx 11 - cookie
-                        rmsnorm2_input_cb,  # idx 12 (half0 dst cb)
-                        gather_reduce_half1_scratch_cb,  # idx 13 (half1 dst cb)
-                        rmsnorm2_num_tiles,  # idx 14
-                    ],
+                    # TRISC common runtime args (shared by all cores)
+                    trisc_common_runtime_args=trisc_common_runtime_args,
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                         math_approx_mode=False,
@@ -1750,31 +1761,31 @@ class PreSDPA:
                     matmul_half1_weights_cb_descriptor,
                     matmul_output_cb_descriptor,
                     matmul_input_cb_descriptor,
-                    rmsnorm2_gamma_cb_descriptor,  # CB 6: RMSNorm2 gamma
-                    rmsnorm2_input_cb_descriptor,  # CB 7: RMSNorm2 input
-                    rmsnorm2_output_cb_descriptor,  # CB 8: RMSNorm2 output
-                    gather_reduce_half1_scratch_cb_descriptor,  # CB 32: gather_reduce half1 scratch
-                    matmul2_input_cb_descriptor,  # CB 9: Matmul2 input
-                    matmul2_weights_cb_descriptor,  # CB 10: Matmul2 weights
-                    matmul2_output_cb_descriptor,  # CB 11: Matmul2 output (intermediate)
-                    matmul3_weights_cb_descriptor,  # CB 12: Matmul3 weights
-                    matmul3_output_cb_descriptor,  # CB 13: Matmul3 output (Qnope final)
-                    qrope_output_cb_descriptor,  # CB 14: Qrope output (RoPE output)
-                    gather_heads_out_cb_descriptor,  # CB 15: Gather heads output (linked to tensor, no staging)
-                    qrope_cos_cb_descriptor,  # CB 16: Cos (sharded tensor)
-                    qrope_sin_cb_descriptor,  # CB 17: Sin (sharded tensor)
-                    qrope_trans_mat_cb_descriptor,  # CB 18: Trans_mat (sharded tensor)
-                    qrope_rotated_input_interm_cb_descriptor,  # CB 19: Rotated input intermediate
-                    qrope_cos_interm_cb_descriptor,  # CB 20: Cos intermediate
-                    qrope_sin_interm_cb_descriptor,  # CB 21: Sin intermediate
-                    dkv_matmul_weights_cb_descriptor,  # CB 22: DKV Matmul weights
-                    dkv_matmul_output_cb_descriptor,  # CB 23: DKV Matmul output
-                    kv_rmsnorm_input_cb_descriptor,  # CB 24: KV RMSNorm input
-                    kv_rmsnorm_gamma_cb_descriptor,  # CB 25: KV RMSNorm gamma
-                    kv_rmsnorm_output_cb_descriptor,  # CB 26: KV RMSNorm output
-                    krope_output_cb_descriptor,  # CB 27: KV Cache Branch RoPE output
-                    krope_cos_cb_descriptor,  # CB 28: Cos (sharded tensor)
-                    krope_sin_cb_descriptor,  # CB 29: Sin (sharded tensor)
+                    rmsnorm2_gamma_cb_descriptor,  # CB 7: RMSNorm2 gamma
+                    rmsnorm2_input_cb_descriptor,  # CB 8: RMSNorm2 input
+                    gather_reduce_half1_scratch_cb_descriptor,  # CB 9: gather_reduce half1 scratch
+                    rmsnorm2_output_cb_descriptor,  # CB 10: RMSNorm2 output
+                    matmul2_input_cb_descriptor,  # CB 11: Matmul2 input
+                    matmul2_weights_cb_descriptor,  # CB 12: Matmul2 weights
+                    matmul2_output_cb_descriptor,  # CB 13: Matmul2 output (intermediate)
+                    matmul3_weights_cb_descriptor,  # CB 14: Matmul3 weights
+                    matmul3_output_cb_descriptor,  # CB 15: Matmul3 output (Qnope final)
+                    qrope_output_cb_descriptor,  # CB 16: Qrope output (RoPE output)
+                    gather_heads_out_cb_descriptor,  # CB 17: Gather heads output (linked to tensor, no staging)
+                    qrope_cos_cb_descriptor,  # CB 18: Cos (sharded tensor)
+                    qrope_sin_cb_descriptor,  # CB 19: Sin (sharded tensor)
+                    qrope_trans_mat_cb_descriptor,  # CB 20: Trans_mat (sharded tensor)
+                    qrope_rotated_input_interm_cb_descriptor,  # CB 21: Rotated input intermediate
+                    qrope_cos_interm_cb_descriptor,  # CB 22: Cos intermediate
+                    qrope_sin_interm_cb_descriptor,  # CB 23: Sin intermediate
+                    dkv_matmul_weights_cb_descriptor,  # CB 24: DKV Matmul weights
+                    dkv_matmul_output_cb_descriptor,  # CB 25: DKV Matmul output
+                    kv_rmsnorm_input_cb_descriptor,  # CB 26: KV RMSNorm input
+                    kv_rmsnorm_gamma_cb_descriptor,  # CB 27: KV RMSNorm gamma
+                    kv_rmsnorm_output_cb_descriptor,  # CB 28: KV RMSNorm output
+                    krope_output_cb_descriptor,  # CB 29: KV Cache Branch RoPE output
+                    krope_cos_cb_descriptor,  # CB 30: Cos (sharded tensor)
+                    krope_sin_cb_descriptor,  # CB 31: Sin (sharded tensor)
                 ]
                 if not skip_ccl:
                     cbs_list.append(bcast_pkt_cb_descriptor)
