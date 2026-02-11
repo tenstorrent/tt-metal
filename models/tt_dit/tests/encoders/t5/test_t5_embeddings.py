@@ -83,8 +83,6 @@ def test_t5_embeddings(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
-    logger.info(f"print huggingface state dict keys: {hf_model.state_dict().keys()}")
-
     # === TT-DiT T5 ====
     config = T5Config(
         vocab_size=hf_model.config.vocab_size,
@@ -99,15 +97,17 @@ def test_t5_embeddings(
         relative_attention_max_distance=hf_model.config.relative_attention_max_distance,
     )
 
-    tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
-    embeddings_state_dict = {}
-    for key, value in hf_model.state_dict().items():
-        if key.startswith("encoder.embed_tokens.") or key.startswith(
-            "encoder.block.0.layer.0.SelfAttention.relative_attention_bias."
-        ):
-            embeddings_state_dict[key] = value
+    state_dict = hf_model.state_dict()
 
-    tt_embedding.load_state_dict(embeddings_state_dict)
+    tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
+    embeddings_state_dict = {
+        "token_embedding_weights": state_dict["encoder.embed_tokens.weight"],
+        "relative_attention_bias_weights": state_dict[
+            "encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"
+        ],
+    }
+
+    tt_embedding.load_torch_state_dict(embeddings_state_dict)
 
     tt_start_time = time.time()
     tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)
