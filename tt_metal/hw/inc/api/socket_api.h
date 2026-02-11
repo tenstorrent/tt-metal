@@ -332,6 +332,20 @@ void fabric_socket_notify_sender(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
+// Stateful version: route and NOC address are pre-computed by the caller.
+// Avoids redundant get_noc_addr and fabric_set_unicast_route calls in hot loops.
+FORCE_INLINE void fabric_socket_notify_sender_stateful(
+    const SocketReceiverInterface& socket,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr,
+    uint64_t upstream_bytes_acked_noc_addr) {
+    fabric_header_addr->to_noc_unicast_inline_write(
+        NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+}
+
 void socket_notify_sender(const SocketReceiverInterface& socket) {
     if (socket.is_h2d) {
         volatile tt_l1_ptr receiver_socket_md* socket_config =
