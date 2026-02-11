@@ -428,7 +428,12 @@ protected:
         }
         // Non exec buff execution in BaseTestFixture
         BaseTestFixture::execute_generated_commands(
-            commands_per_iteration, device_data, num_cores_to_log, num_iterations, wait_for_completion);
+            commands_per_iteration,
+            device_data,
+            num_cores_to_log,
+            num_iterations,
+            wait_for_completion,
+            wait_for_host_writes);
     }
 
     uint32_t get_page_size() const { return page_size_; }
