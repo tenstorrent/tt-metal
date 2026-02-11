@@ -2,18 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ....layers.linear import ColParallelLinear
+from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
-from ....utils.substate import substate
+from ....parallel.config import DiTParallelConfig
+from ....parallel.manager import CCLManager
+from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
 
 
-class WanAttention:
+class WanAttention(Module):
     # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
     sdpa_chunk_size_map = {
         (False, 2, 4): (256, 256),
@@ -25,15 +30,18 @@ class WanAttention:
 
     def __init__(
         self,
-        dim,
-        num_heads,
-        qk_norm=True,
-        eps=1e-5,
-        mesh_device=None,
-        ccl_manager=None,
-        parallel_config=None,
-        is_fsdp=False,
-    ):
+        *,
+        dim: int,
+        num_heads: int,
+        qk_norm: bool = True,
+        eps: float = 1e-5,
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager | None = None,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool = False,
+    ) -> None:
+        super().__init__()
+
         assert dim % num_heads == 0
         self.dim = dim
         self.num_heads = num_heads
@@ -154,57 +162,18 @@ class WanAttention:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        cache_dict = {}
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "to_out.0", "to_out")
 
-        # Cache normalization layers
-        norm_q_cache = self.norm_q.to_cached_state_dict(path_prefix + "norm_q.")
-        norm_k_cache = self.norm_k.to_cached_state_dict(path_prefix + "norm_k.")
-
-        # Add norm prefixes to all keys
-        for key, value in norm_q_cache.items():
-            cache_dict[f"norm_q.{key}"] = value
-        for key, value in norm_k_cache.items():
-            cache_dict[f"norm_k.{key}"] = value
-
-        # Cache linear layers
-        to_q_cache = self.to_q.to_cached_state_dict(path_prefix + "to_q.")
-        to_k_cache = self.to_k.to_cached_state_dict(path_prefix + "to_k.")
-        to_v_cache = self.to_v.to_cached_state_dict(path_prefix + "to_v.")
-        to_out_cache = self.to_out.to_cached_state_dict(path_prefix + "to_out.")
-
-        # Add linear layer prefixes to all keys
-        for key, value in to_q_cache.items():
-            cache_dict[f"to_q.{key}"] = value
-        for key, value in to_k_cache.items():
-            cache_dict[f"to_k.{key}"] = value
-        for key, value in to_v_cache.items():
-            cache_dict[f"to_v.{key}"] = value
-        for key, value in to_out_cache.items():
-            cache_dict[f"to_out.{key}"] = value
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.norm_q.from_cached_state_dict(substate(cache_dict, "norm_q"))
-        self.norm_k.from_cached_state_dict(substate(cache_dict, "norm_k"))
-
-        self.to_q.from_cached_state_dict(substate(cache_dict, "to_q"))
-        self.to_k.from_cached_state_dict(substate(cache_dict, "to_k"))
-        self.to_v.from_cached_state_dict(substate(cache_dict, "to_v"))
-        self.to_out.from_cached_state_dict(substate(cache_dict, "to_out"))
-
-    def load_state_dict(self, state_dict):
-        self.norm_q.load_state_dict(substate(state_dict, "norm_q"))
-        self.norm_k.load_state_dict(substate(state_dict, "norm_k"))
-
-        self.to_q.load_state_dict(substate(state_dict, "to_q"))
-        self.to_k.load_state_dict(substate(state_dict, "to_k"))
-        self.to_v.load_state_dict(substate(state_dict, "to_v"))
-
-        self.to_out.load_state_dict(substate(state_dict, "to_out.0"))
-
-    def __call__(self, spatial_1BND, N, prompt_1BLP=None, rope_cos=None, rope_sin=None, trans_mat=None):
+    def forward(
+        self,
+        spatial_1BND: ttnn.Tensor,
+        N: int,
+        prompt_1BLP: ttnn.Tensor | None = None,
+        rope_cos: ttnn.Tensor | None = None,
+        rope_sin: ttnn.Tensor | None = None,
+        trans_mat: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
         prompt_1BLP: replicated on SP, replicated D on TP (optional)

@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/experimental/dataflow_buffer/dataflow_buffer.hpp"
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::experimental::dfb {
