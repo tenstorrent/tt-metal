@@ -10,14 +10,21 @@
 # Exit codes:
 #   0 - All tests passed
 #   1 - Test failure (normal pytest failure, no hang)
-#   2 - Hang detected (triage output included in stderr)
+#   2 - Hang detected (triage summary printed, full triage at /tmp/dev-test-triage.log)
 #   3 - Setup error (missing args, etc.)
+#
+# NOTE: The dispatch timeout mechanism converts hangs into exceptions that pytest
+# catches as normal test failures (exit code 1). Hangs are distinguished from
+# normal failures by checking whether triage output was generated (the timeout
+# handler runs tt-triage before raising the exception).
 
 set -o pipefail
 
 REPO_DIR="/localdev/mstaletovic/tt-metal"
 TIMEOUT_SECONDS=5
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
+TRIAGE_SUMMARIZER="${REPO_DIR}/.claude/scripts/summarize-triage.py"
+TRIAGE_LOG="/tmp/dev-test-triage.log"
 
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
@@ -54,15 +61,18 @@ export TT_METAL_WATCHER_NOINLINE=1
 export TT_METAL_WATCHER_DISABLE_DISPATCH=1
 
 # Hang detection: dispatch layer invokes triage automatically on timeout
+# Triage output goes to a separate file to keep pytest output clean
 export TT_METAL_OPERATION_TIMEOUT_SECONDS="$TIMEOUT_SECONDS"
-export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress 1>&2"
+rm -f "$TRIAGE_LOG"
+export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
 
 echo "DEV_TEST: Running with watcher=ON, timeout=${TIMEOUT_SECONDS}s" >&2
 echo "DEV_TEST: Test: ${TEST_PATH} ${EXTRA_ARGS}" >&2
 echo "========================================" >&2
 
 # --- Run pytest ---
-pytest "${TEST_PATH}" ${EXTRA_ARGS} -v 2>&1
+# -x: stop on first failure (avoids running doomed tests after a hang bricks the device)
+pytest "${TEST_PATH}" -x ${EXTRA_ARGS} -v 2>&1
 exit_code=$?
 
 echo "========================================" >&2
@@ -77,32 +87,43 @@ fi
 # Kill any remaining pytest processes
 pkill -9 -f pytest 2>/dev/null || true
 
-if [[ $exit_code -eq 1 ]]; then
-    # Exit code 1 = pytest test failure (could be normal failure or watcher error).
-    echo "DEV_TEST_RESULT: FAIL (exit code: $exit_code)" >&2
+# Determine if this was a hang: the dispatch timeout handler writes triage output
+# to TRIAGE_LOG before raising an exception. If the file exists and is non-empty,
+# a hang occurred. Pytest exit code is 1 in both cases (normal fail and hang-as-exception).
+is_hang=false
+if [[ -s "$TRIAGE_LOG" ]]; then
+    is_hang=true
+fi
+
+if [[ "$is_hang" == true ]]; then
+    echo "DEV_TEST_RESULT: HANG (detected via triage — dispatch timeout fired)" >&2
+    echo "" >&2
+
+    # Summarize triage output
+    python3 "$TRIAGE_SUMMARIZER" "$TRIAGE_LOG" >&2 2>/dev/null || \
+        echo "DEV_TEST: Triage output saved to: ${TRIAGE_LOG} (summarizer failed)" >&2
+    echo "" >&2
+
+    # Dump watcher log — useful for waypoints and assert failures
+    WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
+    if [[ -f "$WATCHER_LOG" ]]; then
+        echo "=== WATCHER LOG (last 50 lines) ===" >&2
+        tail -50 "$WATCHER_LOG" >&2
+        echo "=== END WATCHER LOG ===" >&2
+        echo "" >&2
+    fi
+
     echo "DEV_TEST: Resetting device..." >&2
     tt-smi -r 2>/dev/null
     sleep 2
     echo "DEV_TEST: Device reset complete. Ready for next run." >&2
-    exit 1
+    exit 2
 fi
 
-# Exit codes > 1 = crashes, signals, or hangs
-echo "DEV_TEST_RESULT: HANG/CRASH (exit code: $exit_code)" >&2
-echo "DEV_TEST: Triage output (if any) was printed above by dispatch timeout handler." >&2
-
-# Dump watcher log if it exists
-WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
-if [[ -f "$WATCHER_LOG" ]]; then
-    echo "" >&2
-    echo "=== WATCHER LOG (last 50 lines) ===" >&2
-    tail -50 "$WATCHER_LOG" >&2
-    echo "=== END WATCHER LOG ===" >&2
-fi
-
-# Full cleanup
+# Normal test failure (no hang) — exit code 1 from pytest
+echo "DEV_TEST_RESULT: FAIL (exit code: $exit_code)" >&2
 echo "DEV_TEST: Resetting device..." >&2
 tt-smi -r 2>/dev/null
 sleep 2
 echo "DEV_TEST: Device reset complete. Ready for next run." >&2
-exit 2
+exit 1
