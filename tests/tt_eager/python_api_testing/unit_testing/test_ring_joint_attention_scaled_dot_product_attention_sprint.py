@@ -6,26 +6,39 @@
 Ring Joint Attention SDPA Sprint Tests
 
 This test suite evaluates Ring Joint Attention Scaled Dot Product Attention (SDPA) performance
-and accuracy. Ring Joint Attention extends standard ring attention by supporting both:
+and accuracy across different multi-chip architectures. Ring Joint Attention extends standard
+ring attention by supporting both:
 1. Distributed sequences (Q, K, V) - sharded across devices in a ring
 2. Joint sequences (joint_Q, joint_K, joint_V) - replicated on all devices
 
+=== FLEXIBLE MULTI-CHIP ARCHITECTURE SUPPORT ===
+The test dynamically adapts to available hardware while maintaining consistent per-device workloads:
+
+**Per-Device Requirements:**
+- Sequence length per device: 9472 or 2368 tokens
+- Heads per device: 10 heads
+
+**Architecture Configurations:**
+1. **Galaxy (32 devices)**: 8x4 mesh = 4 rings of 8 devices each
+   - SP=8 (sequence parallel), TP=4 (tensor parallel)
+   - Total heads: 40 (10 heads × 4 TP devices - shared across TP)
+   - Total sequence: 75,776 or 18,944 tokens (per-device × 8)
+   - Shapes: `[1, 40, 75776, 128]` and `[1, 40, 18944, 128]`
+
+2. **Single Ring (2-31 devices)**: 1xN mesh = 1 ring of N devices
+   - SP=N (all devices in ring), TP=1 (single ring)
+   - Total heads: 10 (10 heads × 1 TP device)
+   - Total sequence: per-device × N tokens
+   - Example (4 devices): `[1, 10, 37888, 128]` and `[1, 10, 9472, 128]`
+
+3. **Single Device**: Fallback for testing/debugging
+
 === RING JOINT ATTENTION OVERVIEW ===
-Ring Joint Attention enables processing of extremely long sequences with mixed attention patterns:
-
-1. **Main Attention**: Distributed sequence tokens attending to each other across the ring
-2. **Joint Attention**: Joint tokens (e.g., cached prefixes) attending to both distributed and joint tokens
-3. **Multi-Device Coordination**: Explicit mesh device setup with CCL synchronization
-
-=== KEY DIFFERENCES FROM DISTRIBUTED RING ATTENTION ===
-- Requires mesh device (not single device)
-- Uses 6 input tensors: Q, K, V + joint_Q, joint_K, joint_V
-- Returns 3 outputs: main_output, joint_output, log_sum_exp
-- Needs persistent buffers, semaphores, and topology configuration
-- Supports joint attention strategies (e.g., "rear" - joint tokens attend after main)
+1. **Main Attention**: Distributed sequence tokens attending across the ring
+2. **Joint Attention**: Joint tokens attending to both distributed and joint tokens
+3. **Multi-Device Coordination**: Mesh device setup with CCL synchronization
 
 === TEST STRUCTURE ===
-Similar to distributed ring attention tests but adapted for joint attention:
 1. Performance sweep across different chunk sizes
 2. Accuracy verification against PyTorch reference
 3. Determinism testing
@@ -103,6 +116,63 @@ def detect_available_devices():
         return 0
 
 
+def calculate_mesh_config(num_devices):
+    """
+    Calculate mesh configuration based on available devices.
+
+    Returns:
+        sp_size: Sequence parallel size (devices per ring)
+        tp_size: Tensor parallel size (number of rings)
+        arch_type: Architecture type string
+    """
+    if num_devices == 32:  # Galaxy case: 8x4 mesh = 4 rings of 8 devices each
+        sp_size = 8  # devices per ring
+        tp_size = 4  # number of rings (TP dimension)
+        arch_type = "galaxy_8x4"
+    elif num_devices >= 2:  # Single ring case
+        sp_size = num_devices  # all devices in one ring
+        tp_size = 1  # single ring
+        arch_type = f"single_ring_{num_devices}x1"
+    else:  # Single device fallback
+        sp_size = 1
+        tp_size = 1
+        arch_type = "single_device"
+
+    return sp_size, tp_size, arch_type
+
+
+def generate_input_shapes():
+    """
+    Generate input shapes based on available devices.
+
+    Per-device targets:
+    - Sequence length per device: 9472 or 2368
+    - Heads per device: 10 (computation per device)
+    - Total heads = 10 × tp_size (devices across TP share same heads)
+    """
+    num_devices = detect_available_devices()
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+
+    # Calculate total shapes based on per-device requirements
+    seq_lens_per_device = [9472, 2368]
+    heads_per_device = 10
+
+    shapes = []
+    shape_ids = []
+
+    for seq_len_per_device in seq_lens_per_device:
+        # Total sequence = seq_len_per_device * sp_size
+        total_seq_len = seq_len_per_device * sp_size
+        # Total heads = heads_per_device * tp_size (TP devices share same heads)
+        total_heads = heads_per_device * tp_size
+
+        shape = [1, total_heads, total_seq_len, 128]
+        shapes.append(shape)
+        shape_ids.append(f"{arch_type}_{seq_len_per_device}x{sp_size}_h{total_heads}")
+
+    return shapes, shape_ids
+
+
 def create_global_semaphores(mesh_device, cores, initial_value):
     """Create global semaphore handles for CCL coordination."""
     return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
@@ -154,11 +224,13 @@ def run_ring_joint_sdpa(
     if nh != nkv:
         pytest.skip(f"Ring joint attention currently requires nh == nkv, got nh={nh}, nkv={nkv}")
 
-    # Detect available devices and determine ring size
+    # Auto-detect mesh configuration based on available devices
     num_devices = detect_available_devices()
-    ring_size = num_devices
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+    ring_size = sp_size  # Ring size is the SP dimension
 
-    logger.info(f"Using {ring_size} devices for ring joint attention")
+    logger.info(f"Architecture: {arch_type}, SP={sp_size}, TP={tp_size}, Ring size={ring_size}")
+    logger.info(f"Total devices: {num_devices}, Devices per ring: {sp_size}, Number of rings: {tp_size}")
 
     # Configure fabric for ring joint attention
     ttnn.set_fabric_config(
@@ -170,39 +242,61 @@ def run_ring_joint_sdpa(
         ttnn.FabricManagerMode.DEFAULT,
     )
 
-    # Ring joint attention setup - define axes first
-    rp_axis = 1  # Ring axis (column axis for 1xN mesh)
-    up_axis = 0  # Up axis (row axis for 1xN mesh)
+    # Mesh axis configuration based on architecture
+    if arch_type.startswith("galaxy"):
+        # Galaxy: 8x4 mesh (SP=8, TP=4)
+        sp_axis = 0  # Row axis for sequence parallel (ring axis)
+        tp_axis = 1  # Column axis for tensor parallel (head axis)
+    else:
+        # Single ring: maintain original working configuration for compatibility
+        # Original working pattern: rp_axis = 1, up_axis = 0 for 1xN mesh
+        sp_axis = 1  # Ring axis (column axis for 1xN mesh)
+        tp_axis = 0  # Up axis (row axis for 1xN mesh)
 
-    # Each device processes sq // ring_size local tokens + NON-EMPTY joint tokens
-    local_seq_len = sq // ring_size
+    # Each SP device processes sq // sp_size local tokens + joint tokens
+    local_seq_len = sq // sp_size  # Sequence length per SP device
     joint_seq_len = local_seq_len  # Use non-zero joint sequence
 
-    logger.info(f"Total sequence: {sq}, Local per device: {local_seq_len}, Joint: {joint_seq_len}")
+    logger.info(f"Total sequence: {sq}, Local per SP device: {local_seq_len}, Joint: {joint_seq_len}")
+    if tp_size > 1:
+        logger.info(f"Total heads: {nh} (shared across {tp_size} TP devices), SP devices: {sp_size}")
+        logger.info(f"Configuration: {tp_size} rings of {sp_size} devices each")
+    else:
+        logger.info(f"Total heads: {nh}, SP devices: {sp_size} (single ring)")
 
-    # Check padding constraint and adjust ring size if needed
-    estimated_total_padding = max(q_chunk_size, k_chunk_size) * 4  # Conservative estimate
+    # Architecture-specific logging
+    logger.info(f"Architecture: {arch_type}")
 
-    if estimated_total_padding >= local_seq_len:
-        logger.warning(f"Reducing ring_size from {ring_size} to 2 to increase local_seq_len")
-        ring_size = 2  # Reduce ring size to increase local sequence length
-        local_seq_len = sq // ring_size  # Recalculate with new ring size
-        joint_seq_len = local_seq_len  # Keep joint sequence same as local
-
-    # Open mesh device for ring topology
+    # Open mesh device based on calculated configuration
     try:
-        mesh_shape = ttnn.MeshShape(1, ring_size)  # 1xN mesh for ring topology
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
-        logger.info(f"Mesh device opened with shape {mesh_shape}")
+        if arch_type == "single_device":
+            # Single device case
+            mesh_device = ttnn.open_device(device_id=0)
+            logger.info("Single device opened")
+        else:
+            # Multi-device mesh case
+            if arch_type.startswith("galaxy"):
+                mesh_shape = ttnn.MeshShape(sp_size, tp_size)  # 8x4 mesh for Galaxy
+            elif arch_type.startswith("single_ring"):
+                mesh_shape = ttnn.MeshShape(1, sp_size)  # 1xN mesh for single ring
+
+            mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+            logger.info(f"Mesh device opened with shape {mesh_shape}")
     except Exception as e:
         logger.warning(f"Mesh device opening failed: {e}, falling back to single device")
         mesh_device = ttnn.open_device(device_id=0)
-        ring_size = 1  # Override ring_size due to hardware constraints
+        sp_size = 1  # Override size due to hardware constraints
+        tp_size = 1
+        ring_size = 1
+        arch_type = "single_device_fallback"
 
     try:
         # Validate constraints for ring joint attention
-        if ring_size < 2:
-            pytest.skip(f"Ring joint attention requires at least 2 devices, got {ring_size}")
+        if sp_size < 2:
+            pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={sp_size}")
+
+        if tp_size > 1 and nh % tp_size != 0:
+            pytest.skip(f"num_heads ({nh}) must be divisible by TP size ({tp_size}) for multi-ring architecture")
 
         # if local_seq_len < q_chunk_size:
         #     pytest.skip(f"Local sequence length {local_seq_len} per device too small for q_chunk_size {q_chunk_size}")
@@ -259,8 +353,9 @@ def run_ring_joint_sdpa(
 
         # Create persistent output buffers
         kv_shard_dims = [None, None]
-        kv_shard_dims[rp_axis] = None  # Output of AllGather is not sharded on RP axis
-        kv_shard_dims[up_axis] = 1  # UP shards on heads dimension
+        kv_shard_dims[sp_axis] = None  # Output of AllGather is not sharded on SP axis
+        if tp_size > 1:
+            kv_shard_dims[tp_axis] = 1  # TP shards on heads dimension (multi-ring only)
 
         expected_output_seq_len = sq  # Use full sequence length
         persistent_output_buffer_k = ttnn.from_torch(
@@ -293,13 +388,15 @@ def run_ring_joint_sdpa(
             packer_l1_acc=False,
         )
 
-        # Convert to TT tensors with proper mesh sharding
+        # Convert to TT tensors with appropriate mesh sharding
         sdpa_input_shard_dims = [None, None]
-        sdpa_input_shard_dims[rp_axis] = 2  # Sequence dimension sharded across ring
-        sdpa_input_shard_dims[up_axis] = 1  # Head dimension
+        sdpa_input_shard_dims[sp_axis] = 2  # Sequence dimension sharded across SP axis
+        if tp_size > 1:
+            sdpa_input_shard_dims[tp_axis] = 1  # Head dimension sharded across TP axis (multi-ring only)
 
         sdpa_joint_shard_dims = [None, None]
-        sdpa_joint_shard_dims[up_axis] = 1  # Head dimension only
+        if tp_size > 1:
+            sdpa_joint_shard_dims[tp_axis] = 1  # Joint tensors only sharded on TP (head) axis (multi-ring only)
 
         tt_Q = ttnn.from_torch(
             Q,
@@ -377,7 +474,7 @@ def run_ring_joint_sdpa(
             dim=2,  # Ring dimension (sequence dimension)
             multi_device_global_semaphore=ccl_semaphore_handles,
             num_links=1,  # Single link topology
-            cluster_axis=rp_axis,  # Ring axis (column axis for 1xN mesh)
+            cluster_axis=sp_axis,  # Ring axis (SP axis for multi-device configurations)
             mesh_device=mesh_device,
             topology=Topology.Linear,
             subdevice_id=worker_sub_device_id,
@@ -385,21 +482,46 @@ def run_ring_joint_sdpa(
         )
         logger.info("Ring joint attention completed successfully!")
 
-        # Convert outputs to torch tensors
-        main_composer_dims = [sdpa_input_shard_dims[0], sdpa_input_shard_dims[1]]  # [1, 2]
-        tt_out_torch = ttnn.to_torch(
-            tt_out, mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_composer_dims))
-        )
+        # Convert outputs to torch tensors with appropriate mesh composer
+        if arch_type.startswith("galaxy"):
+            # Galaxy mesh composer configuration
+            main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
+            main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+            tt_out_torch = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+                ),
+            )
 
-        # Joint output
-        joint_composer_dims = [1, -1]  # Head count concat, sequence no concat
-        tt_joint_out_torch = ttnn.to_torch(
-            tt_joint_out,
-            mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(joint_composer_dims)),
-        )
+            # Joint output for Galaxy
+            joint_row_dim = sdpa_joint_shard_dims[0] if sdpa_joint_shard_dims[0] is not None else -1
+            joint_col_dim = sdpa_joint_shard_dims[1] if sdpa_joint_shard_dims[1] is not None else -1
+            tt_joint_out_torch = ttnn.to_torch(
+                tt_joint_out,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device, ttnn.MeshComposerConfig(joint_row_dim, joint_col_dim)
+                ),
+            )
+        else:
+            # Single ring: use original working configuration with correct API
+            main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
+            main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+            tt_out_torch = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+                ),
+            )
 
-        # Fix head dimension if needed
-        expected_head_dim = 128  # Should match input tensor head dimension
+            # Joint output: use original hardcoded pattern
+            tt_joint_out_torch = ttnn.to_torch(
+                tt_joint_out,
+                mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(1, -1)),
+            )
+
+        # Fix head dimension if needed (Galaxy uses d=128 for head dimension)
+        expected_head_dim = d  # Should match input tensor head dimension
         if tt_joint_out_torch.shape[3] != expected_head_dim:
             tt_joint_out_torch = tt_joint_out_torch[:, :, :, :expected_head_dim]
 
@@ -414,8 +536,8 @@ def run_ring_joint_sdpa(
         if not do_check:
             return
 
-        # Compute PyTorch reference
-        gt_main, gt_joint = torch_joint_sdpa_reference(Q_base, K_base, V_base, joint_Q, joint_K, joint_V, ring_size)
+        # Compute PyTorch reference using ring size (SP dimension)
+        gt_main, gt_joint = torch_joint_sdpa_reference(Q_base, K_base, V_base, joint_Q, joint_K, joint_V, sp_size)
 
         # Verify accuracy for main output
         out_pass_main, out_pcc_main = comp_pcc(gt_main, tt_out_torch, pcc_threshold)
@@ -435,11 +557,15 @@ def run_ring_joint_sdpa(
         assert out_pass_joint, f"Joint PCC {out_pcc_joint} below threshold {pcc_threshold}"
 
     finally:
-        # Clean up device
+        # Clean up device based on what was opened
         try:
-            ttnn.close_mesh_device(mesh_device)
-        except:
-            ttnn.close_device(mesh_device)
+            if arch_type == "single_device" or arch_type == "single_device_fallback":
+                ttnn.close_device(mesh_device)
+            else:
+                ttnn.close_mesh_device(mesh_device)
+        except Exception as e:
+            logger.warning(f"Device cleanup failed: {e}")
+
         # Restore fabric to disabled state
         ttnn.set_fabric_config(
             ttnn.FabricConfig.DISABLED,
@@ -449,18 +575,11 @@ def run_ring_joint_sdpa(
         )
 
 
-# Use smaller input shapes for joint attention testing
-# Joint attention has more complexity, so we use more manageable sizes
+# Dynamic input shapes based on available devices
+# Maintains consistent per-device workload: 9472/2368 seq_len per device, 10 heads per device
 
-INPUT_SHAPES = [
-    # batch, num_heads, sequence_length, head_dim
-    [1, 10, 9472 * 4, 128],
-    [1, 10, 2368 * 4, 128],
-]
-INPUT_IDS = [
-    "wan_1xGLX_analog",
-    "wan_4xGLX_analog",
-]
+# Generate shapes dynamically based on detected hardware
+INPUT_SHAPES, INPUT_IDS = generate_input_shapes()
 
 Q_CHUNK_SIZES = [64, 128, 256, 512]
 K_CHUNK_SIZES = [128, 256, 512]
