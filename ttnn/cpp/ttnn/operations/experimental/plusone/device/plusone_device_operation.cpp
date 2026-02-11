@@ -7,9 +7,6 @@
 
 namespace ttnn::experimental::prim {
 
-PlusOneDeviceOperation::program_factory_t PlusOneDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return PlusOneProgramFactory{};
 }
 
 void PlusOneDeviceOperation::validate_on_program_cache_miss(

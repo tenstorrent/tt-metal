@@ -15,9 +15,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-SamplingDeviceOperation::program_factory_t SamplingDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return SamplingProgramFactory{};
 }
 
 void SamplingDeviceOperation::validate_on_program_cache_miss(

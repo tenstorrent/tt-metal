@@ -11,10 +11,6 @@
 namespace ttnn::experimental::prim {
 
 NlpCreateHeadsSegformerDeviceOperation::program_factory_t
-NlpCreateHeadsSegformerDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return NlpCreateQkvHeadsSegformerProgramFactory{};
-}
 
 void NlpCreateHeadsSegformerDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {

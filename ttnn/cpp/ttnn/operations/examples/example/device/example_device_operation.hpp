@@ -107,9 +107,8 @@ struct ExampleDeviceOperation {
 
     using program_factory_t = std::variant<SingleCore, MultiCore>;
 
-    // Mandatory methods
-
-    // Select the program factory based on the operation attributes and tensor args
+    // Required only when program_factory_t has more than one variant.
+    // For single-variant program_factory_t, the framework auto-selects it.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // Validate the operation when it creates a program. Also called on cache hit by default.

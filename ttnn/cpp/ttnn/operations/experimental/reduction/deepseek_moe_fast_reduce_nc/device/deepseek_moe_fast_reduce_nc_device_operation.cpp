@@ -13,12 +13,10 @@
 namespace ttnn::experimental::prim {
 
 DeepseekMoEFastReduceNCDeviceOperation::program_factory_t
-DeepseekMoEFastReduceNCDeviceOperation::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-    return DeepseekMoEFastReduceNCProgramFactory{};
-}
 
-void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    void
+    DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_hit(
+        const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");

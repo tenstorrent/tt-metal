@@ -12,9 +12,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-HCSumReduceDeviceOperation::program_factory_t HCSumReduceDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return HCSumReduceProgramFactory{};
 }
 
 void HCSumReduceDeviceOperation::validate_on_program_cache_miss(
@@ -69,14 +66,8 @@ tt::stl::hash::hash_t HCSumReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<HCSumReduceDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        args.math_fidelity,
-        input_shape.volume());
+        args, 0, input_tensor.dtype(), input_tensor.memory_config(), args.math_fidelity, input_shape.volume());
 
     return hash;
 }

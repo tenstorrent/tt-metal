@@ -9,10 +9,6 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot_backward {
-MorehDotBackwardOperation::program_factory_t MorehDotBackwardOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return SingleCore{};
-}
 
 void grad_tensor_validate(const Tensor& tensor, const Tensor& grad_tensor) {
     const auto& tensor_shape = tensor.logical_shape();

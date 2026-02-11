@@ -13,9 +13,6 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
-PostAllGatherDeviceOperation::program_factory_t PostAllGatherDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return PostAllGatherWelfordProgramFactory{};
 }
 
 void PostAllGatherDeviceOperation::validate_on_program_cache_miss(

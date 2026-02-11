@@ -17,10 +17,6 @@ thread_local std::unordered_map<std::size_t, std::uint32_t>
     HaloDeviceOperation::sliding_window_max_out_nsticks_per_core = {};
 
 // TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
-HaloDeviceOperation::program_factory_t HaloDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return UntilizeWithHaloProgramFactory{};
-}
 
 void HaloDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {

@@ -11,9 +11,6 @@
 
 namespace ttnn::experimental::prim {
 
-FastReduceNCDeviceOperation::program_factory_t FastReduceNCDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return FastReduceNCProgramFactory{};
 }
 
 void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
