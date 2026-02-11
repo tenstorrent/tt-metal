@@ -20,14 +20,12 @@ void kernel_main() {
     constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
     constexpr uint32_t in1_tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
-    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(16);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(17);
+    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
+    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
+    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(15);
 
-    // Load input/output addresses and range parameters
+    // Load input addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
@@ -35,32 +33,20 @@ void kernel_main() {
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
 
-    // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<18>();
+    // Tensor accessor for input tensor (only input, no output -- in1 never writes output)
+    constexpr auto in1_args = TensorAccessorArgs<16>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
-
-    // Output accessor (single output tensor)
-    constexpr uint32_t out_tensor_args_cta_offset = in1_args.next_compile_time_args_offset();
-    constexpr auto out_args = TensorAccessorArgs<out_tensor_args_cta_offset>();
-    const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
 
     // in1 reads from the original X [M, K] with transposed block indexing
     const TensorShape2D in1_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
-    const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
-    constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
@@ -81,16 +67,7 @@ void kernel_main() {
 
     bool k_forward = true;
 
-    uint32_t defer_write_m_tile = 0;
-    uint32_t defer_write_m_tile_end = 0;
-    uint32_t defer_write_n_tile = 0;
-    uint32_t defer_write_n_tile_end = 0;
-    bool defer_write = false;
-
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
-
         k_forward = true;
 
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
@@ -99,24 +76,6 @@ void kernel_main() {
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                if (defer_write && k_block_iter == defer_write_k_block) {
-                    if constexpr (is_output_writer) {
-                        cb_wait_front(cb_id_out, out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-
-                        write_block_sync<M_block_tiles, N_block_tiles>(
-                            out_writer,
-                            out_shape,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile,
-                            defer_write_n_tile_end);
-                        cb_pop_front(cb_id_out, out_block_num_tiles);
-                    }
-                }
-
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
@@ -165,25 +124,6 @@ void kernel_main() {
             }
 
             k_forward = !k_forward;
-            // We have an output block to write out
-
-            defer_write_m_tile = m_tile;
-            defer_write_m_tile_end = m_tile_end;
-            defer_write_n_tile = n_tile;
-            defer_write_n_tile_end = n_tile_end;
-            /**
-             * If this isn't the last output block, defer writing until the defer_k_write_block iteration
-             * of the next output block.
-             */
-            defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
-            defer_write = defer_write && !is_injector_core;
-
-            if (!defer_write) {
-                if constexpr (is_output_writer) {
-                    write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                        out_writer, out_shape, cb_id_out, out_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
-                }
-            }
         }
     }
     noc_async_write_barrier();

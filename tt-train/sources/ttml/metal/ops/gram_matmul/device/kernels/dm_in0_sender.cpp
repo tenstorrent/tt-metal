@@ -24,8 +24,7 @@ void kernel_main() {
     uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
     uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
     uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(16);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(17);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(16);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -43,10 +42,10 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<18>();
+    constexpr auto in0_args = TensorAccessorArgs<17>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
 
-    // Output accessor (single output tensor)
+    // Output accessor (in0 DM always writes output for Gram matmul)
     constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
     constexpr auto out_args = TensorAccessorArgs<out_tensor_args_cta_offset>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -104,21 +103,19 @@ void kernel_main() {
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
-                    if constexpr (is_output_writer) {
-                        cb_wait_front(cb_id_out, out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                    cb_wait_front(cb_id_out, out_block_num_tiles);
+                    uint32_t out_read_ptr = get_read_ptr(cb_id_out);
 
-                        write_block_sync<M_block_tiles, N_block_tiles>(
-                            out_writer,
-                            out_shape,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile,
-                            defer_write_n_tile_end);
-                        cb_pop_front(cb_id_out, out_block_num_tiles);
-                    }
+                    write_block_sync<M_block_tiles, N_block_tiles>(
+                        out_writer,
+                        out_shape,
+                        out_read_ptr,
+                        out_tile_size,
+                        defer_write_m_tile,
+                        defer_write_m_tile_end,
+                        defer_write_n_tile,
+                        defer_write_n_tile_end);
+                    cb_pop_front(cb_id_out, out_block_num_tiles);
                 }
 
                 if (reuse_block && k_block_iter == 0) {
@@ -141,7 +138,7 @@ void kernel_main() {
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles);
                 } else {
-                    // Get from previous device
+                    // Get from previous core
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
@@ -187,10 +184,8 @@ void kernel_main() {
             defer_write = defer_write && !is_injector_core;
 
             if (!defer_write) {
-                if constexpr (is_output_writer) {
-                    write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                        out_writer, out_shape, cb_id_out, out_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
-                }
+                write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                    out_writer, out_shape, cb_id_out, out_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
             }
         }
     }

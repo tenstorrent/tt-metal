@@ -9,8 +9,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
-#include <tuple>
-#include <utility>
 #include <vector>
 
 #include "ttnn/operations/cb_utils.hpp"
@@ -71,10 +69,16 @@ tt::tt_metal::CoreCoord clamped_next(const std::vector<tt::tt_metal::CoreCoord>&
     return order.at(index >= last ? last : index + 1);
 }
 
-// Append tensor accessors in a consistent order
-void append_accessors(std::vector<uint32_t>& args, const ttnn::Tensor& main_tensor, const ttnn::Tensor& output_tensor) {
-    tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
+// Append both input and output tensor accessors as compile-time args
+void append_input_and_output_accessors(
+    std::vector<uint32_t>& args, const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tensor) {
+    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
+}
+
+// Append only the input tensor accessor as compile-time args
+void append_input_accessor(std::vector<uint32_t>& args, const ttnn::Tensor& input_tensor) {
+    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(args);
 }
 
 }  // namespace
@@ -104,13 +108,10 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
 
     /**
      * Determine dataformats, compute kernel config.
-     * Both inputs are always BFLOAT16.
+     * Gram matmul uses a single input tensor for both in0 and in1 (same dtype).
      */
     auto in0_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     auto in0_tile_size = tt::tile_size(in0_data_format);
-    // in1 reads from the same input tensor (transpose is done on-the-fly in compute)
-    auto in1_data_format = in0_data_format;
-    auto in1_tile_size = in0_tile_size;
     auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
     auto out_tile_size = tt::tile_size(output_data_format);
 
@@ -209,8 +210,9 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
     uint32_t in0_cb_id = tt::CBIndex::c_0;
     tt::tt_metal::create_cb(in0_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
 
+    // in1 CB uses same data format / tile size as in0 (same tensor)
     uint32_t in1_cb_id = tt::CBIndex::c_1;
-    tt::tt_metal::create_cb(in1_cb_id, program, core_grid, in1_tile_size, in1_cb_num_tiles, in1_data_format);
+    tt::tt_metal::create_cb(in1_cb_id, program, core_grid, in0_tile_size, in1_cb_num_tiles, in0_data_format);
 
     uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::create_cb(out_cb_id, program, core_grid, out_tile_size, out_cb_num_tiles, output_data_format);
@@ -222,19 +224,15 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
     std::map<std::string, std::string> defines;
 
     uint32_t in0_addr = input_tensor.buffer()->address();
-    // in1 reads from the same tensor as in0 (no materialized transpose)
-    uint32_t in1_addr = in0_addr;
     uint32_t out_addr = tensor_return_value.buffer()->address();
 
     /**
      * Create kernels.
-     * in0 DM always writes output (is_output_writer = true).
-     * in1 DM never writes output  (is_output_writer = false).
+     * in0 DM always writes output.
+     * in1 DM never writes output.
      */
 
-    constexpr bool in0_is_output_writer = true;
-    constexpr bool in1_is_output_writer = false;
-
+    // in0 sender/receiver compile-time args (no is_output_writer -- always writes output)
     std::vector<uint32_t> in0_sender_compile_time_args = {
         M_tiles,
         padded_M_tiles,
@@ -252,10 +250,9 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
         in0_sender_semaphore_id,
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
-        in0_is_output_writer,
         true,  // is_injector_core
     };
-    append_accessors(in0_sender_compile_time_args, input_tensor, tensor_return_value);
+    append_input_and_output_accessors(in0_sender_compile_time_args, input_tensor, tensor_return_value);
     auto in0_sender_kernels_id = CreateKernel(
         program,
         "tt-train/sources/ttml/metal/ops/gram_matmul/device/kernels/dm_in0_sender.cpp",
@@ -280,10 +277,9 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
         in0_sender_semaphore_id,
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
-        in0_is_output_writer,
         false,  // is_injector_core
     };
-    append_accessors(in0_receiver_compile_time_args, input_tensor, tensor_return_value);
+    append_input_and_output_accessors(in0_receiver_compile_time_args, input_tensor, tensor_return_value);
 
     auto in0_receiver_kernels_id = CreateKernel(
         program,
@@ -292,6 +288,7 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
         DataMovementConfig{
             .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
 
+    // in1 sender/receiver compile-time args (no is_output_writer, no out_tile_size -- in1 never writes output)
     std::vector<uint32_t> in1_sender_compile_time_args = {
         M_tiles,
         padded_M_tiles,
@@ -304,15 +301,13 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
-        in1_tile_size,
-        out_tile_size,
+        in0_tile_size,  // in1 reads from the same tensor as in0
         in1_sender_semaphore_id,
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
-        in1_is_output_writer,
         true,  // is_injector_core
     };
-    append_accessors(in1_sender_compile_time_args, input_tensor, tensor_return_value);
+    append_input_accessor(in1_sender_compile_time_args, input_tensor);
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "tt-train/sources/ttml/metal/ops/gram_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -332,15 +327,13 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
-        in1_tile_size,
-        out_tile_size,
+        in0_tile_size,  // in1 reads from the same tensor as in0
         in1_sender_semaphore_id,
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
-        in1_is_output_writer,
         false,  // is_injector_core
     };
-    append_accessors(in1_receiver_compile_time_args, input_tensor, tensor_return_value);
+    append_input_accessor(in1_receiver_compile_time_args, input_tensor);
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "tt-train/sources/ttml/metal/ops/gram_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -422,7 +415,7 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
 
-        // RT args layout: [in_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k, out_addr]
+        // in0 RT args: [in_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k, out_addr]
         std::vector<uint32_t> in0_args = {
             in0_addr,
             is_in0_sink,
@@ -443,19 +436,17 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
         }
 
+        // in1 RT args: [in_addr, is_sink, noc_coords(4), N_range(2)]
+        // in1 never writes output, so no defer_k, no out_addr
         std::vector<uint32_t> in1_args = {
-            in1_addr,
+            in0_addr,  // in1 reads from the same tensor as in0
             is_in1_sink,
             (std::uint32_t)in1_next_core_physical.x,
             (std::uint32_t)in1_next_core_physical.y,
             (std::uint32_t)in1_prev_core_physical.x,
             (std::uint32_t)in1_prev_core_physical.y,
-            M_start_tile,
-            M_end_tile,
             N_start_tile,
             N_end_tile,
-            defer_write_k_block,
-            out_addr,
         };
         if (in0_idx == 0) {
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
@@ -497,12 +488,10 @@ void GramMatmulProgramFactory::override_runtime_arguments(
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
 
     auto in0_addr = tensor_args.input_tensor.buffer()->address();
-    // in1 reads from the same tensor (no materialized transpose)
-    auto in1_addr = in0_addr;
     auto out_addr = tensor_return_value.buffer()->address();
 
-    // RT args layout: [in_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k, out_addr]
-    constexpr uint32_t out_addr_idx = 11;
+    // in0 RT args layout: [in_addr(0), is_sink, noc_coords(4), tile_ranges(4), defer_k(10), out_addr(11)]
+    constexpr uint32_t in0_out_addr_idx = 11;
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         tt::tt_metal::CoreCoord core = override_variables.cores.at(i);
@@ -513,19 +502,20 @@ void GramMatmulProgramFactory::override_runtime_arguments(
         if (in1_idx == 0) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
             in0_sender_args[0] = in0_addr;
-            in0_sender_args[out_addr_idx] = out_addr;
+            in0_sender_args[in0_out_addr_idx] = out_addr;
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-            in0_receiver_args[out_addr_idx] = out_addr;
+            in0_receiver_args[0] = in0_addr;
+            in0_receiver_args[in0_out_addr_idx] = out_addr;
         }
 
+        // in1 RT args layout: [in_addr(0), is_sink, noc_coords(4), N_range(2)]
         if (in0_idx == 0) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
-            in1_sender_args[0] = in1_addr;
-            in1_sender_args[out_addr_idx] = out_addr;
+            in1_sender_args[0] = in0_addr;  // same tensor
         } else {
             auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-            in1_receiver_args[out_addr_idx] = out_addr;
+            in1_receiver_args[0] = in0_addr;  // same tensor
         }
     }
 }

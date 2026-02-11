@@ -4,39 +4,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <tuple>
-#include <utility>
 
 #include "api/dataflow/dataflow_api.h"
 
-namespace detail {
-/**
- * Helper to create tuple of TensorAccessors from TensorAccessorArgs tuple.
- * Unlike make_tensor_accessor_tuple, this takes the actual page_size value,
- * not a Compile Time Argument (CTA) index.
- */
-template <typename... Args, uint32_t... Indexes>
-auto make_tensor_accessor_tuple_with_page_size(
-    const std::tuple<Args...>& args_tuple,
-    uint32_t address_rt_arg_index_start,
-    uint32_t page_size,
-    std::integer_sequence<uint32_t, Indexes...>) {
-    return std::make_tuple(TensorAccessor(
-        std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes), page_size)...);
-}
-}  // namespace detail
-
-/**
- * Create a tuple of TensorAccessors from a tuple of TensorAccessorArgs.
- * Each tensor gets its address from consecutive RT args starting at address_rt_arg_index_start.
- * All tensors share the same page_size (actual value, not CTA index).
- */
-template <typename... Args>
-auto make_tensor_accessor_tuple_uniform_page_size(
-    const std::tuple<Args...>& args_tuple, uint32_t address_rt_arg_index_start, uint32_t page_size) {
-    return detail::make_tensor_accessor_tuple_with_page_size(
-        args_tuple, address_rt_arg_index_start, page_size, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
-}
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
@@ -101,43 +71,6 @@ void read_in0_block_sync(
         }
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
-    }
-    noc_async_read_barrier();
-}
-
-/**
- * Read a block of in1 from a potentially padded tensor.
- * Since this is for matmul, no need to read when N >= logical_N
- * Otherwise, if K >= logical_K, fill with zeros.
- */
-template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
-void read_in1_block_sync(
-    const TensorAccessorType& tensor_accessor,
-    const TensorShape2D& shape,
-    uint32_t write_ptr,
-    uint32_t tile_size_bytes,
-    uint32_t d0_start,
-    uint32_t d0_end,
-    uint32_t d1_start,
-    uint32_t d1_end) {
-    ASSERT(d0_end > d0_start);
-    ASSERT(d1_end > d1_start);
-    for (uint32_t i = d0_start; i < d0_end; i++) {
-        for (uint32_t j = d1_start; j < d1_end; j++) {
-            if (j >= shape.logical_d1) {
-                write_ptr += tile_size_bytes;
-                continue;
-            }
-            if (i < shape.logical_d0) {
-                uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
-            } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
-            }
-            write_ptr += tile_size_bytes;
-        }
-        // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
-        write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
 }
