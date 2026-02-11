@@ -46,6 +46,11 @@ on:
         description: "Whether to push the built image to GitHub Container Registry"
         type: boolean
         default: false
+      ubuntu-version:
+        required: false
+        description: "Ubuntu version for base image (22.04 or 24.04)"
+        type: string
+        default: "24.04"
     outputs:
       evaluation-image-url:
         description: "Docker image URL(s) for the evaluation image"
@@ -92,6 +97,11 @@ on:
         description: "Whether to push the built image to GitHub Container Registry"
         type: boolean
         default: false
+      ubuntu-version:
+        required: false
+        description: "Ubuntu version for base image (22.04 or 24.04)"
+        type: string
+        default: "24.04"
 
 env:
   BUILDKIT_HOST: buildkitd.buildkit.svc.cluster.local
@@ -218,6 +228,7 @@ jobs:
           tags: ${{ steps.docker-metadata.outputs.tags }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
           build-args: |
+            UBUNTU_VERSION=${{ inputs.ubuntu-version }}
             TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
             TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
             ${{ inputs.build-args }}

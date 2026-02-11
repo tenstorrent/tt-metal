@@ -464,7 +464,7 @@ install_mpi_ulfm() {
     local VERSION_NUM=$(echo "$VERSION_MAJOR_MINOR" | tr -d '.')
 
     if [ "$VERSION_NUM" -gt "2404" ]; then
-        echo "[INFO] Skipping MPI ULFM installation for Ubuntu $VERSION (only needed for 24.04 or older)"
+        echo "[INFO] Skipping MPI ULFM installation for Ubuntu $OS_VERSION (only needed for 24.04 or older)"
         return
     fi
 

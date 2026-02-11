@@ -271,6 +271,7 @@ RUN OMPI_TAG=${OMPI_TAG} \
     INSTALL_DIR=/opt \
     /bin/bash /tmp/install-openmpi.sh
 
+# Destination path must match consumers: Dockerfile copies /install/ to /opt/, yielding /opt/openmpi-<tag>-ulfm/
 FROM scratch AS openmpi
 ARG OMPI_TAG
 COPY --from=openmpi-builder /opt/openmpi-${OMPI_TAG}-ulfm/ /install/openmpi-${OMPI_TAG}-ulfm/

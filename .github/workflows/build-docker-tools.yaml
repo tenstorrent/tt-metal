@@ -1,0 +1,260 @@
+name: "Build Docker tool images"
+
+# Reusable workflow that checks and builds tool images (ccache, mold, doxygen, etc.).
+# Called by build-docker-artifact.yaml. Tool images are pushed to GHCR.
+permissions:
+  packages: write
+
+on:
+  workflow_call:
+    outputs:
+      ccache-tag:
+        description: "Docker tag for ccache tool image"
+        value: ${{ jobs.check-tool-images.outputs.ccache-tag }}
+      mold-tag:
+        description: "Docker tag for mold tool image"
+        value: ${{ jobs.check-tool-images.outputs.mold-tag }}
+      doxygen-tag:
+        description: "Docker tag for doxygen tool image"
+        value: ${{ jobs.check-tool-images.outputs.doxygen-tag }}
+      cba-tag:
+        description: "Docker tag for ClangBuildAnalyzer tool image"
+        value: ${{ jobs.check-tool-images.outputs.cba-tag }}
+      gdb-tag:
+        description: "Docker tag for GDB tool image"
+        value: ${{ jobs.check-tool-images.outputs.gdb-tag }}
+      cmake-tag:
+        description: "Docker tag for cmake tool image"
+        value: ${{ jobs.check-tool-images.outputs.cmake-tag }}
+      yq-tag:
+        description: "Docker tag for yq tool image"
+        value: ${{ jobs.check-tool-images.outputs.yq-tag }}
+      sfpi-tag:
+        description: "Docker tag for SFPI tool image"
+        value: ${{ jobs.check-tool-images.outputs.sfpi-tag }}
+      openmpi-tag:
+        description: "Docker tag for OpenMPI tool image"
+        value: ${{ jobs.check-tool-images.outputs.openmpi-tag }}
+
+jobs:
+  check-tool-images:
+    runs-on: ubuntu-latest
+    outputs:
+      ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
+      ccache-exists: ${{ steps.check.outputs.ccache-exists }}
+      mold-tag: ${{ steps.tags.outputs.mold-tag }}
+      mold-exists: ${{ steps.check.outputs.mold-exists }}
+      doxygen-tag: ${{ steps.tags.outputs.doxygen-tag }}
+      doxygen-exists: ${{ steps.check.outputs.doxygen-exists }}
+      cba-tag: ${{ steps.tags.outputs.cba-tag }}
+      cba-exists: ${{ steps.check.outputs.cba-exists }}
+      gdb-tag: ${{ steps.tags.outputs.gdb-tag }}
+      gdb-exists: ${{ steps.check.outputs.gdb-exists }}
+      cmake-tag: ${{ steps.tags.outputs.cmake-tag }}
+      cmake-exists: ${{ steps.check.outputs.cmake-exists }}
+      yq-tag: ${{ steps.tags.outputs.yq-tag }}
+      yq-exists: ${{ steps.check.outputs.yq-exists }}
+      sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
+      sfpi-exists: ${{ steps.check.outputs.sfpi-exists }}
+      openmpi-tag: ${{ steps.tags.outputs.openmpi-tag }}
+      openmpi-exists: ${{ steps.check.outputs.openmpi-exists }}
+      any-missing: ${{ steps.check.outputs.any-missing }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Compute tool image tags
+        id: tags
+        run: |
+          # Extract versions from Dockerfile.tools (head -1 so multiple ARG lines don't produce multiline output)
+          CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          MOLD_VERSION=$(grep -E "^ARG MOLD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          DOXYGEN_VERSION=$(grep -E "^ARG DOXYGEN_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          CBA_VERSION=$(grep -E "^ARG CBA_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          OMPI_TAG=$(grep -E "^ARG OMPI_TAG=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+          # SFPI version comes from tt_metal/sfpi-version (single source of truth)
+          SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
+
+          # Compute hashes for each tool (version + install script)
+          CCACHE_HASH=$(cat dockerfile/scripts/install-ccache.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          MOLD_HASH=$(cat dockerfile/scripts/install-mold.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          DOXYGEN_HASH=$(cat dockerfile/scripts/install-doxygen.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          CBA_HASH=$(cat dockerfile/scripts/install-clangbuildanalyzer.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          GDB_HASH=$(cat dockerfile/scripts/install-gdb.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          CMAKE_HASH=$(cat dockerfile/scripts/install-cmake.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          YQ_HASH=$(cat dockerfile/scripts/install-yq.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 8)
+          OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+
+          # Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
+          BASE="ghcr.io/${{ github.repository }}/tt-metalium/tools"
+          echo "ccache-tag=${BASE}/ccache:${CCACHE_VERSION}-${CCACHE_HASH}" >> $GITHUB_OUTPUT
+          echo "mold-tag=${BASE}/mold:${MOLD_VERSION}-${MOLD_HASH}" >> $GITHUB_OUTPUT
+          echo "doxygen-tag=${BASE}/doxygen:${DOXYGEN_VERSION}-${DOXYGEN_HASH}" >> $GITHUB_OUTPUT
+          echo "cba-tag=${BASE}/cba:${CBA_VERSION}-${CBA_HASH}" >> $GITHUB_OUTPUT
+          echo "gdb-tag=${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" >> $GITHUB_OUTPUT
+          echo "cmake-tag=${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" >> $GITHUB_OUTPUT
+          echo "yq-tag=${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" >> $GITHUB_OUTPUT
+          echo "sfpi-tag=${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" >> $GITHUB_OUTPUT
+          echo "openmpi-tag=${BASE}/openmpi:${OMPI_TAG}-${OPENMPI_HASH}" >> $GITHUB_OUTPUT
+
+      - name: Check if tool images exist
+        id: check
+        run: |
+          any_missing=false
+          check_image() {
+            local tag="$1"
+            local name="$2"
+            if docker manifest inspect "$tag" > /dev/null 2>&1; then
+              echo "$tag exists"
+              echo "${name}-exists=true" >> $GITHUB_OUTPUT
+            else
+              echo "$tag does not exist"
+              echo "${name}-exists=false" >> $GITHUB_OUTPUT
+              any_missing=true
+            fi
+          }
+
+          check_image "${{ steps.tags.outputs.ccache-tag }}" "ccache"
+          check_image "${{ steps.tags.outputs.mold-tag }}" "mold"
+          check_image "${{ steps.tags.outputs.doxygen-tag }}" "doxygen"
+          check_image "${{ steps.tags.outputs.cba-tag }}" "cba"
+          check_image "${{ steps.tags.outputs.gdb-tag }}" "gdb"
+          check_image "${{ steps.tags.outputs.cmake-tag }}" "cmake"
+          check_image "${{ steps.tags.outputs.yq-tag }}" "yq"
+          check_image "${{ steps.tags.outputs.sfpi-tag }}" "sfpi"
+          check_image "${{ steps.tags.outputs.openmpi-tag }}" "openmpi"
+
+          echo "any-missing=${any_missing}" >> $GITHUB_OUTPUT
+
+  build-tool-images:
+    name: "Build tool images"
+    needs: check-tool-images
+    if: needs.check-tool-images.outputs.any-missing == 'true'
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ccache image
+        if: needs.check-tool-images.outputs.ccache-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: ccache
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.ccache-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push mold image
+        if: needs.check-tool-images.outputs.mold-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: mold
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.mold-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push doxygen image
+        if: needs.check-tool-images.outputs.doxygen-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: doxygen
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.doxygen-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push ClangBuildAnalyzer image
+        if: needs.check-tool-images.outputs.cba-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: cba
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.cba-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push GDB image
+        if: needs.check-tool-images.outputs.gdb-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: gdb
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.gdb-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push cmake image
+        if: needs.check-tool-images.outputs.cmake-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: cmake
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.cmake-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push yq image
+        if: needs.check-tool-images.outputs.yq-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: yq
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.yq-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push sfpi image
+        if: needs.check-tool-images.outputs.sfpi-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: sfpi
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.sfpi-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push openmpi image
+        if: needs.check-tool-images.outputs.openmpi-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: openmpi
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.openmpi-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true

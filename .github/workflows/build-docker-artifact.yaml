@@ -46,7 +46,11 @@ on:
         required: false
         type: boolean
         default: true
-        description: "When false, skip building the manylinux image. Set to false for one platform when build-all-docker-images calls this workflow twice so manylinux is built only once."
+        description: |
+          When true, build the manylinux image. Set to false when build-all-docker-images
+          calls this workflow for both platforms (22.04 and 24.04) in parallel—only the
+          22.04 run should build manylinux to avoid duplicate work. Standalone callers
+          should leave true.
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -69,38 +73,38 @@ on:
       # Tool image tags (for consumers that need them)
       tool-ccache-tag:
         description: "Docker tag for the ccache tool image"
-        value: ${{ jobs.check-tool-images.outputs.ccache-tag }}
+        value: ${{ jobs.build-tools.outputs.ccache-tag }}
       tool-mold-tag:
         description: "Docker tag for the mold tool image"
-        value: ${{ jobs.check-tool-images.outputs.mold-tag }}
+        value: ${{ jobs.build-tools.outputs.mold-tag }}
       tool-doxygen-tag:
         description: "Docker tag for the doxygen tool image"
-        value: ${{ jobs.check-tool-images.outputs.doxygen-tag }}
+        value: ${{ jobs.build-tools.outputs.doxygen-tag }}
       tool-cba-tag:
         description: "Docker tag for the ClangBuildAnalyzer tool image"
-        value: ${{ jobs.check-tool-images.outputs.cba-tag }}
+        value: ${{ jobs.build-tools.outputs.cba-tag }}
       tool-gdb-tag:
         description: "Docker tag for the GDB tool image"
-        value: ${{ jobs.check-tool-images.outputs.gdb-tag }}
+        value: ${{ jobs.build-tools.outputs.gdb-tag }}
       tool-cmake-tag:
         description: "Docker tag for the cmake tool image"
-        value: ${{ jobs.check-tool-images.outputs.cmake-tag }}
+        value: ${{ jobs.build-tools.outputs.cmake-tag }}
       tool-yq-tag:
         description: "Docker tag for the yq tool image"
-        value: ${{ jobs.check-tool-images.outputs.yq-tag }}
+        value: ${{ jobs.build-tools.outputs.yq-tag }}
       tool-sfpi-tag:
         description: "Docker tag for the SFPI tool image"
-        value: ${{ jobs.check-tool-images.outputs.sfpi-tag }}
+        value: ${{ jobs.build-tools.outputs.sfpi-tag }}
       tool-openmpi-tag:
         description: "Docker tag for the OpenMPI (ULFM) tool image"
-        value: ${{ jobs.check-tool-images.outputs.openmpi-tag }}
+        value: ${{ jobs.build-tools.outputs.openmpi-tag }}
       # Python venv image tags
       python-ci-build-venv-tag:
         description: "Docker tag for the Python CI Build venv image"
-        value: ${{ jobs.check-python-venv-images.outputs.ci-build-venv-tag }}
+        value: ${{ jobs.build-python-venvs.outputs.ci-build-venv-tag }}
       python-ci-test-venv-tag:
         description: "Docker tag for the Python CI Test venv image"
-        value: ${{ jobs.check-python-venv-images.outputs.ci-test-venv-tag }}
+        value: ${{ jobs.build-python-venvs.outputs.ci-test-venv-tag }}
   workflow_dispatch:
     inputs:
       platform:
@@ -121,383 +125,28 @@ on:
         required: false
         type: boolean
         default: true
-        description: "Build the manylinux image (set false only when another run is building it)"
+        description: |
+          When true, build the manylinux image. Set to false when build-all-docker-images
+          calls this workflow for both platforms (22.04 and 24.04) in parallel—only the
+          22.04 run should build manylinux to avoid duplicate work. Standalone callers
+          should leave true.
 
 jobs:
   # =============================================================================
-  # TOOL IMAGES: Check and build third-party tool images
+  # TOOL IMAGES: Check and build third-party tool images (reusable workflow)
   # =============================================================================
-  # These images contain pre-built binaries for tools like ccache, mold, etc.
-  # They are built once and pushed to GHCR, then pulled by the main Dockerfile.
-  # This eliminates repeated downloads from upstream sources.
-  # =============================================================================
-
-  check-tool-images:
-    runs-on: ubuntu-latest
-    outputs:
-      ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
-      ccache-exists: ${{ steps.check.outputs.ccache-exists }}
-      mold-tag: ${{ steps.tags.outputs.mold-tag }}
-      mold-exists: ${{ steps.check.outputs.mold-exists }}
-      doxygen-tag: ${{ steps.tags.outputs.doxygen-tag }}
-      doxygen-exists: ${{ steps.check.outputs.doxygen-exists }}
-      cba-tag: ${{ steps.tags.outputs.cba-tag }}
-      cba-exists: ${{ steps.check.outputs.cba-exists }}
-      gdb-tag: ${{ steps.tags.outputs.gdb-tag }}
-      gdb-exists: ${{ steps.check.outputs.gdb-exists }}
-      cmake-tag: ${{ steps.tags.outputs.cmake-tag }}
-      cmake-exists: ${{ steps.check.outputs.cmake-exists }}
-      yq-tag: ${{ steps.tags.outputs.yq-tag }}
-      yq-exists: ${{ steps.check.outputs.yq-exists }}
-      sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
-      sfpi-exists: ${{ steps.check.outputs.sfpi-exists }}
-      openmpi-tag: ${{ steps.tags.outputs.openmpi-tag }}
-      openmpi-exists: ${{ steps.check.outputs.openmpi-exists }}
-      any-missing: ${{ steps.check.outputs.any-missing }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Compute tool image tags
-        id: tags
-        run: |
-          # Extract versions from Dockerfile.tools (head -1 so multiple ARG lines don't produce multiline output)
-          CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          MOLD_VERSION=$(grep -E "^ARG MOLD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          DOXYGEN_VERSION=$(grep -E "^ARG DOXYGEN_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          CBA_VERSION=$(grep -E "^ARG CBA_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          OMPI_TAG=$(grep -E "^ARG OMPI_TAG=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          # SFPI version comes from tt_metal/sfpi-version (single source of truth)
-          SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
-
-          # Compute hashes for each tool (version + install script)
-          CCACHE_HASH=$(cat dockerfile/scripts/install-ccache.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-          MOLD_HASH=$(cat dockerfile/scripts/install-mold.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-          DOXYGEN_HASH=$(cat dockerfile/scripts/install-doxygen.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-          CBA_HASH=$(cat dockerfile/scripts/install-clangbuildanalyzer.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-          GDB_HASH=$(cat dockerfile/scripts/install-gdb.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-          CMAKE_HASH=$(cat dockerfile/scripts/install-cmake.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-          YQ_HASH=$(cat dockerfile/scripts/install-yq.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-          SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 8)
-          OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-
-          # Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
-          BASE="ghcr.io/${{ github.repository }}/tt-metalium/tools"
-          echo "ccache-tag=${BASE}/ccache:${CCACHE_VERSION}-${CCACHE_HASH}" >> $GITHUB_OUTPUT
-          echo "mold-tag=${BASE}/mold:${MOLD_VERSION}-${MOLD_HASH}" >> $GITHUB_OUTPUT
-          echo "doxygen-tag=${BASE}/doxygen:${DOXYGEN_VERSION}-${DOXYGEN_HASH}" >> $GITHUB_OUTPUT
-          echo "cba-tag=${BASE}/cba:${CBA_VERSION}-${CBA_HASH}" >> $GITHUB_OUTPUT
-          echo "gdb-tag=${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" >> $GITHUB_OUTPUT
-          echo "cmake-tag=${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" >> $GITHUB_OUTPUT
-          echo "yq-tag=${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" >> $GITHUB_OUTPUT
-          echo "sfpi-tag=${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" >> $GITHUB_OUTPUT
-          echo "openmpi-tag=${BASE}/openmpi:${OMPI_TAG}-${OPENMPI_HASH}" >> $GITHUB_OUTPUT
-
-          # Also output versions for build args
-          echo "ccache-version=${CCACHE_VERSION}" >> $GITHUB_OUTPUT
-          echo "mold-version=${MOLD_VERSION}" >> $GITHUB_OUTPUT
-          echo "doxygen-version=${DOXYGEN_VERSION}" >> $GITHUB_OUTPUT
-          echo "cba-version=${CBA_VERSION}" >> $GITHUB_OUTPUT
-          echo "gdb-version=${GDB_VERSION}" >> $GITHUB_OUTPUT
-          echo "cmake-version=${CMAKE_VERSION}" >> $GITHUB_OUTPUT
-          echo "yq-version=${YQ_VERSION}" >> $GITHUB_OUTPUT
-          echo "sfpi-version=${SFPI_VERSION}" >> $GITHUB_OUTPUT
-          echo "openmpi-version=${OMPI_TAG}" >> $GITHUB_OUTPUT
-
-      - name: Check if tool images exist
-        id: check
-        run: |
-          check_image() {
-            local tag="$1"
-            local name="$2"
-            if docker manifest inspect "$tag" > /dev/null 2>&1; then
-              echo "$tag exists"
-              echo "${name}-exists=true" >> $GITHUB_OUTPUT
-            else
-              echo "$tag does not exist"
-              echo "${name}-exists=false" >> $GITHUB_OUTPUT
-            fi
-          }
-
-          check_image "${{ steps.tags.outputs.ccache-tag }}" "ccache"
-          check_image "${{ steps.tags.outputs.mold-tag }}" "mold"
-          check_image "${{ steps.tags.outputs.doxygen-tag }}" "doxygen"
-          check_image "${{ steps.tags.outputs.cba-tag }}" "cba"
-          check_image "${{ steps.tags.outputs.gdb-tag }}" "gdb"
-          check_image "${{ steps.tags.outputs.cmake-tag }}" "cmake"
-          check_image "${{ steps.tags.outputs.yq-tag }}" "yq"
-          check_image "${{ steps.tags.outputs.sfpi-tag }}" "sfpi"
-          check_image "${{ steps.tags.outputs.openmpi-tag }}" "openmpi"
-
-          # Check if any are missing
-          if [[ "${{ steps.tags.outputs.ccache-tag }}" == "" ]] || \
-             ! docker manifest inspect "${{ steps.tags.outputs.ccache-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.mold-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.doxygen-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.cba-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.gdb-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.cmake-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.yq-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.sfpi-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.openmpi-tag }}" > /dev/null 2>&1; then
-            echo "any-missing=true" >> $GITHUB_OUTPUT
-          else
-            echo "any-missing=false" >> $GITHUB_OUTPUT
-          fi
-
-  build-tool-images:
-    name: "🔧 Build tool images"
-    needs: check-tool-images
-    if: needs.check-tool-images.outputs.any-missing == 'true'
-    timeout-minutes: 60
-    runs-on: ubuntu-latest
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push ccache image
-        if: needs.check-tool-images.outputs.ccache-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: ccache
-          push: true
-          tags: ${{ needs.check-tool-images.outputs.ccache-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push mold image
-        if: needs.check-tool-images.outputs.mold-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: mold
-          push: true
-          tags: ${{ needs.check-tool-images.outputs.mold-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push doxygen image
-        if: needs.check-tool-images.outputs.doxygen-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: doxygen
-          push: true
-          tags: ${{ needs.check-tool-images.outputs.doxygen-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push ClangBuildAnalyzer image
-        if: needs.check-tool-images.outputs.cba-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: cba
-          push: true
-          tags: ${{ needs.check-tool-images.outputs.cba-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push GDB image
-        if: needs.check-tool-images.outputs.gdb-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: gdb
-          push: true
-          tags: ${{ needs.check-tool-images.outputs.gdb-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push cmake image
-        if: needs.check-tool-images.outputs.cmake-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: cmake
-          push: true
-          tags: ${{ needs.check-tool-images.outputs.cmake-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push yq image
-        if: needs.check-tool-images.outputs.yq-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: yq
-          push: true
-          tags: ${{ needs.check-tool-images.outputs.yq-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push sfpi image
-        if: needs.check-tool-images.outputs.sfpi-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: sfpi
-          push: true
-          tags: ${{ needs.check-tool-images.outputs.sfpi-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push openmpi image
-        if: needs.check-tool-images.outputs.openmpi-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: openmpi
-          push: true
-          tags: ${{ needs.check-tool-images.outputs.openmpi-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+  build-tools:
+    uses: ./.github/workflows/build-docker-tools.yaml
+    secrets: inherit
 
   # =============================================================================
   # PYTHON VENV IMAGES: Check and build pre-built Python virtual environments
   # =============================================================================
-  # These images contain pre-built Python virtual environments with all dependencies
-  # installed. They are built once per requirements change and pushed to GHCR.
-  # Using pre-built venvs saves 5-10 minutes per build.
-  # =============================================================================
-
-  check-python-venv-images:
-    runs-on: ubuntu-latest
-    outputs:
-      ci-build-venv-tag: ${{ steps.tags.outputs.ci-build-venv-tag }}
-      ci-build-venv-exists: ${{ steps.check.outputs.ci-build-venv-exists }}
-      ci-test-venv-tag: ${{ steps.tags.outputs.ci-test-venv-tag }}
-      ci-test-venv-exists: ${{ steps.check.outputs.ci-test-venv-exists }}
-      any-missing: ${{ steps.check.outputs.any-missing }}
-      ubuntu-version: ${{ steps.platform.outputs.version }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Parse platform
-        id: platform
-        uses: ./.github/actions/parse-platform
-        with:
-          platform: ${{ inputs.platform }}
-
-      - name: Compute Python venv image tags
-        id: tags
-        run: |
-          VERSION="${{ steps.platform.outputs.version }}"
-          # Remove dots from version for image tag (22.04 -> 2204)
-          VERSION_NODOT="${VERSION//.}"
-
-          # Hash Dockerfile.python + its COPY source files (requirements files)
-          # dockerfile-hash.sh automatically discovers COPY sources from the Dockerfile
-          VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
-
-          # Generate tags: ghcr.io/<repo>/tt-metalium/python-venv/<type>:<ubuntu-version>-<hash>
-          BASE="ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
-          echo "ci-build-venv-tag=${BASE}/ci-build:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-venv-tag=${BASE}/ci-test:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
-
-          # Store version and target suffix for build step
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "version-nodot=${VERSION_NODOT}" >> $GITHUB_OUTPUT
-
-      - name: Check if Python venv images exist
-        id: check
-        run: |
-          check_image() {
-            local tag="$1"
-            local name="$2"
-            if docker manifest inspect "$tag" > /dev/null 2>&1; then
-              echo "$tag exists"
-              echo "${name}-exists=true" >> $GITHUB_OUTPUT
-            else
-              echo "$tag does not exist"
-              echo "${name}-exists=false" >> $GITHUB_OUTPUT
-            fi
-          }
-
-          check_image "${{ steps.tags.outputs.ci-build-venv-tag }}" "ci-build-venv"
-          check_image "${{ steps.tags.outputs.ci-test-venv-tag }}" "ci-test-venv"
-
-          # Check if any are missing
-          if ! docker manifest inspect "${{ steps.tags.outputs.ci-build-venv-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.ci-test-venv-tag }}" > /dev/null 2>&1; then
-            echo "any-missing=true" >> $GITHUB_OUTPUT
-          else
-            echo "any-missing=false" >> $GITHUB_OUTPUT
-          fi
-
-  build-python-venv-images:
-    name: "🐍 Build Python venv images"
-    needs: check-python-venv-images
-    if: needs.check-python-venv-images.outputs.any-missing == 'true'
-    timeout-minutes: 45
-    runs-on: ubuntu-latest
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push ci-build-venv image
-        if: needs.check-python-venv-images.outputs.ci-build-venv-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.python
-          target: ci-build-venv
-          push: true
-          tags: ${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
-          build-args: |
-            UBUNTU_VERSION=${{ needs.check-python-venv-images.outputs.ubuntu-version }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push ci-test-venv image
-        if: needs.check-python-venv-images.outputs.ci-test-venv-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.python
-          target: ci-test-venv
-          push: true
-          tags: ${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
-          build-args: |
-            UBUNTU_VERSION=${{ needs.check-python-venv-images.outputs.ubuntu-version }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+  build-python-venvs:
+    uses: ./.github/workflows/build-docker-python-venvs.yaml
+    with:
+      platform: ${{ inputs.platform }}
+    secrets: inherit
 
   # =============================================================================
   # MAIN DOCKER IMAGES: Check and build CI/Dev/Test images
@@ -616,9 +265,9 @@ jobs:
   # Build Ubuntu images
   build-ubuntu-images:
     name: "🐳️ Build Ubuntu images"
-    needs: [check-docker-images, check-tool-images, build-tool-images, check-python-venv-images, build-python-venv-images]
+    needs: [check-docker-images, build-tools, build-python-venvs]
     # Run if distro is ubuntu AND (main images missing OR basic images missing)
-    # Use always() to run even when build-tool-images or build-python-venv-images is skipped (all exist)
+    # Use always() to run even when tool/venv build jobs inside build-tools/build-python-venvs are skipped (all exist)
     if: |
       always() && !failure() && !cancelled() &&
       needs.check-docker-images.outputs.distro == 'ubuntu' &&
@@ -638,6 +287,34 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup build args
+        id: buildargs
+        run: |
+          {
+            echo "main<<EOF"
+            echo "UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}"
+            echo "TOOL_CCACHE_IMAGE=${{ needs.build-tools.outputs.ccache-tag }}"
+            echo "TOOL_MOLD_IMAGE=${{ needs.build-tools.outputs.mold-tag }}"
+            echo "TOOL_DOXYGEN_IMAGE=${{ needs.build-tools.outputs.doxygen-tag }}"
+            echo "TOOL_CBA_IMAGE=${{ needs.build-tools.outputs.cba-tag }}"
+            echo "TOOL_GDB_IMAGE=${{ needs.build-tools.outputs.gdb-tag }}"
+            echo "TOOL_CMAKE_IMAGE=${{ needs.build-tools.outputs.cmake-tag }}"
+            echo "TOOL_YQ_IMAGE=${{ needs.build-tools.outputs.yq-tag }}"
+            echo "TOOL_SFPI_IMAGE=${{ needs.build-tools.outputs.sfpi-tag }}"
+            echo "TOOL_OPENMPI_IMAGE=${{ needs.build-tools.outputs.openmpi-tag }}"
+            echo "PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.build-python-venvs.outputs.ci-build-venv-tag }}"
+            echo "PYTHON_CI_TEST_VENV_IMAGE=${{ needs.build-python-venvs.outputs.ci-test-venv-tag }}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+          {
+            echo "basic-dev<<EOF"
+            echo "UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}"
+            echo "TOOL_CMAKE_IMAGE=${{ needs.build-tools.outputs.cmake-tag }}"
+            echo "TOOL_SFPI_IMAGE=${{ needs.build-tools.outputs.sfpi-tag }}"
+            echo "TOOL_OPENMPI_IMAGE=${{ needs.build-tools.outputs.openmpi-tag }}"
+            echo "TOOL_CCACHE_IMAGE=${{ needs.build-tools.outputs.ccache-tag }}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
       - name: Build and push CI Build image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
@@ -646,19 +323,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-build
           tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
-          build-args: |
-            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
-            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
-            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
-            TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
-            TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
-            TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
-            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
-            TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
-            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
-            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
-            PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
-            PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
+          build-args: ${{ steps.buildargs.outputs.main }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -671,19 +336,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-test
           tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
-          build-args: |
-            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
-            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
-            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
-            TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
-            TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
-            TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
-            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
-            TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
-            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
-            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
-            PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
-            PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
+          build-args: ${{ steps.buildargs.outputs.main }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -696,19 +349,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: dev
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
-          build-args: |
-            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
-            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
-            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
-            TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
-            TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
-            TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
-            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
-            TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
-            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
-            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
-            PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
-            PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
+          build-args: ${{ steps.buildargs.outputs.main }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -721,12 +362,7 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: base
           tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
-          build-args: |
-            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
-            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
-            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
-            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
-            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
+          build-args: ${{ steps.buildargs.outputs.basic-dev }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -739,12 +375,7 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
           tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
-          build-args: |
-            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
-            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
-            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
-            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
-            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
+          build-args: ${{ steps.buildargs.outputs.basic-dev }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -753,9 +384,9 @@ jobs:
   # Build ManyLinux image (runs in parallel with Ubuntu)
   build-manylinux-image:
     name: "🐳️ Build ManyLinux image"
-    needs: [check-docker-images, check-tool-images, build-tool-images]
+    needs: [check-docker-images, build-tools]
     # Run if manylinux needs build AND tool images are ready AND this run is responsible for manylinux
-    # Use always() to run even when build-tool-images is skipped (all exist)
+    # Use always() to run even when build-tool-images job inside build-tools is skipped (all exist)
     # When build-manylinux input is false (e.g. second platform in build-all-docker-images), skip so manylinux is built only once
     if: |
       always() && !failure() && !cancelled() &&
@@ -774,26 +405,35 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup build args
+        id: buildargs
+        run: |
+          {
+            echo "manylinux<<EOF"
+            echo "TOOL_CCACHE_IMAGE=${{ needs.build-tools.outputs.ccache-tag }}"
+            echo "TOOL_MOLD_IMAGE=${{ needs.build-tools.outputs.mold-tag }}"
+            echo "TOOL_SFPI_IMAGE=${{ needs.build-tools.outputs.sfpi-tag }}"
+            echo "TOOL_OPENMPI_IMAGE=${{ needs.build-tools.outputs.openmpi-tag }}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
       - name: Build and push ManyLinux image
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.manylinux
           tags: ${{ needs.check-docker-images.outputs.manylinux-tag }}
-          build-args: |
-            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
-            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
-            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
-            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
+          build-args: ${{ steps.buildargs.outputs.manylinux }}
           cache-to: type=inline
           pull: true
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
-  # Cannot use needs.build-*-images to ensure this job runs sequentially after the build jobs because it would break when the build jobs are skipped
-  # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
-  # However, this isn't a huge issue because the image should already have been built on a branch before merging, and if it wasn't (like in a push scenario),
-  # the problem would self-correct on the next merge to main, which happens frequently.
+  # tag-latest runs after check-docker-images only (not after build jobs) because adding
+  # needs.build-ubuntu-images would cause this job to be skipped when builds are skipped
+  # (images already exist). The trade-off: on a push to main where images were just built
+  # on a branch, tag-latest may run before the build jobs complete, so "latest" could lag
+  # one run. This self-corrects on the next merge. For direct workflow_dispatch of
+  # build-docker-artifact, images are typically pre-built.
   tag-latest:
     name: "🔄 Update latest tag"
     needs: check-docker-images

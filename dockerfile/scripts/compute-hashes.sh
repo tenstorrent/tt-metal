@@ -1,6 +1,8 @@
 #!/bin/bash
-# Utility script to compute SHA256 hashes for tool tarballs
-# Run this to verify/update hashes in the Dockerfile.tools
+# Compute SHA256 hashes for tool tarballs. Use when updating versions in Dockerfile.tools.
+#
+# IMPORTANT: Keep version defaults in sync with dockerfile/Dockerfile.tools.
+# After updating Dockerfile.tools ARGs, run this script and update the SHA256 ARGs.
 set -euo pipefail
 
 TMPDIR=$(mktemp -d)

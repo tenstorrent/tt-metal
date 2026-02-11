@@ -86,9 +86,10 @@ FROM ghcr.io/astral-sh/uv@sha256:NEW_DIGEST_HERE AS uv-layer
 ### Updating other tools
 
 1. Update the version ARG in the Dockerfile
-2. Run `compute-hashes.sh` to get the new SHA256 hash
-3. Update the corresponding SHA256 ARG in the Dockerfile
-4. Test the build
+2. Ensure compute-hashes.sh defaults match Dockerfile.tools ARGs before running
+3. Run `compute-hashes.sh` to get the new SHA256 hash
+4. Update the corresponding SHA256 ARG in the Dockerfile
+5. Test the build
 
 ```bash
 # Compute hashes for current versions
