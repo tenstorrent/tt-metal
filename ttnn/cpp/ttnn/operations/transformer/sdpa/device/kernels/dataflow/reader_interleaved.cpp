@@ -23,7 +23,6 @@ FORCE_INLINE uint32_t read_chunk_for_forwarding(
     cb_reserve_back(cb_id, num_tiles);
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
     {
-        // DeviceZoneScopedN("READ_CHUNK_FOR_FORWARDING");
         const uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
         const uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
 
@@ -132,6 +131,7 @@ void kernel_main() {
     uint32_t next_physical_y = 0;
     uint32_t next_core_q_chunks = 0;
     uint32_t mcast_num_dests = 0;
+    uint32_t mcast_sender_wait = 0;
     uint64_t mcast_base_noc_addr = 0;
 
     // Initialize semaphore addresses and NOC addresses for chain forwarding
@@ -158,6 +158,7 @@ void kernel_main() {
         next_physical_y = get_arg_val<uint32_t>(argidx++);
         next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
         mcast_num_dests = get_arg_val<uint32_t>(argidx++);
+        mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
         if (is_chain_participant) {
             const uint32_t sender_semaphore_addr = get_semaphore(sender_semaphore_id);
@@ -183,7 +184,7 @@ void kernel_main() {
                         next_physical_y,
                         0);  // addr=0; will OR in actual L1 addr at use site
                     mcast_sem_noc_addr = mcast_base_noc_addr | receiver_semaphore_l1_addr;
-                    sender_wait_count = mcast_num_dests;
+                    sender_wait_count = mcast_sender_wait;
                 }
             } else {
                 sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
@@ -400,7 +401,6 @@ void kernel_main() {
                                 // Receive forwarded K chunk from previous core
                                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                                 {
-                                    // DeviceZoneScopedN("K RECEIVE");
                                     cb_k_start_address = get_write_ptr(cb_k_in);
                                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
                                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
@@ -452,7 +452,6 @@ void kernel_main() {
                             if (should_forward) {
                                 noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                                 {
-                                    // DeviceZoneScopedN("K_forward_initiate");
                                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
                                     if constexpr (mcast_enabled) {
                                         uint64_t k_mcast_addr = mcast_base_noc_addr | cb_k_start_address;
@@ -515,9 +514,6 @@ void kernel_main() {
                         {
                             if (should_forward) {
                                 if constexpr (mcast_enabled) {
-#ifdef ARCH_BLACKHOLE
-                                    noc_async_writes_flushed();
-#endif
                                     noc_semaphore_set_multicast(
                                         valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
                                 } else {
@@ -620,9 +616,6 @@ void kernel_main() {
                                     v_chunk_tiles * v_tile_bytes,
                                     mcast_num_dests,
                                     true /* linked: semaphore mcast follows */);
-#ifdef ARCH_BLACKHOLE
-                                noc_async_writes_flushed();
-#endif
                                 noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
                             } else {
                                 uint64_t v_unicast_data_addr =
