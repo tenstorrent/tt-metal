@@ -7,7 +7,6 @@ import math
 import torch
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
