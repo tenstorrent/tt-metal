@@ -603,8 +603,11 @@ class TestConfig:
 
         # Check if this is an outlier format combination that requires dest_acc to be enabled
         # Automatically enable dest_acc for outlier combinations
-        if is_format_combination_outlier(
-            self.formats.input_format, self.formats.output_format, self.dest_acc
+        if (
+            is_format_combination_outlier(
+                self.formats.input_format, self.formats.output_format, self.dest_acc
+            )
+            and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
         ):
             dest_acc = DestAccumulation.Yes
 
