@@ -69,6 +69,10 @@ TernaryBroadcastType get_broadcast_type(
 // 2-tensor broadcast compatibility (used by both TTS and TST)
 TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape);
 
+// Broadcast output shape for three tensors (used by where fallback and device op)
+ttnn::Shape compute_broadcasted_output_ternary(
+    const ttnn::Shape& a_shape, const ttnn::Shape& b_shape, const ttnn::Shape& c_shape);
+
 // AllShardSpecs structure for TensorSpecs
 struct AllShardSpecs {
     tt::tt_metal::ShardSpec predicate_shard_spec;

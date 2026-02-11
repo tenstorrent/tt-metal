@@ -608,6 +608,66 @@ TernaryBroadcastType get_broadcast_type(
     return TernaryBroadcastType::INVALID_BCAST;
 }
 
+ttnn::Shape compute_broadcasted_output_ternary(
+    const ttnn::Shape& a_shape, const ttnn::Shape& b_shape, const ttnn::Shape& c_shape) {
+    const int rank_a = a_shape.rank();
+    const int rank_b = b_shape.rank();
+    const int rank_c = c_shape.rank();
+    const int largest_rank = std::max({rank_a, rank_b, rank_c});
+
+    tt::stl::SmallVector<uint32_t> output_shape(largest_rank, 1);
+
+    for (int i = -1; i >= -largest_rank; --i) {
+        auto dim_a = (i >= -rank_a) ? a_shape[i] : 1;
+        auto dim_b = (i >= -rank_b) ? b_shape[i] : 1;
+        auto dim_c = (i >= -rank_c) ? c_shape[i] : 1;
+
+        uint32_t max_dim = 1;
+        if (dim_a != 1) {
+            max_dim = std::max(max_dim, dim_a);
+        }
+        if (dim_b != 1) {
+            max_dim = std::max(max_dim, dim_b);
+        }
+        if (dim_c != 1) {
+            max_dim = std::max(max_dim, dim_c);
+        }
+
+        bool compatible = true;
+        if (dim_a != 1 && dim_a != max_dim) {
+            compatible = false;
+        }
+        if (dim_b != 1 && dim_b != max_dim) {
+            compatible = false;
+        }
+        if (dim_c != 1 && dim_c != max_dim) {
+            compatible = false;
+        }
+
+        TT_FATAL(
+            compatible,
+            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}, dim c: {}",
+            i,
+            dim_a,
+            dim_b,
+            dim_c);
+
+        if (i <= -6) {
+            TT_FATAL(
+                dim_a == dim_b && dim_b == dim_c,
+                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, "
+                "dim a: {}, dim b: {}, dim c: {}",
+                i,
+                dim_a,
+                dim_b,
+                dim_c);
+        }
+
+        output_shape[i + largest_rank] = max_dim;
+    }
+    return ttnn::Shape(output_shape);
+}
+
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
     auto ret = shard_spec;
