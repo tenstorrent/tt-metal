@@ -53,9 +53,9 @@ void build_failure(const string& target_name, const string& op, const string& cm
     std::ifstream file{log_file};
     if (file.is_open()) {
         std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        TT_THROW("{} build failed. Log: {}", target_name, log_contents);
+        TT_THROW("{} build failed. cmd: {}, log: {}", target_name, cmd, log_contents);
     } else {
-        TT_THROW("Failed to open {} failure log file {}", op, log_file);
+        TT_THROW("Failed to open {} failure log file {}, cmd: {}", op, log_file, cmd);
     }
 }
 
@@ -407,6 +407,16 @@ void JitBuildState::compile_one(
     const string& obj,
     const string& obj_temp_path) const {
     // ZoneScoped;
+
+    if (fs::exists(obj_temp_path)) {
+        TT_THROW(
+            "Race condition detected: temp object file already exists before compilation: {} "
+            "(out_dir={}, src={}, obj={})",
+            obj_temp_path,
+            out_dir,
+            src,
+            obj);
+    }
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
