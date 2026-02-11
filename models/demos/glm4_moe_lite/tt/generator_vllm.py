@@ -13,6 +13,8 @@ from loguru import logger
 
 import ttnn
 
+import models.demos.glm4_moe_lite.tt.debug_runtime  # noqa: F401
+
 from models.demos.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT, _torch_dtype_to_ttnn
 from models.demos.glm4_moe_lite.tt.weights import resolve_best_effort_snapshot_dir
 
@@ -257,6 +259,57 @@ class Glm4MoeLiteForCausalLM(nn.Module):
 
         self._ensure_tt_runner()
 
+        # Debug-only correctness knob: clear the *first* paged KV block referenced by
+        # this request before running prefill via the decode-loop fallback.
+        #
+        # Motivation: if the paged MLA decode kernel incorrectly reads tokens beyond
+        # `cur_pos` within a KV cache block, stale values (from previously served
+        # requests that reused the same physical KV block) can leak into attention
+        # and make greedy decode nondeterministic.
+        #
+        # This is not a production solution, but it is a fast A/B test to confirm
+        # whether stale KV data is the root cause of gibberish/nondeterminism.
+        clear_block0 = os.environ.get("GLM4_MOE_LITE_CLEAR_KV_CACHE_BLOCK0", "").strip() == "1"
+        if clear_block0:
+            try:
+                block_size = int(getattr(self, "_kv_cache_shape", (0, 0, 64, 0))[2]) or 64
+                kvpe_dim = int(self.hparams.kv_lora_rank + self.hparams.qk_rope_head_dim)
+                is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+                mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+
+                # Reuse a single zero-fill tensor across all layers for this prefill call.
+                kv_dtype = kv_cache[0].dtype if isinstance(kv_cache, list) and kv_cache else ttnn.bfloat8_b
+                zero_fill_torch = torch.zeros((1, 1, block_size, kvpe_dim), dtype=torch.bfloat16, device="cpu")
+                zero_fill_tt = ttnn.from_torch(
+                    zero_fill_torch,
+                    device=self.mesh_device,
+                    dtype=kv_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                )
+
+                for i in range(batch):
+                    if int(prompt_lens[i]) <= 0:
+                        continue
+                    block0 = int(page_table[i, 0].item())
+                    page_table_fill = torch.full_like(page_table[i : i + 1, :], fill_value=block0, dtype=torch.int32)
+                    page_table_tt = ttnn.from_torch(
+                        page_table_fill,
+                        device=self.mesh_device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=mapper,
+                    )
+                    for layer_cache in kv_cache:
+                        ttnn.experimental.paged_fill_cache(layer_cache, zero_fill_tt, page_table=page_table_tt, batch_idx=0)
+                    ttnn.deallocate(page_table_tt, force=False)
+
+                ttnn.deallocate(zero_fill_tt, force=False)
+            except Exception as e:
+                logger.warning("GLM4_MOE_LITE_CLEAR_KV_CACHE_BLOCK0 failed (ignored): {}", e)
+
         impl = os.environ.get("GLM4_MOE_LITE_PREFILL_IMPL", "").strip().lower() or "flash_mla_prefill"
         if impl in {"mla", "flash_mla", "flash_mla_prefill", "prefill"}:
             return self._tt_runner.prefill(tokens=tokens, prompt_lens=prompt_lens, page_table=page_table, kv_cache=kv_cache)
@@ -291,6 +344,15 @@ class Glm4MoeLiteForCausalLM(nn.Module):
 
             user_page_table = page_table[i : i + 1, :]
             logits_i = None
+            # Debug knob: avoid on-device sampling during decode-loop prefill.
+            #
+            # Motivation: If on-device argmax has correctness issues (e.g. memory
+            # lifetime, kernel bug), it can corrupt subsequent computation even
+            # though we discard intermediate prompt-token outputs. Disabling this
+            # forces host logits readback for intermediate prompt tokens.
+            use_intermediate_sampling = os.environ.get(
+                "GLM4_MOE_LITE_PREFILL_INTERMEDIATE_SAMPLING", "1"
+            ).strip() not in {"0", "false", "no", "off"}
             for t in range(prompt_len):
                 tok = tokens[i, t].view(1, 1).to(torch.int32)
                 pos = torch.tensor([t], dtype=torch.int32)
@@ -298,14 +360,16 @@ class Glm4MoeLiteForCausalLM(nn.Module):
                     # Intermediate prompt tokens: update KV cache, but avoid reading
                     # back full logits. Use on-device greedy sampling (ids only) and
                     # discard the result.
-                    _ = self._tt_runner.decode(
-                        tokens=tok,
-                        start_pos=pos,
-                        page_table=user_page_table,
-                        kv_cache=kv_cache,
-                        sampling_params={"temperature": 0.0},
-                        enable_trace=(impl == "decode_loop_trace"),
-                    )
+                    kwargs_decode: dict[str, object] = {
+                        "tokens": tok,
+                        "start_pos": pos,
+                        "page_table": user_page_table,
+                        "kv_cache": kv_cache,
+                        "enable_trace": (impl == "decode_loop_trace"),
+                    }
+                    if use_intermediate_sampling:
+                        kwargs_decode["sampling_params"] = {"temperature": 0.0}
+                    _ = self._tt_runner.decode(**kwargs_decode)
                     continue
 
                 logits_i = self._tt_runner.decode(
@@ -317,6 +381,11 @@ class Glm4MoeLiteForCausalLM(nn.Module):
                 )  # [1,1,V]
             assert logits_i is not None
             last_logits.append(logits_i[0])  # [1,V]
+
+        if os.environ.get("GLM4_MOE_LITE_SYNC_DEVICE", "").strip() == "1":
+            # Debug-only: force full device sync at the end of prefill to rule out
+            # cross-request overlap or async lifetime issues.
+            ttnn.synchronize_device(self.mesh_device)
 
         return torch.stack(last_logits, dim=0)  # [B,1,V]
 
@@ -349,6 +418,10 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             sampling_params=sampling_params,
             enable_trace=enable_trace,
         )
+        if os.environ.get("GLM4_MOE_LITE_SYNC_DEVICE", "").strip() == "1":
+            # Debug-only: force full device sync at the end of decode to rule out
+            # cross-request overlap or async lifetime issues.
+            ttnn.synchronize_device(self.mesh_device)
         if read_from_device:
             # Used by vLLM warmup. Force a synchronous readback so compilation/tracing
             # work happens during warmup rather than at first user request.
