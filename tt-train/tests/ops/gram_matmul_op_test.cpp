@@ -70,31 +70,31 @@ void print_error_stats(
               << "got=" << flat_result(flat_idx) << " ref=" << flat_expected(flat_idx) << "\n";
 }
 
-// Run gram_matmul and minimal_matmul, compare both against ttnn::matmul.
+// Run gram_matmul(X) and compare against minimal_matmul(X, X^T) and ttnn::matmul(X, X^T).
 void run_gram_matmul_vs_minimal(uint32_t N, uint32_t C, uint32_t H, uint32_t W) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
 
-    // A has shape [N, C, H, W] where W >= H (cols >= rows).
-    auto a = make_random_tensor(N, C, H, W, device);
+    // X has shape [N, C, H, W] where W >= H (cols >= rows).
+    auto x = make_random_tensor(N, C, H, W, device);
 
-    // B = transpose of A: swap last two dims -> [N, C, W, H], so rows >= cols.
-    auto b = ttnn::transpose(a, -2, -1);
+    // X^T for the reference implementations
+    auto xt_tensor = ttnn::transpose(x, -2, -1);
 
-    // Reference: ttnn::matmul(A, B)
-    auto ref = ttnn::matmul(a, b);
+    // Reference: ttnn::matmul(X, X^T)
+    auto ref = ttnn::matmul(x, xt_tensor);
 
-    // minimal_matmul(A, B)
+    // minimal_matmul(X, X^T)
     auto minimal = ttnn::experimental::minimal_matmul(
-        a,
-        b,
+        x,
+        xt_tensor,
         /*bias_tensor=*/std::nullopt,
         /*fused_activation=*/std::nullopt,
         /*config=*/std::nullopt);
 
-    // gram_matmul(A, B)
-    auto gram = metal::gram_matmul(a, b);
+    // gram_matmul(X) -- single tensor, transpose happens internally
+    auto gram = metal::gram_matmul(x);
 
     auto ref_xt = core::to_xtensor(ref);
     auto minimal_xt = core::to_xtensor(minimal);
@@ -116,11 +116,11 @@ void run_gram_matmul_vs_minimal(uint32_t N, uint32_t C, uint32_t H, uint32_t W) 
 }  // namespace
 
 TEST_F(GramMatmulTest, Square128x128) {
-    // A: [1, 1, 128, 128], B: [1, 1, 128, 128] (transposed A), output: [1, 1, 128, 128]
+    // X: [1, 1, 128, 128], output: [1, 1, 128, 128]
     run_gram_matmul_vs_minimal(1, 1, 128, 128);
 }
 
 TEST_F(GramMatmulTest, Large2048x5632) {
-    // A: [1, 1, 2048, 5632], B: [1, 1, 5632, 2048] (transposed A), output: [1, 1, 2048, 2048]
+    // X: [1, 1, 2048, 5632], output: [1, 1, 2048, 2048]
     run_gram_matmul_vs_minimal(1, 1, 2048, 5632);
 }

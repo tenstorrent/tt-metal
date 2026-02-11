@@ -9,6 +9,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
+#include <ttnn/operations/data_movement/transpose/transpose.hpp>
 
 #include "gram_matmul_program_factory.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -30,65 +31,32 @@ void GramMatmulDeviceOperation::validate_on_program_cache_hit(
 
 void GramMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& act_tensor = tensor_args.input_tensor;
-    const auto& weight_tensor = tensor_args.weight_tensor;
+    const auto& input = tensor_args.input_tensor;
     const auto& config = operation_attributes.config;
 
-    // Basic device/storage checks
-    TT_FATAL(
-        act_tensor.storage_type() == StorageType::DEVICE && weight_tensor.storage_type() == StorageType::DEVICE,
-        "gram_matmul operands must be on device");
-    TT_FATAL(act_tensor.device() == weight_tensor.device(), "gram_matmul inputs must reside on the same device");
-    TT_FATAL(
-        act_tensor.buffer() != nullptr && weight_tensor.buffer() != nullptr,
-        "gram_matmul inputs must be allocated in device buffers");
+    // Basic device/storage checks (input_tensor only; weight_tensor is the internally-created transpose)
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "gram_matmul input must be on device");
+    TT_FATAL(input.buffer() != nullptr, "gram_matmul input must be allocated in a device buffer");
 
-    // Layout requirements: all inputs must be TILE layout
-    TT_FATAL(
-        act_tensor.layout() == Layout::TILE && weight_tensor.layout() == Layout::TILE,
-        "gram_matmul requires TILE layout for both inputs");
+    // Layout
+    TT_FATAL(input.layout() == Layout::TILE, "gram_matmul requires TILE layout");
 
-    // DType constraint: only BFLOAT16 is supported for both inputs
-    TT_FATAL(
-        act_tensor.dtype() == DataType::BFLOAT16 && weight_tensor.dtype() == DataType::BFLOAT16,
-        "gram_matmul supports only BFLOAT16 for inputs, got act={} weight={}",
-        act_tensor.dtype(),
-        weight_tensor.dtype());
+    // DType constraint: only BFLOAT16
+    TT_FATAL(input.dtype() == DataType::BFLOAT16, "gram_matmul supports only BFLOAT16, got {}", input.dtype());
 
     // Shape constraints
-    const auto& a_logical = act_tensor.logical_shape();
-    const auto& w_logical = weight_tensor.logical_shape();
-    TT_FATAL(a_logical.rank() >= 2 && w_logical.rank() >= 2, "gram_matmul expects rank >= 2 tensors");
+    const auto& shape = input.logical_shape();
+    TT_FATAL(shape.rank() >= 2, "gram_matmul expects rank >= 2 tensor");
 
-    // Allow upper-dim broadcasting on activation (LHS): activation may have arbitrary upper dims
-    for (int i = 0; i < static_cast<int>(w_logical.rank()) - 2; ++i) {
-        TT_FATAL(w_logical[i] == 1, "gram_matmul weight must have 1 in all dims < -2");
-    }
+    const uint32_t M = shape[-2];
+    const uint32_t K = shape[-1];
 
-    const uint32_t M = a_logical[-2];
-    const uint32_t K = a_logical[-1];
-    const uint32_t K_w = w_logical[-2];
-    const uint32_t N = w_logical[-1];
+    TT_FATAL(M > 0 && K > 0, "gram_matmul dimensions must be positive");
+    TT_FATAL(K >= M, "gram_matmul expects cols >= rows (K={} >= M={})", K, M);
 
-    TT_FATAL(K == K_w, "gram_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
-    TT_FATAL(M > 0 && K > 0 && N > 0, "gram_matmul dimensions must be positive");
-
-    // Gram matrix constraints:
-    // - Input A is wide: cols >= rows (K >= M)
-    // - Weight B is the transpose: rows >= cols (K_w >= N)
-    // - Output is always square: M == N
-    TT_FATAL(K >= M, "gram_matmul expects input A to have cols >= rows (K={} >= M={})", K, M);
-    TT_FATAL(K_w >= N, "gram_matmul expects weight B to have rows >= cols (K={} >= N={})", K_w, N);
-    TT_FATAL(M == N, "gram_matmul output must be square (M={} must equal N={})", M, N);
-
-    // Tile alignment checks (implicitly guaranteed by TILE layout, but assert inner two dims are tile-aligned)
-    const auto& a_padded = act_tensor.padded_shape();
-    const auto& w_padded = weight_tensor.padded_shape();
-    TT_FATAL(
-        a_padded[-2] % TILE_HEIGHT == 0 && a_padded[-1] % TILE_WIDTH == 0,
-        "gram_matmul activation must be tile-aligned");
-    TT_FATAL(
-        w_padded[-2] % TILE_HEIGHT == 0 && w_padded[-1] % TILE_WIDTH == 0, "gram_matmul weight must be tile-aligned");
+    // Tile alignment
+    const auto& padded = input.padded_shape();
+    TT_FATAL(padded[-2] % TILE_HEIGHT == 0 && padded[-1] % TILE_WIDTH == 0, "gram_matmul input must be tile-aligned");
 
     // Config constraints
     if (config.has_value()) {
@@ -106,13 +74,11 @@ void GramMatmulDeviceOperation::validate_on_program_cache_miss(
             cfg.N_block_size,
             cfg.subblock_w);
 
-        // Grid must be at least 2x2
         TT_FATAL(
             cfg.compute_with_storage_grid_size.x >= 2 && cfg.compute_with_storage_grid_size.y >= 2,
             "compute_with_storage_grid_size must be >= 2x2");
 
-        // Additional grid checks are performed when creating the program
-        auto device_grid = act_tensor.device()->compute_with_storage_grid_size();
+        auto device_grid = input.device()->compute_with_storage_grid_size();
         TT_FATAL(
             cfg.compute_with_storage_grid_size.x <= device_grid.x &&
                 cfg.compute_with_storage_grid_size.y <= device_grid.y,
@@ -126,16 +92,16 @@ void GramMatmulDeviceOperation::validate_on_program_cache_miss(
 
 GramMatmulDeviceOperation::spec_return_value_t GramMatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& in0_input_tensor = tensor_args.input_tensor;
-    const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
+    const auto& input = tensor_args.input_tensor;
+    const auto& input_shape = input.logical_shape();
 
-    // Output is always square: [M, M]
-    uint32_t M = in0_input_tensor_shape[-2];
-    ttnn::Shape output_shape(in0_input_tensor_shape);
+    // Output is square: [..., M, M]
+    uint32_t M = input_shape[-2];
+    ttnn::Shape output_shape(input_shape);
     output_shape[-1] = M;
 
-    const auto& memory_config = operation_attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
-    auto dtype = operation_attributes.output_dtype.value_or(in0_input_tensor.dtype());
+    const auto& memory_config = operation_attributes.output_mem_config.value_or(input.memory_config());
+    auto dtype = operation_attributes.output_dtype.value_or(input.dtype());
 
     return ttnn::TensorSpec(
         output_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::TILE), memory_config));
@@ -153,7 +119,6 @@ namespace ttnn::prim {
 
 ttml::metal::ops::gram_matmul::device::GramMatmulDeviceOperation::tensor_return_value_t ttml_gram_matmul(
     const Tensor& input_tensor,
-    const Tensor& weight_tensor,
     const std::optional<const ttml::metal::ops::gram_matmul::device::GramMatmulConfig>& config,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<const tt::tt_metal::DataType> dtype,
@@ -167,13 +132,17 @@ ttml::metal::ops::gram_matmul::device::GramMatmulDeviceOperation::tensor_return_
         true /*fp32_acc*/,
         true /*packer_acc*/);
 
+    // Compute X^T by transposing the last two dimensions.
+    // This creates a separate DRAM buffer that the program factory reads as the "weight" tensor.
+    auto transposed = ttnn::transpose(input_tensor, -2, -1);
+
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .config = config,
             .output_mem_config = memory_config,
             .output_dtype = dtype,
             .compute_kernel_config = kernel_config_val},
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor});
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .weight_tensor = transposed});
 }
 
 }  // namespace ttnn::prim

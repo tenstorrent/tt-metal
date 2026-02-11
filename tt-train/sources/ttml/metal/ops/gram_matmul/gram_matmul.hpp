@@ -12,9 +12,11 @@
 
 namespace ttml::metal {
 
+// Compute the Gram matrix G = X @ X^T.
+// X must be a BFLOAT16 tensor with cols >= rows in the last two dimensions.
+// Output is a square tensor [... , M, M] where M = X.shape[-2].
 ttnn::Tensor gram_matmul(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
     const std::optional<const ttml::metal::ops::gram_matmul::device::GramMatmulConfig>& config = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     std::optional<const tt::tt_metal::DataType> dtype = std::nullopt,
