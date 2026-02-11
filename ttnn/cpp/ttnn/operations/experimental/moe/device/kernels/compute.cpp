@@ -8,7 +8,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
-// #include "compute_kernel_api/pack_untilize.h"
+#include "compute_kernel_api/pack_untilize.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -175,7 +175,7 @@ void kernel_main() {
         cb_reserve_back(cb_c2w_rdy, 1);
         cb_push_back(cb_c2w_rdy, 1);
 
-        // pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
+        pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
 
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 4)
@@ -226,16 +226,11 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            // Pack this in-place for now.
-            pack_tile(0, cb_c2s_out);
-            pack_tile(1, cb_c2s_out);
-            pack_tile(2, cb_c2s_out);
-            pack_tile(3, cb_c2s_out);
-            // pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out, /*block_rt_dim=*/1,
-            // /*block_c_index=*/iter);
+            pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(
+                cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
             tile_regs_release();
         }
-        // pack_untilize_uninit(cb_c2s_out);
+        pack_untilize_uninit(cb_c2s_out);
         cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
     }  // end for (expert_id)
 
