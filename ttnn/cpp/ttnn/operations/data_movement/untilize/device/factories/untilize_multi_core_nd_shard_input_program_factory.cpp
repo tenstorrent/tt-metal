@@ -41,7 +41,6 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
-    // uint32_t tensor_height = a.physical_volume() / tensor_width;
     uint32_t output_tensor_width = output.padded_shape()[-1];
     uint32_t output_tensor_height = output.physical_volume() / output_tensor_width;
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
