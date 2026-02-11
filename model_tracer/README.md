@@ -15,7 +15,6 @@ Automatically extracts real-world operation configurations from model tests and 
 The tracer has been updated to use the new `--trace-params` flag instead of graph tracing. This provides:
 - ✅ Simpler implementation (no C++ graph tracing dependencies)
 - ✅ Individual JSON files per operation for easier debugging
-- ✅ Same master JSON output format for backward compatibility
 - ✅ Works with both pytest tests and standalone Python scripts
 
 **How it works:**
@@ -90,7 +89,7 @@ These traced configurations provide real-world operation patterns from productio
 
 ### Key Files
 
-- **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [graph tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md)
+- **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [operation tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/operation-tracing.md)
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
