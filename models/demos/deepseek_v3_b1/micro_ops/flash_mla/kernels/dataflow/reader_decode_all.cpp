@@ -208,7 +208,6 @@ void kernel_main() {
                 noc_semaphore_inc(sender_receiver_ready_noc_addr, 1);
 
                 // Step 3: Receiver waits for multicast data
-                DeviceZoneScopedN("mcast-receiver-wait");
                 noc_semaphore_wait(mcast_semaphore_ptr, MCAST_VALID);
                 noc_semaphore_set(mcast_semaphore_ptr, MCAST_INVALID);
             }

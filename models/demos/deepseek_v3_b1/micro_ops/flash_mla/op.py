@@ -329,82 +329,6 @@ class FlashMLADecode:
         return output
 
     @staticmethod
-    def golden_dummy(
-        q: torch.Tensor,
-        kv_cache: torch.Tensor,
-        position_ids: torch.Tensor,
-        head_dim_v: int,
-        kv_chunk_size: int,
-    ) -> torch.Tensor:
-        """
-        Simplified golden matching the dummy compute kernel (no softmax, no scale).
-
-        For each KV chunk:
-            QK = Q @ K_chunk^T          -> [num_heads, 1, chunk_len]
-            OUT_chunk = QK @ V_chunk     -> [num_heads, 1, head_dim_v]
-        Final output = sum of all chunk outputs.
-
-        Args:
-            q: Query tensor [1, batch_size, num_heads, kvpe_dim]
-            kv_cache: KV cache tensor [batch_size, 1, max_seq_len, kvpe_dim]
-            position_ids: Position indices [batch_size]
-            head_dim_v: The value head dimension (first head_dim_v elements of kvpe_dim)
-            kv_chunk_size: Size of each KV chunk (must match k_chunk_size in ProgramConfig)
-
-        Returns:
-            Attention output [1, batch_size, num_heads, head_dim_v]
-        """
-        batch_size = q.shape[1]
-        num_heads = q.shape[2]
-        kvpe_dim = q.shape[3]
-
-        # Reshape Q: [1, batch, num_heads, kvpe_dim] -> [batch, num_heads, 1, kvpe_dim]
-        q = q.permute(1, 2, 0, 3)  # [batch, num_heads, 1, kvpe_dim]
-
-        outputs = []
-        for b in range(batch_size):
-            seq_len = position_ids[b].item() + 1
-
-            # Get KV for this batch: [1, seq_len, kvpe_dim]
-            kv = kv_cache[b, :, :seq_len, :]  # [1, seq_len, kvpe_dim]
-
-            # Expand KV to num_heads: [num_heads, seq_len, kvpe_dim]
-            kv_expanded = kv.expand(num_heads, seq_len, kvpe_dim)
-
-            # Q for this batch: [num_heads, 1, kvpe_dim]
-            q_b = q[b]
-
-            # Break into chunks and accumulate (no softmax, no scale)
-            num_chunks = (seq_len + kv_chunk_size - 1) // kv_chunk_size
-            out_b = torch.zeros(num_heads, 1, head_dim_v, dtype=q.dtype)
-
-            for c in range(num_chunks):
-                start = c * kv_chunk_size
-                end = min(start + kv_chunk_size, seq_len)
-
-                k_chunk = kv_expanded[:, start:end, :]  # [num_heads, chunk_len, kvpe_dim]
-                v_chunk = k_chunk[:, :, :head_dim_v]  # [num_heads, chunk_len, head_dim_v]
-
-                # QK = Q @ K_chunk^T (no scale!)
-                qk = torch.matmul(q_b, k_chunk.transpose(-2, -1))  # [num_heads, 1, chunk_len]
-
-                # OUT_chunk = QK @ V_chunk
-                out_chunk = torch.matmul(qk, v_chunk)  # [num_heads, 1, head_dim_v]
-
-                out_b += out_chunk
-
-            outputs.append(out_b)
-
-        # Stack outputs: [batch, num_heads, 1, head_dim_v]
-        output = torch.stack(outputs, dim=0)
-
-        # Reshape to [1, batch, num_heads, head_dim_v]
-        output = output.squeeze(2)  # [batch, num_heads, head_dim_v]
-        output = output.unsqueeze(0)  # [1, batch, num_heads, head_dim_v]
-
-        return output
-
-    @staticmethod
     def op(
         q_tensor: ttnn.Tensor,
         kv_cache_tensor: ttnn.Tensor,
@@ -456,6 +380,7 @@ class FlashMLADecode:
         math_fidelity = compute_kernel_config.math_fidelity
         math_approx_mode = compute_kernel_config.math_approx_mode
         fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en
+        dst_full_sync_en = compute_kernel_config.dst_full_sync_en
 
         # =========================================================================
         # Shape extraction (matching C++ lines 70-114)
@@ -562,42 +487,25 @@ class FlashMLADecode:
         # =========================================================================
         # CB tile counts (matching C++ lines 285-299)
         # =========================================================================
-        dst_size = 4 if fp32_dest_acc_en else 8
+        if dst_full_sync_en:
+            dst_size = 8 if fp32_dest_acc_en else 16
+        else:
+            dst_size = 4 if fp32_dest_acc_en else 8
+
+        assert dst_size >= 8, f"dst_size must be >= 8, got {dst_size}"
 
         q_tiles = PNHt * DHt
         # Double buffer K for overlap between DRAM reads and compute.
         # Receivers signal sender when ready (CB reserved) to ensure consistent addresses.
         k_tiles = Sk_chunk_t * DHt * 2
-        qk_tiles = PNHt * Sk_chunk_t
-        out_im_tiles = PNHt * vDHt
         out0_t = PNHt * vDHt
         statistics_tiles = PNHt
-
-        # =========================================================================
-        # Matmul configs (matching C++ lines 310-371)
-        # =========================================================================
-        qk_in0_block_w = DHt
-        qk_num_blocks = DHt // qk_in0_block_w
-
-        qk_out_subblock_w = min(Sk_chunk_t, dst_size)
-        qk_out_subblock_h = min(PNHt, dst_size // qk_out_subblock_w) if qk_out_subblock_w == Sk_chunk_t else 1
-        qk_in0_num_subblocks = PNHt // qk_out_subblock_h
-        qk_in1_num_subblocks = Sk_chunk_t // qk_out_subblock_w
-
-        out_in0_block_w = Sk_chunk_t
-        out_num_blocks = Sk_chunk_t // out_in0_block_w
-
-        out_out_subblock_w = min(vDHt, dst_size)
-        out_out_subblock_h = min(PNHt, dst_size // out_out_subblock_w) if out_out_subblock_w == vDHt else 1
-        out_in0_num_subblocks = PNHt // out_out_subblock_h
-        out_in1_num_subblocks = vDHt // out_out_subblock_w
 
         # =========================================================================
         # Data formats (matching C++ lines 374-426)
         # =========================================================================
         q_df = input_tensor_q.dtype
         k_df = input_tensor_k.dtype
-        im_df = ttnn.bfloat16
         stats_df = ttnn.bfloat16
 
         # Create tile objects - Q uses tiny tiles, K/V use full tiles
@@ -613,13 +521,11 @@ class FlashMLADecode:
 
         # Create tile descriptors for CB setup
         q_tile_descriptor = ttnn.TileDescriptor(q_tiny_tile)
-        im_tile_descriptor = ttnn.TileDescriptor(im_tile)
         stats_tile_descriptor = ttnn.TileDescriptor(stats_tile)
 
         # Tile sizes - use tile.get_tile_size(dtype) for proper sizing
         q_tile_size = q_tiny_tile.get_tile_size(q_df)
         k_tile_size = k_tile_obj.get_tile_size(k_df)
-        im_tile_size = im_tile.get_tile_size(im_df)
         stats_tile_size = stats_tile.get_tile_size(stats_df)
 
         # =========================================================================
@@ -627,23 +533,22 @@ class FlashMLADecode:
         # =========================================================================
         cb_q_in = 0  # Q input
         cb_k_in = 1  # K/V cache input
-        cb_ms_in = 6  # m/s stats input (from sender in tree reduction)
-        cb_index_id = 8  # cur_pos tensor
-        cb_out_o = 16  # output O from compute
-        cb_out_ms = 17  # output m/s stats from compute
-        cb_intermed_out = 19  # intermediate output for tree reduction
-        cb_out_final = 20  # final sharded output
-        cb_qk_im = 24  # QK intermediate
-        cb_out_im = 25  # output intermediate
-        cb_out_accumulate_im = 26  # output accumulate intermediate
+        cb_ms_in = 2  # m/s stats input (from sender in tree reduction)
+        cb_out_in = 3  # output input for tree reduction
+        cb_index_id = 4  # cur_pos tensor
+        cb_out_o = 5  # output O from compute
+        cb_out_ms = 6  # output m/s stats from compute
+        cb_interm_out = 7  # intermediate output for tree reduction
+        cb_interm_ms = 8  # intermediate m/s stats for tree reduction
+        cb_out_final = 9  # final sharded output
 
         # Intermediate output tiles for tree reduction
         # With tree reduction, senders can complete their steps out of order (e.g., S5 may send
         # in step 3 before S3 sends in step 2). To prevent data corruption, each tree reduction
         # step uses a separate buffer slot. This requires num_tree_reduction_steps * per_step_tiles.
         # Each transfer contains: output tiles (out0_t) + m/s stats (PNHt, packed into single tile)
-        per_step_tiles = out0_t + PNHt
-        intermed_output_tiles = per_step_tiles * grid.NUM_TREE_REDUCTION_STEPS
+        intermed_output_tiles = out0_t * grid.NUM_TREE_REDUCTION_STEPS
+        intermed_ms_tiles = PNHt * grid.NUM_TREE_REDUCTION_STEPS
 
         # =========================================================================
         # DRAM Streaming Optimization: Calculate page size for K chunk reads
@@ -735,10 +640,10 @@ class FlashMLADecode:
             receiver_ready_semaphore_id,  # 13: receiver_ready_semaphore_id (for double-buffer sync)
             cb_index_id,  # 14: cur_pos tensor CB index
             cb_k_in,  # 15: K input CB index
-            cb_ms_in,  # 16: m/s stats input CB index
-            cb_out_o,  # 17: output O CB index
-            cb_out_ms,  # 18: output m/s stats CB index
-            cb_intermed_out,  # 19: intermediate output CB index
+            cb_out_in,  # 16: output input CB index
+            cb_ms_in,  # 17: m/s stats input CB index
+            cb_out_o,  # 18: output O CB index
+            cb_out_ms,  # 19: output m/s stats CB index
         ]
 
         # Compute compile time args (keep existing interface for compute kernel)
@@ -748,36 +653,25 @@ class FlashMLADecode:
             vDHt,  # 2
             PNHt,  # 3
             Sk_chunk_t,  # 4
-            qk_in0_block_w,  # 5
-            qk_out_subblock_w,  # 6
-            qk_out_subblock_h,  # 7
-            qk_in0_num_subblocks,  # 8
-            qk_in1_num_subblocks,  # 9
-            qk_num_blocks,  # 10
-            out_in0_block_w,  # 11
-            out_out_subblock_w,  # 12
-            out_out_subblock_h,  # 13
-            out_in0_num_subblocks,  # 14
-            out_in1_num_subblocks,  # 15
-            out_num_blocks,  # 16
-            num_cores_per_batch,  # 17
-            k_chunk_size,  # 18
-            num_cores_per_head,  # 19
-            num_heads_per_core,  # 20 (always 1)
-            B,  # 21: q_heads_parallel_factor
-            Q_TILE_HEIGHT,  # 22: Q tile height
-            float_to_uint32(scale),  # scale_fp32 (unused by simplified compute)
-            grid.NUM_TREE_REDUCTION_STEPS,  # 24: tree reduction steps (3)
-            cb_q_in,  # 25: Q input CB index
-            cb_k_in,  # 26: K input CB index
-            cb_ms_in,  # 27: m/s stats input CB index
-            cb_index_id,  # 28: cur_pos tensor CB index
-            cb_qk_im,  # 29: QK intermediate CB index
-            cb_out_im,  # 30: output intermediate CB index
-            cb_out_accumulate_im,  # 31: output accumulate intermediate CB index
-            cb_out_o,  # 32: output O CB index
-            cb_out_ms,  # 33: output m/s stats CB index
-            cb_out_final,  # 34: final sharded output CB index
+            num_cores_per_batch,  # 5
+            k_chunk_size,  # 6
+            num_cores_per_head,  # 7
+            num_heads_per_core,  # 8 (always 1)
+            B,  # 9: q_heads_parallel_factor
+            Q_TILE_HEIGHT,  # 10: Q tile height
+            float_to_uint32(scale),  # 11: scale_fp32
+            grid.NUM_TREE_REDUCTION_STEPS,  # 12: tree reduction steps (3)
+            dst_size,  # 13: dst size
+            cb_index_id,  # 14: cur_pos tensor CB index
+            cb_q_in,  # 15: Q input CB index
+            cb_k_in,  # 16: K input CB index
+            cb_interm_out,  # 17: intermediate output CB index
+            cb_interm_ms,  # 18: intermediate m/s stats CB index
+            cb_out_in,  # 19: output input CB index
+            cb_ms_in,  # 20: m/s stats input CB index
+            cb_out_o,  # 21: output O CB index
+            cb_out_ms,  # 22: output m/s stats CB index
+            cb_out_final,  # 23: final sharded output CB index
         ]
 
         # No compute defines needed for simplified kernel (no softmax)
@@ -807,16 +701,28 @@ class FlashMLADecode:
 
         # V is read directly from K buffer (strided matmul) - no separate V CB needed
 
-        # cb_ms_in: m/s stats input (m and s are packed into single tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(cb_ms_in, stats_df, stats_tile_size, stats_tile_descriptor)
-                ],
+        if grid.NUM_TREE_REDUCTION_STEPS > 0:
+            # cb_out_in: output input (tiny tile)
+            cb_descriptors.append(
+                ttnn.CBDescriptor(
+                    total_size=intermed_output_tiles * stats_tile_size,
+                    core_ranges=core_grid,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(cb_out_in, stats_df, stats_tile_size, stats_tile_descriptor)
+                    ],
+                )
             )
-        )
+
+            # cb_ms_in: m/s stats input (m and s are packed into single tile)
+            cb_descriptors.append(
+                ttnn.CBDescriptor(
+                    total_size=intermed_ms_tiles * stats_tile_size,
+                    core_ranges=core_grid,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(cb_ms_in, stats_df, stats_tile_size, stats_tile_descriptor)
+                    ],
+                )
+            )
 
         # cb_index_id: cur_pos input
         cb_descriptors.append(
@@ -827,68 +733,29 @@ class FlashMLADecode:
             )
         )
 
-        # cb_qk_im: QK intermediate (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=qk_tiles * im_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(cb_qk_im, im_df, im_tile_size, im_tile_descriptor)],
-            )
-        )
-
-        # cb_out_im: output intermediate (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=out_im_tiles * im_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(cb_out_im, im_df, im_tile_size, im_tile_descriptor)],
-            )
-        )
-
-        # cb_out_accumulate_im: output accumulate intermediate (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=out_im_tiles * im_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(cb_out_accumulate_im, im_df, im_tile_size, im_tile_descriptor)
-                ],
-            )
-        )
-
-        # cb_out_o: output O (tiny tile)
+        # cb_out_o/cb_interm_out: output O (tiny tile)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=out0_t * stats_tile_size,
                 core_ranges=core_grid,
                 format_descriptors=[
-                    ttnn.CBFormatDescriptor(cb_out_o, stats_df, stats_tile_size, stats_tile_descriptor)
+                    ttnn.CBFormatDescriptor(cb_out_o, stats_df, stats_tile_size, stats_tile_descriptor),
+                    ttnn.CBFormatDescriptor(cb_interm_out, stats_df, stats_tile_size, stats_tile_descriptor),
                 ],
             )
         )
 
-        # cb_out_ms: output m/s stats (tiny tile, shared for both m and s)
+        # cb_out_ms/cb_interm_ms: output m/s stats (tiny tile, shared for both m and s)
         cb_descriptors.append(
             ttnn.CBDescriptor(
                 total_size=statistics_tiles * stats_tile_size,
                 core_ranges=core_grid,
                 format_descriptors=[
-                    ttnn.CBFormatDescriptor(cb_out_ms, stats_df, stats_tile_size, stats_tile_descriptor)
+                    ttnn.CBFormatDescriptor(cb_out_ms, stats_df, stats_tile_size, stats_tile_descriptor),
+                    ttnn.CBFormatDescriptor(cb_interm_ms, stats_df, stats_tile_size, stats_tile_descriptor),
                 ],
             )
         )
-
-        # cb_intermed_out: tree reduction intermediate (tiny tile, only if intermed_output_tiles > 0)
-        if intermed_output_tiles > 0:
-            cb_descriptors.append(
-                ttnn.CBDescriptor(
-                    total_size=intermed_output_tiles * stats_tile_size,
-                    core_ranges=core_grid,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(cb_intermed_out, stats_df, stats_tile_size, stats_tile_descriptor)
-                    ],
-                )
-            )
 
         # cb_out_final: final sharded output
         cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_final, output_tensor)
@@ -1021,6 +888,7 @@ class FlashMLADecode:
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1,
                     noc=ttnn.NOC.NOC_0,
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 ),
             ),
             # Writer kernel (use NOC_1 to avoid conflict with reader on NOC_0)
@@ -1033,6 +901,7 @@ class FlashMLADecode:
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0,
                     noc=ttnn.NOC.NOC_1,
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 ),
             ),
             # Compute kernel
