@@ -117,7 +117,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             output_sharded_memory_config));
-    
+
     //-------------------------------------------------------------------------
     // Shared output (sharded)
     //-------------------------------------------------------------------------
@@ -125,8 +125,8 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
      * This will be an alias to the buffer used by Shared tilize output.
      * But re-perceived as RM. This is not strictly necessary but facilitates
      * torch interop and unit testing
-     */        
-    
+     */
+
     const auto& tilize_output_layout = tilize_output_spec.tensor_layout();
     const tt::tt_metal::TensorLayout output_layout(
         tilize_output_layout.get_data_type(), ROW_MAJOR_LAYOUT, tilize_output_layout.get_memory_config());
@@ -138,17 +138,15 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const std::vector<ttnn::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
-    
-    const auto tilize_output_tensor = tensor_args.optional_input_output_tensor.value_or(
-        create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device()));
-    
-    // re-percieve tilize output tensor as RM for output        
- 
+
+    const auto tilize_output_tensor = create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device());
+
+    // re-percieve tilize output tensor as RM for output
     const auto& output_storage = tilize_output_tensor.device_storage();
     const auto& output_spec = output_specs[4];
     const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
     const ttnn::Tensor output_tensor(output_storage,output_spec,output_topology);
-    
+
     return {
         create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[1], tensor_args.tilize_input_tensor.device()),
@@ -169,12 +167,19 @@ std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& matmul_w0_w1_tensor,
     const ttnn::Tensor& matmul_w2_tensor,
     const uint32_t layer_id,
-    const std::optional<uint32_t>& cluster_axis,
-    const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    const uint32_t output_height_shard_dim,
+    const uint32_t output_width_shard_dim,
+    const std::vector<ttnn::CoreCoord>& output_shard_cores,
+    const std::optional<uint32_t>& cluster_axis) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{.layer_id = layer_id, .cluster_axis = cluster_axis},
+        OperationType::operation_attributes_t{
+            .layer_id = layer_id,
+            .output_height_shard_dim = output_height_shard_dim,
+            .output_width_shard_dim = output_width_shard_dim,
+            .output_shard_cores = output_shard_cores,
+            .cluster_axis = cluster_axis},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,

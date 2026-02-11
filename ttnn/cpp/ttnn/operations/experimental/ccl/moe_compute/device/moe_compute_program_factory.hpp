@@ -26,6 +26,9 @@ struct MoEComputeMeshWorkloadFactory {
 
         // CB handle for shared global sharded tensor
         tt::tt_metal::CBHandle sharded_output_cb_handle;
+
+        // CB handle for matmul output
+        tt::tt_metal::CBHandle matmul_writer_cb_handle;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

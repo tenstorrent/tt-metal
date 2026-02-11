@@ -15,12 +15,18 @@ namespace ttnn::experimental::prim {
 
 struct MoEComputeParams {
     uint32_t layer_id;
+    uint32_t output_height_shard_dim{};
+    uint32_t output_width_shard_dim{};
+    std::vector<ttnn::CoreCoord> output_shard_cores{};
     std::optional<uint32_t> cluster_axis;
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("layer_id", layer_id);
+        attrs.emplace_back("output_height_shard_dim", layer_id);
+        attrs.emplace_back("output_width_shard_dim", layer_id);
+        attrs.emplace_back("output_shard_cores", layer_id);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
     }
