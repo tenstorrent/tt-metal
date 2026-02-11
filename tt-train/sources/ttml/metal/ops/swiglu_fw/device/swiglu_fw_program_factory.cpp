@@ -207,9 +207,9 @@ bool row_of_m_fits_in_l1_check(
 
     // Memory for input CBs (always needed regardless of algorithm)
     const uint64_t input_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_input
-    // W1/W2/W3 use batched mcast which needs larger CB (2 × block_size^2 tiles)
+    // W1/W3: double-buffered, W2: triple-buffered (prefetch during Phase B)
     const uint64_t w1_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w1
-    const uint64_t w2_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w2
+    const uint64_t w2_memory = (3U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w2 (triple)
     const uint64_t w3_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w3
 
     // Memory for output CB (L1 acc eliminates cb_y_partial)
@@ -363,9 +363,10 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // Plus double-buffering: 2 × block_size^2 = 32 tiles for block_size=4
     const uint32_t w1_w3_cb_tiles = 2U * block_size * block_size;
 
-    // W2 CB size: use batched mcast (block_size cols × block_size tiles per batch)
-    // Same size as W1/W3 for consistency
-    const uint32_t w2_cb_tiles = 2U * block_size * block_size;
+    // W2 CB size: triple-buffered to allow sender to prefetch W2 during Phase B (SiLU).
+    // The sender finishes Phase A W1/W3 and immediately starts Phase C W2 reads.
+    // Triple-buffering lets the sender stay 3 batches ahead, overlapping with SiLU compute.
+    const uint32_t w2_cb_tiles = 3U * block_size * block_size;
 
     // CB sizing for M-fits-L1 algorithm (full row caching)
     const uint32_t num_tiles_xw1 = ((hidden_Wt + block_size - 1U) / block_size) * block_size;
