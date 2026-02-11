@@ -6,6 +6,7 @@ import ttnn
 import math
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
+from models.common.utility_functions import is_watcher_enabled
 
 
 # Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
