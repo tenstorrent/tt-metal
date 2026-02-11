@@ -76,11 +76,13 @@ def _tt_to_torch_for_vllm_output(*, tensor: ttnn.Tensor, device: Any) -> torch.T
     contract.
     """
     if not _is_mesh_device(device):
-        return ttnn.to_torch(tensor)
+        # `ttnn.to_torch` can be async depending on runtime settings; stage
+        # through a blocking device->host transfer for correctness.
+        return ttnn.to_torch(tensor.cpu())
     device_tensors = ttnn.get_device_tensors(tensor)
     if not device_tensors:
         raise RuntimeError("ttnn.get_device_tensors returned an empty list for a mesh tensor")
-    return ttnn.to_torch(device_tensors[0])
+    return ttnn.to_torch(device_tensors[0].cpu())
 
 
 def _mesh_to_torch_selected(*, tensor: ttnn.Tensor, device_ids: list[int]) -> list[torch.Tensor]:
@@ -92,7 +94,7 @@ def _mesh_to_torch_selected(*, tensor: ttnn.Tensor, device_ids: list[int]) -> li
     for device_id in device_ids:
         if device_id < 0 or device_id >= len(device_tensors):
             raise IndexError(f"device_id {device_id} out of range for mesh tensor with {len(device_tensors)} devices")
-        out.append(ttnn.to_torch(device_tensors[device_id]))
+        out.append(ttnn.to_torch(device_tensors[device_id].cpu()))
     return out
 
 
@@ -591,9 +593,123 @@ class Glm4MoeLiteDenseOnlyTT:
         decode_profile: dict[str, float] = {}
         t_decode0 = time.perf_counter() if profile_on else 0.0
 
-        tokens = tokens[:active].to(torch.int32)
-        positions = start_pos[:active].to(torch.int32)
-        page_table = page_table[:active].to(torch.int32)
+        # Make the host inputs own their storage. vLLM can reuse/pad input
+        # buffers across engine steps, and TTNN host->device copies can be
+        # asynchronous under some runtime configurations.
+        tokens = tokens[:active].to(torch.int32).contiguous().clone()
+        positions = start_pos[:active].to(torch.int32).contiguous().clone()
+        page_table = page_table[:active].to(torch.int32).contiguous()
+
+        if os.environ.get("GLM4_MOE_LITE_DECODE_EMBED_ONLY", "").strip() == "1" and sampling_params is None:
+            # Debug-only: skip KV cache update + all decoder layers and return
+            # logits from (embed -> final_norm -> lm_head) only. This is useful
+            # for isolating nondeterminism in low-level matmul/readback paths.
+            x = run_tt_embedding(device=self.device, token_ids=tokens, tt_weight=self.embed_w)
+            if x.layout != ttnn.TILE_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            x = ttnn.reshape(x, (1, active, 1, int(self.hparams.hidden_size)))
+            x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
+            x_view = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, int(self.hparams.hidden_size)])
+            x_tight = ttnn.clone(x_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x, force=False)
+            x = x_tight
+
+            x = self.final_norm(x, mode="decode")
+            logits_tt = ttnn.linear(x, self.lm_head_w)  # [1,1,B,vocab]
+
+            vocab = int(self.hparams.vocab_size)
+            if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+                shards = ttnn.get_device_tensors(logits_tt)
+                if not shards:
+                    raise RuntimeError("ttnn.get_device_tensors returned an empty list for a mesh tensor")
+                logits_shards = [ttnn.to_torch(t)[..., : int(t.shape[-1])] for t in shards]
+                logits_full = torch.cat(logits_shards, dim=-1)[..., :vocab]
+                logits_flat = logits_full.reshape(-1, vocab)
+            else:
+                logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
+                logits_torch = logits_torch[..., :vocab]
+                logits_flat = logits_torch.reshape(-1, vocab)
+
+            if logits_flat.shape[0] != active:
+                raise RuntimeError(
+                    f"decode logits shape mismatch: expected {active} rows, got {int(logits_flat.shape[0])} "
+                    f"(logits_flat.shape={tuple(logits_flat.shape)})"
+                )
+            if os.environ.get("GLM4_MOE_LITE_DEBUG_LOGITS_SANITY", "").strip() == "1":
+                try:
+                    finite = torch.isfinite(logits_flat)
+                    finite_count = int(finite.sum().item())
+                    total = int(logits_flat.numel())
+                    # Quick proxy for distribution sharpness on the first row.
+                    row0 = logits_flat[0]
+                    top2 = torch.topk(row0, k=2).values
+                    gap = float((top2[0] - top2[1]).item())
+                    spread = float((row0.max() - row0.min()).item())
+                    if finite_count != total or gap < 0.1:
+                        logger.warning(
+                            "GLM decode embed-only logits look suspicious: finite={}/{} top2_gap={:.6f} spread={:.6f} top1={:.6f}",
+                            finite_count,
+                            total,
+                            gap,
+                            spread,
+                            float(top2[0].item()),
+                        )
+                except Exception as e:
+                    logger.warning("GLM4_MOE_LITE_DEBUG_LOGITS_SANITY failed: {}", e)
+            logits = logits_flat.reshape(active, 1, vocab).to(dtype=torch.float32).cpu()
+
+            ttnn.deallocate(logits_tt, force=False)
+            ttnn.deallocate(x, force=False)
+            return logits
+
+        # Correctness: vLLM uses a fixed-width page table (max blocks per req),
+        # but decode only needs the prefix of blocks that cover the current
+        # position. Some kernels have historically been sensitive to garbage in
+        # unused page-table slots, which can manifest as nondeterministic greedy
+        # outputs when KV blocks are reused across requests.
+        #
+        # Slice the page table down to the minimal required width for this
+        # decode step to ensure we never pass unneeded block IDs to kernels.
+        try:
+            block_size = int(kv_cache[0].shape[2])
+        except Exception:
+            block_size = 64
+        max_pos = int(positions.max().item()) if positions.numel() else 0
+        blocks_needed = 1
+        if block_size > 0:
+            blocks_needed = max(1, max_pos // block_size + 1)
+
+        if blocks_needed > int(page_table.shape[1]):
+            msg = (
+                f"decode page_table too narrow: blocks_needed={blocks_needed} "
+                f"page_table.shape={tuple(page_table.shape)} max_pos={max_pos} block_size={block_size}. "
+                "This indicates a vLLM block table allocation/hand-off bug; continuing will corrupt output."
+            )
+            if os.environ.get("GLM4_MOE_LITE_DEBUG_PAGE_TABLE_BOUNDARY", "").strip() == "1":
+                raise ValueError(msg)
+            logger.warning(msg)
+            blocks_needed = int(page_table.shape[1])
+
+        if blocks_needed < int(page_table.shape[1]):
+            page_table = page_table[:, :blocks_needed].contiguous()
+        page_table = page_table.clone()
+
+        if os.environ.get("GLM4_MOE_LITE_DEBUG_PAGE_TABLE_BOUNDARY", "").strip() == "1":
+            try:
+                if 58 <= max_pos <= 70:
+                    head_w = min(4, int(page_table.shape[1]))
+                    head = page_table[0, :head_w].tolist() if active > 0 else []
+                    logger.info(
+                        "GLM boundary debug (model_tt.decode): active={} max_pos={} blocks_needed={} "
+                        "page_table_shape={} page_table_head={}",
+                        active,
+                        max_pos,
+                        blocks_needed,
+                        tuple(page_table.shape),
+                        head,
+                    )
+            except Exception as e:  # pragma: no cover
+                logger.warning("GLM boundary debug (model_tt.decode) failed: {}", e)
 
         # vLLM uses a constant page_table width; accept any W here.
         t0 = time.perf_counter() if profile_on else 0.0
@@ -702,11 +818,25 @@ class Glm4MoeLiteDenseOnlyTT:
             # greedy-only first.
             # Multicore argmax expects ROW_MAJOR input.
             logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
+            # Correctness: TT matmul outputs are tile-padded. If we run argmax over
+            # the padded vocab region, we can select an out-of-range token id,
+            # which can appear as gibberish/nondeterminism depending on whatever
+            # values happen to be present in the padded lanes.
+            vocab = int(self.hparams.vocab_size)
 
             if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
-                next_ids_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
-                ttnn.deallocate(logits_rm, force=False)
-                ttnn.deallocate(logits_tt, force=False)
+                logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab])
+                # `slice` can return a view with non-trivial strides. Some reduction
+                # kernels are sensitive to strided inputs; materialize a tight
+                # buffer before taking top-1 to avoid rare garbage tokens.
+                logits_rm_tight = ttnn.clone(logits_rm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                max_out = ttnn.max(logits_rm_tight, dim=3, keepdim=True)
+                if isinstance(max_out, tuple):
+                    local_max_tt, next_ids_tt = max_out
+                    ttnn.deallocate(local_max_tt, force=False)
+                else:
+                    next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False, use_multicore=True)
+                ttnn.deallocate(logits_rm_tight, force=False)
 
                 next_ids_torch = _tt_to_torch_for_vllm_output(tensor=next_ids_tt, device=self.device)
                 next_ids_flat = next_ids_torch.reshape(-1).to(dtype=torch.int32).cpu()
@@ -715,6 +845,14 @@ class Glm4MoeLiteDenseOnlyTT:
                         f"decode token ids shape mismatch: expected {active} values, got {int(next_ids_flat.numel())} "
                         f"(next_ids_torch.shape={tuple(next_ids_torch.shape)})"
                     )
+                if int(next_ids_flat.max().item()) >= vocab or int(next_ids_flat.min().item()) < 0:
+                    # This should be impossible once the padded vocab region is excluded.
+                    raise RuntimeError(
+                        f"decode produced out-of-range token ids: min={int(next_ids_flat.min().item())} "
+                        f"max={int(next_ids_flat.max().item())} vocab={vocab}"
+                    )
+                ttnn.deallocate(logits_rm, force=False)
+                ttnn.deallocate(logits_tt, force=False)
                 ttnn.deallocate(next_ids_tt, force=False)
             else:
                 # Vocab-sharded LM head: avoid all-gathering full logits. Compute per-device
@@ -734,21 +872,22 @@ class Glm4MoeLiteDenseOnlyTT:
                     selected_device_ids = [r * mesh_cols for r in range(tp_size)]
                     shard_indices = [r for r in range(tp_size)]
 
-                max_out = ttnn.max(logits_rm, dim=3, keepdim=True)
+                vocab_per_shard = int(self.lm_head_vocab_per_shard)
+                logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab_per_shard])
+                max_out = ttnn.max(logits_rm_view, dim=3, keepdim=True)
                 if isinstance(max_out, tuple):
                     local_max_tt, local_argmax_tt = max_out
                 else:
                     local_max_tt = max_out
-                    local_argmax_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
-                ttnn.deallocate(logits_rm, force=False)
-                ttnn.deallocate(logits_tt, force=False)
+                    local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
 
                 local_argmax_torch = _mesh_to_torch_selected(tensor=local_argmax_tt, device_ids=selected_device_ids)
                 local_max_torch = _mesh_to_torch_selected(tensor=local_max_tt, device_ids=selected_device_ids)
                 ttnn.deallocate(local_argmax_tt, force=False)
                 ttnn.deallocate(local_max_tt, force=False)
+                ttnn.deallocate(logits_rm, force=False)
+                ttnn.deallocate(logits_tt, force=False)
 
-                vocab_per_shard = int(self.lm_head_vocab_per_shard)
                 next_ids = torch.empty((active,), dtype=torch.int32)
                 for b in range(active):
                     best_val = None
@@ -759,10 +898,13 @@ class Glm4MoeLiteDenseOnlyTT:
                         max_val = float(max_tensor.reshape(-1)[b].item())
                         local_idx = int(argmax_tensor.reshape(-1)[b].item())
                         global_idx = int(shard_idx * vocab_per_shard + local_idx)
+                        if global_idx >= vocab:
+                            continue
                         if best_val is None or max_val > best_val:
                             best_val = max_val
                             best_global = global_idx
-                    assert best_global is not None
+                    if best_global is None:
+                        best_global = max(0, vocab - 1)
                     next_ids[b] = int(best_global)
                 next_ids_flat = next_ids
 
@@ -1007,6 +1149,38 @@ class Glm4MoeLiteDenseOnlyTT:
                 f"trace page_table_width mismatch: allocated={int(self._trace_page_table_width)} got={int(page_table.shape[1])}"
             )
 
+        # Debug-only: print the page table and positions at KV block boundaries.
+        #
+        # The most common correctness failure mode we've seen is a sudden
+        # degradation to gibberish output exactly when the total sequence length
+        # crosses the vLLM KV-cache `--block-size` boundary (currently 64).
+        #
+        # This log helps validate whether:
+        # - vLLM is passing absolute positions (expected) vs modulo positions.
+        # - page_table contains a valid second block id at pos==64.
+        if os.environ.get("GLM4_MOE_LITE_DEBUG_PAGE_TABLE_BOUNDARY", "").strip() == "1":
+            try:
+                if batch == 1 and start_pos.numel() >= 1 and tokens.numel() >= 1:
+                    pos0 = int(start_pos[0].item())
+                    # Log a small window around the first block boundary.
+                    # This avoids relying on an exact convention (0-based vs 1-based),
+                    # and makes it easy to see if positions wrap modulo block_size.
+                    if 60 <= pos0 <= 70:
+                        pt0 = page_table[0].to(torch.int32)
+                        block = pos0 // 64
+                        lo = max(0, block - 1)
+                        hi = min(int(pt0.numel()), block + 2)
+                        logger.info(
+                            "GLM4 boundary: pos={} block={} token={} page_table_first8={} page_table_near={}",
+                            pos0,
+                            block,
+                            int(tokens[0, 0].item()),
+                            pt0[:8].tolist(),
+                            pt0[lo:hi].tolist(),
+                        )
+            except Exception as e:
+                logger.warning("GLM4_MOE_LITE_DEBUG_PAGE_TABLE_BOUNDARY failed: {}", e)
+
         is_mesh_device = _is_mesh_device(self.device)
         mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None
 
@@ -1185,18 +1359,22 @@ class Glm4MoeLiteDenseOnlyTT:
         # capture, allocating device buffers becomes unsafe, so sampling must be
         # fully trace-contained.
         logits_rm_warm = ttnn.to_layout(logits_warm, ttnn.ROW_MAJOR_LAYOUT)
+        vocab = int(self.hparams.vocab_size)
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
-            next_ids_warm = ttnn.argmax(logits_rm_warm, dim=3, keepdim=False, use_multicore=True)
+            logits_rm_warm_view = ttnn.slice(logits_rm_warm, [0, 0, 0, 0], [1, 1, batch, vocab])
+            next_ids_warm = ttnn.argmax(logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
             ttnn.deallocate(next_ids_warm, force=False)
         else:
-            max_out_warm = ttnn.max(logits_rm_warm, dim=3, keepdim=True)
+            vocab_per_shard = int(self.lm_head_vocab_per_shard)
+            logits_rm_warm_view = ttnn.slice(logits_rm_warm, [0, 0, 0, 0], [1, 1, batch, vocab_per_shard])
+            max_out_warm = ttnn.max(logits_rm_warm_view, dim=3, keepdim=True)
             if isinstance(max_out_warm, tuple):
                 local_max_warm, local_argmax_warm = max_out_warm
                 ttnn.deallocate(local_max_warm, force=False)
                 ttnn.deallocate(local_argmax_warm, force=False)
             else:
                 local_max_warm = max_out_warm
-                local_argmax_warm = ttnn.argmax(logits_rm_warm, dim=3, keepdim=False, use_multicore=True)
+                local_argmax_warm = ttnn.argmax(logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
                 ttnn.deallocate(local_max_warm, force=False)
                 ttnn.deallocate(local_argmax_warm, force=False)
         ttnn.deallocate(logits_rm_warm, force=False)
@@ -1213,16 +1391,20 @@ class Glm4MoeLiteDenseOnlyTT:
         # Capture greedy sampling inside the trace to avoid allocating any
         # device buffers while an active trace exists.
         logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
+        vocab = int(self.hparams.vocab_size)
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
             top1_values_tt = None
-            top1_indices_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
+            logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab])
+            top1_indices_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
         else:
-            max_out = ttnn.max(logits_rm, dim=3, keepdim=True)
+            vocab_per_shard = int(self.lm_head_vocab_per_shard)
+            logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab_per_shard])
+            max_out = ttnn.max(logits_rm_view, dim=3, keepdim=True)
             if isinstance(max_out, tuple):
                 top1_values_tt, top1_indices_tt = max_out
             else:
                 top1_values_tt = max_out
-                top1_indices_tt = ttnn.argmax(logits_rm, dim=3, keepdim=False, use_multicore=True)
+                top1_indices_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
 
@@ -1250,6 +1432,10 @@ class Glm4MoeLiteDenseOnlyTT:
         assert self._trace_top1_indices_tt is not None
 
         self._copy_decode_trace_inputs(tokens=tokens, start_pos=start_pos, page_table=page_table)
+        if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
+            # Debug-only: enforce that host->device copies of decode inputs
+            # (tokens/positions/page_table) are visible before trace replay.
+            ttnn.synchronize_device(self.device)
         # NOTE: Keep trace replay blocking for correctness.
         #
         # Our vLLM integration currently reads decode outputs back to host
@@ -1289,6 +1475,8 @@ class Glm4MoeLiteDenseOnlyTT:
         assert self._trace_logits_tt is not None
 
         self._copy_decode_trace_inputs(tokens=tokens, start_pos=start_pos, page_table=page_table)
+        if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
+            ttnn.synchronize_device(self.device)
         ttnn.execute_trace(self.device, self._decode_trace_id_sampling, cq_id=0, blocking=True)
 
         logits_tt = self._trace_logits_tt
