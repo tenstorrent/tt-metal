@@ -237,6 +237,7 @@ class MoELayerTTWeights:
     - w1_experts (gate_proj): [1,n_routed_experts,hidden,moe_intermediate]
     - w3_experts (up_proj):   [1,n_routed_experts,hidden,moe_intermediate]
     - w2_experts (down_proj): [1,n_routed_experts,moe_intermediate,hidden]
+    - w1w3_experts (fused gate+up): [1,n_routed_experts,hidden,2*moe_intermediate] (optional)
     """
 
     w_gate: ttnn.Tensor
@@ -244,6 +245,7 @@ class MoELayerTTWeights:
     w1_experts: ttnn.Tensor
     w2_experts: ttnn.Tensor
     w3_experts: ttnn.Tensor
+    w1w3_experts: Optional[ttnn.Tensor] = None
 
 
 @dataclass(frozen=True)
@@ -610,12 +612,25 @@ def convert_decoder_layer_weights(
             dtype=experts_dtype,
         )
 
+        # Optional fused gate+up (w1+w3) tensor for single sparse_matmul.
+        w1w3_experts_tt: Optional[ttnn.Tensor] = None
+        fuse_gate_up = os.environ.get("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP", "").strip() == "1"
+        if fuse_gate_up:
+            w1w3_stacked = torch.cat([w1_stacked, w3_stacked], dim=2)  # [E, hidden, 2*moe_intermediate]
+            w1w3_experts_tt = _experts_weight_tt(
+                device=device,
+                torch_weights=w1w3_stacked,
+                cache_file=c("w1w3_experts", experts_variant),
+                dtype=experts_dtype,
+            )
+
         moe = MoELayerTTWeights(
             w_gate=w_gate,
             e_score_correction_bias=e_bias,
             w1_experts=w1_experts,
             w2_experts=w2_experts,
             w3_experts=w3_experts,
+            w1w3_experts=w1w3_experts_tt,
         )
 
     return DecoderLayerTTWeights(
