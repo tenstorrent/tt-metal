@@ -20,15 +20,13 @@ from models.demos.deepseek_v3_b1.micro_ops.tilize_8x32.op import golden, tilize_
 
 
 @pytest.mark.parametrize("N", [256, 64])
-@pytest.mark.parametrize("pcc", [0.999])
-def test_tilize_8x32(device, N, pcc):
+def test_tilize_8x32(device, N):
     """
     Test tilize operation: row-major 8xN tensor -> tiled 8x32 blocks.
 
     Args:
         device: TTNN device
         N: Width dimension (must be divisible by 32)
-        pcc: PCC threshold for validation
     """
     torch.manual_seed(42)
 
@@ -102,8 +100,9 @@ def test_tilize_8x32(device, N, pcc):
     ref_output = golden(torch_input)
 
     # Compare results
-    passing, pcc_msg = comp_pcc(ref_output, tt_out_torch, pcc)
+    passing, pcc_msg = comp_pcc(ref_output, tt_out_torch, 0.999)
     logger.info(pcc_msg)
     assert passing, f"PCC check failed: {pcc_msg}"
 
-    logger.info("✓ Tilize 8x32 test passed!")
+    if passing:
+        logger.info("✓ Tilize 8x32 test passed!")
