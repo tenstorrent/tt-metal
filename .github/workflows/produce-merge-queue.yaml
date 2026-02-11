@@ -33,7 +33,7 @@ jobs:
         run: gh api rate_limit
 
       # ------------------------------------------------------------
-      # Compute timestamp (15 min lookback)
+      # Compute timestamp (15 min lookback for safety)
       # ------------------------------------------------------------
       - name: Compute lookback timestamp
         id: time
@@ -78,7 +78,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
           LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
 
           gh api graphql -f query="
@@ -86,7 +85,7 @@ jobs:
             search(
               query: \"repo:tenstorrent/tt-metal is:pr is:merged merged:>=$LOOKBACK\",
               type: ISSUE,
-              first: 50
+              first: 100
             ) {
               nodes {
                 ... on PullRequest {
@@ -95,11 +94,42 @@ jobs:
                   author { login }
                   headRefOid
                   mergedAt
+                  closedAt
                 }
               }
             }
           }
           " > merged_prs_raw.json
+
+      # ------------------------------------------------------------
+      # Fetch recently closed (NOT merged) PRs
+      # ------------------------------------------------------------
+      - name: Fetch closed PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
+
+          gh api graphql -f query="
+          query {
+            search(
+              query: \"repo:tenstorrent/tt-metal is:pr is:closed -is:merged closed:>=$LOOKBACK\",
+              type: ISSUE,
+              first: 100
+            ) {
+              nodes {
+                ... on PullRequest {
+                  number
+                  title
+                  author { login }
+                  headRefOid
+                  closedAt
+                }
+              }
+            }
+          }
+          " > closed_prs_raw.json
 
       # ------------------------------------------------------------
       # Build unified snapshot
@@ -115,12 +145,14 @@ jobs:
             --arg repo "tenstorrent/tt-metal" \
             --arg ts "$COLLECTED_AT" \
             --slurpfile queue merge_queue_raw.json \
-            --slurpfile merged merged_prs_raw.json '
+            --slurpfile merged merged_prs_raw.json \
+            --slurpfile closed closed_prs_raw.json '
           {
             repository: $repo,
             collected_at: $ts,
             merge_queue:
               (
+                # ---------------- IN QUEUE ----------------
                 [
                   $queue[0].data.repository.mergeQueue.entries.nodes[]? | {
                     pr_number: .pullRequest.number,
@@ -131,10 +163,14 @@ jobs:
                     queue_position: .position,
                     enqueued_at: .enqueuedAt,
                     merged_at: null,
+                    closed_at: null,
                     collected_at: $ts
                   }
                 ]
+
                 +
+
+                # ---------------- MERGED ----------------
                 [
                   $merged[0].data.search.nodes[]? | {
                     pr_number: .number,
@@ -145,6 +181,25 @@ jobs:
                     queue_position: null,
                     enqueued_at: null,
                     merged_at: .mergedAt,
+                    closed_at: .closedAt,
+                    collected_at: $ts
+                  }
+                ]
+
+                +
+
+                # ---------------- CLOSED (NOT MERGED) ----------------
+                [
+                  $closed[0].data.search.nodes[]? | {
+                    pr_number: .number,
+                    pr_title: .title,
+                    pr_author_login: .author.login,
+                    head_sha: .headRefOid,
+                    state: "CLOSED",
+                    queue_position: null,
+                    enqueued_at: null,
+                    merged_at: null,
+                    closed_at: .closedAt,
                     collected_at: $ts
                   }
                 ]
@@ -161,7 +216,6 @@ jobs:
       - name: Add timestamp to filename
         run: |
           TS=$(date -u +"%Y%m%dT%H%M%SZ")
-
           mv generated/merge_queue/merge_queue_snapshot.json \
              generated/merge_queue/${TS}_merge_queue_snapshot.json
 
