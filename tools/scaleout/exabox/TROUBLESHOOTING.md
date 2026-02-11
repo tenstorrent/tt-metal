@@ -751,24 +751,13 @@ The error originates from `tt_metal/impl/device/device_manager.cpp` during `Devi
 
 **Solution**:
 
-1. **Increase reset sleep time**: 30 seconds may not be enough. Try 60 seconds or more:
-   ```bash
-   mpirun --host <hosts> tt-smi -r
-   sleep 60  # Increased from 30
-   ```
-
-2. **Increase sync timeout**: Set `TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS` to a higher value (e.g., 60000 for 1 minute):
-   ```bash
-   export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=60000
-   ```
-
-3. **Run physical validation first**: This catches unhealthy links before attempting fabric tests:
+1. **Run physical validation first**: This catches unhealthy links before attempting fabric tests:
    ```bash
    ./run_validation.sh --hosts <hosts> --image <docker-image>
    ```
    If validation shows missing connections or unhealthy links, fix those issues before running fabric tests.
 
-4. **For automated pipelines**: Add physical validation as a pre-check and implement retry logic:
+2. **For automated pipelines**: Add physical validation as a pre-check and implement retry logic:
    ```bash
    # Reset and wait
    mpirun --host <hosts> tt-smi -r
