@@ -33,12 +33,12 @@ jobs:
         run: gh api rate_limit
 
       # ------------------------------------------------------------
-      # Compute timestamp (15 min lookback for safety)
+      # Compute timestamp (30 min lookback for safety)
       # ------------------------------------------------------------
       - name: Compute lookback timestamp
         id: time
         run: |
-          echo "LOOKBACK=$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+          echo "LOOKBACK=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
       # ------------------------------------------------------------
       # Fetch merge queue
