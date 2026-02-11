@@ -17,6 +17,8 @@ file(
     all_gather_concat_heads_fused/device/kernels/*
     all_reduce_async/device/kernels/*
     all_to_all_async/device/kernels/*
+    all_to_all_async_generic/device/kernels/*
+    all_to_all_dispatch_metadata/device/kernels/*
     llama_all_gather_matmul_async/device/kernels/*
     llama_reduce_scatter/device/kernels/*
     llama_reduce_scatter_create_heads/device/kernels/*
@@ -27,6 +29,7 @@ file(
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
+    strided_all_gather_async/device/kernels/*
     deepseek_minimal_broadcast/device/kernels/*
     deepseek_minimal_all_reduce/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
@@ -130,6 +133,9 @@ target_sources(
         deepseek_b1_reduce_to_one/deepseek_b1_reduce_to_one.cpp
         deepseek_b1_reduce_to_one/device/deepseek_b1_reduce_to_one_op.cpp
         deepseek_b1_reduce_to_one/device/deepseek_b1_reduce_to_one_program.cpp
+        all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
+        all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
+        all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

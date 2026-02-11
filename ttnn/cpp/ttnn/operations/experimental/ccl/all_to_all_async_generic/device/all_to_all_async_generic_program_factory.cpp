@@ -114,7 +114,7 @@ AllToAllAsyncGenericProgram::create_at(
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
 
     auto cb_src0_config = tt::tt_metal::CircularBufferConfig(cb_size, {{tt::CB::c_in0, data_format}})
-                              .set_page_size(tt::CB::c_in0, page_size);
+                              .set_page_size(tt::CB::c_in0, number_pages_per_packet * page_size);
 
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
@@ -159,7 +159,6 @@ AllToAllAsyncGenericProgram::create_at(
 
     const uint32_t num_blocks_devices = num_senders_per_link;
     const uint32_t num_cores_per_blocks = operation_attributes.num_links;
-    const uint32_t devices_per_core = operation_attributes.num_devices / num_blocks_devices;
     const uint32_t blocks_per_core = num_blocks / num_cores_per_blocks;
 
     auto sender_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
@@ -171,11 +170,10 @@ AllToAllAsyncGenericProgram::create_at(
         input_shape[operation_attributes.out_dim],  // split_dim_size
         src_in_dims,                                // inner_dims_size
         input_shape[input_shape.size() - 1],        // last_dim_sizes
-        number_pages_per_packet,                    // number_pages_per_packet
         reader_has_extra_half_tile,                 // has_reader_tail
         writer_has_extra_half_tile,                 // has_writer_tail
-        devices_per_core,                           // num_devices_per_core
-        blocks_per_core,                            // num_blocks_per_core
+        concat_num_tiles,                           // concat_num_tiles
+        dst_in_dims                                 // dst_inner_dims_size
     };
 
     tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer())
@@ -188,6 +186,53 @@ AllToAllAsyncGenericProgram::create_at(
         sender_worker_core_range,
         sender_reader_kernel_config);
 
+    std::vector<int32_t> device_offsets[2];
+    std::vector<std::vector<int32_t>> block_starts[2], block_ends[2];
+    for (int i = 0; i < 2; ++i) {
+        block_starts[i].resize(operation_attributes.num_links);
+        block_ends[i].resize(operation_attributes.num_links);
+    }
+    // splitting device blocks for Ring topology, starting from the farthest device to ensure better load balance
+    const uint32_t num_splitted_devices = 1;
+    if (is_ring) {
+        for (int d = operation_attributes.num_devices - 1 + num_splitted_devices; d >= 0; --d) {
+            int distance = (d + 1) / 2;
+            int device_offset = (d % 2 == 0) ? distance : -distance;
+            if (num_senders_per_link == 1) {
+                device_offsets[0].push_back(device_offset);
+            } else {
+                device_offsets[d % 2].push_back(device_offset);
+            }
+        }
+    } else {
+        // Linear topology
+        for (uint32_t i = 0; i < operation_attributes.num_devices; ++i) {
+            device_offsets[0].push_back(i - device_index);
+        }
+    }
+    uint32_t semaphore_sent = 0;
+    for (int l = 0; l < operation_attributes.num_links; ++l) {
+        uint32_t current_start_block = l * blocks_per_core;
+        uint32_t current_end_block = (l + 1) * blocks_per_core;
+        if (l == operation_attributes.num_links - 1) {
+            current_end_block = num_blocks;
+        }
+        for (int c = 0; c < num_senders_per_link; ++c) {
+            for (int d = 0; d < device_offsets[c].size(); ++d) {
+                semaphore_sent++;
+                block_starts[c][l].push_back(current_start_block);
+                block_ends[c][l].push_back(current_end_block);
+            }
+        }
+        if (is_ring) {
+            for (int i = 0; i < num_splitted_devices; ++i) {
+                uint32_t split = (block_ends[0][l][i] + block_starts[0][l][i]) / 2;
+                block_ends[0][l][i] = split;
+                block_starts[1][l][num_splitted_devices - 1 - i] = split;
+            }
+        }
+    }
+
     auto sender_writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_writer_kernel_config.defines.emplace("TOPOLOGY", topology_type);
     sender_writer_kernel_config.compile_args = {
@@ -196,29 +241,15 @@ AllToAllAsyncGenericProgram::create_at(
         operation_attributes.num_devices,           // num_devices
         output_shape[operation_attributes.in_dim],  // concat_dim_size
         dst_in_dims,                                // inner_dims_size
-        number_pages_per_packet,                    // number_pages_per_packet
         writer_has_extra_half_tile,                 // has_writer_tail
         page_size,                                  // intermediate_page_size
         reserved_packet_header_CB_index,            // reserved_packet_header_cb_id
-        devices_per_core,                           // num_devices_per_core
-        blocks_per_core,                            // num_blocks_per_core
-        num_cores_per_blocks,                       // num_cores_per_blocks
+        semaphore_sent,                             // semaphore_expected_value
+        concat_num_tiles,                           // concat_num_tiles
+        (concat_num_half_tiles * device_index) / 2  // full_block_offset
     };
 
     tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_kernel_config.compile_args);
-    std::vector<int32_t> device_offsets;
-    if (is_ring) {
-        for (int d = operation_attributes.num_devices - 1; d >= 0; --d) {
-            int distance = (d + 1) / 2;
-            int device_offset = (d % 2 == 0) ? distance : -distance;
-            device_offsets.push_back(device_offset);
-        }
-    } else {
-        // Linear topology
-        for (uint32_t i = 0; i < operation_attributes.num_devices; ++i) {
-            device_offsets.push_back(i - device_index);
-        }
-    }
 
     auto sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -241,13 +272,13 @@ AllToAllAsyncGenericProgram::create_at(
         const auto& core = sender_worker_cores[core_id];
         std::vector<uint32_t> sender_reader_rt_args = {
             tensor_args.input_tensor.buffer()->address(),
-            (core_id / num_blocks_devices) * blocks_per_core,
+            device_offsets[core_id % num_blocks_devices].size(),
         };
-        for (auto d : device_offsets) {
-            if (num_senders_per_link == 1 || (core_id % num_blocks_devices == 0 && d >= 0) ||
-                (core_id % num_blocks_devices == 1 && d < 0)) {
-                sender_reader_rt_args.push_back(d);
-            }
+        for (uint32_t i = 0; i < device_offsets[core_id % num_blocks_devices].size(); ++i) {
+            sender_reader_rt_args.push_back(device_offsets[core_id % num_blocks_devices][i]);
+            sender_reader_rt_args.push_back(
+                block_starts[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
+            sender_reader_rt_args.push_back(block_ends[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
         }
         tt::tt_metal::SetRuntimeArgs(program, sender_reader_kernel_id, {core}, sender_reader_rt_args);
 
@@ -255,20 +286,23 @@ AllToAllAsyncGenericProgram::create_at(
             tensor_return_value.buffer()->address(),
             init_barrier_semaphore.address(),
             final_barrier_semaphore.address(),
-            (core_id % num_blocks_devices) * devices_per_core,
-            (core_id / num_blocks_devices) * blocks_per_core,
+            core_id % num_blocks_devices,
+            core_id / num_blocks_devices,
             mcast_dest_noc_start_x,
             mcast_dest_noc_start_y,
             mcast_dest_noc_end_x,
             mcast_dest_noc_end_y,
             mcast_size,
             drain_sync_core.x,
-            drain_sync_core.y};
-        for (auto d : device_offsets) {
-            if (num_senders_per_link == 1 || (core_id % num_blocks_devices == 0 && d >= 0) ||
-                (core_id % num_blocks_devices == 1 && d < 0)) {
-                sender_writer_rt_args.push_back(d);
-            }
+            drain_sync_core.y,
+            device_offsets[core_id % num_blocks_devices].size(),
+        };
+
+        for (uint32_t i = 0; i < device_offsets[core_id % num_blocks_devices].size(); ++i) {
+            sender_writer_rt_args.push_back(device_offsets[core_id % num_blocks_devices][i]);
+            sender_writer_rt_args.push_back(
+                block_starts[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
+            sender_writer_rt_args.push_back(block_ends[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
         }
         bool with_forward =
             (num_senders_per_link == 1 || (core_id % num_blocks_devices == 0)) && forward_coord.has_value();

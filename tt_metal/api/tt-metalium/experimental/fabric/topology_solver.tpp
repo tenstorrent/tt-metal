@@ -200,7 +200,18 @@ void MappingConstraints<TargetNode, GlobalNode>::validate_and_throw() const {
     if (!conflicted_targets.empty()) {
         std::ostringstream oss;
         oss << "Constraint validation failed: " << conflicted_targets.size()
-            << " target node(s) have no valid mappings (overconstrained).";
+            << " target node(s) have no valid mappings (overconstrained).\n";
+        oss << "Overconstrained target nodes:\n";
+        for (const auto& target : conflicted_targets) {
+            oss << "  - " << target << "\n";
+        }
+
+        // Show summary of all constraints for context
+        oss << "\nConstraint summary:\n";
+        oss << "  Total target nodes with constraints: " << valid_mappings_.size() << "\n";
+        oss << "  Target nodes with valid mappings: " << (valid_mappings_.size() - conflicted_targets.size()) << "\n";
+        oss << "  Overconstrained target nodes: " << conflicted_targets.size() << "\n";
+
         TT_THROW("{}", oss.str());
     }
 }

@@ -107,81 +107,31 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, num_tiles_per_input_block);
     };
-    // Access pages within kernel
-    const auto& dspec = accessor_src.dspec();
-    // Iterate through all shards and within each shard iterate through all pages (padding and non-padding). Process
-    // only rows in the shards with non padding pages.
+
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
-        // Get total pages in shard (including padding)
-        uint32_t shard_volume = dspec.shard_volume();
+        auto shard_pages = accessor_src.shard_pages(shard_id);
+        for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end();
+             page_iter += num_tiles_per_input_block) {
+            uint32_t page_id = page_iter->page_id();
+            uint32_t height_wise_input_block_index = page_id / num_tiles_per_row;
+            uint32_t tile_index_width = page_id % num_tiles_per_row;
+            uint32_t width_wise_input_block_index = tile_index_width / num_tiles_per_input_block;
 
-        // Initialize coordinates for checking padding
-        auto local_page_coord = std::array<uint32_t, 4>{};  // Max rank 4
-        auto global_page_coord = std::array<uint32_t, 4>{};
-        auto shard_coord = std::array<uint32_t, 4>{};
-
-        // Calculate shard coordinates
-        uint32_t remaining_shard_id = shard_id;
-        for (int i = dspec.rank() - 1; i >= 0; --i) {
-            shard_coord[i] = remaining_shard_id % dspec.shard_grid()[i];
-            remaining_shard_id /= dspec.shard_grid()[i];
-        }
-
-        // Iterate through all pages in the shard
-        for (uint32_t page_offset = 0; page_offset < shard_volume; ++page_offset) {
-            // Calculate local page coordinates within shard
-            uint32_t temp_page_id = page_offset;
-            for (int i = dspec.rank() - 1; i >= 0; --i) {
-                local_page_coord[i] = temp_page_id % dspec.shard_shape()[i];
-                temp_page_id /= dspec.shard_shape()[i];
+            uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
+            if (tile_index_width + num_tiles_per_input_block >= num_tiles_per_row) {
+                // we have an uneven shard with padding along the width dimension, so ignore those last
+                // padding columns
+                num_unpadded_cols_per_input_block = (num_tiles_per_row - tile_index_width) * tile_width;
             }
-
-            // Calculate global coordinates and check if within bounds
-            bool is_padding = false;
-            for (uint32_t i = 0; i < dspec.rank(); ++i) {
-                global_page_coord[i] = shard_coord[i] * dspec.shard_shape()[i] + local_page_coord[i];
-                if (global_page_coord[i] >= dspec.tensor_shape()[i]) {
-                    is_padding = true;
-                    break;
-                }
-            }
-
-            // Check if page is at start of row in shard
-            bool is_start_of_row = (local_page_coord[dspec.rank() - 1] % num_tiles_per_input_block == 0);
-            if (is_start_of_row) {
-                if (!is_padding) {
-                    uint32_t page_id = 0;
-                    for (uint32_t i = 0; i < dspec.rank(); ++i) {
-                        page_id += global_page_coord[i] * dspec.tensor_strides()[i];
-                    }
-                    uint32_t height_wise_input_block_index = page_id / num_tiles_per_row;
-                    uint32_t tile_index_width = page_id % num_tiles_per_row;
-                    uint32_t width_wise_input_block_index = tile_index_width / num_tiles_per_input_block;
-
-                    uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
-                    if (tile_index_width + num_tiles_per_input_block >= num_tiles_per_row) {
-                        // we have an uneven shard with padding along the width dimension, so ignore those last
-                        // padding columns
-                        num_unpadded_cols_per_input_block = (num_tiles_per_row - tile_index_width) * tile_width;
-                    }
-
-                    uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
-                    uint32_t width_wise_output_block_start_index =
-                        input_block_global_col_index / num_cols_per_output_block;
-                    uint32_t num_cols_already_processed_in_first_output_block =
-                        input_block_global_col_index % num_cols_per_output_block;
-                    write_tiles_in_current_block(
-                        height_wise_input_block_index,
-                        width_wise_output_block_start_index,
-                        num_unpadded_cols_per_input_block,
-                        num_cols_already_processed_in_first_output_block);
-
-                } else {
-                    // Discard padding blocks, do not write to output
-                    cb_wait_front(cb_id_out0, num_tiles_per_input_block);
-                    cb_pop_front(cb_id_out0, num_tiles_per_input_block);
-                }
-            }
+            uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
+            uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
+            uint32_t num_cols_already_processed_in_first_output_block =
+                input_block_global_col_index % num_cols_per_output_block;
+            write_tiles_in_current_block(
+                height_wise_input_block_index,
+                width_wise_output_block_start_index,
+                num_unpadded_cols_per_input_block,
+                num_cols_already_processed_in_first_output_block);
         }
     }
 }

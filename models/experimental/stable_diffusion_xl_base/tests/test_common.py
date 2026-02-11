@@ -11,8 +11,8 @@ from typing import List, Optional, Union
 
 from transformers import CLIPTextModelWithProjection
 from ttnn.distributed.distributed import ConcatMeshToTensor
-from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.common.utility_functions import profiler
 
 import ttnn
@@ -81,7 +81,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
         tt_text_encoder = CLIPEncoder(
             config_1, ttnn_device, ccl_manager, parallel_config_1, text_encoder_1.config.eos_token_id
         )
-        tt_text_encoder.load_state_dict(text_encoder_1.state_dict())
+        tt_text_encoder.load_torch_state_dict(text_encoder_1.state_dict())
     else:
         tt_text_encoder = None
 
@@ -96,6 +96,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
         layer_norm_eps=text_encoder_2.config.layer_norm_eps,
         attention_dropout=text_encoder_2.config.attention_dropout,
         hidden_act=text_encoder_2.config.hidden_act,
+        projection_dim=text_encoder_2.config.projection_dim,
     )
 
     # Note: Factor for SDXL CLIP encoder should always be 1; since it doesn't support TP
@@ -106,7 +107,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
     tt_text_encoder_2 = CLIPEncoder(
         config_2, ttnn_device, ccl_manager, parallel_config_2, text_encoder_2.config.eos_token_id
     )
-    tt_text_encoder_2.load_state_dict(text_encoder_2.state_dict())
+    tt_text_encoder_2.load_torch_state_dict(text_encoder_2.state_dict())
 
     return tt_text_encoder, tt_text_encoder_2
 
@@ -130,7 +131,7 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
             device=ttnn_device,
             mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
         )
-        _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, with_projection=False)
+        _, _ = tt_text_encoder(tt_tokens_1, ttnn_device)
 
     dummy_ids_2 = tokenizer_2(
         dummy_prompt,
@@ -146,7 +147,7 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
         device=ttnn_device,
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
     )
-    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, with_projection=True)
+    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device)
     ttnn.synchronize_device(ttnn_device)
 
 
@@ -342,7 +343,7 @@ def batch_encode_prompt_on_device(
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
 
-            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, with_projection=with_projection)
+            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device)
 
             tt_sequence_output_torch = ttnn.to_torch(
                 tt_sequence_output[-2],
@@ -429,9 +430,7 @@ def batch_encode_prompt_on_device(
                 device=ttnn_device,
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
-            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(
-                tt_tokens, ttnn_device, with_projection=with_projection
-            )
+            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens, ttnn_device)
             tt_sequence_output_neg_torch = ttnn.to_torch(
                 tt_sequence_output_neg[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),

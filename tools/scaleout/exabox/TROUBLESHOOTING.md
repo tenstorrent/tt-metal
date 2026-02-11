@@ -9,12 +9,14 @@ Real issues encountered and their solutions.
 - [Setup & Access](#setup--access)
   - [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi)
   - [Tests Fail with "Permission denied" on tt-metal-cache](#tests-fail-with-permission-denied-on-tt-metal-cache)
+  - [Recovery Script Fails with "could not access or execute an executable"](#recovery-script-fails-with-could-not-access-or-execute-an-executable)
 - [SLURM Issues](#slurm-issues)
   - [SLURM Nodes Showing Down](#slurm-nodes-showing-down)
   - [tt-smi Reset Requires Sudo Password in SLURM Session](#tt-smi-reset-requires-sudo-password-in-slurm-session)
   - [Hanging on PCIe Device Lock](#hanging-on-pcie-device-lock)
 - [Reset & Power Issues](#reset--power-issues)
   - [tt-smi Reset Fails with ARC Timeout](#tt-smi-reset-fails-with-arc-timeout)
+  - [AICLK Timeout During Chip Initialization](#aiclk-timeout-during-chip-initialization)
   - [Machine Won't Power On After BMC Power Cycle](#machine-wont-power-on-after-bmc-power-cycle)
   - [Machine Rebooted with PCIe Errors](#machine-rebooted-with-pcie-errors)
   - [Tensix Stall Issue (Requires Power Cycle)](#tensix-stall-issue-requires-power-cycle)
@@ -23,11 +25,16 @@ Real issues encountered and their solutions.
   - [Missing ASIC After Reboot](#missing-asic-after-reboot)
   - [Do NOT Update Firmware on Cluster Machines](#do-not-update-firmware-on-cluster-machines)
 - [Ethernet & Connectivity](#ethernet--connectivity)
+  - [Hostname Not Found in FSD](#hostname-not-found-in-fsd)
   - [UMD Firmware Version Mismatch - Links Not Detected](#umd-firmware-version-mismatch---links-not-detected)
   - [QSFP Connections Missing Between Hosts](#qsfp-connections-missing-between-hosts)
   - [Transient Ethernet Connectivity Loss](#transient-ethernet-connectivity-loss)
   - [Z Ports Showing Down](#z-ports-showing-down)
   - [Trace Connections Hanging After Reset](#trace-connections-hanging-after-reset-30-failure-rate)
+- [Fabric Tests](#fabric-tests)
+  - [Fabric Test Fails with "Graph could not fit in physical topology"](#fabric-test-fails-with-graph-could-not-fit-in-physical-topology)
+  - [Fabric Test Fails with "Failed to initialize FW"](#fabric-test-fails-with-failed-to-initialize-fw)
+  - [Fabric Router Sync Timeout](#fabric-router-sync-timeout)
 - [Tensix & Validation](#tensix--validation)
   - [Tensix Cores Unresponsive During Validation](#tensix-cores-unresponsive-during-validation)
   - [Intermittent Tensix Cores Hung at Device Startup](#intermittent-tensix-cores-hung-at-device-startup)
@@ -115,22 +122,31 @@ When you encounter issues that require escalation, use the following contacts an
 
 **Analyzing validation logs:**
 
-After running `run_validation_*.sh`, use the analysis script:
+After running `run_validation.sh`, use the analysis script:
 ```bash
-./tools/scaleout/exabox/analyze_validation_results.sh validation_output/
+python3 tools/scaleout/exabox/analyze_validation_results.py validation_output/
 ```
 
-The script categorizes each log file and gives you a summary with success rate. Here's what each category means and where to look next:
+For additional details (host summary, error messages, timeline):
+```bash
+python3 tools/scaleout/exabox/analyze_validation_results.py validation_output/ --all
+```
+
+The script categorizes each log file and gives you a summary with success rate, plus actionable recommendations. Here's what each category means and where to look next:
 
 | Category | What it means | Next steps |
 |----------|---------------|------------|
 | **Healthy links** | All links passed validation | Good to go |
 | **Unhealthy links** | Data mismatch, CRC errors, or retrains detected | Check the FAULTY LINKS REPORT in the log. Same channel failing repeatedly = bad cable. Scattered failures = try power cycle. See [Data Mismatch During Traffic Tests](#data-mismatch-during-traffic-tests) |
-| **Timeout issues** | Cores hung waiting for response | Power cycle the cluster. See [Tensix Stall Issue](#tensix-stall-issue-requires-power-cycle) |
-| **Missing connections** | Links in FSD not found in discovered state | Check cables are seated. Verify correct FSD file. See [QSFP Connections Missing](#qsfp-connections-missing-between-hosts) or [UMD Firmware Version Mismatch](#umd-firmware-version-mismatch---links-not-detected) |
-| **Extra connections** | Unexpected links found | System has been cabled up incorrectly with FSD file for your topology. Verify you're using the correct FSD file (8x16 vs 4x32) |
+| **Missing connections** | Links in FSD not found (port or channel level) | Check cables are seated. Verify correct FSD file. See [QSFP Connections Missing](#qsfp-connections-missing-between-hosts) or [UMD Firmware Version Mismatch](#umd-firmware-version-mismatch---links-not-detected) or [Hostname Not Found in FSD](#hostname-not-found-in-fsd) |
+| **Extra connections** | Unexpected links found | FSD doesn't match actual cabling. Verify you're using the correct FSD file (8x16 vs 4x32) |
+| **Workload timeout** | Traffic tests timed out | Cores hung waiting for response. Power cycle the cluster. See [Tensix Stall Issue](#tensix-stall-issue-requires-power-cycle) |
 | **DRAM training failures** | Chip memory failed to initialize | Hardware issue. See [GDDR Issue on Chip](#gddr-issue-on-chip). Contact syseng |
-| **Indeterminate** | Log incomplete (test crashed/hung) | Check if machine rebooted (`uptime`). May need power cycle |
+| **ARC timeout** | ARC communication issues | Try reset with `tt-smi -r`. If persistent, may need power cycle. See [tt-smi Reset Fails with ARC Timeout](#tt-smi-reset-fails-with-arc-timeout) |
+| **AICLK timeout** | AICLK failed to settle during chip init | Possible bad firmware or hardware. See [AICLK Timeout During Chip Initialization](#aiclk-timeout-during-chip-initialization). Escalate to syseng |
+| **MPI error** | Lost connection between hosts during test | Check network connectivity. Verify SSH agent forwarding. See [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi) |
+| **SSH error** | Authentication failed (publickey) | SSH agent not forwarded or key not added. See [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi) |
+| **Inconclusive** | Log incomplete or unrecognized error | Check if machine rebooted (`uptime`). Review raw log for details. May need power cycle |
 
 **Interpreting success rate:**
 
@@ -197,6 +213,29 @@ Error points to `/tmp/tt-metal-cache/...`
 1. **Set a custom kernel directory**: Configure TT-Metal to use a user-specific cache directory to avoid permission conflicts
 2. **Clear the cache**: Reboot the machine to clear `/tmp` and remove the stale cache directory
 3. **Debug mpi-docker**: Contact @tt-asaigal or @jpanasiukTT if the issue persists. They can help debug the `mpi-docker` setup and permissions.
+
+---
+
+## Recovery Script Fails with "could not access or execute an executable"
+
+**Symptom**: Running `recover_4x32.sh` or `recover_8x16.sh` fails with:
+```
+mpirun was unable to launch the specified application as it could not access
+or execute an executable:
+
+Executable: ./build/tools/scaleout/run_cluster_validation
+Node: bh-glx-d01u08
+
+while attempting to start process rank 0.
+```
+
+**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.sh`), they don't use containers.
+
+**Solution**:
+- **Build tt-metal first** - See [Quick Health Check](./README.md#quick-health-check-for-developers) for build instructions
+- **Or use Docker-based validation** - Run `./run_validation.sh --hosts <hosts> --image <docker-image>` which doesn't require a build
+
+**Common confusion**: People often confuse the `recover_*.sh` scripts (developer tools, require build) with the `run_validation.sh` script (operator tool, uses Docker). For hardware qualification, use the Docker-based scripts.
 
 ---
 
@@ -271,6 +310,35 @@ If this issue persists, report to infra team to fix group synchronization.
 **Solution for GDDR BIST failure**:
 - Syseng may attempt to revive with debug firmware reload
 - If no improvement, UBB tray swap required
+
+---
+
+## AICLK Timeout During Chip Initialization
+
+**Symptom**: Validation or chip initialization fails with a message like:
+```
+Waiting for AICLK value to settle failed on timeout after <timeout_ms>. Expected to see <target_aiclk>, last value observed <aiclk>. This can be due to possible overheating of the chip or other issues. ASIC temperature: <temp>
+```
+
+This error originates from UMD during chip initialization (`tt_metal/third_party/umd/device/chip/chip.cpp`).
+
+**Cause**: The AICLK (AI Clock) failed to stabilize to the expected frequency. This has been observed across multiple systems and can indicate:
+- Bad firmware state on the affected chip
+- Hardware issues with the ASIC
+- Chip overheating (check the reported ASIC temperature)
+
+**Resolution steps**:
+1. Check the ASIC temperature in the error message - if abnormally high, allow cooldown
+2. Try a reset with `tt-smi -r`
+3. If issue persists, try a soft reboot of the host
+4. If still failing after reboot, escalate to Systems Engineering
+
+**Escalation**: This issue should be escalated to **Systems Engineering** as it often indicates:
+- Bad firmware requiring reflash
+- Hardware issues requiring further diagnosis
+- Potential need for UBB tray replacement
+
+Report the error message (including the expected AICLK, observed value, and temperature) when escalating.
 
 ---
 
@@ -385,6 +453,59 @@ tt-smi -l  # should show 32 devices
 
 # Ethernet & Connectivity
 
+## Hostname Not Found in FSD
+
+**Symptom**: Validation crashes with a `std::runtime_error` indicating a hostname is not found in the Factory System Descriptor (FSD):
+```
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  Hostname not found in FSD: bh-glx-d03u02
+[bh-glx-d04u08:00001] *** Process received signal ***
+[bh-glx-d04u08:00001] Signal: Aborted (6)
+```
+
+This error typically appears across multiple MPI ranks with the same hostname mentioned.
+
+**Cause**: The FSD file being used doesn't include all the hosts in the current cluster topology. This happens when:
+- Running validation on a different cluster than the FSD was created for
+- The FSD file wasn't updated after cluster reconfiguration
+- Using a template FSD without customizing hostnames
+- **The recovery scripts have hardcoded FSD paths** that may not match your cluster
+
+**Resolution steps**:
+
+1. **Identify which FSD file is being used**:
+   - For `recover_*.sh` scripts: Check the `--factory-descriptor-path` argument in the script
+   - For `run_validation.sh`: Check the `--cabling-descriptor-path` and `--deployment-descriptor-path` arguments (run with `--help` for usage)
+
+2. **Find the correct FSD for your cluster**:
+   - Check `/data/scaleout_configs/` for available FSD files
+   - Ask in `#exabox-infra` if unsure which FSD to use for your cluster
+   - Common locations:
+     - `/data/scaleout_configs/merged_fsd.textproto` - consolidated FSD for multiple clusters
+     - `/data/scaleout_configs/4xBH_4x32_intrapod_updated/` - updated 4x32 configs
+
+3. **Update the script or use a custom command**:
+
+   Option A - Modify the recovery script temporarily:
+   ```bash
+   # Edit recover_4x32.sh and change the --factory-descriptor-path to the correct FSD
+   ```
+
+   Option B - Run the validation command directly with the correct FSD:
+   ```bash
+   mpirun --host <hosts> tt-smi -r
+   sleep 30
+   mpirun --host <hosts> --tag-output ./build/tools/scaleout/run_cluster_validation \
+       --factory-descriptor-path /data/scaleout_configs/merged_fsd.textproto \
+       --send-traffic --num-iterations 5
+   ```
+
+**Common mistake**: The `recover_*.sh` scripts have hardcoded paths like `/data/scaleout_configs/4xBH_4x32_intrapod/fsd.textproto`. If you're running on a different cluster (e.g., C34 instead of the original cluster the script was written for), you'll get this error.
+
+**Note**: This is a configuration error, not a hardware issue. Ensure the FSD matches your actual cluster topology before running validation.
+
+---
+
 ## UMD Firmware Version Mismatch - Links Not Detected
 
 **Symptom**: Validation reports massive numbers of missing connections (e.g., 180 missing port/cable connections). Every single Trace and Linking Board connection appears to not be trained. However, when checked with the eth status script, all ports show `PORT_UP` and `LINK_TRAIN_PASS`.
@@ -497,6 +618,159 @@ Only investigate if Z ports are supposed to be connected in your topology.
 ```bash
 export TT_METAL_DISABLE_MULTI_AERISC=1
 ```
+
+---
+
+# Fabric Tests
+
+## Fabric Test Fails with "Graph could not fit in physical topology"
+
+**Symptom**: Running `run_fabric_tests.sh --config 4x32` fails with:
+```
+TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology for mesh 0.
+Could not find valid mapping for mesh 0 under the given constraints.
+Logical graph may not fit in the physical topology.
+Either relax pinnings or modify the MGD.
+```
+
+The error originates from `tt_metal/fabric/topology_mapper.cpp` during `TopologyMapper::build_mapping()`.
+
+**Cause**: This error can have two root causes:
+
+1. **Missing physical connections** - Physical validation reported missing connections, meaning the cluster doesn't have all expected links. This is the most common cause.
+
+2. **Host ordering mismatch** - If physical validation passed but fabric tests fail with this error, hosts were passed in the wrong order to MPI.
+
+**Diagnosing the cause**:
+```bash
+# Run physical validation first
+./run_validation.sh --hosts <hosts> --image <docker-image>
+```
+- If validation shows missing connections → Fix the hardware/cabling issue first
+- If validation passes (all links healthy) → It's a host ordering issue, continue below
+
+**Host Ordering Explanation (Cause #2)**:
+
+In a 4x32 pod, the 4 Galaxies are connected in a ring: `1 <-> 2 <-> 3 <-> 4 <-> 1`. Hosts 1 & 3 are **not** directly connected, and neither are hosts 2 & 4.
+
+When you pass hostnames to MPI in an arbitrary order, MPI assigns rank values that may not respect the physical connectivity. For example, if hosts 1 & 3 are placed adjacent in "MPI space" (consecutive ranks), the fabric test assumes they must be physically connected. When it validates against actual connectivity and finds no physical links between them, it fails.
+
+**Visual representation of 4x32 connectivity:**
+```
+    Host 1 -------- Host 2
+       |              |
+       |              |
+    Host 4 -------- Host 3
+```
+
+Hosts are connected in a ring: 1-2, 2-3, 3-4, 4-1. There are no diagonal connections (1-3 or 2-4).
+
+**Solution**: Specify hosts in physical connectivity order.
+
+1. Identify which host is "Host 1" in your pod (the starting point)
+2. Log onto that host
+3. Pass hosts in ring order: `1,2,3,4` (not `1,3,2,4` or any other order)
+
+**Example**: For a pod with hosts `b02u08`, `b02u02`, `b09u02`, `b09u08`:
+- Log onto `b02u08` (Host 1)
+- Run: `./run_fabric_tests.sh --config 4x32 --hosts b02u08,b02u02,b09u02,b09u08 --image <docker-image>`
+
+The host order must follow the physical ring topology.
+
+**How to determine the correct order**:
+1. Check the cabling diagram or FSD for your pod
+2. Identify which hosts are directly connected via QSFP cables
+3. Order them so consecutive hosts in your list are physically connected
+
+**Long-term fix**: Automatic mesh placement and rank binding is being developed to eliminate this manual ordering requirement (TT-Distributed infrastructure improvement).
+
+**Diagnostic**: If you're unsure about connectivity, run physical validation first:
+```bash
+./run_validation.sh --hosts <hosts> --image <docker-image>
+```
+
+The validation output shows which hosts have physical connections to each other.
+
+---
+
+## Fabric Test Fails with "Failed to initialize FW"
+
+**Symptom**: Fabric test fails during device initialization with:
+```
+TT_THROW: Device 31: Timeout (10000 ms) waiting for physical cores to finish: (x=2,y=10)
+TT_THROW: Device 31 init: failed to initialize FW! Try resetting the board.
+```
+
+The error originates from `tt_metal/impl/context/metal_context.cpp` during `MetalContext::initialize_and_launch_firmware()`.
+
+**Context**: This typically happens after running several successful tests without resetting the cluster in between. The cluster gets into a bad state where firmware initialization fails.
+
+**Cause**: The cluster entered a bad state after repeated test runs. This is seen periodically across all machines (local and CI) and is not specific to any particular hardware.
+
+**Solution**:
+
+1. **Immediate fix**: Reset the cluster and retry:
+   ```bash
+   mpirun --host <hosts> tt-smi -r
+   sleep 30
+   # Re-run the test
+   ```
+
+2. **For automated pipelines**: Always run a distributed reset and physical validation before starting fabric tests:
+   ```bash
+   # Reset all hosts
+   mpirun --host <hosts> tt-smi -r
+   sleep 30
+
+   # Validate cluster health
+   ./run_validation.sh --hosts <hosts> --image <docker-image>
+
+   # Only proceed if validation passes
+   ./run_fabric_tests.sh --config 4x32 --hosts <hosts> --image <docker-image>
+   ```
+
+3. **Pipeline best practice**: Implement retry logic with reset on failure. Early exit if reset + validation fails multiple times.
+
+---
+
+## Fabric Router Sync Timeout
+
+**Symptom**: Fabric test fails during mesh device creation with:
+```
+TT_THROW: Fabric Router Sync: Timeout after 10000 ms. Device 0: Expected status 0xa2b2c2d2, got 0xa1b1c1d1
+```
+
+The error originates from `tt_metal/impl/device/device_manager.cpp` during `DeviceManager::wait_for_fabric_router_sync()`.
+
+**Context**: This can happen even after resetting the cards. The status value `0xa1b1c1d1` indicates the sync handshake started but didn't complete (expected `0xa2b2c2d2`).
+
+**Cause**: Handshakes over Ethernet links during fabric initialization failed. This happens when:
+- A link or its peer is down
+- Links didn't fully train after reset
+- Reset sleep time was insufficient
+
+**Solution**:
+
+1. **Run physical validation first**: This catches unhealthy links before attempting fabric tests:
+   ```bash
+   ./run_validation.sh --hosts <hosts> --image <docker-image>
+   ```
+   If validation shows missing connections or unhealthy links, fix those issues before running fabric tests.
+
+2. **For automated pipelines**: Add physical validation as a pre-check and implement retry logic:
+   ```bash
+   # Reset and wait
+   mpirun --host <hosts> tt-smi -r
+   sleep 60
+
+   # Validate - exit early if cluster is unhealthy
+   ./run_validation.sh --hosts <hosts> --image <docker-image> || exit 1
+
+   # Run fabric tests
+   ./run_fabric_tests.sh --config 4x32 --hosts <hosts> --image <docker-image>
+   ```
+
+**Note**: These clusters are not 100% stable. Running reset + validation before every test batch significantly improves reliability.
 
 ---
 

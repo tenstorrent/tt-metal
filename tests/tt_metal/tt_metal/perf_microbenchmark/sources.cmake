@@ -42,9 +42,10 @@ set(TEST_TT_FABRIC_ADDITIONAL_SOURCES
     routing/tt_fabric_test_common_types.cpp
     routing/tt_fabric_test_config.cpp
     routing/tt_fabric_test_results.cpp
+    routing/tt_fabric_test_latency_results.cpp
+    routing/tt_fabric_test_bandwidth_results.cpp
     routing/tt_fabric_test_context.cpp
     routing/tt_fabric_test_bandwidth_profiler.cpp
-    routing/tt_fabric_test_latency_manager.cpp
     routing/tt_fabric_test_device_setup.cpp
     routing/tt_fabric_test_progress_monitor.cpp
     routing/tt_fabric_test_eth_readback.cpp

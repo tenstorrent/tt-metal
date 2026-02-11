@@ -160,10 +160,17 @@ def decode_forward(
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+
+    # Calculate padded hidden size for tile-aligned CCL operations.
+    # o_proj weights may be padded so local_hidden becomes tile-aligned.
+    local_hidden = hidden_size // mesh_config.tp
+    padded_local_hidden = ((local_hidden + 31) // 32) * 32
+    padded_hidden = padded_local_hidden * mesh_config.tp if mesh_config.tp > 1 else hidden_size
+
     tt_out = ttnn.reshape(
         tt_out,
-        (1, 1, batch_size, hidden_size),
-        (1, 1, 32, hidden_size),
+        (1, 1, batch_size, padded_hidden),
+        (1, 1, 32, padded_hidden),
     )
     # tt_out = ttnn.unsqueeze(tt_out, 0)
 

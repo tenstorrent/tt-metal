@@ -8,14 +8,12 @@
 /*
  * A test for the watcher waypointing feature.
 */
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-void kernel_main() {
-#else
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
+#if !defined(COMPILE_FOR_BRISC) && !defined(COMPILE_FOR_NCRISC) && !defined(COMPILE_FOR_ERISC) && \
+    !defined(COMPILE_FOR_IDLE_ERISC)
+#include "api/compute/common.h"
 #endif
 
+void kernel_main() {
     // Conditionally enable using defines for each trisc
 #if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
     (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
@@ -25,10 +23,4 @@ void MAIN {
         WATCHER_RING_BUFFER_PUSH((idx + 1) + (idx << 16));
     }
 #endif
-
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 }
-#else
-}
-}
-#endif

@@ -7,7 +7,7 @@ import torch
 import ttnn
 from loguru import logger
 import pytest
-from models.experimental.tt_dit.tests.unit.test_ring_joint_attention import (
+from models.tt_dit.tests.unit.test_ring_joint_attention import (
     run_ring_joint_sdpa,
     run_test_ring_joint_sdpa,
     create_ring_joint_sdpa_submesh,

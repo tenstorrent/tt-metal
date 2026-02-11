@@ -12,7 +12,6 @@ from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
-    is_e75,
     is_wormhole_b0,
 )
 from models.experimental.t5.tt.t5_block import TtT5Block
@@ -76,6 +75,4 @@ def test_T5Block_inference_flan_t5_small(device):
 
 
 def test_T5Block_inference_t5_base(device):
-    if is_e75(device):
-        pytest.skip("T5 Block T5 base config is not supported on E75")
     run_test_T5Block_inference(device, "t5-base", 64, 768)
