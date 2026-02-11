@@ -3,7 +3,7 @@
 > **Quick start:**
 > 1. Run your training binary multiple times with different configurations
 > 2. Save the logs to text files (e.g., `baseline.txt`, `optimized.txt`)
-> 3. Run `python scripts/plot_training_comparison.py --baseline baseline.txt --compare optimized.txt`
+> 3. Run `python tt-train/scripts/plot_training_comparison.py --baseline baseline.txt --compare optimized.txt`
 
 ---
 
@@ -70,7 +70,7 @@ The script extracts:
 Compare a baseline run against an optimized version:
 
 ```bash
-python scripts/plot_training_comparison.py \
+python tt-train/scripts/plot_training_comparison.py \
     --baseline run_baseline.txt \
     --compare run_optimized.txt
 ```
@@ -80,7 +80,7 @@ python scripts/plot_training_comparison.py \
 Compare multiple optimization strategies:
 
 ```bash
-python scripts/plot_training_comparison.py \
+python tt-train/scripts/plot_training_comparison.py \
     --baseline fw_only.txt \
     --compare fw_bw_3_packs.txt fw_bw_4_packs.txt \
     --labels "Forward Only" "FW+BW 3 Packs" "FW+BW 4 Packs"
@@ -89,7 +89,7 @@ python scripts/plot_training_comparison.py \
 ### Customization Options
 
 ```bash
-python scripts/plot_training_comparison.py \
+python tt-train/scripts/plot_training_comparison.py \
     --baseline baseline.txt \
     --compare optimized.txt \
     --output-dir ./plots \
@@ -168,7 +168,7 @@ Final Loss (last 100 steps average):
 
 4. **Compare results:**
    ```bash
-   python scripts/plot_training_comparison.py \
+   python tt-train/scripts/plot_training_comparison.py \
        --baseline baseline.txt \
        --compare optimized.txt \
        --labels "Baseline" "SiLU Fused" \

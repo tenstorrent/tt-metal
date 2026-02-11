@@ -85,13 +85,14 @@ def print_statistics(all_data: Dict[str, Dict[str, List[float]]]) -> None:
     names = list(all_data.keys())
     if len(names) > 1:
         baseline_name = names[0]
-        baseline_time = np.mean(all_data[baseline_name]["step_times"])
-        print(f"\nSpeedup relative to '{baseline_name}':")
-        for name, data in all_data.items():
-            if name != baseline_name and data["step_times"]:
-                mean_time = np.mean(data["step_times"])
-                speedup = baseline_time / mean_time
-                print(f"  {name}: {speedup:.3f}x")
+        if all_data[baseline_name]["step_times"]:
+            baseline_time = np.mean(all_data[baseline_name]["step_times"])
+            print(f"\nSpeedup relative to '{baseline_name}':")
+            for name, data in all_data.items():
+                if name != baseline_name and data["step_times"]:
+                    mean_time = np.mean(data["step_times"])
+                    speedup = baseline_time / mean_time
+                    print(f"  {name}: {speedup:.3f}x")
 
     print("\nFinal Loss (last 100 steps average):")
     for name, data in all_data.items():
@@ -294,6 +295,11 @@ Examples:
         labels = args.labels
     else:
         labels = [Path(f).stem for f in all_files]
+
+    # Fail fast if baseline file is missing (--baseline is required)
+    if not Path(args.baseline).exists():
+        print(f"Error: Baseline file not found: {args.baseline}")
+        sys.exit(1)
 
     # Parse all log files
     print("Parsing log files...")
