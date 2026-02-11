@@ -743,7 +743,7 @@ def test_rotary_embedding_llama_kernel_with_scaled_values(
     trans_mat_torch = trans_mat_torch.repeat(1, 1, batch_size, 1)
 
     # Set up sharded memory configs
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
 
     # Input memory config: HEIGHT_SHARDED (matching nlp_create_qkv_heads_decode output)
@@ -1077,7 +1077,7 @@ def test_trace_rope_ops_for_corruption(mesh_device, device_params, reset_seeds):
     # ===== Now test rotary_embedding_llama =====
     logger.info("\n=== Testing rotary_embedding_llama ===")
 
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
 
     # Create Q tensor with known values
@@ -1203,7 +1203,7 @@ def test_rope_multiple_iterations(mesh_device, device_params, reset_seeds):
     cos_matrix_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_setup.cos_matrix)[0])
     sin_matrix_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_setup.sin_matrix)[0])
 
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
     num_mesh_cols = mesh_device.shape[1]
 
@@ -1350,7 +1350,7 @@ def test_paged_update_cache_with_large_values(mesh_device, device_params, reset_
     logger.info(f"K large range: [{k_torch_large.min():.4f}, {k_torch_large.max():.4f}]")
 
     # Create memory config for K
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
 
     kv_mem_config = ttnn.create_sharded_memory_config(
@@ -1562,7 +1562,7 @@ def test_sdpa_with_large_q_values(mesh_device, device_params, reset_seeds):
     logger.info(f"Q large range: [{q_torch_large.min():.4f}, {q_torch_large.max():.4f}]")
 
     # Create memory config for Q
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
 
     q_mem_config = ttnn.create_sharded_memory_config(
@@ -1606,7 +1606,7 @@ def test_sdpa_with_large_q_values(mesh_device, device_params, reset_seeds):
     )
 
     sdpa_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),  # Safe limit: max 8 per dimension to avoid Galaxy hangs
         q_chunk_size=32,
         k_chunk_size=32,
     )
@@ -1826,7 +1826,7 @@ def test_attention_chain_with_yarn_scaling(mesh_device, device_params, reset_see
     logger.info(f"Position range: {position_ids.min().item()} - {position_ids.max().item()}")
 
     # Memory configs
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
 
     q_mem_config = ttnn.create_sharded_memory_config(
@@ -1948,7 +1948,9 @@ def test_attention_chain_with_yarn_scaling(mesh_device, device_params, reset_see
 
         # Step 3: Run SDPA
         sdpa_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=ttnn.CoreCoord(
+                8, 8
+            ),  # Safe limit: max 8 per dimension to avoid Galaxy hangs
             q_chunk_size=32,
             k_chunk_size=32,
         )
@@ -2103,7 +2105,7 @@ def test_single_layer_with_yarn(mesh_device, device_params, reset_seeds, use_yar
         # Test that RoPE can be applied to Q-like tensors
         q_torch = torch.randn(1, batch_per_row, 32, 64, dtype=torch.bfloat16)
 
-        grid_size = mesh_device.compute_with_storage_grid_size()
+        grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
         batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
 
         q_mem_config = ttnn.create_sharded_memory_config(

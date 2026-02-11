@@ -138,25 +138,25 @@ class ThroughputProgramConfig:
     """
 
     # Core grid sizes for unfused gate/up projections
-    gate_up_cores: tuple[int, int] = (5, 9)
-    down_cores: tuple[int, int] = (5, 9)
+    gate_up_cores: tuple[int, int] = (5, 6)  # 30 cores - divides N=90 evenly (90/30=3)
+    down_cores: tuple[int, int] = (5, 6)  # 30 cores - divides N=90 evenly (90/30=3)
 
     # Core grid sizes for fused gate/up projection (when use_fused_gate_up=True)
     # If None, defaults to gate_up_cores
-    fused_gate_up_cores: tuple[int, int] | None = None
+    fused_gate_up_cores: tuple[int, int] | None = (5, 6)  # 30 cores - divides N=180 evenly (180/30=6)
 
     # Matmul parameters for unfused mode
-    # in0_block_w: int = 2
-    in0_block_w: int = 10
-    ## can be estimated by k // 32 (2880 / 32 = 90) therefore factors of 90 (30, 15, 10, 9 etc.)
-    out_subblock_h: int = 1
-    out_subblock_w: int = 1
+    in0_block_w: int = 15  # ⭐ CRITICAL: K=90 tiles, 90/15 = 6 iterations (was 2 → 45 iters!)
+    ## K dimension = 2880 / 32 = 90 tiles. Factors: 10, 15, 18, 30, 45
+    ## in0_block_w=15 gives 6 iterations - good balance of register usage and memory efficiency
+    out_subblock_h: int = 1  # M is small (4 tiles)
+    out_subblock_w: int = 1  # Conservative for unfused
 
     # Matmul parameters for fused mode (when use_fused_gate_up=True)
-    # If None, defaults to unfused parameters
-    fused_in0_block_w: int | None = None
-    fused_out_subblock_h: int | None = None
-    fused_out_subblock_w: int | None = None
+    # Fused output is 2x wider (N=180 vs 90), so may benefit from different config
+    fused_in0_block_w: int | None = 15  # Same K blocking as unfused
+    fused_out_subblock_h: int | None = 1  # M is small
+    fused_out_subblock_w: int | None = 2  # Wider output (N=180) benefits from larger subblock
 
     def __post_init__(self):
         """Validate configuration."""
@@ -193,6 +193,8 @@ class ThroughputProgramConfig:
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,
+            out_block_h=max(1, m_tiles),  # Same as per_core_M for 1D mcast
+            out_block_w=max(1, per_core_N),  # Same as per_core_N for 1D mcast
             per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
             fuse_batch=False,
@@ -231,6 +233,8 @@ class ThroughputProgramConfig:
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
+            out_block_h=max(1, m_tiles),  # Same as per_core_M for 1D mcast
+            out_block_w=max(1, per_core_N),  # Same as per_core_N for 1D mcast
             per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
             fuse_batch=False,
@@ -258,6 +262,8 @@ class ThroughputProgramConfig:
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,
+            out_block_h=max(1, m_tiles),  # Same as per_core_M for 1D mcast
+            out_block_w=max(1, per_core_N),  # Same as per_core_N for 1D mcast
             per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
             fuse_batch=False,

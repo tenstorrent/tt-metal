@@ -125,6 +125,6 @@ def prefill_forward(
     # tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
 
     # Tensor parallel allreduce
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
 
     return tt_out
