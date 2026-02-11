@@ -353,7 +353,7 @@ class RunChecks:
         check: Callable[[OnChipCoordinate, CoreType], object],
         block_filter: list[str] | str | None = None,
         core_filter: list[str] | str | None = None,
-        skip_broken_cores: bool = True,
+        skip_broken_cores: bool = False,
     ) -> list[PerCoreCheckResult] | None:
         """Run a check function on each RISC core in each block location, collecting results.
 

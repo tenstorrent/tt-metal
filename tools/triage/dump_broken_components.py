@@ -35,36 +35,18 @@ _USER_VIEW = False
 
 
 def probe_device(device: Device) -> None:
-    # TESTING CODE
-    # import tt_umd
-    # from ttexalens.umd_device import TimeoutDeviceRegisterError
-    # coord = tt_umd.CoreCoord(1, 1, tt_umd.CoreType.TENSIX, tt_umd.CoordSystem.NOC0)
-    # if device.id == 0:
-    #     raise TimeoutDeviceRegisterError(
-    #         chip_id=device.id, coord=coord, address=0x1000, size=4, is_read=True, duration=1.0)
     location = device.get_block_locations()[0]
     assert location is not None
     read_word_from_device(location, 0)
 
 
 def probe_core(location: OnChipCoordinate, risc_name: str) -> None:
-    # TESTING CODE
-    # from ttexalens.hardware.risc_debug import RiscHaltError
-
-    # if risc_name == "erisc" and ("e0,10" in location.to_user_str() or "e0,0" in location.to_user_str()):
-    #     raise RiscHaltError(risc_name, location)
-    # if risc_name == "brisc" and ("0,0" in location.to_user_str() or "0,1" in location.to_user_str() or "0,2" in location.to_user_str() or "0,3" in location.to_user_str()):
-    #     raise RiscHaltError(risc_name, location)
     noc_block = location._device.get_block(location)
     risc_debug = noc_block.get_risc_debug(risc_name)
     if risc_debug.is_in_reset():
         return
     with risc_debug.ensure_halted():
         pass
-
-
-def error_serializer(value: Exception | None) -> str:
-    return "N/A" if value is None else f"[error]{str(value)}[/]"
 
 
 def group_broken_cores_by_risc_name(broken_cores: set[BrokenCore]) -> dict[str, set[OnChipCoordinate]]:
@@ -94,12 +76,12 @@ def draw_broken_cores(broken_cores: set[BrokenCore]) -> str:
     return next(iter(broken_cores)).location.device.render(axis_coordinate="noc0", cell_renderer=location_render)
 
 
-def broken_core_serializer(broken_cores: set[BrokenCore] | None, user_view: bool | None = None) -> str:
-    if user_view is None:
-        user_view = _USER_VIEW
+def broken_core_serializer(broken_cores: set[BrokenCore] | None | str) -> str:
+    if isinstance(broken_cores, str):
+        return broken_cores
     if broken_cores is None:
         return "N/A"
-    elif not user_view:
+    elif not _USER_VIEW:
         broken_cores_by_risc_name = group_broken_cores_by_risc_name(broken_cores)
         return "\n".join(
             [
@@ -114,21 +96,20 @@ def broken_core_serializer(broken_cores: set[BrokenCore] | None, user_view: bool
 @dataclass
 class DeviceHealthSummary:
     device: Device = triage_field("Device")
-    error: Exception | None = triage_field("Error", serializer=error_serializer)
-    broken_cores: dict[Device, set[BrokenCore]] | None = triage_field("Broken Cores", serializer=broken_core_serializer)
+    broken_cores: dict[Device, set[BrokenCore]] | None | str = triage_field(
+        "Broken Cores", serializer=broken_core_serializer
+    )
 
 
 def collect_device_health_summary(run_checks: RunChecks) -> DeviceHealthSummary:
     broken_devices = run_checks.get_broken_devices()
     for device in run_checks.devices:
         if BrokenDevice(device=device) in broken_devices:
-            return DeviceHealthSummary(
-                device=device, error=next(bd for bd in broken_devices if bd.device == device).error, broken_cores=None
-            )
+            return DeviceHealthSummary(device=device, broken_cores=f"Device is broken so it is skipped.")
         else:
             broken_cores = run_checks.get_broken_cores()
             return DeviceHealthSummary(
-                device=device, error=None, broken_cores=broken_cores[device] if device in broken_cores else None
+                device=device, broken_cores=broken_cores[device] if device in broken_cores else None
             )
 
 
@@ -145,8 +126,7 @@ def run(args, context: Context):
         block_filter=BLOCK_TYPES_TO_CHECK,
         core_filter=RISC_CORES_TO_CHECK,
     )
-    broken_components = collect_device_health_summary(run_checks)
-    return broken_components
+    return collect_device_health_summary(run_checks)
 
 
 if __name__ == "__main__":
