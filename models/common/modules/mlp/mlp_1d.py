@@ -434,6 +434,7 @@ class MLP1D(LightweightModule):
         dtype=None,
         model_config=None,
         state_dict_prefix: Optional[str] = None,
+        prefetcher=None,
     ):
         """Factory method for backward compatibility with ModelArgs.
 
