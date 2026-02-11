@@ -162,7 +162,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
 
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch
 // cores
-void Device::configure_command_queue_programs() {
+void Device::configure_command_queue_programs(const std::shared_ptr<DispatchTopology>& dispatch_topology) {
     ChipId device_id = this->id();
     ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 
@@ -219,7 +219,10 @@ void Device::configure_command_queue_programs() {
     }
 
     // Write device-side cq pointers
-    configure_dispatch_cores(this);
+    TT_ASSERT(
+        dispatch_topology != nullptr,
+        "Dispatch topology required for configure_command_queue_programs (fast dispatch)");
+    dispatch_topology->configure_dispatch_cores(this);
 
     // Run the cq program
     command_queue_program.impl().finalize_offsets(this);
@@ -242,10 +245,11 @@ void Device::init_command_queue_host() {
     }
 }
 
-void Device::init_command_queue_device() {
-    this->command_queue_programs_.push_back(get_compiled_cq_program(this));
+void Device::init_command_queue_device_with_topology(const std::shared_ptr<DispatchTopology>& topo) {
+    TT_ASSERT(topo != nullptr, "Dispatch topology required for init_command_queue_device_with_topology");
+    this->command_queue_programs_.push_back(topo->get_compiled_cq_program(this));
     TT_ASSERT(this->command_queue_programs_.size() == 1);
-    this->configure_command_queue_programs();
+    this->configure_command_queue_programs(topo);
     Program& command_queue_program = *this->command_queue_programs_[0];
 
     // Write 0 to all workers launch message read pointer. Need to do this since dispatch cores are written new on each
@@ -347,6 +351,8 @@ void Device::init_command_queue_device() {
         hw_cq->set_go_signal_noc_data_and_dispatch_sems(num_sub_devices(), noc_mcast_unicast_data);
     }
 }
+
+void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
 bool Device::compile_fabric() {
     fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);

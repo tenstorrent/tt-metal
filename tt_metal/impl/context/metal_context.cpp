@@ -417,7 +417,6 @@ void MetalContext::teardown() {
 
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
-    tt::tt_metal::reset_topology_state();
 
     // Clear dispatch, dispatch_s and prefetcher core info in inspector data
     Inspector::clear_all_core_info();
@@ -1074,8 +1073,12 @@ void MetalContext::reset_cores(ChipId device_id) {
 }
 
 void MetalContext::assert_cores(ChipId device_id) {
-    auto dispatch_cores = get_virtual_dispatch_cores(device_id);
-    auto routing_cores = get_virtual_dispatch_routing_cores(device_id);
+    std::unordered_set<CoreCoord> dispatch_cores;
+    std::unordered_set<CoreCoord> routing_cores;
+    if (device_manager_) {
+        dispatch_cores = device_manager_->get_virtual_dispatch_cores(device_id);
+        routing_cores = device_manager_->get_virtual_dispatch_routing_cores(device_id);
+    }
 
     // Assert riscs on Tensix
     CoreCoord grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
