@@ -14,9 +14,6 @@ namespace ttml::metal::ops::sdpa_bw::device {
 using namespace tt::tt_metal;
 using namespace ttnn;
 
-SDPABackwardQDeviceOperation::program_factory_t SDPABackwardQDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return SDPABackwardQProgramFactory{};
 }
 
 void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(

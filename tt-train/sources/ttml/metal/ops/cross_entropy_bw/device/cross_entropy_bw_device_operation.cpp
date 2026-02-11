@@ -11,9 +11,6 @@
 
 namespace ttml::metal::ops::cross_entropy_bw::device {
 
-CrossEntropyBackwardDeviceOperation::program_factory_t CrossEntropyBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return CrossEntropyBackwardProgramFactory{};
 }
 
 void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
@@ -97,9 +94,8 @@ ttsl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     return tt::tt_metal::operation::hash_operation<CrossEntropyBackwardDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        args, 0, input_tensor.dtype(), input_logical_shape);
 }
 
 }  // namespace ttml::metal::ops::cross_entropy_bw::device

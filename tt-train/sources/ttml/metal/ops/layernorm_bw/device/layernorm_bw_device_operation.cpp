@@ -11,9 +11,6 @@
 
 namespace ttml::metal::ops::layernorm_bw::device {
 
-LayerNormBackwardDeviceOperation::program_factory_t LayerNormBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return LayerNormBackwardProgramFactory{};
 }
 
 void LayerNormBackwardDeviceOperation::validate_on_program_cache_miss(
@@ -151,9 +148,8 @@ ttsl::hash::hash_t LayerNormBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<LayerNormBackwardDeviceOperation>(
-        program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        0, input_tensor.dtype(), input_logical_shape);
 
     return hash;
 }

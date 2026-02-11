@@ -10,9 +10,6 @@
 
 namespace ttml::metal::ops::swiglu_fw::device {
 
-SwiGLUForwardDeviceOperation::program_factory_t SwiGLUForwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return SwiGLUForwardProgramFactory{};
 }
 
 void SwiGLUForwardDeviceOperation::validate_on_program_cache_miss(
@@ -102,10 +99,9 @@ ttsl::hash::hash_t SwiGLUForwardDeviceOperation::compute_program_hash(
     const auto& w2_logical_shape = w2.logical_shape();
     const auto& w3 = tensor_args.w3;
     const auto& w3_logical_shape = w3.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SwiGLUForwardDeviceOperation>(
         args,
-        program_factory.index(),
+        0,
         input.dtype(),
         input_logical_shape,
         w1.dtype(),
