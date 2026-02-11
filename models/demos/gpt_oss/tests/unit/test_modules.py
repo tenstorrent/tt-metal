@@ -140,9 +140,9 @@ def run_rms_norm_component(
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, ref_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"RMS Norm test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"RMS Norm test failed. Output: {output}"
 
 
 def run_topk_router_component(
@@ -222,46 +222,49 @@ def run_throughput_experts_component(
     """Test experts component - extracted from decoder layer"""
 
     # Create input
-    batch, seq_len, hidden_size = hidden_shape
+    _, _, num_tokens, hidden_size = hidden_shape
     hidden_states = torch.randn(hidden_shape)
-    import itertools
 
-    router_indices = torch.zeros(batch * seq_len, config.num_experts_per_tok, dtype=torch.long)
-    routing_weights = torch.zeros(batch * seq_len, config.num_local_experts)
+    router_indices = torch.zeros(1, 1, num_tokens, config.num_experts_per_tok, dtype=torch.long)
+    routing_weights = torch.zeros(1, 1, num_tokens, config.num_local_experts)
 
-    for b, s in itertools.product(range(batch), range(seq_len)):
+    for t in range(num_tokens):
         active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
-        router_indices[b * seq_len + s, :] = active_experts
+        router_indices[..., t, :] = active_experts
         weights = torch.rand(config.num_experts_per_tok)
         weights = weights / weights.sum()  # Normalize
-        routing_weights[b * seq_len + s, active_experts] = weights
-    topk_weights_dense = torch.tensor([[routing_weights[i, j].item() for j in b] for i, b in enumerate(router_indices)])
+        routing_weights[..., t, active_experts] = weights
+    topk_weights_dense = torch.tensor(
+        [[routing_weights[..., i, j].item() for j in b] for i, b in enumerate(router_indices.squeeze())]
+    ).reshape(1, 1, num_tokens, config.num_experts_per_tok)
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
-    reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
+    reference_output = reference_experts(
+        hidden_states, router_indices=router_indices.squeeze(), routing_weights=routing_weights.squeeze()
+    )
 
     # Convert to TTNN tensors
     mesh_mapper = (
-        ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+        ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
         if is_row_sharded
         else None
     )
     tt_hidden_states = ttnn.from_torch(
-        hidden_states.unsqueeze(1),
+        hidden_states,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         mesh_mapper=mesh_mapper,
     )
     tt_routing_weights = ttnn.from_torch(
-        topk_weights_dense.unsqueeze(1).unsqueeze(1),
+        topk_weights_dense,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         mesh_mapper=mesh_mapper,
     )
     tt_router_indices = ttnn.from_torch(
-        router_indices.unsqueeze(1).unsqueeze(1),
+        router_indices,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.uint16,
@@ -278,13 +281,13 @@ def run_throughput_experts_component(
     )
 
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
-    tt_output = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., : batch * seq_len, :hidden_size]
+    tt_output = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., :num_tokens, :hidden_size]
     # Compare outputs
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"High Throughput Experts test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"High Throughput Experts test failed. Output: {output}"
 
 
 def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, pcc_threshold):
@@ -337,9 +340,9 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     # Compare outputs
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"Low Latency Experts test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"Low Latency Experts test failed. Output: {output}"
 
 
 def run_full_mlp_pipeline(
@@ -632,9 +635,10 @@ def test_decoder(
     if should_test("experts"):
         if decoder_layer.mlp.use_throughput_experts:
             logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {mesh_shape}...")
+            hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
             run_throughput_experts_component(
                 setup["mesh_device"],
-                hidden_states.shape,
+                hidden_states_throughput_experts.shape,
                 config,
                 reference_layer,
                 decoder_layer,

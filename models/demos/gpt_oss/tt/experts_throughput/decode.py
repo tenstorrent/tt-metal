@@ -72,6 +72,35 @@ def _apply_swiglu(
     return result
 
 
+def apply_allreduce(tensor, mesh_config, ccl_manager, mesh_device, hidden_size: int):
+    """
+    Apply tensor parallel allreduce if needed.
+
+    Args:
+        tensor: Input tensor
+        mesh_config: Mesh configuration
+        ccl_manager: Communication manager
+        batch_size: Batch size for final reshape
+        seq_len: Sequence length for final reshape
+        hidden_size: Hidden size for final reshape
+
+    Returns:
+        Tensor after allreduce (if TP > 1) or original tensor
+    """
+    tensor = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=1)
+    # Remove padding added in weights.py for tile-aligned CCL operations.
+    # Slice from padded_hidden back to hidden_size on the last dimension.
+    # Works for both decode [1, 1, batch, padded_hidden] and prefill [1, batch, seq_len, padded_hidden].
+    shape = tensor.shape
+    tensor = ttnn.slice(
+        tensor,
+        starts=[0, 0, 0, 0],
+        ends=[shape[0], shape[1], shape[2], hidden_size],
+        steps=[1, 1, 1, 1],
+    )
+    return tensor
+
+
 def decode_forward(
     hidden_states: ttnn.Tensor,
     topk_expert_indices: ttnn.Tensor,
@@ -84,6 +113,8 @@ def decode_forward(
     combine_config: AllToAllCombineConfig,
     program_config: ThroughputProgramConfig,
     mesh_device,
+    mesh_config,
+    ccl_manager,
 ) -> ttnn.Tensor:
     """Decode forward pass with all_to_all dispatch and combine.
 
@@ -189,28 +220,82 @@ def decode_forward(
     # ==========================================================================
     # Batched matmul: input repeated across expert dim, weights have expert dim.
     #   Input:   [1, num_experts_per_device, total_tokens, H]
-    #   Weights: [1, num_experts_per_device, H, I]
-    #   Output:  [1, num_experts_per_device, total_tokens, I]
+    #   Weights: [1, num_experts_per_device, H, I (or 2*I for fused)]
+    #   Output:  [1, num_experts_per_device, total_tokens, I (or 2*I for fused)]
     #
     # All dispatched tokens are processed by all local experts. The combine
     # step will select the correct expert output for each token.
 
     # Build 1D multicast program configs sized for total_tokens (M dimension)
-    gate_up_matmul_config = program_config.get_gate_up_config(n=config.intermediate_size, m=total_tokens)
     down_matmul_config = program_config.get_down_config(n=config.hidden_size, m=total_tokens)
 
-    # Gate projection (w1)
-    w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config)
-    # w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config, program_config=gate_up_matmul_config)
-    # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
-    ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
+    # Choose between fused and unfused gate/up projection
+    if weights.w1_w3_fused is not None:
+        # ======================================================================
+        # FUSED PATH: Single matmul for gate+up projections
+        # ======================================================================
+        assert weights.w1_w3_bias_fused is not None, "Fused bias must be present when using fused weights"
 
-    # Up projection (w3)
-    w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config)
-    # w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config, program_config=gate_up_matmul_config)
-    ttnn.deallocate(post_dispatch)
-    # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
-    ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
+        # Get fused-specific matmul config (output size is 2*intermediate_size)
+        fused_gate_up_matmul_config = program_config.get_fused_gate_up_config(
+            n=config.intermediate_size * 2, m=total_tokens
+        )
+
+        # Fused projection: [1, E, total_tokens, H] x [1, E, H, 2*I] -> [1, E, total_tokens, 2*I]
+        w1_w3_out = ttnn.matmul(post_dispatch, weights.w1_w3_fused, memory_config=memory_config)
+        # w1_w3_out = ttnn.matmul(post_dispatch, weights.w1_w3_fused, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+        # w1_w3_out = ttnn.matmul(post_dispatch, weights.w1_w3_fused, memory_config=memory_config, program_config=fused_gate_up_matmul_config)
+        ttnn.deallocate(post_dispatch)
+
+        # Add fused bias: [1, num_experts_per_device, 1, 2*I] broadcasts across total_tokens
+        ttnn.add(w1_w3_out, weights.w1_w3_bias_fused, output_tensor=w1_w3_out)
+
+        # Split into gate and up projections
+        # w1_w3_out: [1, num_experts_per_device, total_tokens, 2*intermediate_size]
+        # Split along last dimension: first half is gate, second half is up
+        shape = w1_w3_out.shape
+
+        # Extract gate projection (first half of last dimension)
+        w1_out = ttnn.slice(
+            w1_w3_out,
+            [0, 0, 0, 0],
+            [shape[0], shape[1], shape[2], config.intermediate_size],
+            [1, 1, 1, 1],
+        )
+
+        # Extract up projection (second half of last dimension)
+        w3_out = ttnn.slice(
+            w1_w3_out,
+            [0, 0, 0, config.intermediate_size],
+            [shape[0], shape[1], shape[2], config.intermediate_size * 2],
+            [1, 1, 1, 1],
+        )
+        ttnn.deallocate(w1_w3_out)
+
+    else:
+        # ======================================================================
+        # UNFUSED PATH: Separate matmuls for gate and up projections
+        # ======================================================================
+        assert weights.w1 is not None, "Unfused weights (w1) must be present when not using fused mode"
+        assert weights.w3 is not None, "Unfused weights (w3) must be present when not using fused mode"
+        assert weights.w1_bias is not None, "Unfused bias (w1_bias) must be present when not using fused mode"
+        assert weights.w3_bias is not None, "Unfused bias (w3_bias) must be present when not using fused mode"
+
+        # Get unfused-specific matmul config (output size is intermediate_size)
+        gate_up_matmul_config = program_config.get_gate_up_config(n=config.intermediate_size, m=total_tokens)
+
+        # Gate projection (w1)
+        w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config)
+        # w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config, program_config=gate_up_matmul_config)
+        # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
+        ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
+
+        # Up projection (w3)
+        w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config)
+        # w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config, program_config=gate_up_matmul_config)
+        ttnn.deallocate(post_dispatch)
+        # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
+        ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
 
     # SwiGLU activation: (up + 1) * (gate * sigmoid(gate * alpha))
     activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
@@ -229,7 +314,7 @@ def decode_forward(
     # Combine expects: [num_experts_per_device, 1, total_tokens, H] in ROW_MAJOR
     expert_output = ttnn.reshape(
         expert_output,
-        shape=(config.num_experts_per_device, 1, total_tokens, config.hidden_size),
+        shape=(config.num_experts_per_device, 1, total_tokens, config.hidden_size + 192),
     )
     expert_output_tiled = expert_output
     expert_output = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
@@ -284,11 +369,13 @@ def decode_forward(
     # 5. We need to sum these partials across columns to get complete expert outputs
     output_all_reduced = ttnn.all_reduce(
         output,
-        num_links=1,
+        num_links=4,
         topology=ttnn.Topology.Ring,
         cluster_axis=1,
         memory_config=memory_config,
     )
+
+    # output_all_reduced = apply_allreduce(output, mesh_config, ccl_manager, mesh_device, config.hidden_size)
     ttnn.deallocate(output)
 
     # Final shape: [1, 1, tokens_per_device, H] (tokens on dim -2)
