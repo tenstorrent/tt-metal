@@ -83,14 +83,14 @@ class WanAttentionBlock:
             math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -243,7 +243,7 @@ class WanCausalConv3d:
         padding=0,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         self.conv_dtype = conv_dtype
         self.unpadded_in_channels = in_channels
@@ -291,7 +291,7 @@ class WanCausalConv3d:
             math_fidelity=ttnn.MathFidelity.HiFi3,  # Do not use HiFi4.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
         self.mask_cache = {}
@@ -442,7 +442,7 @@ class WanResidualBlock:
         mesh_device,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -500,7 +500,7 @@ class WanResidualBlock:
             math_fidelity=ttnn.MathFidelity.HiFi3,  # Do not use HiFi4.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -620,7 +620,7 @@ class WanMidBlock:
         ccl_manager=None,
         parallel_config=None,
         num_layers=1,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         self.dim = dim
         self.mesh_device = mesh_device
@@ -721,7 +721,7 @@ class WanConv2d:
         parallel_config=None,
         stride=1,
         padding=0,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         self.conv_dtype = conv_dtype
         self.in_channels = in_channels
@@ -767,7 +767,7 @@ class WanConv2d:
             math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
         self.mask_cache = {}
@@ -896,7 +896,7 @@ class WanResample:
         ccl_manager=None,
         parallel_config=None,
         resample_out_dim=None,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         self.dim = dim
         self.mode = mode
@@ -1022,7 +1022,7 @@ class WanUpBlock:
         ccl_manager=None,
         parallel_config=None,
         upsample_mode=None,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -1091,7 +1091,7 @@ class WanDecoder3d:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         assert not is_residual, "is_residual is not supported"
         self.dim = dim
@@ -1284,7 +1284,7 @@ class WanDecoder:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         assert not is_residual, "is_residual is not supported"
         self.z_dim = z_dim
@@ -1374,7 +1374,7 @@ class WanEncoder3D:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         assert not is_residual, "is_residual is not supported"
         self.dim = dim
@@ -1546,7 +1546,7 @@ class WanEncoder:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        conv_dtype=ttnn.DataType.BFLOAT16,
+        conv_dtype=ttnn.DataType.FLOAT32,
     ):
         self.z_dim = z_dim
         self.out_channels = z_dim * 2  # Mean and logvar
