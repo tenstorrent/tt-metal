@@ -12,7 +12,6 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     setup_conv3d_test,
     create_conv3d_config,
-    prepare_weights,
     reshape_output,
     run_conv3d_test,
 )
@@ -36,9 +35,19 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
 @pytest.mark.parametrize("groups", [1, 2, 4], ids=["groups_1", "groups_2", "groups_4"])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-@pytest.mark.parametrize("prepare_weights_", [True, False], ids=["prepare_weights_True", "prepare_weights_False"])
 def test_conv3d_sweep_shapes(
-    device, B, C_in, C_out, T, H, W, kernel_size, stride, groups, padding, padding_mode, prepare_weights_
+    device,
+    B,
+    C_in,
+    C_out,
+    T,
+    H,
+    W,
+    kernel_size,
+    stride,
+    groups,
+    padding,
+    padding_mode,
 ):
     if padding == (0, 0, 0) and padding_mode == "replicate":
         pytest.skip("Skipping padding (0, 0, 0) and padding_mode replicate because it's duplicate")
@@ -60,7 +69,6 @@ def test_conv3d_sweep_shapes(
         padding,
         padding_mode,
         grid_size=grid_size,
-        prepare_weights_=prepare_weights_,
     )
 
 
@@ -71,10 +79,16 @@ def test_conv3d_sweep_shapes(
         [(3, 64, 8, 8, 8), 64, (3, 3, 3), (1, 1, 1), 2, (0, 1, 1), "zeros"],
     ],
 )
-@pytest.mark.parametrize("prepare_weights_", [True, False], ids=["prepare_weights_True", "prepare_weights_False"])
 @pytest.mark.timeout(1000)
 def test_conv3d_sweep_blocks(
-    device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, prepare_weights_
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    groups,
+    padding,
+    padding_mode,
 ):
     """
     For a specific shape, sweep through different block sizes.
@@ -112,8 +126,14 @@ def test_conv3d_sweep_blocks(
         # Prepare weights with specified C_in_block
         if prev_C_in_block != C_in_block:
             # Only prepare if changing C_in_block
-            tt_weight, tt_bias = prepare_weights(
-                conv3d_module, C, out_channels, device, C_in_block=C_in_block, prepare_weights_=prepare_weights_
+            w = conv3d_module.weight.data
+            tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+            tt_bias = ttnn.from_torch(
+                conv3d_module.bias.data.reshape(1, -1),
+                device=device,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.TILE_LAYOUT,
+                pad_value=0,
             )
             prev_C_in_block = C_in_block
 
@@ -220,7 +240,6 @@ def test_conv3d_sweep_blocks(
     ],
     ids=["variant1", "variant2", "variant3", "variant4", "variant5", "variant6"],
 )
-@pytest.mark.parametrize("prepare_weights_", [True, False], ids=["prepare_weights_True", "prepare_weights_False"])
 def test_conv3d_mochi_shapes(
     device,
     input_shape,
@@ -231,7 +250,6 @@ def test_conv3d_mochi_shapes(
     padding,
     padding_mode,
     blocking,
-    prepare_weights_,
     is_ci_env,
 ):
     if out_channels == 128 or out_channels == 256:
@@ -245,8 +263,14 @@ def test_conv3d_mochi_shapes(
     C = input_shape[1]
 
     # Prepare weights with specified C_in_block
-    tt_weight, tt_bias = prepare_weights(
-        conv3d_module, C, out_channels, device, C_in_block=C_in_block, prepare_weights_=prepare_weights_
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
     )
 
     config = create_conv3d_config(

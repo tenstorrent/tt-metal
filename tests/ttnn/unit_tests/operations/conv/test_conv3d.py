@@ -27,69 +27,6 @@ def prepare_input_tensor(input_tensor, C, device, alignment=ALIGNMENT):
     return ttnn.from_torch(tt_input, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT, prepare_weights_=True):
-    """Prepare weights and bias for TTNN."""
-    w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
-    groups = conv3d_module.groups
-
-    if not prepare_weights_:
-        tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
-        tt_bias = ttnn.from_torch(
-            conv3d_module.bias.data.reshape(1, -1),
-            device=device,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.TILE_LAYOUT,
-            pad_value=0,
-        )
-        return tt_weight, tt_bias
-
-    if groups > 1:
-        # Pad weights for grouped convolution to convert to a standard convolution.
-        # The weight tensor for grouped conv in PyTorch has shape (out_channels, C / groups, kD, kH, kW).
-        # We pad it to a dense tensor of shape (out_channels, C, kD, kH, kW) with zeros.
-        oc_per_group = out_channels // groups
-        ic_per_group = C // groups
-        assert out_channels % groups == 0
-        assert C % groups == 0
-        assert w.shape[1] == ic_per_group
-
-        kD, kH, kW = w.shape[2:]
-        padded_w = torch.zeros(out_channels, C, kD, kH, kW, dtype=w.dtype)
-
-        for g in range(groups):
-            oc_start, oc_end = g * oc_per_group, (g + 1) * oc_per_group
-            ic_start, ic_end = g * ic_per_group, (g + 1) * ic_per_group
-            # The weights for group `g` are in the `w` tensor at output channels [oc_start:oc_end]
-            weight_group_g = w[oc_start:oc_end]
-            # Place these weights in the correct "diagonal" block of the padded tensor
-            padded_w[oc_start:oc_end, ic_start:ic_end, :, :, :] = weight_group_g
-        w = padded_w
-
-    w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    ALIGN_PAD = alignment - C % alignment
-    if C % alignment != 0:
-        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
-
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
-    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
-    num_C_in_blocks = C_in_aligned // C_in_block
-    assert num_C_in_blocks * C_in_block == C_in_aligned
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
-
-    tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0)
-    tt_bias = ttnn.from_torch(
-        conv3d_module.bias.data.reshape(1, -1),
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT,
-        pad_value=0,
-    )
-    return tt_weight, tt_bias
-
-
 def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device):
     """Reshape and permute TTNN output to match PyTorch format."""
     tt_output = ttnn.to_torch(tt_output, device=device, dtype=torch.float32)
@@ -169,7 +106,6 @@ def run_conv3d_test(
     padding,
     padding_mode,
     grid_size=(1, 1),
-    prepare_weights_=True,
 ):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
         input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device
@@ -178,8 +114,14 @@ def run_conv3d_test(
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    tt_weight, tt_bias = prepare_weights(
-        conv3d_module, C, out_channels, device, C_in_block=32, prepare_weights_=prepare_weights_
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
     )
 
     # Create config and run TTNN conv3d
@@ -225,9 +167,19 @@ def run_conv3d_test(
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
 @skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
-@pytest.mark.parametrize("prepare_weights_", [True, False], ids=["prepare_weights_True", "prepare_weights_False"])
 def test_conv3d_sweep_shapes(
-    device, B, C_in, C_out, T, H, W, kernel_size, stride, groups, padding, padding_mode, prepare_weights_
+    device,
+    B,
+    C_in,
+    C_out,
+    T,
+    H,
+    W,
+    kernel_size,
+    stride,
+    groups,
+    padding,
+    padding_mode,
 ):
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
@@ -247,7 +199,6 @@ def test_conv3d_sweep_shapes(
         padding,
         padding_mode,
         grid_size=grid_size,
-        prepare_weights_=prepare_weights_,
     )
 
 
@@ -259,9 +210,15 @@ def test_conv3d_sweep_shapes(
     ],
 )
 @skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
-@pytest.mark.parametrize("prepare_weights_", [True, False], ids=["prepare_weights_True", "prepare_weights_False"])
 def test_conv3d_cache_address(
-    device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, prepare_weights_
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    groups,
+    padding,
+    padding_mode,
 ):
     # Test that program cache updates the addresses of the inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -278,7 +235,6 @@ def test_conv3d_cache_address(
             padding,
             padding_mode,
             grid_size=grid_size,
-            prepare_weights_=prepare_weights_,
         )
 
 
@@ -290,9 +246,15 @@ def test_conv3d_cache_address(
     ],
 )
 @skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
-@pytest.mark.parametrize("prepare_weights_", [True, False], ids=["prepare_weights_True", "prepare_weights_False"])
 def test_conv3d_cache_hash(
-    device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, prepare_weights_
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    groups,
+    padding,
+    padding_mode,
 ):
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -311,7 +273,6 @@ def test_conv3d_cache_hash(
                 padding,
                 padding_mode,
                 grid_size=grid_size,
-                prepare_weights_=prepare_weights_,
             )
 
     # assert device.num_program_cache_entries() == 2
@@ -331,9 +292,16 @@ def test_conv3d_cache_hash(
     ids=["qwen_exact_with_blocking"],
 )
 @skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #29024")
-@pytest.mark.parametrize("prepare_weights_", [True, False], ids=["prepare_weights_True", "prepare_weights_False"])
 def test_conv3d_qwen_shapes(
-    device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, blocking, prepare_weights_
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    groups,
+    padding,
+    padding_mode,
+    blocking,
 ):
     """Test Conv3d with exact Qwen2.5-VL-3B parameters (issue #35201).
 
@@ -350,8 +318,14 @@ def test_conv3d_qwen_shapes(
     C = input_shape[1]
 
     # Prepare weights with specified C_in_block
-    tt_weight, tt_bias = prepare_weights(
-        conv3d_module, C, out_channels, device, C_in_block=C_in_block, prepare_weights_=prepare_weights_
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
     )
 
     config = create_conv3d_config(
@@ -383,120 +357,4 @@ def test_conv3d_qwen_shapes(
     assert tt_output.shape == gt_output.shape
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
-    assert pcc_passed, pcc_message
-
-
-@pytest.mark.parametrize("B", [1, 2])
-@pytest.mark.parametrize("C_in", [12, 64])
-@pytest.mark.parametrize("C_out", [64])
-@pytest.mark.parametrize("T", [8, 11])
-@pytest.mark.parametrize("H", [10, 13])
-@pytest.mark.parametrize("W", [9, 12])
-@pytest.mark.parametrize("kernel_size", [(3, 3, 3), (1, 1, 1)], ids=["kernel_333", "kernel_111"])
-@pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
-@pytest.mark.parametrize("groups", [1, 2, 4], ids=["groups_1", "groups_2", "groups_4"])
-@pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
-@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-def test_conv3d_prepare_weight(device, B, C_in, C_out, T, H, W, kernel_size, stride, groups, padding, padding_mode):
-    input_shape = (B, C_in, T, H, W)
-    out_channels = C_out
-    kernel_size = kernel_size
-    stride = stride
-    groups = groups
-    padding = padding
-    padding_mode = padding_mode
-    grid_size = device.compute_with_storage_grid_size()
-    run_conv3d_test_prepare_weight(
-        device,
-        input_shape,
-        out_channels,
-        kernel_size,
-        stride,
-        groups,
-        padding,
-        padding_mode,
-        grid_size=grid_size,
-    )
-
-
-def run_conv3d_test_prepare_weight(
-    device,
-    input_shape,
-    out_channels,
-    kernel_size,
-    stride,
-    groups,
-    padding,
-    padding_mode,
-    grid_size=(1, 1),
-):
-    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device
-    )
-    N, D_out, H_out, W_out = output_dims
-    C = input_shape[1]
-
-    # Prepare weights and bias for TTNN
-    tt_weight_prepare, tt_bias = prepare_weights(
-        conv3d_module, C, out_channels, device, C_in_block=32, prepare_weights_=True
-    )
-    tt_weight_no_prepare, tt_bias = prepare_weights(
-        conv3d_module, C, out_channels, device, C_in_block=32, prepare_weights_=False
-    )
-
-    # Create config and run TTNN conv3d
-    config = create_conv3d_config(compute_with_storage_grid_size=grid_size, C_in_block=32)
-
-    tt_output_prepare = ttnn.experimental.conv3d(
-        input_tensor=tt_input,
-        weight_tensor=tt_weight_prepare,
-        device=device,
-        bias_tensor=tt_bias,
-        dtype=ttnn.bfloat16,
-        output_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        groups=groups,
-        padding=padding,
-        padding_mode=padding_mode,
-        config=config,
-        compute_kernel_config=kernel_config,
-    )
-
-    tt_output_no_prepare = ttnn.experimental.conv3d(
-        input_tensor=tt_input,
-        weight_tensor=tt_weight_no_prepare,
-        device=device,
-        bias_tensor=tt_bias,
-        dtype=ttnn.bfloat16,
-        output_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        groups=groups,
-        padding=padding,
-        padding_mode=padding_mode,
-        config=config,
-        compute_kernel_config=kernel_config,
-    )
-
-    # Reshape output and verify results
-    tt_output_prepare = reshape_output(tt_output_prepare, N, D_out, H_out, W_out, out_channels, device)
-    tt_output_no_prepare = reshape_output(tt_output_no_prepare, N, D_out, H_out, W_out, out_channels, device)
-
-    print(f"gt output shape = {gt_output.shape}")
-    print(f"tt output shape prepare = {tt_output_prepare.shape}")
-    print(f"tt output shape no prepare = {tt_output_no_prepare.shape}")
-    assert tt_output_prepare.shape == gt_output.shape
-    assert tt_output_no_prepare.shape == gt_output.shape
-
-    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output_prepare, pcc=0.999)
-    logger.info(f"Compare conv3d torch vs ttnn prepare: {pcc_message}")
-    assert pcc_passed, pcc_message
-
-    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output_no_prepare, pcc=0.999)
-    logger.info(f"Compare conv3d torch vs ttnn no prepare: {pcc_message}")
-    assert pcc_passed, pcc_message
-
-    pcc_passed, pcc_message = check_with_pcc(tt_output_prepare, tt_output_no_prepare, pcc=0.999)
-    logger.info(f"ttnn prepare vs no prepare: {pcc_message}")
     assert pcc_passed, pcc_message
