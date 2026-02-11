@@ -50,8 +50,7 @@ class WanAttentionBlock:
 
         self.norm = RMSNorm(
             embedding_dim=dim,
-            norm_eps=1e-6,
-            # norm_eps=1e-12,
+            norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
@@ -451,8 +450,7 @@ class WanResidualBlock:
 
         self.norm1 = RMSNorm(
             embedding_dim=in_dim,
-            norm_eps=1e-6,
-            # norm_eps=1e-12,
+            norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
@@ -470,8 +468,7 @@ class WanResidualBlock:
         )
         self.norm2 = RMSNorm(
             embedding_dim=out_dim,
-            norm_eps=1e-6,
-            # norm_eps=1e-12,
+            norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
@@ -1165,12 +1162,11 @@ class WanDecoder3d:
         # output blocks
         self.norm_out = RMSNorm(
             embedding_dim=out_dim,
-            norm_eps=1e-6,
+            norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
             dtype=conv_dtype,
-            # embedding_dim=out_dim, norm_eps=1e-12, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
         )
         self.conv_out = WanCausalConv3d(
             out_dim,
@@ -1460,12 +1456,11 @@ class WanEncoder3D:
         # output blocks
         self.norm_out = RMSNorm(
             embedding_dim=out_dim,
-            norm_eps=1e-6,
+            norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
             dtype=conv_dtype,
-            # embedding_dim=out_dim, norm_eps=1e-12, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
         )
         self.conv_out = WanCausalConv3d(
             out_dim,
