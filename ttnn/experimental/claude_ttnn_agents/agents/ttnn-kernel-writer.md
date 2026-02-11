@@ -124,7 +124,33 @@ Verify CB configuration matches design expectations:
 - Page sizes
 - Capacities
 
-### Step 3: Implement Each Kernel
+### Step 3: Plan TDD Stages
+
+Read the design document and plan ordered implementation stages. Each stage adds one logical piece and is tested before proceeding.
+
+**Ordering heuristic:**
+- **Stage 1 (data pipeline):** Final reader + final writer + passthrough compute (copy cb_in tiles to cb_out). Validates data movement, work distribution, and multi-core correctness.
+- **Bookend phases together:** If the op has tilize + untilize, add both in one stage (roundtrip = identity check).
+- **Compute phases in pipeline order**, one per stage. Each stage's reference evolves to include the new phase.
+- **Stable parts first:** Reader/writer get validated in Stage 1 and are never revisited.
+
+Example stage plan for an op with tilize → reduce → untilize:
+
+| Stage | What's added | Compute behavior | Expected output |
+|-------|-------------|-----------------|----------------|
+| 1 | Reader + Writer + passthrough | copy_tile cb_in→cb_out | output ≈ input |
+| 2 | Tilize + Untilize | tilize then untilize | output ≈ input (identity roundtrip) |
+| 3 | Reduce | full pipeline | output matches PyTorch reference |
+
+**For shape-changing ops** (e.g., reduce changes output shape): in passthrough stages, temporarily adjust the ProgramDescriptor/test to use input shape as output shape.
+
+### Step 4: Implement & Test Each Stage
+
+For each stage in order: **implement → test → pass → commit → next stage. Do NOT proceed to the next stage until the current stage passes.**
+
+Use the **full parametrized shapes from the spec** at every stage, not just a minimal shape. Shape-related bugs (work distribution, multi-core edge cases) must surface at the earliest stage where they're relevant. If Stage 1 (passthrough) fails on `(2, 64, 128)` but passes on `(32, 32)`, fix it immediately while only reader/writer code is in play.
+
+#### Implementing Kernels
 
 **Reader Kernel:**
 - Typically raw calls (no compute helpers for dataflow)
@@ -139,17 +165,15 @@ Verify CB configuration matches design expectations:
 - Typically raw calls (no compute helpers for dataflow)
 - Follow design's "Writer Kernel Design" section
 
-### Step 4: Verify CB Synchronization
-Use the design's "CB Synchronization Summary" table:
+#### Verify CB Synchronization
+
+After implementing each stage, use the design's "CB Synchronization Summary" table:
 - Total pushes must equal total pops for each CB
 - Page counts must match across producer/consumer
 
-### Step 5: Test
+#### Testing
 
-Create or update a test file that verifies:
-- Functional correctness against PyTorch reference
-- Multiple tensor sizes (widths, heights, batches)
-- Edge cases per the spec
+Create or update the test file with a PyTorch reference matching the current stage's expected behavior, all spec shapes, and appropriate tolerances.
 
 **Test file template:**
 ```python
@@ -181,7 +205,7 @@ def test_functional_correctness(device):
 The script enables watcher, LLK asserts, lightweight kernel asserts, and automatic hang detection (5s dispatch timeout). It is idempotent — resets the device after any failure, so just fix your code and re-run.
 
 **Exit codes:**
-- **0** — PASS
+- **0** — PASS. Commit this stage and proceed to the next.
 - **1** — Normal test failure (no hang). Look at pytest output for:
   - **PCC/numerical mismatch**: Verify helper parameters match design
   - **Watcher assert**: "tripped assert on line X" — check that line in the kernel
