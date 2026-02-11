@@ -116,6 +116,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Enable trace for decode forward pass",
     )
     p.add_argument(
+        "--enable-mem-profile",
+        action="store_true",
+        default=False,
+        help="Enable TTNN memory profiling dumps during setup",
+    )
+    p.add_argument(
         "--repeat-batches",
         type=int,
         default=1,
@@ -243,6 +249,7 @@ def run_demo(
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = False,
+    enable_mem_profile: bool = False,
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
@@ -341,6 +348,7 @@ def run_demo(
                 ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
+                enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
             )
@@ -439,6 +447,7 @@ def main() -> None:
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
+        enable_mem_profile=args.enable_mem_profile,
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
     )
