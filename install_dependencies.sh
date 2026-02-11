@@ -318,6 +318,55 @@ prep_redhat_system() {
     # TODO: Implement Red Hat family system preparation
 }
 
+# Configure update-alternatives so gcc/g++ and clang/clang++ point to
+# version-specific compilers. Only applies to Ubuntu (debian-based).
+configure_compiler_alternatives() {
+    if ! is_debian_based; then
+        return
+    fi
+
+    if [[ "$OS_ID" != "ubuntu" ]]; then
+        return
+    fi
+
+    case "$OS_VERSION" in
+        22.04*)
+            if [ -x /usr/bin/gcc-12 ]; then
+                echo "[INFO] Setting gcc-12/g++-12 as defaults via update-alternatives"
+                update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 120 || true
+                update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 120 || true
+                update-alternatives --set gcc /usr/bin/gcc-12 2>/dev/null || true
+                update-alternatives --set g++ /usr/bin/g++-12 2>/dev/null || true
+            fi
+            ;;
+        24.04*)
+            if [ -x /usr/bin/gcc-14 ]; then
+                echo "[INFO] Setting gcc-14/g++-14 as defaults via update-alternatives"
+                update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 140 || true
+                update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 140 || true
+                update-alternatives --set gcc /usr/bin/gcc-14 2>/dev/null || true
+                update-alternatives --set g++ /usr/bin/g++-14 2>/dev/null || true
+            fi
+            ;;
+        *)
+            echo "[INFO] No GCC/G++ version override for Ubuntu $OS_VERSION"
+            ;;
+    esac
+
+    # Set llvm-20 toolchain as default when installed
+    if [ -x /usr/bin/clang-20 ]; then
+        echo "[INFO] Setting llvm-20 toolchain as defaults via update-alternatives"
+        for tool in clang clang++; do
+            update-alternatives --install /usr/bin/$tool $tool /usr/bin/${tool}-20 100 || true
+            update-alternatives --set $tool /usr/bin/${tool}-20 2>/dev/null || true
+        done
+        if [ -x /usr/bin/clang-tidy-20 ]; then
+            update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-20 100 || true
+            update-alternatives --set clang-tidy /usr/bin/clang-tidy-20 2>/dev/null || true
+        fi
+    fi
+}
+
 # We currently have an affinity to clang as it is more thoroughly tested in CI
 # However g++-12 and later should also work
 
@@ -478,6 +527,9 @@ install() {
         install_mpi_ulfm
     fi
     install_llvm
+
+    # Set gcc/g++ and clang/clang++ defaults via update-alternatives
+    configure_compiler_alternatives
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
     if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
