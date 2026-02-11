@@ -1164,6 +1164,57 @@ def generate_plots(analyses: list[LogAnalysis], output_dir: str) -> None:
     print()
 
 
+def validate_results(analyses: list[LogAnalysis]) -> int:
+    """
+    Validate analysis results against expected thresholds.
+
+    Returns:
+        0 if cluster meets stability criteria
+        1 if cluster fails validation (low success rate or high timeout rate)
+    """
+    if not analyses:
+        print(f"{Colors.RED}VALIDATION FAILED:{Colors.NC} No log files analyzed", file=sys.stderr)
+        return 1
+
+    total = len(analyses)
+    cat_counts = defaultdict(int)
+    for a in analyses:
+        for c in a.categories:
+            cat_counts[c] += 1
+
+    # Calculate success rate
+    healthy_count = cat_counts.get("healthy", 0)
+    success_rate = (healthy_count / total * 100) if total > 0 else 0
+
+    # Calculate timeout rate
+    timeout_count = cat_counts.get("workload_timeout", 0)
+    timeout_rate = (timeout_count / total * 100) if total > 0 else 0
+
+    # Determine exit code based on thresholds
+    exit_code = 0
+
+    if success_rate < SUCCESS_RATE_STABLE:
+        print(
+            f"{Colors.RED}VALIDATION FAILED:{Colors.NC} Success rate {success_rate:.1f}% is below threshold {SUCCESS_RATE_STABLE}%",
+            file=sys.stderr,
+        )
+        exit_code = 1
+
+    if timeout_rate >= TIMEOUT_ESCALATION_THRESHOLD:
+        print(
+            f"{Colors.RED}VALIDATION FAILED:{Colors.NC} Timeout rate {timeout_rate:.1f}% exceeds threshold {TIMEOUT_ESCALATION_THRESHOLD}%",
+            file=sys.stderr,
+        )
+        exit_code = 1
+
+    if exit_code == 0:
+        print(
+            f"{Colors.GREEN}VALIDATION PASSED:{Colors.NC} Cluster meets stability criteria (success: {success_rate:.1f}%, timeout: {timeout_rate:.1f}%)"
+        )
+
+    return exit_code
+
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze validation logs.")
     parser.add_argument("directory", nargs="?", default="validation_output", help="Log directory")
@@ -1214,6 +1265,10 @@ def main():
             print_verbose(analyses)
         if args.plot:
             generate_plots(analyses, args.plot_dir)
+
+    # Validate results and exit with appropriate code
+    exit_code = validate_results(analyses)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
