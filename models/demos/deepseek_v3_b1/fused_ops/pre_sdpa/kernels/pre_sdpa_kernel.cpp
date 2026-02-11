@@ -144,8 +144,8 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul3_args{};
 
     // Qrope CTArgs type alias (NCRISC uses ReaderCTArgs)
-    using QRopeCTArgs =
-        deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+    using QRopeCTArgs = deepseek_b1_ops::Rope::
+        ReaderCTArgs<get_named_compile_time_arg_val("qrope_Wt"), get_named_compile_time_arg_val("qrope_Ht")>;
 
     // Qrope reader args (NCRISC is no-op)
     deepseek_b1_ops::Rope::ReaderArgs qrope_args{};
@@ -488,18 +488,18 @@ void kernel_main() {
 
     // Qrope CTArgs type alias
     using QRopeCTArgs = deepseek_b1_ops::Rope::
-        ComputeCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+        ComputeCTArgs<get_named_compile_time_arg_val("qrope_Wt"), get_named_compile_time_arg_val("qrope_Ht")>;
 
     // Qrope compute args (from compile-time args)
     deepseek_b1_ops::Rope::ComputeArgs qrope_args{
-        get_named_compile_time_arg_val("in_cb"),  // Input from matmul2 output
-        get_named_compile_time_arg_val("cos_cb"),
-        get_named_compile_time_arg_val("sin_cb"),
-        get_named_compile_time_arg_val("trans_mat_cb"),
-        get_named_compile_time_arg_val("rotated_in_interm_cb"),
-        get_named_compile_time_arg_val("cos_interm_cb"),
-        get_named_compile_time_arg_val("sin_interm_cb"),
-        get_named_compile_time_arg_val("out_cb"),
+        get_named_compile_time_arg_val("qrope_in_cb"),  // Input from matmul2 output
+        get_named_compile_time_arg_val("qrope_cos_cb"),
+        get_named_compile_time_arg_val("qrope_sin_cb"),
+        get_named_compile_time_arg_val("qrope_trans_mat_cb"),
+        get_named_compile_time_arg_val("qrope_rotated_in_interm_cb"),
+        get_named_compile_time_arg_val("qrope_cos_interm_cb"),
+        get_named_compile_time_arg_val("qrope_sin_interm_cb"),
+        get_named_compile_time_arg_val("qrope_output_cb"),
     };
 
     // CreateQHeads compute args (tilization on SDPA input cores)
@@ -548,7 +548,7 @@ void kernel_main() {
     constexpr uint32_t krope_input_cb = get_named_compile_time_arg_val("krope_in_cb");
     constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
     constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
-    constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
+    constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
     constexpr uint32_t krope_rotated_in_interm_cb = get_named_compile_time_arg_val("krope_rotated_in_interm_cb");
     constexpr uint32_t krope_cos_interm_cb = get_named_compile_time_arg_val("krope_cos_interm_cb");
     constexpr uint32_t krope_sin_interm_cb = get_named_compile_time_arg_val("krope_sin_interm_cb");
@@ -559,7 +559,7 @@ void kernel_main() {
         .in_cb = krope_input_cb,
         .cos_cb = krope_cos_cb,
         .sin_cb = krope_sin_cb,
-        .trans_mat_cb = trans_mat_cb,
+        .trans_mat_cb = krope_trans_mat_cb,
         .rotated_in_interm_cb = krope_rotated_in_interm_cb,
         .cos_interm_cb = krope_cos_interm_cb,
         .sin_interm_cb = krope_sin_interm_cb,
@@ -610,10 +610,10 @@ void kernel_main() {
 
     if constexpr (Core::is_qrope_core) {
         // Qrope CB indices and parameters from named compile-time args
-        constexpr uint32_t qrope_cos_cb = get_named_compile_time_arg_val("cos_cb");
-        constexpr uint32_t qrope_sin_cb = get_named_compile_time_arg_val("sin_cb");
-        constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-        constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+        constexpr uint32_t qrope_cos_cb = get_named_compile_time_arg_val("qrope_cos_cb");
+        constexpr uint32_t qrope_sin_cb = get_named_compile_time_arg_val("qrope_sin_cb");
+        constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
+        constexpr uint32_t Wt = get_named_compile_time_arg_val("qrope_Wt");
 
         // NOTE: Do NOT setup qrope input CB (matmul2_output_cb) as sharded buffer!
         // The input to RoPE comes from matmul2 compute output, NOT from a sharded tensor.

@@ -60,7 +60,7 @@ class PreSDPA:
             gamma_tensor: Gamma/weight tensor (torch.Tensor) [1, K]
             matmul_weights_tensor: Matmul weights (torch.Tensor) [K, N]
             rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (torch.Tensor) [1, N]
-            matmul2_weights_tensor: Matmul2 weights (torch.Tensor) [N, M] - SHUFFLED for interleaved output
+            matmul2_weights_tensor: Matmul2 weights (torch.Tensor) [N, M]
             matmul3_weights_tensor: Matmul3 weights (torch.Tensor) [num_qnope_heads, qnope_head_dim, qnope_out_dim]
                                     e.g., [64, 128, 512] for batched matmul on Qnope heads
             sin_tensor: Sin tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
@@ -80,7 +80,6 @@ class PreSDPA:
             - sdpa_interleaved: [8, 8, 576] interleaved QNOPE/QROPE output for SDPA
         """
         from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
-        from models.demos.deepseek_v3_b1.utils import unshuffle_output_from_interleaved_qnope_qrope
 
         def rmsnorm(x, gamma):
             variance = x.pow(2).mean(-1, keepdim=True)
@@ -91,20 +90,11 @@ class PreSDPA:
         input_layernorm = rmsnorm(input_tensor, gamma_tensor)
         matmul_result = input_layernorm @ matmul_weights_tensor
 
-        # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M] (interleaved output with shuffled weights)
+        # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M]
         matmul2_result = rmsnorm(matmul_result, rmsnorm2_gamma_tensor) @ matmul2_weights_tensor
 
-        # Unshuffle to get separate Qnope and Qrope tensors
-        # qnope_heads: [num_qnope_heads, 1, qnope_head_dim] = [64, 1, 128]
-        # qrope_heads: [num_qrope_heads, 1, qrope_head_dim] = [64, 1, 64]
-        qnope_heads, qrope_heads = unshuffle_output_from_interleaved_qnope_qrope(
-            matmul2_result,
-            num_qnope_heads=num_qnope_heads,
-            num_qrope_heads=num_qrope_heads,
-            qnope_head_dim=qnope_head_dim,
-            qrope_head_dim=qrope_head_dim,
-            heads_per_row=heads_per_row,
-        )
+        qnope_heads = matmul2_result[:, : num_qnope_heads * qnope_head_dim].reshape(num_qnope_heads, 1, qnope_head_dim)
+        qrope_heads = matmul2_result[:, num_qnope_heads * qnope_head_dim :].reshape(num_qrope_heads, 1, qrope_head_dim)
 
         # Matmul3: Batched matmul on Qnope heads
         # [64, 1, 128] @ [64, 128, 512] -> [64, 1, 512]
@@ -162,8 +152,8 @@ class PreSDPA:
         rmsnorm2_gamma_tensor,
         matmul2_weights_tensor,
         matmul3_weights_tensor,
-        sin_tensor,
-        cos_tensor,
+        qrope_sin_tensor,
+        qrope_cos_tensor,
         trans_mat_tensor,
         krope_cos_tensor,
         krope_sin_tensor,
@@ -190,8 +180,8 @@ class PreSDPA:
             rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (1536 elements = 3 tiles of 16x32)
             matmul2_weights_tensor: Matmul2 weights tensor (width sharded, shuffled for interleaved output)
             matmul3_weights_tensor: Matmul3 weights tensor (height sharded on Qnope grid, [128, 512] per core)
-            sin_tensor: Sin tensor (sharded tensor for QRoPE)
-            cos_tensor: Cos tensor (sharded tensor for QRoPE)
+            qrope_sin_tensor: Sin tensor (sharded tensor for QRoPE)
+            qrope_cos_tensor: Cos tensor (sharded tensor for QRoPE)
             trans_mat_tensor: Trans_mat tensor (sharded tensor for RoPE)
             output_tensor: Output tensor for pre-SDPA (sharded on SDPA grid, [8, 576] per core = 8 interleaved heads)
             sender_coord: Tuple (row, col) of sender device in mesh
@@ -223,8 +213,8 @@ class PreSDPA:
         rmsnorm2_gamma_tensors_per_device = ttnn.get_device_tensors(rmsnorm2_gamma_tensor)
         matmul2_weights_tensors_per_device = ttnn.get_device_tensors(matmul2_weights_tensor)
         matmul3_weights_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor)
-        sin_tensors_per_device = ttnn.get_device_tensors(sin_tensor)
-        cos_tensors_per_device = ttnn.get_device_tensors(cos_tensor)
+        qrope_sin_tensors_per_device = ttnn.get_device_tensors(qrope_sin_tensor)
+        qrope_cos_tensors_per_device = ttnn.get_device_tensors(qrope_cos_tensor)
         trans_mat_tensors_per_device = ttnn.get_device_tensors(trans_mat_tensor)
         krope_cos_tensors_per_device = ttnn.get_device_tensors(krope_cos_tensor)
         krope_sin_tensors_per_device = ttnn.get_device_tensors(krope_sin_tensor)
@@ -702,27 +692,27 @@ class PreSDPA:
         # RoPE compile-time args (only on Qrope cores)
         # NCRISC: in_cb, cos_cb, sin_cb, trans_mat_cb, Wt, Ht
         qrope_ncrisc_named_compile_time_args = [
-            ("in_cb", matmul2_output_cb),  # Input from matmul2 output
-            ("cos_cb", qrope_cos_cb),
-            ("sin_cb", qrope_sin_cb),
-            ("trans_mat_cb", qrope_trans_mat_cb),
-            ("Wt", qrope_head_dim_per_core_t),
-            ("Ht", qrope_num_heads_per_core),
+            ("qrope_in_cb", matmul2_output_cb),  # Input from matmul2 output
+            ("qrope_cos_cb", qrope_cos_cb),
+            ("qrope_sin_cb", qrope_sin_cb),
+            ("qrope_trans_mat_cb", qrope_trans_mat_cb),
+            ("qrope_Wt", qrope_head_dim_per_core_t),
+            ("qrope_Ht", qrope_num_heads_per_core),
         ]
         # BRISC: no-op (empty args)
         qrope_brisc_named_compile_time_args = []
         # TRISC: in_cb, cos_cb, sin_cb, trans_mat_cb, rotated_in_interm_cb, cos_interm_cb, sin_interm_cb, out_cb, Wt, Ht
         qrope_trisc_named_compile_time_args = [
-            ("in_cb", matmul2_output_cb),
-            ("cos_cb", qrope_cos_cb),
-            ("sin_cb", qrope_sin_cb),
-            ("trans_mat_cb", qrope_trans_mat_cb),
-            ("rotated_in_interm_cb", qrope_rotated_input_interm_cb),
-            ("cos_interm_cb", qrope_cos_interm_cb),
-            ("sin_interm_cb", qrope_sin_interm_cb),
-            ("out_cb", qrope_output_cb),
-            ("Wt", qrope_head_dim_per_core_t),
-            ("Ht", qrope_num_heads_per_core),
+            ("qrope_in_cb", matmul2_output_cb),
+            ("qrope_cos_cb", qrope_cos_cb),
+            ("qrope_sin_cb", qrope_sin_cb),
+            ("qrope_trans_mat_cb", qrope_trans_mat_cb),
+            ("qrope_rotated_in_interm_cb", qrope_rotated_input_interm_cb),
+            ("qrope_cos_interm_cb", qrope_cos_interm_cb),
+            ("qrope_sin_interm_cb", qrope_sin_interm_cb),
+            ("qrope_output_cb", qrope_output_cb),
+            ("qrope_Wt", qrope_head_dim_per_core_t),
+            ("qrope_Ht", qrope_num_heads_per_core),
         ]
 
         # ========================================================================
@@ -1060,8 +1050,8 @@ class PreSDPA:
                 rmsnorm2_gamma_tensor_device = rmsnorm2_gamma_tensors_per_device[device_idx]
                 matmul2_weights_tensor_device = matmul2_weights_tensors_per_device[device_idx]
                 matmul3_weights_tensor_device = matmul3_weights_tensors_per_device[device_idx]
-                cos_tensor_device = cos_tensors_per_device[device_idx]
-                sin_tensor_device = sin_tensors_per_device[device_idx]
+                qrope_cos_tensor_device = qrope_cos_tensors_per_device[device_idx]
+                qrope_sin_tensor_device = qrope_sin_tensors_per_device[device_idx]
                 trans_mat_tensor_device = trans_mat_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
                 dkv_matmul_weights_tensor_device = dkv_matmul_weights_tensors_per_device[device_idx]
@@ -1336,10 +1326,10 @@ class PreSDPA:
                 )
 
                 # CB 17: Cos (sharded tensor)
-                qrope_cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_cos_cb, cos_tensor_device)
+                qrope_cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_cos_cb, qrope_cos_tensor_device)
 
                 # CB 18: Sin (sharded tensor)
-                qrope_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_sin_cb, sin_tensor_device)
+                qrope_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_sin_cb, qrope_sin_tensor_device)
 
                 # CB 19: Trans_mat (sharded tensor)
                 qrope_trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1825,8 +1815,8 @@ class PreSDPA:
                 rmsnorm2_gamma_tensor,
                 matmul2_weights_tensor,
                 matmul3_weights_tensor,
-                sin_tensor,
-                cos_tensor,
+                qrope_sin_tensor,
+                qrope_cos_tensor,
                 trans_mat_tensor,
                 krope_cos_tensor,
                 krope_sin_tensor,

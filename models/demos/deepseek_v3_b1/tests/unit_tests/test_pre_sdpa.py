@@ -436,7 +436,7 @@ def test_pre_sdpa(
     cos_replicated = cos_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
     sin_replicated = sin_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
 
-    ttnn_cos = ttnn.from_torch(
+    ttnn_qrope_cos = ttnn.from_torch(
         cos_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -446,7 +446,7 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    ttnn_sin = ttnn.from_torch(
+    ttnn_qrope_sin = ttnn.from_torch(
         sin_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -580,8 +580,8 @@ def test_pre_sdpa(
             ttnn_rmsnorm2_gamma,
             ttnn_matmul2_weights,
             ttnn_matmul3_weights,
-            ttnn_sin,
-            ttnn_cos,
+            ttnn_qrope_sin,
+            ttnn_qrope_cos,
             ttnn_trans_mat,
             ttnn_krope_cos,
             ttnn_krope_sin,
@@ -608,13 +608,13 @@ def test_pre_sdpa(
     # ========================================================================
     logger.info("Computing golden reference...")
 
-    # Golden uses shuffled weights to produce same interleaved output
+    # Golden uses unshuffled weights (sequential output: all QNOPE, then all QROPE)
     _, _, torch_sdpa_expected, torch_kv_cache_expected = PreSDPA.golden(
         torch_input,
         torch_gamma,
         torch_matmul_weights,
         torch_rmsnorm2_gamma,
-        torch_matmul2_weights_shuffled,  # Use shuffled weights
+        torch_matmul2_weights_unshuffled,  # Use unshuffled weights
         torch_matmul3_weights,
         torch_sin,
         torch_cos,
