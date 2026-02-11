@@ -84,7 +84,7 @@ void kernel_main() {
         .out_cb = out_cb,
     };
     // Full init, CBs don't matter
-    compute_kernel_hw_startup(in_cb, in_cb, out_cb);  // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);  // Full init, CBs don't matter
 #endif
 
     // ========================================================================

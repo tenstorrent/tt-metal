@@ -67,7 +67,7 @@ void kernel_main() {
         .scalar = get_common_arg_val<float>(1),      // scalar (1/sqrt(num_elements))
     };
     // Full init, CBs don't matter
-    compute_kernel_hw_startup(rmsnorm_args.input_cb, rmsnorm_args.input_cb, rmsnorm_args.output_cb);
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     // ========================================================================

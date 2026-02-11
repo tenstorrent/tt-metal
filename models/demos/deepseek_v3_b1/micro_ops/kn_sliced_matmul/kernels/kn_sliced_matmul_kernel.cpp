@@ -45,7 +45,7 @@ void kernel_main() {
     };
     deepseek_b1_ops::KNSlicedMatmul::Op<KNSlicedMatmulCTArgs, true, /*pop_act=*/true, /*pop_weights=*/false> matmul;
     // Full init, CBs don't matter
-    compute_kernel_hw_startup(matmul_args.act_cb, matmul_args.weights_cb, matmul_args.out_cb);
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
     matmul(matmul_args);
 }

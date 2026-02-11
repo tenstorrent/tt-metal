@@ -122,7 +122,7 @@ void kernel_main() {
 #endif
 
     // Full init, CBs don't matter
-    compute_kernel_hw_startup(rms_args.input_cb, rms_args.gamma_cb, rms_args.output_cb);
+    compute_kernel_hw_startup(0, 0, 0);
 
 #endif
 

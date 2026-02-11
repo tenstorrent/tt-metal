@@ -162,7 +162,7 @@ void kernel_main() {
         .out_cb = k_rope_output_cb,
     };
     // Full init, CBs don't matter
-    compute_kernel_hw_startup(dkv_matmul_args.in0, dkv_matmul_args.in1, dkv_matmul_args.out);
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers

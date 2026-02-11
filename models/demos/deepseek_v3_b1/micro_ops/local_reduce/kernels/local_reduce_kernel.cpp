@@ -49,7 +49,7 @@ void kernel_main() {
         .out_cb = out_cb,
     };
     // Full init, CBs don't matter
-    compute_kernel_hw_startup(in_cb, in_cb, out_cb);
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     deepseek_b1_ops::LocalReduce::Op<LocalReduceCTArgs, Core::is_active_core> local_reduce;

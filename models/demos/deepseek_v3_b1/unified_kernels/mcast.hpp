@@ -181,7 +181,7 @@ FORCE_INLINE void teardown_persistent_mcast_sender() {
         false,
         write_reg_cmd_buf>(0, 0, 0);
     noc_async_write_barrier();
-    riscv_wait(1000);  // This is just to guarantee safety due to posted mcast hw bug
+    riscv_wait(10000);  // This is just to guarantee safety due to posted mcast hw bug
 }
 
 #endif  // defined(COMPILE_FOR_BRISC)

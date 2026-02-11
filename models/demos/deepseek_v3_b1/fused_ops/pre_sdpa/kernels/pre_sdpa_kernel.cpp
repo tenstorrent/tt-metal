@@ -528,7 +528,7 @@ void kernel_main() {
         .out_cb = krope_output_cb,
     };
     // Full init, CBs don't matter
-    compute_kernel_hw_startup(rmsnorm_args.input_cb, rmsnorm_args.gamma_cb, rmsnorm_args.output_cb);
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)

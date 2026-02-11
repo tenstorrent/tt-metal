@@ -69,7 +69,7 @@ void kernel_main() {
         .k_num_tiles = num_tiles_k,
     };
     // Full init, CBs don't matter
-    compute_kernel_hw_startup(in0_cb, in1_cb, out_cb);
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     // ========================================================================

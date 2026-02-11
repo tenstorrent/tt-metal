@@ -76,7 +76,7 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
             256,
             64,
             ttnn.bfloat16,
-            ttnn.bfloat8_b,
+            ttnn.bfloat4_b,
             False,
             None,
             False,
@@ -104,6 +104,23 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
             ),
             id="q_a_proj_with_split_inner_dim",
         ),
+        pytest.param(
+            1,
+            7168,
+            128,  # Not accurate, should be 160. TODO: Add support to custom MM
+            ttnn.bfloat16,
+            ttnn.bfloat4_b,
+            False,
+            None,
+            False,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(10, 9), ttnn.CoreCoord(10, 9)),
+                }
+            ),
+            id="lm_head",
+        ),
     ],
 )
 @pytest.mark.skip_post_commit
@@ -111,6 +128,8 @@ def test_matmul_single_core(
     device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en, core_grid
 ):
     """Test single-core matmul operation with fully sharded inputs"""
+    print(core_grid.num_cores())
+    print(core_grid)
 
     # Use fused_activation directly (no special suffixes needed now)
     actual_activation = fused_activation
