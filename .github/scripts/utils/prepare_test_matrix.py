@@ -89,15 +89,19 @@ def load_tests(tests_yaml_path):
 
 def build_test_matrix(tests, enabled_skus, sku_config):
     """
-    Filter tests based on enabled SKUs and add runs_on labels.
+    Filter tests based on enabled SKUs and expand multi-SKU entries into flat matrix entries.
+
+    Each test entry may define multiple SKUs in its 'skus' dict. This function
+    expands each test into one matrix entry per enabled SKU, with the appropriate
+    timeout and runs_on labels.
 
     Args:
-        tests: List of test dictionaries
+        tests: List of test dictionaries (with 'skus' dict)
         enabled_skus: List of enabled SKU strings
         sku_config: Dictionary mapping SKU names to their configuration
 
     Returns:
-        Filtered list of test dictionaries with runs_on added
+        Filtered list of flat test dictionaries with sku, timeout, and runs_on added
     """
     if not enabled_skus:
         print("::error::No SKUs enabled. At least one SKU must be specified.")
@@ -112,24 +116,35 @@ def build_test_matrix(tests, enabled_skus, sku_config):
     filtered_tests = []
 
     for test in tests:
-        test_sku = test.get("sku")
         test_name = test.get("name", "Unnamed Test")
+        test_skus = test.get("skus")
 
-        # Skip tests without a SKU
-        if not test_sku:
-            print(f"::warning::Test '{test_name}' has no SKU, skipping")
+        # Skip tests without skus
+        if not test_skus or not isinstance(test_skus, dict):
+            print(f"::warning::Test '{test_name}' has no valid 'skus' mapping, skipping")
             continue
 
-        # Filter: only include tests whose SKU is in the enabled list
-        if test_sku in enabled_skus:
-            # Add runs_on from SKU config
-            if test_sku in sku_config:
-                test_with_runs_on = test.copy()
-                test_with_runs_on["runs_on"] = sku_config[test_sku].get("runs_on", [])
-                filtered_tests.append(test_with_runs_on)
-            else:
-                print(f"::warning::SKU '{test_sku}' for test '{test_name}' not found in SKU config, skipping")
+        # Determine which of this test's SKUs are enabled
+        matching_skus = [s for s in test_skus if s in enabled_skus]
+
+        for sku_name in matching_skus:
+            sku_test_config = test_skus[sku_name]
+
+            if sku_name not in sku_config:
+                print(f"::warning::SKU '{sku_name}' for test '{test_name}' not found in SKU config, skipping")
                 continue
+
+            # Build a flat matrix entry
+            entry = {
+                "name": test_name,
+                "cmd": test.get("cmd", ""),
+                "sku": sku_name,
+                "timeout": sku_test_config.get("timeout", 0),
+                "owner_id": test.get("owner_id", ""),
+                "team": test.get("team", ""),
+                "runs_on": sku_config[sku_name].get("runs_on", []),
+            }
+            filtered_tests.append(entry)
 
     if not filtered_tests:
         print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'. Failing pipeline.")
