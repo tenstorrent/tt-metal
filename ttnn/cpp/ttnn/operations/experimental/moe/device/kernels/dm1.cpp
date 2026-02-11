@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/tt-metalium/constants.hpp"
 #include "moe_ring_common.h"
 
 void kernel_main() {
@@ -11,6 +12,9 @@ void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+
+    // This is a define that is passed in from the program factory
+    constexpr std::array<uint32_t, 2 * moe_ring::NUM_COMBINE_CORES> combine_core_map = OUTPUT_SHARD_CORE_MAP;
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -98,12 +102,45 @@ void kernel_main() {
     uint32_t semaphore_value = 0;
     *my_semaphore_ptr = 0;
 
-    // Set state for the data writes
-    noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
+    //-------------------------------------------------------------------------
+    // Write out constants
+    //-------------------------------------------------------------------------
+    // Each row (token) written to destination is num_w2_tiles_w * 32 * 2 bytes (18 or 19 tiles wide)
+    const uint32_t write_out_packet_size = num_w2_tiles_w * tt::constants::TILE_WIDTH * sizeof(uint16_t);  // bf16
 
-    // Set state for the semaphore write
-    noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
-        neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
+    // Source stride: each token in src is 20 tiles wide (20*32*2 bytes), we skip the extra tiles
+    constexpr uint32_t write_out_src_stride = 20 * tt::constants::TILE_WIDTH * sizeof(uint16_t);
+
+    // Destination stride: each row at the destination is NUM_COMBINE_TILES_PER_CORE_W tiles wide (full row width).
+    // We write num_w2_tiles_w tiles into a column slice of that row, so successive tokens are one full row apart.
+    constexpr uint32_t write_out_dst_stride =
+        moe_ring::NUM_COMBINE_TILES_PER_CORE_W * tt::constants::TILE_WIDTH * sizeof(uint16_t);
+
+    // W offset at destination for this source core's data
+    const uint32_t write_out_dst_offset_w =
+        moe_ring::COMBINE_W_OFFSET_PER_CORE_B[ring_core_id] * tt::constants::TILE_WIDTH * sizeof(uint16_t);
+
+    // Base local address at each destination core (before adding w offset)
+    const uint32_t write_out_dst_base_addr = get_write_ptr(cb_s2c_in);
+
+    // Expert 1 data goes 32 rows after expert 0 (32 tokens * full row stride)
+    constexpr uint32_t write_out_expert_offset = 128 * write_out_dst_stride;
+
+    // 12 ring cores are grouped into 4 groups of 3 (matching COMBINE_W_OFFSET_PER_CORE_B reset pattern).
+    // Each group of 3 ring cores writes to the same x-column of combine cores.
+    constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / moe_ring::NUM_COMBINE_CORES_W;  // 12/4 = 3
+    const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
+
+    //-------------------------------------------------------------------------
+    // Per expert counts
+    //-------------------------------------------------------------------------
+
+    // TODO get height_blocks from token_counts;
+    // noc_semaphore_wait(reinterpret_cast < volatile tt_l1_ptr uint32_t*(metadata_ready_semaphore_addr), 1);
+    // uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+
+    uint32_t per_expert_counts_ptr[num_experts];
+    per_expert_counts_ptr[0] = per_expert_counts_ptr[1] = 32;
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -116,6 +153,13 @@ void kernel_main() {
         // Wait for compute core to tell us that all mm01 data is ready
         cb_wait_front(cb_c2w_rdy, 1);
         cb_pop_front(cb_c2w_rdy, 1);
+
+        // Set state for the data writes
+        noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
+
+        // Set state for the semaphore write
+        noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
+            neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
 
         // Take the data in cb_s2c_in2 and send it to the next core in the ring
         // Ring synchronization: all cores participate regardless of whether they had CB work
@@ -151,5 +195,82 @@ void kernel_main() {
                 noc_async_posted_writes_flushed();
             }
         }
+
+        //-------------------------------------------------------------------------
+        // Write out to combine cores
+        //-------------------------------------------------------------------------
+        cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
+
+        uint32_t src_addr = get_read_ptr(cb_c2s_out);
+
+        const uint32_t num_tokens = per_expert_counts_ptr[expert_id];
+        const uint32_t num_full_blocks = num_tokens / moe_ring::NUM_TOKENS_PER_CORE;
+        const uint32_t remainder_tokens = num_tokens % moe_ring::NUM_TOKENS_PER_CORE;
+        // Total height blocks: full blocks + 1 partial block if there are remainder tokens
+        const uint32_t num_height_blocks = num_full_blocks + (remainder_tokens > 0 ? 1 : 0);
+
+        // Destination address for this expert at each core:
+        //   base + w_offset + expert_id * expert_offset
+        uint32_t dst_local_addr_base =
+            write_out_dst_base_addr + write_out_dst_offset_w + expert_id * write_out_expert_offset;
+
+        // y-core index: we start at 0 and advance by 1 every 8 tokens, wrapping at NUM_COMBINE_CORES_H (4)
+        uint32_t combine_core_y_idx = 0;
+
+        // Track how many groups of 8 tokens have been written to each y-core so far,
+        // so that wrap-around writes continue after previously placed tokens.
+        uint32_t y_core_visit_count[moe_ring::NUM_COMBINE_CORES_H] = {0};
+
+        for (uint32_t height_block = 0; height_block < num_height_blocks; ++height_block) {
+            // Compute the combine core map index: x + y * NUM_COMBINE_CORES_W
+            uint32_t combine_core_idx = combine_core_x + combine_core_y_idx * moe_ring::NUM_COMBINE_CORES_W;
+
+            // Pick the dst core for this height block
+            const uint32_t dest_noc_x = combine_core_map[2 * combine_core_idx];
+            const uint32_t dest_noc_y = combine_core_map[2 * combine_core_idx + 1];
+
+            // Destination address: offset by how many groups of 8 we've already written to this y-core
+            uint32_t dst_addr = dst_local_addr_base + y_core_visit_count[combine_core_y_idx] *
+                                                          moe_ring::NUM_TOKENS_PER_CORE * write_out_dst_stride;
+
+            // Set state for the data writes to this core
+            uint64_t combine_dst_noc_addr = get_noc_addr(dest_noc_x, dest_noc_y, dst_addr);
+            noc_async_write_one_packet_set_state</*posted=*/true>(
+                combine_dst_noc_addr, write_out_packet_size, /*noc=*/1, vchannel);
+
+            // Last block may be partial if num_tokens is not a multiple of 8
+            const uint32_t tokens_this_block =
+                (height_block == num_full_blocks) ? remainder_tokens : moe_ring::NUM_TOKENS_PER_CORE;
+
+            for (uint32_t h = 0; h < tokens_this_block; ++h) {
+                noc_async_write_one_packet_with_state</*posted=*/true>(src_addr, dst_addr);
+
+                // Advance src by full token width in source (20 tiles)
+                src_addr += write_out_src_stride;
+                // Advance dst by one full row at the destination
+                dst_addr += write_out_dst_stride;
+            }
+
+            // Record that we've written one group of 8 tokens to this y-core
+            y_core_visit_count[combine_core_y_idx]++;
+
+            // Move to the next y-core, wrapping around after NUM_COMBINE_CORES_H (4)
+            combine_core_y_idx = (combine_core_y_idx + 1) % moe_ring::NUM_COMBINE_CORES_H;
+        }
+        cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
+    }  // end expert loop
+
+    // Ensure all data writes have landed before signaling
+    noc_async_posted_writes_flushed();
+
+    // Atomically increment the semaphore at ALL destination combine cores in our x-column,
+    // regardless of whether we wrote data to them, so they can wait for completion from all sources.
+    for (uint32_t y = 0; y < moe_ring::NUM_COMBINE_CORES_H; ++y) {
+        uint32_t idx = combine_core_x + y * moe_ring::NUM_COMBINE_CORES_W;
+        uint64_t dest_sem_noc_addr =
+            get_noc_addr(combine_core_map[2 * idx], combine_core_map[2 * idx + 1], semaphore_addr);
+        noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
     }
+
+    // TODO: Barrier to make sure the increments left the core before exiting.
 }

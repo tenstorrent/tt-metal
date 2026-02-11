@@ -8,6 +8,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
 #include <numeric>
@@ -16,15 +17,31 @@
 #include <vector>
 
 namespace ttnn::operations::experimental::moe::program {
+namespace detail {
+
+std::string serialize_physical_core_coords(const tt::tt_metal::CoreRangeSet& coreranges, const MeshDevice& device) {
+    std::vector<uint32_t> flat_physical_core_coords;
+    flat_physical_core_coords.reserve(2 * coreranges.num_cores());
+
+    for (const auto& c : corerange_to_cores(coreranges, /*max_cores=*/std::nullopt, /*row_wise=*/true)) {
+        const auto pc = device.worker_core_from_logical_core(c);
+        flat_physical_core_coords.push_back(pc.x);
+        flat_physical_core_coords.push_back(pc.y);
+    }
+
+    return ccl::common::stringify(flat_physical_core_coords);
+}
+}  // namespace detail
 
 MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t&) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
+    auto* device = tensor_args.input_tensor.device();
+
     // Get the cores for the program
     const auto dram_bank2core_coords =
-        tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
-            tt::tt_metal::NOC::RISCV_0_default);
+        device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
 
     const uint32_t num_cores = dram_bank2core_coords.size();
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
@@ -114,6 +131,12 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
+    const auto& output_shard_core_ranges = operation_attributes.output_shard_core_ranges;
+    auto combine_cores = output_shard_core_ranges;
+
+    std::map<std::string, std::string> dm1_defines = {
+        {"OUTPUT_SHARD_CORE_MAP", detail::serialize_physical_core_coords(output_shard_core_ranges, *device)}};
+
     auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm1.cpp",
@@ -122,6 +145,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = compile_args,
+            .defines = dm1_defines,
             .named_compile_args = named_compile_time_args});
 
     auto compute_kernel_handle = tt::tt_metal::CreateKernel(
@@ -137,16 +161,27 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
+    auto combine_dm1_kernel_handle = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/combine_dm1.cpp",
+        combine_cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_1});
+
     // Create semaphores for ring synchronization between cores
     // Each core will have a semaphore that its predecessor will signal
     const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+
+    // Create semaphore on combine cores for source->combine completion signaling.
+    // The dm1 kernel uses get_semaphore(ring_semaphore_id) to compute the remote address,
+    // so the combine cores need a semaphore at the same ID.
+    const uint32_t combine_semaphore_id = tt::tt_metal::CreateSemaphore(program, combine_cores, 0);
 
     // Create optimal ring ordering for NOC1 to minimize traffic conflicts
     // NOC1 routes: decreasing y (top) first, then decreasing x (left)
     // Sort cores by (descending y, descending x) to create a ring that flows naturally
     std::vector<uint32_t> ring_pos2bank_id(num_cores);
     std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
-    auto device = tensor_args.input_tensor.device();
 
     std::sort(
         ring_pos2bank_id.begin(),
@@ -220,6 +255,16 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         log_debug(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
     }
 
+    // Set runtime arguments for the combine dm1 kernel on each combine core.
+    // The only runtime arg is the semaphore ID.
+    const std::vector<uint32_t> combine_runtime_args = {combine_semaphore_id};
+    for (const auto& core : corerange_to_cores(combine_cores)) {
+        tt::tt_metal::SetRuntimeArgs(program, combine_dm1_kernel_handle, core, combine_runtime_args);
+    }
+
+    // Note: combine_dm1_kernel_handle is intentionally excluded from kernel_handles
+    // because override_runtime_arguments iterates kernel_handles over worker_cores (ring cores),
+    // and the combine kernel runs on different cores with a different runtime args layout.
     return cached_program_t{
         std::move(program),
         MoESharedVariables{

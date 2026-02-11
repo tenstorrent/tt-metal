@@ -12,6 +12,7 @@ namespace ttnn::operations::experimental::moe {
 struct operation_attributes_t {
     uint32_t num_experts{};
     uint32_t layer_id{};
+    tt::tt_metal::CoreRangeSet output_shard_core_ranges;
 };
 
 struct tensor_args_t {

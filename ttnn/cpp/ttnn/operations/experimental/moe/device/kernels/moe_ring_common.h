@@ -6,8 +6,9 @@
 
 #include <stdint.h>
 #include <algorithm>
+#include <array>
 
-//=============================================================================
+//-----------------------------------------------------------------------------
 // MoE Ring All-to-All Configuration
 //
 // Two arrangements supported:
@@ -18,7 +19,7 @@
 // 2. Evenly distributed: [6,5,5,6,5,5,6,5,5,6,5,5] - positions [0,3,6,9]
 //    Formula: (source % 3 == 0) ? 6 : 5
 //    Simplest code pattern
-//=============================================================================
+//-----------------------------------------------------------------------------
 
 namespace moe_ring {
 
@@ -142,4 +143,39 @@ constexpr uint32_t NUM_A2A_ITERS_A =
 constexpr uint32_t NUM_A2A_ITERS_B =
     (*std::max_element(W2_TILES_PER_CORE_B, W2_TILES_PER_CORE_B + NUM_CORES) + 4 - 1) / 4;
 
+//-----------------------------------------------------------------------------
+// MoE Combine Write Out Configuration
+//-----------------------------------------------------------------------------
+constexpr uint32_t NUM_COMBINE_CORES_W = 4;
+constexpr uint32_t NUM_COMBINE_CORES_H = 4;
+constexpr uint32_t NUM_COMBINE_CORES = NUM_COMBINE_CORES_W * NUM_COMBINE_CORES_H;
+
+constexpr uint32_t NUM_TOKENS_PER_CORE = 8;
+
+constexpr uint32_t NUM_COMBINE_TILES_PER_CORE_W = NUM_W0_W1_TILES_H / NUM_COMBINE_CORES_W;
+
+constexpr std::array<uint32_t, NUM_CORES> COMBINE_W_OFFSET_PER_CORE_A = []() constexpr {
+    std::array<uint32_t, NUM_CORES> arr = {};
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < NUM_CORES; ++i) {
+        arr[i] = sum;
+        sum += W2_TILES_PER_CORE_A[i];
+    }
+    return arr;
+}();
+
+// This gives offset (from start at that core) at destination for each source core
+// The destination itself is picked based on ring_core_id (w) and token ID (h)
+constexpr std::array<uint32_t, NUM_CORES> COMBINE_W_OFFSET_PER_CORE_B = []() constexpr {
+    std::array<uint32_t, NUM_CORES> arr = {};
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < NUM_CORES; ++i) {
+        if (i % 3 == 0) {
+            sum = 0;
+        }
+        arr[i] = sum;
+        sum += W2_TILES_PER_CORE_B[i];
+    }
+    return arr;
+}();
 }  // namespace moe_ring
