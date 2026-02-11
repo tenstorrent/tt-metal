@@ -133,8 +133,8 @@ void kernel_main() {
     constexpr uint32_t num_subblocks_k = get_compile_time_arg_val(6);
     constexpr uint32_t tile_r_dim = get_compile_time_arg_val(7);
 
-    constexpr uint32_t transpose = false;
-    constexpr uint32_t split_acc = true;
+    constexpr bool transpose = false;
+    constexpr bool split_acc = true;
     constexpr uint32_t num_subblocks_n = per_core_N / subblock_w;
     constexpr uint32_t num_tiles_k = subblock_k * num_subblocks_k;
 

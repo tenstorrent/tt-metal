@@ -13,7 +13,7 @@
  * in0 tile shape: [{1, 2, 4, 8}, 32]
  * in1 tile shape: [32, 32]
  * rt_dim: 1
- * ct_dim: {1, 2, 4, 6, 8, 10, 11, 12, 14, 16}
+ * ct_dim: {1, 2, 4, 6, 8, 10, 12, 14, 16}
  * kt_dim: even number from 2 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported

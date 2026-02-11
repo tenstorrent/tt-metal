@@ -21,7 +21,7 @@ using namespace ckernel::unpacker;
 // in0 tile shape: [{1, 2, 4, 8}, 32]
 // in1 tile shape: [32, 32]
 // rt_dim: 1
-// ct_dim: {1, 2, 4, 6, 8, 10, 11, 12, 14, 16}
+// ct_dim: {1, 2, 4, 6, 8, 10, 12, 14, 16}
 // kt_dim: even number from 2 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
@@ -41,7 +41,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
         // Counters of interest are CH0 Y and Z (both with a stride of a single face in L1
         // (datum_size * 16 * face_r_dim) and CH1 Y with a stride of a face in SrcB (16 rows)
         // Each unpack instruction we move to next face in L1, but this is split among Y and Z counters
-        // Because they are 8 bit counters and to to cover max inner dim of 256
+        // Because they are 8 bit counters and to cover max inner dim of 256
         // we need to increment face counter 512 times thus overflowing if we use a single counter,
         // using both counters allows us to cover exactly 512 needed increments
         // For SrcB first unpack has to land at index 0 and second one at index 16,
@@ -65,7 +65,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
             TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);  // Also set dvalid
 
             // Unpack SrcB (in0, one instruction per face, uses counters to manipulate addresses for both L1 and SrcB)
-            // Same counter shennanigans as descibed above
+            // Same counter shenanigans as described above
             TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
             TTI_UNPACR_COMMON(SrcB, 0b00110100, 1);  // Also set dvalid
 
@@ -126,7 +126,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
     // Since our replay is organized like:
     // full context 0, reuse context 1, {reuse context 0, reuse context 1} 4 times (which fills all 32 instructions)
     // We just pick first ct_dim / 2 sequences (each sequence is 3 instructions plus first full one is
-    // 2 additional instructions, thus getting the equation which calculates frist half of the replay length)
+    // 2 additional instructions, thus getting the equation which calculates first half of the replay length)
     // Similarly second half is just {reuse context 0, reuse context 1} ct_dim / 4 times,
     // which is just picking ct_dim / 2 seqeunces starting from the first reuse context 0 sequence
     // (each sequence is 3 instructions so replay length calculation is simpler)
