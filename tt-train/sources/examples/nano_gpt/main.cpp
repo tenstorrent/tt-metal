@@ -176,6 +176,7 @@ struct DeviceConfig {
 
     bool enable_ddp = false;
     bool enable_tp = false;
+    bool enable_cp = false;
 };
 
 DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
@@ -187,9 +188,10 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
 
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
+    config.enable_cp = device_node["enable_cp"].as<bool>(false);
 
     auto mesh_shape_node = device_node["mesh_shape"];
-    bool multidevice = config.enable_ddp || config.enable_tp;
+    bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp;
     if (multidevice && !mesh_shape_node) {
         throw std::runtime_error("Mesh shape is required for multidevice training");
     }
@@ -288,8 +290,8 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string training_config_name =
-        std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
+    std::string training_config_name = std::filesystem::current_path().string() +
+                                       "/configs/training_configs/training_shakespeare_tinyllama_tp_galaxy.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -332,9 +334,10 @@ int main(int argc, char **argv) {
         fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
     }
 
-    if (device_config.enable_ddp || device_config.enable_tp) {
+    if (device_config.enable_ddp || device_config.enable_cp || device_config.enable_tp) {
         fmt::println("Device config:");
         fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
+        fmt::println("  Context parallel enabled: {}", device_config.enable_cp);
         fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
         fmt::println("  Device IDs: {}", device_config.device_ids);
@@ -359,7 +362,13 @@ int main(int argc, char **argv) {
         int rank = *ttml::autograd::ctx().get_distributed_context()->rank();
         auto seed = training_config.seed + static_cast<uint32_t>(rank);
         ttml::autograd::ctx().set_seed(seed);
+    } else if (device_config.enable_cp) {
+        // Initialize distributed context for CP (needed for socket communication).
+        // NOTE: initialize_socket_manager is called AFTER enable_fabric + open_device
+        // to match the working initialization order from tests.
+        ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
     }
+
     auto schedule_func = schedulers.at(training_config.scheduler_type);
 
     fmt::print("Max steps {}\n", training_config.max_steps);
@@ -420,17 +429,26 @@ int main(int argc, char **argv) {
     fmt::print("Dataset size: {}\n", dataset.get_size());
 
     auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
-    // enable fabric config for 3-tier architecture, tp, ddp
-    if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp) {
+    // enable fabric config for 3-tier architecture, tp, ddp, cp
+    if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp ||
+        device_config.enable_cp) {
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
     auto *device = &ttml::autograd::ctx().get_device();
 
+    // Initialize socket manager AFTER fabric is enabled and device is opened.
+    // This matches the working initialization order from tests (ring_shift_test, GQA test).
+    if (device_config.enable_cp && !multihost_config.enable_mpi) {
+        ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
+    }
+
     // Configure parallelization context from device config
     ttml::autograd::ctx().initialize_parallelism_context(
-        {.enable_ddp = device_config.enable_ddp, .enable_tp = device_config.enable_tp});
+        {.enable_ddp = device_config.enable_ddp,
+         .enable_tp = device_config.enable_tp,
+         .enable_cp = device_config.enable_cp});
 
     struct CachedHostData {
         std::vector<uint32_t> data;
@@ -445,8 +463,21 @@ int main(int argc, char **argv) {
             mask.push_back(i >= j ? 1.0F : 0.0F);
         }
     }
-    cached_data.masks_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
+    // Create mask tensor - shard along sequence dim if CP is enabled
+    const auto &pctx_mask = ttml::autograd::ctx().get_parallelism_context();
+    if (pctx_mask.is_cp_enabled() && pctx_mask.get_cp_size() > 1) {
+        const auto mask_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
+            *device, /*dim=*/2, /*cluster_axis=*/pctx_mask.get_cp_axis().value());
+        cached_data.masks_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+            mask,
+            ttnn::Shape({1U, 1U, sequence_length, sequence_length}),
+            device,
+            ttnn::Layout::TILE,
+            mask_mapper.get()));
+    } else {
+        cached_data.masks_tensor = ttml::autograd::create_tensor(
+            ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
+    }
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {
@@ -474,7 +505,7 @@ int main(int argc, char **argv) {
                 if (pctx.is_ddp_enabled()) {
                     // Shard batch on DP axis (replicates on TP axis automatically for 2D mesh)
                     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
-                        *device, /*dim=*/0, /*cluster_axis=*/pctx.get_ddp_axis());
+                        *device, /*dim=*/0, /*cluster_axis=*/pctx.get_ddp_axis().value());
                     auto data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                             data,
@@ -489,6 +520,30 @@ int main(int argc, char **argv) {
                         device,
                         ttnn::Layout::ROW_MAJOR,
                         mapper.get());
+                    auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
+                    return {data_tensor, targets_tensor};
+                } else if (pctx.is_cp_enabled() && pctx.get_cp_size() > 1) {
+                    // Shard sequence on CP axis
+                    // Data is 4D [B, 1, 1, S] -> shard on dim 3
+                    // Targets is 2D [B, S] -> shard on dim 1 (cross_entropy_loss expects rank 2)
+                    const auto data_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
+                        *device, /*dim=*/3, /*cluster_axis=*/pctx.get_cp_axis().value());
+                    auto data_tensor =
+                        ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                            data,
+                            ttnn::Shape({batch_size, 1, 1, sequence_length}),
+                            device,
+                            ttnn::Layout::ROW_MAJOR,
+                            data_mapper.get()));
+
+                    const auto targets_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
+                        *device, /*dim=*/1, /*cluster_axis=*/pctx.get_cp_axis().value());
+                    auto targets_tt_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        targets,
+                        ttnn::Shape({batch_size, sequence_length}),
+                        device,
+                        ttnn::Layout::ROW_MAJOR,
+                        targets_mapper.get());
                     auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
                     return {data_tensor, targets_tensor};
                 }
@@ -536,7 +591,7 @@ int main(int argc, char **argv) {
                 if (multihost_config.pipeline_parallel_config) {
                     return ttml::models::distributed::pipeline_parallel_llama::create(
                         arg, *multihost_config.pipeline_parallel_config, device_config.enable_tp);
-                } else if (device_config.enable_tp) {
+                } else if (device_config.enable_tp || device_config.enable_cp) {
                     return ttml::models::distributed::llama::create(arg);
                 } else {
                     return ttml::models::llama::create(arg);
@@ -708,6 +763,8 @@ int main(int argc, char **argv) {
                 memory_snapshot("BACKWARD_PASS");
             }
 
+            fmt::print("loss_float: {}\n", loss_float);
+
             ttml::autograd::ctx().reset_graph();
 
             auto samples = features->get_value().logical_shape()[0];
@@ -716,7 +773,8 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (device_config.enable_ddp && !is_three_tier_training(multihost_config)) {
+                if ((device_config.enable_ddp || device_config.enable_cp) &&
+                    !is_three_tier_training(multihost_config)) {
                     ttml::core::distributed::synchronize_gradients(parameters);
                 }
 

@@ -91,7 +91,6 @@ autograd::TensorPtr ring_attention_sdpa(
     // NOTE: We do NOT store K/V or step outputs - they are recomputed via ring shifting in backward
     // We only store final global statistics needed for weight computation
 
-    // Helper lambda to print tensor stats for debugging
     // Create "no contribution" intermediate values for skipped devices
     // When a device is skipped, its intermediate tensor should have:
     // - max_val (col 0) = -inf (large negative) so it doesn't affect global max
@@ -387,6 +386,7 @@ autograd::TensorPtr ring_attention_sdpa(
         query->add_grad(grad_Q_accum);
         key->add_grad(grad_K_accum);
         value->add_grad(grad_V_accum);
+        // fmt::print("grad_Q_accum: {}\n", ttml::core::to_xtensor(grad_Q_accum, ttml::core::IdentityComposer{})[0]);
     };
 
     auto links = autograd::get_links(query, key, value);

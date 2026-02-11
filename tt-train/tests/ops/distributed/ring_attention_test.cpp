@@ -252,7 +252,7 @@ SDPAGrads reference_sdpa_backward(
 
 // Create causal mask for full sequence
 // Shape: (1, 1, seq_len, seq_len) - lower triangular
-xt::xarray<float> create_causal_mask(size_t seq_len) {
+static xt::xarray<float> create_causal_mask(size_t seq_len) {
     xt::xarray<float> mask = xt::zeros<float>({1UL, 1UL, seq_len, seq_len});
     for (size_t i = 0; i < seq_len; ++i) {
         for (size_t j = 0; j <= i; ++j) {

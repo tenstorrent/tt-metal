@@ -163,6 +163,10 @@ ParallelismContext::ParallelismContext(
     return *m_parallelism_context;
 }
 
+bool AutoContext::is_parallelism_context_initialized() const {
+    return m_parallelism_context != nullptr;
+}
+
 void AutoContext::initialize_parallelism_context(const DistributedConfig& config) {
     if (m_parallelism_context) {
         throw std::runtime_error("ParallelismContext is already initialized.");

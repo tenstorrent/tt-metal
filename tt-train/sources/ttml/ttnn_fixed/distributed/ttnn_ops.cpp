@@ -162,6 +162,8 @@ tt::tt_metal::Tensor ring_shift(
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
 
+    tt::tt_metal::distributed::Synchronize(
+        mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
     // Phase 1: Even positions send, odd positions receive
     const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
@@ -171,6 +173,8 @@ tt::tt_metal::Tensor ring_shift(
     const core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
     socket_manager.send(tensor, inter_host_params, odd_to_even_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, odd_to_even_params);
+    tt::tt_metal::distributed::Synchronize(
+        mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     return output_tensor;
 }

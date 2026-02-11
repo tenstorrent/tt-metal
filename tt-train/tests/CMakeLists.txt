@@ -38,6 +38,7 @@ set(SOURCES
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
+    modules/distributed/grouped_query_attention_test.cpp
     serialization/model_serializer_test.cpp
     serialization/flatbuffer_serializer_test.cpp
     serialization/tensor_serializer_test.cpp

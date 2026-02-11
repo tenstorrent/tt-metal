@@ -274,7 +274,8 @@ void py_module(nb::module_& m) {
             nb::arg("head_dim"),
             nb::arg("sequence_length"),
             nb::arg("theta"),
-            nb::arg("rope_scaling_params"));
+            nb::arg("rope_scaling_params"),
+            nb::arg("mesh_mapper") = nullptr);
         py_rope.def(
             "build_rope_params",
             &ttml::ops::build_rope_params,

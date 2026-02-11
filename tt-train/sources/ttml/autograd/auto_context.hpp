@@ -120,6 +120,8 @@ public:
 
     [[nodiscard]] const ParallelismContext& get_parallelism_context() const;
 
+    [[nodiscard]] bool is_parallelism_context_initialized() const;
+
     void initialize_parallelism_context(const DistributedConfig& config);
 
 private:
