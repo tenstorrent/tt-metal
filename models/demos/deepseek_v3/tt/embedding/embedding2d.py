@@ -30,6 +30,7 @@ class Embedding2D(Embedding1D):
             cluster_axis=0,
             dim=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
         )
 
         assert "reduce_scatter_scale" not in cfg
@@ -52,6 +53,7 @@ class Embedding2D(Embedding1D):
             cluster_axis=0,
             dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
         )
 
         assert "reduce_scatter_scale" not in cfg

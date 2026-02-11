@@ -16,10 +16,6 @@ from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekG
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
-optimal_topology = (
-    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-)
-
 
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
@@ -280,7 +276,8 @@ def run_demo(
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
-    fabric_config = optimal_topology
+
+    fabric_config = ttnn.FabricConfig.FABRIC_1D
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 

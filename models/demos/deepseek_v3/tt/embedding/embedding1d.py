@@ -101,6 +101,7 @@ class Embedding1D(AbstractModule):
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=0,
                 dim=-1,
+                topology=ttnn.Topology.Linear,
                 # memory_config=memory_config, # TODO: uncomment once all gather async segfault is solved (Issue #26672)
             ),
         }
@@ -146,6 +147,7 @@ class Embedding1D(AbstractModule):
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=0,
                 dim=-1,
+                topology=ttnn.Topology.Linear,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 # memory_config=memory_config, # TODO: uncomment once all gather async segfault is solved (Issue #26672)
             ),
