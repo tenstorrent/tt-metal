@@ -382,7 +382,9 @@ class RunChecks:
                         )
                     continue
                 except Exception as e:
-                    print(f"Skipping {risc_name} at {location.to_user_str()} at device {location.device_id}: {str(e)}")
+                    log_warning(
+                        f"Skipping {risc_name} at {location.to_user_str()} at device {location.device_id}: {str(e)}"
+                    )
                     continue
 
                 # Use the common result collection helper

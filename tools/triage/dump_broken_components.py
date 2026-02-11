@@ -8,7 +8,7 @@ Usage:
     dump_broken_components [--user-view]
 
 Options:
-    --user-view      Draws broken cores instead of listing them.
+    --user-view      Draws broken cores instead of listing them. Broken cores are marked with an 'x' others are marked with a '-'.
 
 Description:
     Probes devices by reading L1 address 0 and probes cores by attempting to halt them.
@@ -60,18 +60,10 @@ def group_broken_cores_by_risc_name(broken_cores: set[BrokenCore]) -> dict[str, 
 
 def draw_broken_cores(broken_cores: set[BrokenCore]) -> str:
     def location_render(location: OnChipCoordinate) -> str:
-        s = ""
+        riscs_string = ""
         for risc_name in location.device.get_block(location).risc_names:
-            if BrokenCore(location, risc_name) in broken_cores:
-                s += "x"
-            else:
-                # Skipping DRAM and ACTIVE_ETH blocks because we do not check them
-                if (
-                    not location in location.device.active_eth_block_locations
-                    and not location.noc_block.block_type == "dram"
-                ):
-                    s += "-"
-        return s
+            riscs_string += "x" if BrokenCore(location, risc_name) in broken_cores else "-"
+        return riscs_string
 
     return next(iter(broken_cores)).location.device.render(axis_coordinate="noc0", cell_renderer=location_render)
 
@@ -85,7 +77,7 @@ def broken_core_serializer(broken_cores: set[BrokenCore] | None | str) -> str:
         broken_cores_by_risc_name = group_broken_cores_by_risc_name(broken_cores)
         return "\n".join(
             [
-                f"{risc_name}: {collection_serializer(', ')(broken_cores_by_risc_name[risc_name])}"
+                f"[error]{risc_name}[/]: {collection_serializer(', ')(broken_cores_by_risc_name[risc_name])}"
                 for risc_name in broken_cores_by_risc_name
             ]
         )
@@ -108,8 +100,10 @@ def collect_device_health_summary(run_checks: RunChecks) -> DeviceHealthSummary:
             return DeviceHealthSummary(device=device, broken_cores=f"[error]Device is broken so it is skipped.[/]")
         else:
             broken_cores = run_checks.get_broken_cores()
-            return DeviceHealthSummary(
-                device=device, broken_cores=broken_cores[device] if device in broken_cores else None
+            return (
+                DeviceHealthSummary(device=device, broken_cores=broken_cores[device])
+                if device in broken_cores
+                else None
             )
 
 
