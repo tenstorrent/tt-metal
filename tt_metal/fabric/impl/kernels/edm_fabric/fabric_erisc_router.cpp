@@ -2402,8 +2402,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     //       (probably better) pack most of these into single words (e.g. we could hold a read, write, and ackptr in a
     //       single word) this way - especially if power of 2 wraps, we can handle both channels literally at once with
     //       math ops on single individual words (or half words)
-    auto outbound_to_receiver_channel_pointers =
-        ChannelPointersTuple<OutboundReceiverChannelPointers, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make();
+    auto outbound_to_receiver_channel_pointers = ChannelPointersTuple<
+        OutboundReceiverChannelPointers,
+        REMOTE_RECEIVER_NUM_BUFFERS_ARRAY,
+        ENABLE_FIRST_LEVEL_ACK_VC0>::make();
 
     configure_outbound_to_receiver_channel_pointers(outbound_to_receiver_channel_pointers, remote_receiver_channels);
 
