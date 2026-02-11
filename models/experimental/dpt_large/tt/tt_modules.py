@@ -220,52 +220,27 @@ class TTLayerNorm:
         self.bias = bias
         self.eps = eps
         self.device = device
-        self._weight_tt = None
-        self._bias_tt = None
-        try:
-            self._weight_tt = ttnn.from_torch(
-                weight.detach().view(1, 1, 1, -1),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-            self._bias_tt = ttnn.from_torch(
-                bias.detach().view(1, 1, 1, -1),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-        except Exception:
-            self._weight_tt = None
-            self._bias_tt = None
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Prefer device-side layer norm to avoid per-layer host round-trips.
-        try:
-            kwargs = {"epsilon": self.eps}
-            if self._weight_tt is not None and self._bias_tt is not None:
-                kwargs["weight"] = self._weight_tt
-                kwargs["bias"] = self._bias_tt
-            return ttnn.layer_norm(x, **kwargs)
-        except Exception:
-            # Host fallback preserves correctness when layer_norm kernels/configs are unavailable.
-            x_host = x.cpu()
-            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-            x_torch = x_host.to_torch()
-            y_torch = torch.nn.functional.layer_norm(
-                x_torch,
-                normalized_shape=[x_torch.shape[-1]],
-                weight=self.weight,
-                bias=self.bias,
-                eps=self.eps,
-            )
-            return ttnn.from_torch(
-                y_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
+        # Host LN for strict parity
+        x_host = x.cpu()
+        if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
+            x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
+        x_torch = x_host.to_torch()
+        y_torch = torch.nn.functional.layer_norm(
+            x_torch,
+            normalized_shape=[x_torch.shape[-1]],
+            weight=self.weight,
+            bias=self.bias,
+            eps=self.eps,
+        )
+        y = ttnn.from_torch(
+            y_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        return y
 
 
 class TTAttention:
