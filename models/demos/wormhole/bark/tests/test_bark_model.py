@@ -55,7 +55,7 @@ class TestBarkSemanticModel:
 
         model = TtBarkModel.from_pretrained(device)
 
-        inputs = model.tokenizer(text=["Hello world"], return_tensors="pt")
+        inputs = model.processor(text=["Hello world"], return_tensors="pt")
         input_ids = inputs["input_ids"]
 
         semantic_tokens = model.semantic.generate(
@@ -207,7 +207,7 @@ class TestBarkPerformance:
 
         model = TtBarkModel.from_pretrained(device)
 
-        inputs = model.tokenizer(text=["Hello world, this is a test."], return_tensors="pt")
+        inputs = model.processor(text=["Hello world, this is a test."], return_tensors="pt")
         input_ids = inputs["input_ids"]
 
         # Warm up

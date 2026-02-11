@@ -21,7 +21,7 @@ import torch
 import ttnn
 
 from models.demos.wormhole.bark.tt.bark_gpt import TtBarkGPT
-from models.demos.wormhole.bark.tt.common import BarkConfig, load_tt_tensor
+from models.demos.wormhole.bark.tt.common import BarkConfig
 
 
 class TtBarkFineModel:

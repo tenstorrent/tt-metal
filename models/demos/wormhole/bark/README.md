@@ -1,56 +1,57 @@
-# Bark Small - TTNN Model Bring-up
+# Bark Small Bring-up for Tenstorrent Wormhole
 
-## Overview
+This directory contains the implementation of the **Bark Small** text-to-audio model optimized for Tenstorrent hardware using the TTNN API.
 
-[Bark](https://github.com/suno-ai/bark) is a transformer-based text-to-audio model created by Suno.
-This implementation brings up the **Bark Small** (80M params per stage, 240M total) on Tenstorrent
-Wormhole hardware using TTNN APIs.
+## Bark Model Overview
+Bark is a transformer-based text-to-audio model by Suno AI. It consists of three stages:
+1.  **Stage 1 (Semantic)**: Text → Semantic tokens.
+2.  **Stage 2 (Coarse)**: Semantic tokens → Coarse acoustic codebooks (EnCodec).
+3.  **Stage 3 (Fine)**: Coarse codebooks → Fine acoustic codebooks (EnCodec).
+4.  **EnCodec Decoder**: Fine codebooks → Audio waveform.
 
-Bark uses a three-stage architecture:
-1. **Text-to-Semantic**: BERT tokenizer → Causal Transformer → 10k semantic vocab
-2. **Semantic-to-Coarse**: Semantic tokens → Causal Transformer → 2×1024 EnCodec codebooks
-3. **Coarse-to-Fine**: Coarse tokens → Non-causal Transformer → 6×1024 EnCodec codebooks
+## Requirements
+-   Tenstorrent Wormhole card.
+-   HuggingFace Transformers library.
+-   PyTorch.
+-   Numpy, Scipy.
 
-The final tokens are decoded to a 24 kHz mono waveform via Facebook's EnCodec decoder.
-
-## How to Run
-
-### Prerequisites
-- Tenstorrent Wormhole N150 or N300 hardware
-- Python 3.10+
-- Install dependencies: `pip install transformers scipy encodec`
-
-### Demo
+## Installation
+Ensure you have the Tenstorrent SDK and environment set up.
 ```bash
-pytest models/demos/wormhole/bark/tests/test_bark_demo.py -svv
+python -m pip install transformers torch numpy scipy loguru
 ```
 
-### Unit Tests
+## Running the Demo
+A demo script is provided to generate audio from sample text.
 ```bash
-# Test individual stages
-pytest models/demos/wormhole/bark/tests/test_bark_semantic.py -svv
-pytest models/demos/wormhole/bark/tests/test_bark_coarse.py -svv
-pytest models/demos/wormhole/bark/tests/test_bark_fine.py -svv
+# Run the demo script
+python models/demos/wormhole/bark/demo/demo.py
+```
 
-# Test full pipeline
+## Running Tests
+Comprehensive unit tests and accuracy validations are provided in a single test suite.
+```bash
+# Run all Bark unit tests
 pytest models/demos/wormhole/bark/tests/test_bark_model.py -svv
 ```
 
-## Architecture
+The tests cover:
+- Individual stage forward passes.
+- End-to-end audio generation.
+- Multilingual support.
+- Emotion annotations ([laughs], [sighs]).
+- PCC validation against PyTorch reference.
+- Performance benchmarks.
 
-Each of the three stages uses a GPT-style transformer with:
-- 4 attention heads
-- 512 embedding dimension
-- 8 transformer layers
-- GELU activation
-- Causal attention (stages 1-2), Non-causal (stage 3)
+## Implementation Details
+-   **Hardware Acceleration**: MLP and LayerNorm layers are executed on the TT device.
+-   **Hybrid Attention**: Attention computation uses PyTorch SDPA for correctness during bring-up, with TT device handling projections.
+-   **Weight Loading**: Uses `from_pretrained` to load weights directly from HuggingFace `suno/bark-small`.
+-   **Configuration**: Automatically detects model dimensions from state dict keys to ensure exact matching.
 
-## Bounty
-
+## Bounty Info
 Fixes #32069
-
-## References
-- [Bark Small on HuggingFace](https://huggingface.co/suno/bark-small)
-- [Bark Official Repository](https://github.com/suno-ai/bark)
-- [EnCodec Repository](https://github.com/facebookresearch/encodec)
-- [TTNN Model Bring-up Tech Report](https://docs.tenstorrent.com)
+Bounty: Bark Small Bring-up using TTNN APIs.
+Target: Stage 1 (Bring-up) implementation and validation.
+Throughput Target: ≥ 20 tokens/sec for Stage 1.
+RTF Target: < 0.8.

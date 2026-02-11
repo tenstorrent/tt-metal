@@ -330,6 +330,12 @@ class TtBarkGPT:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
         )
+        # Validate input_vocab_size
+        actual_input_vocab = self.input_embeds_weight.shape[0]
+        if input_vocab_size is not None and actual_input_vocab != input_vocab_size:
+            raise ValueError(
+                f"Embedding vocab size ({actual_input_vocab}) does not match config ({input_vocab_size})"
+            )
 
         self.position_embeds_weight = load_tt_tensor(
             state_dict[f"{prefix}.position_embeds_layer.weight"],
@@ -339,21 +345,14 @@ class TtBarkGPT:
         )
 
         # Transformer blocks
-        self.layers = []
-        for i in range(config.num_hidden_layers):
-            block = TtBarkBlock(
-                state_dict,
-                f"{prefix}.layers.{i}",
-                device,
-                config,
-                is_causal=is_causal,
-            )
-            self.layers.append(block)
+        self.layers = [
+            TtBarkBlock(state_dict, f"{prefix}.layers.{i}", device, config, is_causal)
+            for i in range(config.num_hidden_layers)
+        ]
 
-        # Final layer norm
-        ln_has_bias = not is_causal or config.bias
+        # Final LayerNorm
         self.layernorm_final = TtBarkLayerNorm(
-            state_dict, f"{prefix}.layernorm_final", device, config, has_bias=ln_has_bias
+            state_dict, f"{prefix}.layernorm_final", device, config, has_bias=True
         )
 
         # LM head (no bias in Bark)
@@ -362,6 +361,12 @@ class TtBarkGPT:
             device=device,
             dtype=ttnn.bfloat8_b,
         )
+        # Validate output_vocab_size
+        actual_output_vocab = self.lm_head_weight.shape[-1]
+        if output_vocab_size is not None and actual_output_vocab != output_vocab_size:
+            raise ValueError(
+                f"LM head vocab size ({actual_output_vocab}) does not match config ({output_vocab_size})"
+            )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,

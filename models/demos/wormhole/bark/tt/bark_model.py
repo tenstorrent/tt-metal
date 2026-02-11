@@ -184,13 +184,16 @@ class TtBarkModel:
                 f"({coarse_len / (t1 - t0):.1f} tok/s)"
             )
 
-        # Extract coarse codebook tokens and reshape to [2, seq_len]
+        # Extract coarse codebook tokens and de-interleave into [n_coarse_codebooks, seq_len]
         coarse_output = coarse_tokens[:, semantic_tokens.shape[-1] :]
         if coarse_output.numel() > 0:
-            # Interleaved format: reshape to [n_coarse_codebooks, seq_len]
+            # Interleaved format: [cb0_0, cb1_0, cb0_1, cb1_1, ...]
             n_coarse = self.config.n_coarse_codebooks
             coarse_seq_len = coarse_output.shape[-1] // n_coarse
-            coarse_codebooks = coarse_output[:, : coarse_seq_len * n_coarse].reshape(n_coarse, coarse_seq_len)
+            flat = coarse_output[:, : coarse_seq_len * n_coarse]
+            # First reshape to [batch, seq_len, n_coarse], then permute to [n_coarse, batch, seq_len]
+            interleaved = flat.reshape(1, coarse_seq_len, n_coarse)
+            coarse_codebooks = interleaved.permute(2, 0, 1).reshape(n_coarse, coarse_seq_len)
         else:
             coarse_codebooks = torch.zeros(self.config.n_coarse_codebooks, 1, dtype=torch.long)
 
