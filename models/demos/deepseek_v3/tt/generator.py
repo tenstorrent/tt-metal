@@ -19,6 +19,7 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -83,6 +84,7 @@ class DeepseekGenerator:
         override_num_layers: int | None = None,
         single_layer: str | None = None,
         enable_trace: bool = False,
+        enable_mem_profile: bool = False,
         signpost: bool = False,
         prefill_max_tokens: int | None = None,
     ) -> None:
@@ -132,13 +134,23 @@ class DeepseekGenerator:
         self.random_weights = random_weights
         self.single_layer = single_layer
 
+        # Model runtime state
+        self.model_state = None
+        self.model_shared_state = None
+        self.model_prefill_cfg = None
+        self.model_decode_cfg = None
+        self.model_weight_config = None
+        self.page_tables_tt = None
+
         # Trace state (decode)
         self._trace_id: int | None = None
         self._trace_tokens: ttnn.Tensor | None = None
         self._trace_positions: ttnn.Tensor | None = None
         self._trace_rot_idxs: ttnn.Tensor | None = None
         self._trace_output: ttnn.Tensor | None = None
+        self._trace_page_tables_to_use: tuple[ttnn.Tensor, ...] | None = None
         self.enable_trace = enable_trace
+        self.enable_mem_profile = enable_mem_profile
         self.signpost = signpost
         self.prefill_max_tokens = prefill_max_tokens
         logger.info(f"Enable trace: {self.enable_trace}")
@@ -149,6 +161,10 @@ class DeepseekGenerator:
         )
 
         self._prepare_weight_configs(cache_dir)
+
+    def _dump_meminfo(self, header: str) -> None:
+        if self.enable_mem_profile:
+            dump_ttnn_meminfo(self.mesh_device, header=header)
 
     @staticmethod
     def _ensure_max_seq_len(hf_config) -> None:
@@ -185,6 +201,7 @@ class DeepseekGenerator:
 
     def _prepare_model_states(self, kv_cache_override: KvCacheConfig | None = None) -> None:
         logger.info("Creating model states...")
+        self._dump_meminfo("Before creating model states...")
         self.model_state = RowBatchedModel.create_state(
             hf_config=self.hf_config,
             mesh_device=self.mesh_device,
@@ -192,18 +209,24 @@ class DeepseekGenerator:
             ccl=self.ccl,
             kv_cache_override=kv_cache_override,
         )
+        self._dump_meminfo("After creating model states...")
         logger.info("Creating model shared states...")
+        self._dump_meminfo("Before creating model shared states...")
         self.model_shared_state = RowBatchedModel.create_shared_state(
             hf_config=self.hf_config, mesh_device=self.mesh_device
         )
+        self._dump_meminfo("After creating model shared states...")
 
     def _prepare_run_configs(self, mode: str, kv_cache_override: KvCacheConfig | None = None) -> None:
         if mode == "prefill":
             logger.info("Creating model prefill config...")
+            self._dump_meminfo("Before creating model prefill config...")
             self.model_prefill_cfg = RowBatchedModel.prefill_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
+            self._dump_meminfo("After creating model prefill config...")
             self._prepare_model_states(kv_cache_override=kv_cache_override)
+            self._dump_meminfo("Before creating model run config for prefill...")
             self.model_run_config_prefill = create_run_config(
                 self.model_prefill_cfg,
                 self.model_weight_config,
@@ -211,6 +234,7 @@ class DeepseekGenerator:
                 self.model_shared_state,
                 cached_ttnn_weights=self._weight_ttnn_cache,
             )
+            self._dump_meminfo("After creating model run config for prefill...")
         elif mode == "decode":
             logger.info("Creating model decode config...")
             assert (
@@ -222,6 +246,7 @@ class DeepseekGenerator:
             self.model_decode_cfg = RowBatchedModel.decode_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
+            self._dump_meminfo("Before creating model run config for decode...")
             self.model_run_config_decode = create_run_config(
                 self.model_decode_cfg,
                 self.model_weight_config,
@@ -229,6 +254,7 @@ class DeepseekGenerator:
                 self.model_shared_state,
                 cached_ttnn_weights=self._weight_ttnn_cache,
             )
+            self._dump_meminfo("After creating model run config for decode...")
         else:
             raise ValueError(f"Unknown run config mode: {mode}")
 
@@ -279,20 +305,47 @@ class DeepseekGenerator:
 
         # Clean up model states
         try:
-            if hasattr(self, "model_state") and self.model_state is not None:
+            if self.model_state is not None:
                 del self.model_state
         except Exception as e:
             logger.warning(f"Failed to cleanup model state: {e}")
 
         try:
-            if hasattr(self, "model_shared_state") and self.model_shared_state is not None:
+            if self.model_shared_state is not None:
                 del self.model_shared_state
         except Exception as e:
             logger.warning(f"Failed to cleanup model shared state: {e}")
 
+        # Clean up trace state
+        try:
+            if self._trace_id is not None:
+                ttnn.release_trace(self.mesh_device, self._trace_id)
+                del self._trace_id
+            if self._trace_tokens is not None:
+                ttnn.deallocate(self._trace_tokens)
+                del self._trace_tokens
+            if self._trace_positions is not None:
+                ttnn.deallocate(self._trace_positions)
+                del self._trace_positions
+            if self._trace_rot_idxs is not None:
+                ttnn.deallocate(self._trace_rot_idxs)
+                del self._trace_rot_idxs
+            if self._trace_output is not None:
+                ttnn.deallocate(self._trace_output)
+                del self._trace_output
+            if self._trace_page_tables_to_use is not None and self._trace_page_tables_to_use is not self.page_tables_tt:
+                for i, page_table in enumerate(self._trace_page_tables_to_use):
+                    try:
+                        ttnn.deallocate(page_table)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate trace page table {i}: {e}")
+                del self._trace_page_tables_to_use
+        except Exception as e:
+            logger.warning(f"Failed to cleanup trace state: {e}")
+
         # Clean up page tables (TTNN tensors)
         try:
-            if hasattr(self, "page_tables_tt") and self.page_tables_tt is not None:
+            if self.page_tables_tt is not None:
                 for i, page_table in enumerate(self.page_tables_tt):
                     try:
                         ttnn.deallocate(page_table)
@@ -304,25 +357,25 @@ class DeepseekGenerator:
 
         # Clean up RoPE setup
         try:
-            if hasattr(self, "rope_setup") and self.rope_setup is not None:
+            if self.rope_setup is not None:
                 del self.rope_setup
         except Exception as e:
             logger.warning(f"Failed to cleanup RoPE setup: {e}")
 
         # Clean up CCL
         try:
-            if hasattr(self, "ccl") and self.ccl is not None:
+            if self.ccl is not None:
                 del self.ccl
         except Exception as e:
             logger.warning(f"Failed to cleanup CCL: {e}")
 
         # Clean up configs
         try:
-            if hasattr(self, "model_prefill_cfg") and self.model_prefill_cfg is not None:
+            if self.model_prefill_cfg is not None:
                 del self.model_prefill_cfg
-            if hasattr(self, "model_decode_cfg") and self.model_decode_cfg is not None:
+            if self.model_decode_cfg is not None:
                 del self.model_decode_cfg
-            if hasattr(self, "model_weight_config") and self.model_weight_config is not None:
+            if self.model_weight_config is not None:
                 del self.model_weight_config
 
         except Exception as e:
@@ -330,18 +383,10 @@ class DeepseekGenerator:
 
         # Clean up paged config
         try:
-            if hasattr(self, "paged_config") and self.paged_config is not None:
+            if self.paged_config is not None:
                 del self.paged_config
         except Exception as e:
             logger.warning(f"Failed to cleanup paged config: {e}")
-
-        # Clean up trace state
-        if self.enable_trace:
-            try:
-                if hasattr(self, "_trace_id") and self._trace_id is not None:
-                    ttnn.release_trace(self.mesh_device, self._trace_id)
-            except Exception as e:
-                logger.warning(f"Failed to release trace: {e}")
 
     def __enter__(self):
         """Context manager entry."""
@@ -414,7 +459,7 @@ class DeepseekGenerator:
         tokens_step: torch.Tensor,
         positions: torch.Tensor,
         batch_size_per_row: int,
-        page_table: torch.Tensor | None = None,
+        page_tables: torch.Tensor | None = None,
         return_rot_idxs: bool = False,
     ) -> torch.Tensor | Tuple[torch.Tensor, ttnn.Tensor]:
         """Run a single decode step and return logits on host as torch tensor [1, 1, B, V].
@@ -444,8 +489,8 @@ class DeepseekGenerator:
             dtype=ttnn.int32,
         )
 
-        if page_table is not None:
-            page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table)
+        if page_tables is not None:
+            page_tables_to_use = self._convert_vllm_page_table_for_batch(page_tables, device=self.mesh_device)
         else:
             page_tables_to_use = self._get_page_tables()
         # RowBatchedModel forward
@@ -637,11 +682,11 @@ class DeepseekGenerator:
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
                     logits = self.decode_forward(
-                        next_tokens,
-                        positions,
-                        self.batch_size_per_row,
-                        profiler,
-                        gen_idx,
+                        tokens=next_tokens,
+                        positions=positions,
+                        batch_size_per_row=self.batch_size_per_row,
+                        profiler=profiler,
+                        gen_idx=gen_idx,
                         enable_trace=self.enable_trace,
                     )
                     profiler.end(f"decode_time_{gen_idx}")
@@ -818,14 +863,18 @@ class DeepseekGenerator:
         return logits  # [1, 1, seq_len, V]
 
     def _capture_decode_trace(
-        self, init_tokens: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int
+        self,
+        init_tokens: torch.Tensor,
+        positions: torch.Tensor,
+        batch_size_per_row: int,
+        page_tables: torch.Tensor | None = None,
     ) -> None:
         """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
         assert self._trace_id is None, "Trace already captured"
 
         # 1) Warm-up compile run (no trace) to keep compilation out of capture
         logger.info("Running warm-up decode step (no trace)...")
-        _ = self._decode_step(init_tokens, positions, batch_size_per_row=batch_size_per_row)
+        _ = self._decode_step(init_tokens, positions, batch_size_per_row=batch_size_per_row, page_tables=page_tables)
         ttnn.synchronize_device(self.mesh_device)
 
         # 2) Allocate persistent device inputs
@@ -838,6 +887,13 @@ class DeepseekGenerator:
         )
 
         self._trace_rot_idxs = self.rope_setup.get_rot_idxs(positions)
+
+        if page_tables is not None:
+            self._trace_page_tables_to_use = self._convert_vllm_page_table_for_batch(
+                page_tables, device=self.mesh_device
+            )
+        else:
+            self._trace_page_tables_to_use = self._get_page_tables()
         ttnn.synchronize_device(self.mesh_device)
 
         # 3) Capture decode graph
@@ -847,15 +903,12 @@ class DeepseekGenerator:
 
         # Only capture the rot_mats generation from rot_idxs (all ttnn ops, no from_torch)
         rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(self._trace_rot_idxs)
-        logger.info(f"Rope tensors done")
-
-        # TODO: Fix this for vLLM
         self._trace_output = RowBatchedModel.forward_decode(
             x=self._trace_tokens,
             position_idxs=self._trace_positions,
             cfg=self.model_run_config_decode,
             rope_tensors=rope_tensors,
-            page_tables=self.page_tables_tt,
+            page_tables=self._trace_page_tables_to_use,
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Decode trace capture complete.")
@@ -866,16 +919,20 @@ class DeepseekGenerator:
         tokens: torch.Tensor,
         positions: torch.Tensor,
         batch_size_per_row: int,
-        profiler: BenchmarkProfiler,
-        gen_idx: int,
+        gen_idx: int = 0,
+        profiler: BenchmarkProfiler | None = None,
         enable_trace: bool = False,
+        page_tables: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        # vLLM does not pass enable_trace param while initializing the model.
+        # vLLM sets it in decode/prefill calls only, so we need to set it here too.
+        self.enable_trace = enable_trace
         if not enable_trace:
-            return self._decode_step(tokens, positions, batch_size_per_row).squeeze(0).squeeze(0)
+            return self._decode_step(tokens, positions, batch_size_per_row, page_tables).squeeze(0).squeeze(0)
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
-                self._capture_decode_trace(tokens, positions, batch_size_per_row)
+                self._capture_decode_trace(tokens, positions, batch_size_per_row, page_tables)
                 # First call: return the captured run's output
                 assert self._trace_output is not None
                 logits = ttnn.to_torch(
@@ -892,6 +949,7 @@ class DeepseekGenerator:
                 and self._trace_positions is not None
                 and self._trace_rot_idxs is not None
                 and self._trace_id is not None
+                and self._trace_page_tables_to_use is not None
             )
             torch_input = tokens.view(1, 1, -1).to(torch.int32)
 
@@ -921,13 +979,20 @@ class DeepseekGenerator:
             host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
             ttnn.copy_host_to_device_tensor(host_rot_idxs, self._trace_rot_idxs)
 
+            if page_tables is not None:
+                page_tables_to_use = self._convert_vllm_page_table_for_batch(page_tables, device=None)
+                for i, page_table in enumerate(page_tables_to_use):
+                    ttnn.copy_host_to_device_tensor(page_table, self._trace_page_tables_to_use[i])
+
             self.ccl.reset_sem_counters()
-            profiler.start(f"trace_execution_{gen_idx}")
+            if profiler is not None:
+                profiler.start(f"trace_execution_{gen_idx}")
             ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
-            profiler.end(f"trace_execution_{gen_idx}")
-            logger.info(
-                f"Trace execution t/s/user @ {gen_idx}th token: {1/profiler.get_duration(f'trace_execution_{gen_idx}')}"
-            )
+            if profiler is not None:
+                profiler.end(f"trace_execution_{gen_idx}")
+                logger.info(
+                    f"Trace execution t/s/user @ {gen_idx}th token: {1/profiler.get_duration(f'trace_execution_{gen_idx}')}"
+                )
             assert self._trace_output is not None
             logits = ttnn.to_torch(
                 self._trace_output,
@@ -1034,13 +1099,17 @@ class DeepseekGenerator:
         num_layers = self.hf_config.num_hidden_layers
         return tuple(ttnn.clone(page_table_tt) for _ in range(num_layers))
 
-    def _convert_vllm_page_table_for_batch(self, page_table: torch.Tensor) -> tuple[ttnn.Tensor, ...]:
+    def _convert_vllm_page_table_for_batch(
+        self, page_table: torch.Tensor, device: ttnn.Device | ttnn.MeshDevice | None
+    ) -> tuple[ttnn.Tensor, ...]:
         """
         Convert vLLM's block_tables (page_table) to TTNN tensor format for the entire batch.
         Creates one page table per layer as expected by the model.
 
         Args:
             page_table: torch.Tensor of shape [batch_size, max_num_blocks_per_req] from vLLM
+            device: ttnn.Device, ttnn.MeshDevice, or None. If provided, creates device tensors on the specified device.
+                   If None, creates host tensors instead of device tensors.
 
         Returns:
             Tuple of TTNN tensors, one per layer
@@ -1051,7 +1120,7 @@ class DeepseekGenerator:
 
         page_table_tt = ttnn.from_torch(
             page_table,
-            device=self.mesh_device,
+            device=device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),

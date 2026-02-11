@@ -1,0 +1,190 @@
+name: "Copilot Autofix ClangSA"
+
+on:
+  schedule:
+    # Run twice daily - 4 hours after analysis, then again 2 hours later
+    - cron: "0 6 * * *"   # 10 PM PST
+    - cron: "0 8 * * *"   # 12 AM PST
+  workflow_dispatch:
+
+jobs:
+  copilot-autofix:
+    name: 🤖 Copilot Autofix ClangSA Issue
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      pr-url: ${{ steps.copilot-fix.outputs.pr-url }}
+      pr-created: ${{ steps.copilot-fix.outputs.pr-created }}
+
+    steps:
+      - name: Check out source repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout results repo
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-metal-clangsa-results
+          ref: gh-pages
+          path: clangsa-results
+          token: ${{ secrets.CLANGSA_RESULTS_PAT }}
+
+      - name: Restore attempted hashes cache
+        uses: actions/cache/restore@v4
+        with:
+          path: attempted_hashes.txt
+          key: copilot-autofix-clangsa-attempted-${{ github.run_id }}
+          restore-keys: copilot-autofix-clangsa-attempted-
+
+      - name: Initialize attempted hashes file
+        run: touch attempted_hashes.txt
+
+      - name: Select unprocessed issue
+        id: select-issue
+        run: |
+          set -euo pipefail
+
+          JSON_FILE="clangsa-results/codechecker_issues.json"
+
+          if [ ! -f "$JSON_FILE" ]; then
+            echo "::error::No codechecker_issues.json found in results repo"
+            echo "has-issue=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TOTAL_ISSUES=$(jq '.reports | length' "$JSON_FILE" 2>/dev/null || echo "0")
+          if [ "$TOTAL_ISSUES" = "0" ]; then
+            echo "No issues in JSON report"
+            echo "has-issue=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Total issues in report: $TOTAL_ISSUES"
+
+          # Read attempted hashes into a variable (newline-separated)
+          ATTEMPTED=$(cat attempted_hashes.txt)
+
+          # Find first clangsa issue whose hash is not in attempted list
+          ISSUE=$(jq -c --arg attempted "$ATTEMPTED" '
+            [.reports[] |
+            select(.analyzer_name == "clangsa") |
+            select(.report_hash as $h | $attempted | split("\n") | index($h) | not)] |
+            first // empty
+          ' "$JSON_FILE")
+
+          if [ -z "$ISSUE" ]; then
+            echo "All issues have been attempted"
+            echo "has-issue=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract details
+          HASH=$(echo "$ISSUE" | jq -r '.report_hash')
+          FILE=$(echo "$ISSUE" | jq -r '.file.path | sub("^/work/"; "")')
+          LINE=$(echo "$ISSUE" | jq -r '.line')
+          CHECKER=$(echo "$ISSUE" | jq -r '.checker_name')
+          MESSAGE=$(echo "$ISSUE" | jq -r '.message')
+
+          echo "Selected issue:"
+          echo "  Hash: $HASH"
+          echo "  File: $FILE:$LINE"
+          echo "  Checker: $CHECKER"
+          echo "  Message: $MESSAGE"
+
+          # Mark as attempted
+          echo "$HASH" >> attempted_hashes.txt
+
+          # Set outputs
+          echo "has-issue=true" >> "$GITHUB_OUTPUT"
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          echo "line=$LINE" >> "$GITHUB_OUTPUT"
+          echo "checker=$CHECKER" >> "$GITHUB_OUTPUT"
+          echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Save attempted hashes cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: attempted_hashes.txt
+          key: copilot-autofix-clangsa-attempted-${{ github.run_id }}
+
+      - name: Run Copilot fix
+        if: steps.select-issue.outputs.has-issue == 'true'
+        id: copilot-fix
+        timeout-minutes: 30
+        env:
+          COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Authenticate
+          if [ -z "$COPILOT_OAUTH_TOKEN" ]; then
+            echo "::error::COPILOT_OAUTH_TOKEN secret not set. \
+              Run 'gh auth login' locally, then 'gh auth token' and add as secret."
+            exit 1
+          fi
+          echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
+
+          # Build prompt
+          CHECKER="${{ steps.select-issue.outputs.checker }}"
+          FILE="${{ steps.select-issue.outputs.file }}"
+          LINE="${{ steps.select-issue.outputs.line }}"
+          MSG="${{ steps.select-issue.outputs.message }}"
+
+          {
+            echo "Fix this Clang Static Analyzer issue:"
+            echo ""
+            echo "- $CHECKER in $FILE:$LINE — $MSG"
+            echo ""
+            echo "Verify it's a real issue, apply minimal fix, follow coding standards."
+          } > /tmp/prompt.txt
+
+          cat /tmp/prompt.txt
+
+          # Run Copilot
+          BASE_BRANCH="${{ github.event_name == 'schedule' && 'main' || github.ref_name }}"
+
+          gh agent-task create -F /tmp/prompt.txt \
+            --base "$BASE_BRANCH" \
+            --repo "${{ github.repository }}" \
+            --follow
+
+          # Get the PR that was created
+          PR_NUMBER=$(gh agent-task list --limit 1 | grep -oE '#[0-9]+' | tr -d '#' || true)
+
+          if [ -n "$PR_NUMBER" ]; then
+            echo "pr-url=https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "pr-created=true" >> "$GITHUB_OUTPUT"
+            # Add label to track Copilot PRs
+            gh pr edit "$PR_NUMBER" -R "${{ github.repository }}" --add-label "copilot-autofix" || true
+            # Mark PR as ready for review (not draft) so CI runs automatically
+            gh pr ready "$PR_NUMBER" -R "${{ github.repository }}" || true
+          else
+            echo "pr-created=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Output job summary
+        if: always()
+        run: |
+          SUMMARY="$GITHUB_STEP_SUMMARY"
+          echo "## 🤖 Copilot Autofix ClangSA" >> "$SUMMARY"
+
+          if [ "${{ steps.select-issue.outputs.has-issue }}" != "true" ]; then
+            echo "No unprocessed issues found." >> "$SUMMARY"
+          elif [ "${{ steps.copilot-fix.outputs.pr-created }}" = "true" ]; then
+            echo "✅ **PR Created:** ${{ steps.copilot-fix.outputs.pr-url }}" >> "$SUMMARY"
+            echo "" >> "$SUMMARY"
+            echo "**Issue fixed:**" >> "$SUMMARY"
+            CHECKER="${{ steps.select-issue.outputs.checker }}"
+            FILE="${{ steps.select-issue.outputs.file }}"
+            LINE="${{ steps.select-issue.outputs.line }}"
+            echo "- \`$CHECKER\` in \`$FILE:$LINE\`" >> "$SUMMARY"
+            echo "- ${{ steps.select-issue.outputs.message }}" >> "$SUMMARY"
+          else
+            REPO="${{ github.repository }}"
+            echo "⚠️ No PR created. Check [Copilot dashboard](https://github.com/$REPO/copilot)." >> "$SUMMARY"
+          fi

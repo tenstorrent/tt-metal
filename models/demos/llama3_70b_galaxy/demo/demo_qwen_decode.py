@@ -267,7 +267,7 @@ def run_qwen_demo(
         )
 
         # Sampling
-        _ = tt_sampling(tt_out[0], seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
+        _, logprobs = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)  # Compile once with setting the seed
         logger.info(f"Sampling done")
 
     if not stress_test:
@@ -277,7 +277,7 @@ def run_qwen_demo(
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
 
-    _ = tt_sampling(
+    _, logprobs = tt_sampling(
         tt_out[0], tt_out_tok=tt_out_tok
     )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
@@ -300,7 +300,7 @@ def run_qwen_demo(
         page_table=page_table_tt,
     )
     # Sampling
-    _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
+    _, logprobs = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
@@ -347,7 +347,7 @@ def run_qwen_demo(
     tokens_per_second_per_user_token127 = None  # Track tokens per second per user at token 128
 
     all_outputs = []
-
+    all_log_probs = []
     logger.info(f"Starting decode loop in trace mode...")
     profiler.start(f"inference_decode", iteration=iteration)
 
@@ -362,6 +362,7 @@ def run_qwen_demo(
     failed_tokens_per_second_per_user = []
     read_events = []
     tt_out_toks_cpu = []
+    tt_log_probs_cpu = []
     iteration_time_start = time()
     prefill = True
     block_host = True
@@ -384,6 +385,8 @@ def run_qwen_demo(
         if prefill:
             current_iteration = iteration
             all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
+            # TODO: Get log probabilities for the prefill output and now append dummy tensor values
+            all_log_probs.append(torch.ones((1, 1, 1, batch_size)))
             tt_out_tok_reset = ttnn.from_torch(
                 encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
                 dtype=ttnn.uint32,
@@ -408,6 +411,7 @@ def run_qwen_demo(
             iteration_time_start = time()
         else:
             tt_out_toks_cpu += [tt_out_tok.cpu(blocking=block_host, cq_id=0)]
+            tt_log_probs_cpu += [tt_sampling.log_probs_calculator.output_tensor.cpu(blocking=block_host, cq_id=0)]
             read_events += [ttnn.record_event(mesh_device, 0)]
 
             if decode_iteration >= trace_exec_offset:
@@ -418,8 +422,16 @@ def run_qwen_demo(
                 tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[current_decode_iteration])[0])[
                     0, 0, 0, :batch_size
                 ]
+                log_probs_torch = ttnn.to_torch(
+                    tt_log_probs_cpu[current_decode_iteration],
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=(0, 1), mesh_shape=list(mesh_device.shape)
+                    ),
+                )[0, 0, 0, :batch_size]
                 all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
-
+                all_log_probs.append(
+                    log_probs_torch.tolist()[0]
+                )  # Update generated log probabilities to list of TT outputs
                 profiler.start(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
                 if not is_ci_env:
                     # Print out generated outputs for each user at the end of every iteration

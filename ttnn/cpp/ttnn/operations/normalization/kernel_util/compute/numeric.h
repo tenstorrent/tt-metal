@@ -9,10 +9,10 @@
 
 #pragma once
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/reduce.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/policies.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"

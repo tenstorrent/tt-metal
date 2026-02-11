@@ -112,60 +112,68 @@ def decode_forward(
     Returns:
         Output tensor [batch_size_per_device, 1, seq_len, hidden_size]
     """
-    # Note: reshape returns views - don't deallocate originals
-    hidden_states = ttnn.reshape(hidden_states, (-1, 1, 1, config.hidden_size))
+    # ==========================================================================
+    # STEP 0: RESHAPE TO PUT TOKENS ON DIM -2 (seq_len dimension)
+    # ==========================================================================
+    # This optimization reduces reshapes by keeping tokens on seq_len dim throughout.
+    # Input typically comes as [B, 1, S, H] where B*S = total tokens per device.
+    # We reshape to [1, 1, tokens_per_device, H] so tokens are on dim -2.
+
+    # Get total tokens per device
+    input_shape = hidden_states.shape
+    tokens_per_device = input_shape[0] * input_shape[2]  # B * S
+
+    # Reshape hidden states: put all tokens on dim -2
+    hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens_per_device, config.hidden_size))
 
     # typecast creates new tensors - safe to deallocate originals
     topk_expert_indices_orig = topk_expert_indices
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint32)
     ttnn.deallocate(topk_expert_indices_orig)
 
-    topk_expert_indices = ttnn.reshape(topk_expert_indices, (-1, 1, 1, config.num_experts_per_tok))
+    # Reshape indices: put all tokens on dim -2
+    topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, config.num_experts_per_tok))
     topk_expert_indices_u32 = topk_expert_indices
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
     ttnn.deallocate(topk_expert_indices_u32)
-    topk_expert_weights = ttnn.reshape(topk_expert_weights, (-1, 1, 1, config.num_experts_per_tok))
+    topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens_per_device, config.num_experts_per_tok))
 
-    seq_len = 1  # Decode mode always has seq_len=1
-    batch_size_per_device = hidden_states.shape[0]
     num_dispatch_devices = (
         mesh_device.shape[dispatch_config.cluster_axis]
         if dispatch_config.cluster_axis is not None
         else prod(mesh_device.shape)
     )
-    batch_size = batch_size_per_device * num_dispatch_devices  # Global batch across dispatch axis
+    total_tokens = tokens_per_device * num_dispatch_devices  # Global tokens across dispatch axis
 
     # ==========================================================================
     # STEP 1: PREPARE INPUTS FOR ALL_TO_ALL_DISPATCH
     # ==========================================================================
     # all_to_all_dispatch requires ROW_MAJOR layout with shape [B, 1, S, H]
-    # Convert from TILE layout used by transformer layers
+    # With tokens on dim -2: [1, 1, tokens_per_device, H]
     # to_layout creates new tensors - safe to deallocate originals
     hidden_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(hidden_states)
-    hidden_rm = ttnn.reshape(hidden_rm, shape=(batch_size_per_device, 1, seq_len, config.hidden_size))
+    # Shape is already [1, 1, tokens_per_device, H], just ensure it's correct
+    hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, config.hidden_size))
 
-    # Expert indices need to be in ROW_MAJOR with shape [B, 1, S, K]
-    # where K = num_experts_per_tok (top-k experts selected per token)
+    # Expert indices: [1, 1, tokens_per_device, K]
     topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_indices)
-    topk_indices_rm = ttnn.reshape(
-        topk_indices_rm, shape=(batch_size_per_device, 1, seq_len, config.num_experts_per_tok)
-    )
+    topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, config.num_experts_per_tok))
 
     # ==========================================================================
     # STEP 2: ALL_TO_ALL_DISPATCH - Route tokens to expert devices
     # ==========================================================================
     # Dispatch sends each token to the device(s) that own its assigned expert(s)
     #
-    # Inputs:
-    #   - hidden_rm: [B_per_device, 1, S, H] - token embeddings
-    #   - topk_indices_rm: [B_per_device, 1, S, K] - which experts each token routes to
+    # Inputs (tokens on dim -2):
+    #   - hidden_rm: [1, 1, tokens_per_device, H] - token embeddings
+    #   - topk_indices_rm: [1, 1, tokens_per_device, K] - which experts each token routes to
     #   - expert_mapping_tensors: [1, 1, E, D] - one-hot mapping of expert -> device
     #
-    # Outputs:
-    #   - dispatch_output: [D, B_global, S, H] - tokens scattered to expert devices
-    #   - dispatch_metadata: [D, B_global, S, K] - expert indices (for combine routing)
+    # With output_concat_dim=2, outputs have seq_len scaled:
+    #   - dispatch_output: [D, 1, total_tokens, H] - tokens scattered to expert devices
+    #   - dispatch_metadata: [D, 1, total_tokens, K] - expert indices (for combine routing)
     dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
         hidden_rm,
         topk_indices_rm,
@@ -181,12 +189,16 @@ def decode_forward(
     # Converts global expert indices to local (per-device) indices and creates
     # a sparsity mask for efficient sparse matmul.
     #
-    # The remap_topk_mask is broadcast across batch dimension
+    # The remap_topk_mask is broadcast across the token dimension (now on dim -2)
     # repeat creates a new tensor - safe to deallocate, but remap_topk_mask is reused externally
-    remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
+    # remap_topk_mask: [1, dispatch_rows, 1, num_experts]
+    # -> repeat to [1, dispatch_rows, tokens_per_device, num_experts]
+    # -> reshape to [1, 1, total_tokens, num_experts] to match dispatch_metadata batch/seq dims
+    remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, 1, tokens_per_device, 1)))
+    remap_mask = ttnn.reshape(remap_mask, (1, 1, total_tokens, config.num_experts))
     # moe_expert_token_remap returns:
-    #   - mapping: [D, B, S, experts_per_device] - local expert activation weights
-    #   - sparsity: [D, 1, B*S/reduction_size, experts_per_device] - which blocks are active
+    #   - mapping: [D, tokens, 1, experts_per_device] - local expert activation weights
+    #   - sparsity: [D, 1, tokens/reduction_size, experts_per_device] - which blocks are active
     #
     # The sparsity tensor tells sparse_matmul which expert blocks have tokens,
     # avoiding computation on empty slots.
@@ -202,21 +214,20 @@ def decode_forward(
     # STEP 4: PREPARE DISPATCH OUTPUT FOR EXPERT COMPUTATION
     # ==========================================================================
     # Reshape dispatch output for sparse matmul:
-    # From: [D, B, S, H] (ROW_MAJOR from dispatch)
-    # To: [1, B*S/block_size, block_size, H] (TILE for matmul)
+    # From: [D, 1, total_tokens, H] (ROW_MAJOR from dispatch with tokens on dim -2)
+    # To: [1, total_tokens/block_size, block_size, H] (TILE for matmul)
     #
     # The sparse matmul operates on blocks of tokens, with sparsity indicating
     # which (token_block, expert) pairs need computation.
     # Note: reshape returns view, but to_layout creates new tensor
-    post_dispatch = ttnn.reshape(dispatch_output, shape=(1, 1, batch_size * seq_len, config.hidden_size))
+    post_dispatch = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, config.hidden_size))
     post_dispatch_rm = post_dispatch
     post_dispatch = ttnn.to_layout(post_dispatch, ttnn.TILE_LAYOUT)
     ttnn.deallocate(post_dispatch_rm)  # This deallocates dispatch_output via the view
 
     # Reshape to sparse block format for matmul
     # Note: reshape returns a view - don't deallocate post_dispatch separately
-    num_tokens = batch_size * seq_len
-    num_sparse_blocks = num_tokens // config.sparsity_block_size
+    num_sparse_blocks = total_tokens // config.sparsity_block_size
     expert_input = ttnn.reshape(
         post_dispatch,
         shape=(1, num_sparse_blocks, config.sparsity_block_size, config.hidden_size),
@@ -302,18 +313,22 @@ def decode_forward(
     # ==========================================================================
     # STEP 6: PREPARE EXPERT OUTPUT FOR ALL_TO_ALL_COMBINE
     # ==========================================================================
+    while len(expert_output_sparse.shape) > 4:
+        expert_output_sparse = ttnn.squeeze(expert_output_sparse, 0)
+
     # Reshape from sparse matmul output to format expected by combine:
-    # From: [B*S/block, experts, block, H]
-    # To: [experts_per_device, B_global, S, H] (ROW_MAJOR)
+    # From: [total_tokens/block, experts, block, H]
+    # To: [experts_per_device, 1, total_tokens, H] (ROW_MAJOR, tokens on dim -2)
     #
     # Permute to get experts_per_device as first dimension (what combine expects)
     # permute creates a new tensor - safe to deallocate original
     expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))
     ttnn.deallocate(expert_output_sparse)
     # Note: reshape returns a view, to_layout creates new tensor
+    # With tokens on dim -2: [experts_per_device, 1, total_tokens, H]
     expert_output = ttnn.reshape(
         expert_output,
-        shape=(config.num_experts_per_device, batch_size, seq_len, config.hidden_size),
+        shape=(config.num_experts_per_device, 1, total_tokens, config.hidden_size),
     )
     expert_output_tiled = expert_output
     expert_output = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
@@ -325,7 +340,8 @@ def decode_forward(
     # Combine routes each expert output back to the device that owns the original token.
     # Uses dispatch_metadata to know which token each output corresponds to.
     #
-    # Output shape: [num_experts_per_tok, B_per_device, S, H]
+    # With output_shard_dim=2, output has tokens sharded on dim -2:
+    # Output shape: [num_experts_per_tok, 1, tokens_per_device, H]
     # (each token gets outputs from k experts stacked in first dimension)
     combine_output = ttnn.all_to_all_combine(
         expert_output,
@@ -339,33 +355,19 @@ def decode_forward(
     # ==========================================================================
     # STEP 8: APPLY ROUTING WEIGHTS AND REDUCE ACROSS EXPERTS
     # ==========================================================================
-    # Reshape combine output for weighted sum:
-    # Shape: [K, 1, B_per_device * S, H] where K = num_experts_per_tok
-    # Note: reshape returns view, to_layout creates new tensor
-    post_combine = ttnn.reshape(
-        combine_output,
-        shape=(config.num_experts_per_tok, 1, batch_size_per_device * seq_len, config.hidden_size),
-    )
-    post_combine_rm = post_combine
-    post_combine = ttnn.to_layout(post_combine, ttnn.TILE_LAYOUT)
-    ttnn.deallocate(post_combine_rm)  # Deallocates combine_output via its reshape view
+    # Combine output already has tokens on dim -2: [K, 1, tokens_per_device, H]
+    # No reshape needed! Just convert to TILE layout.
+    post_combine = ttnn.to_layout(combine_output, ttnn.TILE_LAYOUT)
+    ttnn.deallocate(combine_output)
 
     # Prepare routing weights for broadcasting:
-    # From: [B, 1, S, K] (original topk weights)
-    # To: [K, 1, B*S, H] (matches post_combine for element-wise multiply)
-    #
-    # Steps:
-    # 1. Repeat along hidden_size dimension
-    # 2. Permute to [K, 1, B*S, H]
+    # topk_expert_weights is [1, 1, tokens_per_device, K] (tokens on dim -2)
+    # We want [K, 1, tokens_per_device, 1] so it can broadcast across hidden_size.
     # to_layout creates new tensor - safe to deallocate original
     topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_weights)
-    # repeat creates new tensor - safe to deallocate original
-    topk_weights_repeated = ttnn.repeat(topk_weights_rm, ttnn.Shape((1, 1, config.hidden_size, 1)))
-    ttnn.deallocate(topk_weights_rm)
-    # permute creates new tensor - safe to deallocate original
-    topk_weights_rm = ttnn.permute(topk_weights_repeated, (3, 1, 0, 2))
-    ttnn.deallocate(topk_weights_repeated)
+    # permute to [K, 1, tokens_per_device, 1]
+    topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0))
     topk_weights_reshaped = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
     ttnn.deallocate(topk_weights_rm)
 
@@ -388,11 +390,11 @@ def decode_forward(
     output_all_reduced = ttnn.all_reduce(
         output,
         num_links=1,
-        topology=ttnn.Topology.Linear,
+        topology=ttnn.Topology.Ring,
         cluster_axis=1,
         memory_config=memory_config,
     )
     ttnn.deallocate(output)
 
-    # Final shape: [1, 1, B_per_device * S, H]
+    # Final shape: [1, 1, tokens_per_device, H] (tokens on dim -2)
     return output_all_reduced

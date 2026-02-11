@@ -22,6 +22,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   multi-card-unit-tests:
@@ -33,6 +37,8 @@ jobs:
         test-group:
           - name: CCL APC test
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
+          - name: Socket tests
+            cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
@@ -67,6 +73,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false}}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:

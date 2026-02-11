@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_binary.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
@@ -54,4 +54,7 @@ void kernel_main() {
         cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
         cb_push_back(cb_out, num_tiles_per_cycle);
     }
+
+    // Pop the scalar tile from RHS CB
+    cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
 }

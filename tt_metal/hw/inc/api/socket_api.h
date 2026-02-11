@@ -26,19 +26,22 @@ constexpr bool always_false = false;
 
 template <typename SocketT>
 void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr, const SocketT& socket) {
+    // Communication over fabric only works for D2D sockets
     if constexpr (std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader>) {
         if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
-            fabric_set_unicast_route(fabric_header_addr, socket.downstream_chip_id, socket.downstream_mesh_id);
+            fabric_set_unicast_route(fabric_header_addr, socket.d2d.downstream_chip_id, socket.d2d.downstream_mesh_id);
         } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
-            fabric_set_unicast_route(fabric_header_addr, socket.upstream_chip_id, socket.upstream_mesh_id);
+            ASSERT(socket.is_h2d == 0);
+            fabric_set_unicast_route(fabric_header_addr, socket.d2d.upstream_chip_id, socket.d2d.upstream_mesh_id);
         } else {
             static_assert(always_false<SocketT>, "Unsupported socket type passed to set_fabric_unicast_route");
         }
     } else {
         if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
-            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.downstream_chip_id);
+            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.d2d.downstream_chip_id);
         } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
-            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.upstream_chip_id);
+            ASSERT(socket.is_h2d == 0);
+            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.d2d.upstream_chip_id);
         } else {
             static_assert(always_false<SocketT>, "Unsupported socket type passed to fabric_set_unicast_route");
         }
@@ -55,45 +58,63 @@ SocketSenderInterface create_sender_socket_interface(uint32_t config_addr) {
     SocketSenderInterface socket;
     socket.config_addr = config_addr;
     socket.write_ptr = socket_config->write_ptr;
-    socket.num_downstreams = socket_config->num_downstreams;
     socket.bytes_sent = socket_config->bytes_sent;
     socket.bytes_acked_base_addr = config_addr + sender_socket_md_size_bytes;
+    socket.num_downstreams = socket_config->num_downstreams;
+    socket.downstream_fifo_total_size = socket_config->downstream_fifo_total_size;
     socket.downstream_fifo_addr = socket_config->downstream_fifo_addr;
     socket.downstream_bytes_sent_addr = socket_config->downstream_bytes_sent_addr;
-    socket.downstream_fifo_total_size = socket_config->downstream_fifo_total_size;
-    socket.downstream_enc_base_addr =
-        config_addr + sender_socket_md_size_bytes + socket_config->num_downstreams * bytes_acked_size_bytes;
-
+    socket.is_d2h = socket_config->is_d2h;
+    if (socket.is_d2h) {
+        volatile tt_l1_ptr d2h_sender_socket_md* d2h_socket_config =
+            reinterpret_cast<volatile tt_l1_ptr d2h_sender_socket_md*>(
+                config_addr + sender_socket_md_size_bytes + bytes_acked_size_bytes);
+        socket.d2h.bytes_sent_addr_hi = d2h_socket_config->bytes_sent_addr_hi;
+        socket.d2h.data_addr_hi = d2h_socket_config->data_addr_hi;
+        socket.d2h.pcie_xy_enc = d2h_socket_config->pcie_xy_enc;
+    } else {
+        socket.d2d.downstream_enc_base_addr =
+            config_addr + sender_socket_md_size_bytes + socket_config->num_downstreams * bytes_acked_size_bytes;
+    }
     return socket;
 }
 
 sender_downstream_encoding get_downstream_encoding(const SocketSenderInterface& socket, uint32_t downstream_id) {
-    tt_l1_ptr sender_downstream_encoding* downstream_enc = reinterpret_cast<tt_l1_ptr sender_downstream_encoding*>(
-        socket.downstream_enc_base_addr + downstream_id * downstream_encoding_size_bytes);
+    if (socket.is_d2h) {
+        return sender_downstream_encoding{
+            .d2h = {
+                .bytes_sent_addr_hi = socket.d2h.bytes_sent_addr_hi,
+                .data_addr_hi = socket.d2h.data_addr_hi,
+                .pcie_xy_enc = socket.d2h.pcie_xy_enc,
+            }};
+    }
     // Write to risc from L1
-    sender_downstream_encoding downstream_enc_interface;
-    downstream_enc_interface.downstream_mesh_id = downstream_enc->downstream_mesh_id;
-    downstream_enc_interface.downstream_chip_id = downstream_enc->downstream_chip_id;
-    downstream_enc_interface.downstream_noc_y = downstream_enc->downstream_noc_y;
-    downstream_enc_interface.downstream_noc_x = downstream_enc->downstream_noc_x;
-    return downstream_enc_interface;
+    tt_l1_ptr sender_downstream_encoding* downstream_enc = reinterpret_cast<tt_l1_ptr sender_downstream_encoding*>(
+        socket.d2d.downstream_enc_base_addr + downstream_id * downstream_encoding_size_bytes);
+
+    return sender_downstream_encoding{
+        .d2d = {
+            .downstream_mesh_id = downstream_enc->d2d.downstream_mesh_id,
+            .downstream_chip_id = downstream_enc->d2d.downstream_chip_id,
+            .downstream_noc_y = downstream_enc->d2d.downstream_noc_y,
+            .downstream_noc_x = downstream_enc->d2d.downstream_noc_x,
+        }};
 }
 
 void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_size) {
     // TODO: DRAM
     ASSERT(page_size % L1_ALIGNMENT == 0);
-    uint32_t fifo_start_addr = socket.downstream_fifo_addr;
     uint32_t fifo_total_size = socket.downstream_fifo_total_size;
     ASSERT(page_size <= fifo_total_size);
-    uint32_t& fifo_wr_ptr = socket.write_ptr;
-    uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
+    // write_ptr is a relative offset from downstream_fifo_addr, range [0, fifo_total_size)
+    uint32_t& write_ptr = socket.write_ptr;
+    uint32_t next_write_ptr = align(write_ptr, page_size);
     uint32_t fifo_page_aligned_size = fifo_total_size - fifo_total_size % page_size;
-    uint32_t fifo_limit_page_aligned = fifo_start_addr + fifo_page_aligned_size;
-    if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
-        socket.bytes_sent += fifo_start_addr + fifo_total_size - next_fifo_wr_ptr;
-        next_fifo_wr_ptr = fifo_start_addr;
+    if (next_write_ptr >= fifo_page_aligned_size) {
+        socket.bytes_sent += fifo_total_size - next_write_ptr;
+        next_write_ptr = 0;
     }
-    fifo_wr_ptr = next_fifo_wr_ptr;
+    write_ptr = next_write_ptr;
     socket.page_size = page_size;
     socket.downstream_fifo_curr_size = fifo_page_aligned_size;
 }
@@ -118,7 +139,8 @@ void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
 void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.downstream_fifo_curr_size);
-    if (socket.write_ptr + num_bytes >= socket.downstream_fifo_curr_size + socket.downstream_fifo_addr) {
+    // write_ptr is a relative offset from downstream_fifo_addr, range [0, fifo_total_size)
+    if (socket.write_ptr + num_bytes >= socket.downstream_fifo_curr_size) {
         socket.write_ptr = socket.write_ptr + num_bytes - socket.downstream_fifo_curr_size;
         socket.bytes_sent += num_bytes + socket.downstream_fifo_total_size - socket.downstream_fifo_curr_size;
     } else {
@@ -130,11 +152,25 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
 #ifndef COMPILE_FOR_TRISC
 void socket_notify_receiver(const SocketSenderInterface& socket) {
     // TODO: Store noc encoding in struct?
-    for (uint32_t i = 0; i < socket.num_downstreams; i++) {
-        sender_downstream_encoding downstream_enc = get_downstream_encoding(socket, i);
-        auto downstream_bytes_sent_noc_addr = get_noc_addr(
-            downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, socket.downstream_bytes_sent_addr);
-        noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
+    if (socket.is_d2h) {
+        volatile tt_l1_ptr sender_socket_md* socket_config =
+            reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(socket.config_addr);
+        socket_config->bytes_sent = socket.bytes_sent;
+        uint32_t local_bytes_sent_addr = socket.config_addr;
+        uint64_t bytes_sent_pcie_addr = (static_cast<uint64_t>(socket.d2h.bytes_sent_addr_hi) << 32) |
+                                        (static_cast<uint64_t>(socket.downstream_bytes_sent_addr));
+        noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_index, local_bytes_sent_addr, socket.d2h.pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
+    } else {
+        for (uint32_t i = 0; i < socket.num_downstreams; i++) {
+            sender_downstream_encoding downstream_enc = get_downstream_encoding(socket, i);
+            auto downstream_bytes_sent_noc_addr = get_noc_addr(
+                downstream_enc.d2d.downstream_noc_x,
+                downstream_enc.d2d.downstream_noc_y,
+                socket.downstream_bytes_sent_addr);
+            noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
+        }
     }
 }
 
@@ -145,7 +181,9 @@ void fabric_socket_notify_receiver(
     for (uint32_t i = 0; i < socket.num_downstreams; i++) {
         sender_downstream_encoding downstream_enc = get_downstream_encoding(socket, i);
         auto downstream_bytes_sent_noc_addr = get_noc_addr(
-            downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, socket.downstream_bytes_sent_addr);
+            downstream_enc.d2d.downstream_noc_x,
+            downstream_enc.d2d.downstream_noc_y,
+            socket.downstream_bytes_sent_addr);
         fabric_set_unicast_route(fabric_header_addr, downstream_enc);
         fabric_header_addr->to_noc_unicast_inline_write(
             NocUnicastInlineWriteCommandHeader{downstream_bytes_sent_noc_addr, socket.bytes_sent});
@@ -186,11 +224,20 @@ SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
     socket.bytes_sent_addr = config_addr + offsetof(receiver_socket_md, bytes_sent);
     socket.fifo_addr = socket_config->fifo_addr;
     socket.fifo_total_size = socket_config->fifo_total_size;
-    socket.upstream_mesh_id = socket_config->upstream_mesh_id;
-    socket.upstream_chip_id = socket_config->upstream_chip_id;
-    socket.upstream_noc_x = socket_config->upstream_noc_x;
-    socket.upstream_noc_y = socket_config->upstream_noc_y;
-    socket.upstream_bytes_acked_addr = socket_config->upstream_bytes_acked_addr;
+    socket.is_h2d = socket_config->is_h2d;
+    if (socket.is_h2d) {
+        socket.h2d.bytes_acked_addr_lo = socket_config->h2d.bytes_acked_addr_lo;
+        socket.h2d.bytes_acked_addr_hi = socket_config->h2d.bytes_acked_addr_hi;
+        socket.h2d.data_addr_lo = socket_config->h2d.data_addr_lo;
+        socket.h2d.data_addr_hi = socket_config->h2d.data_addr_hi;
+        socket.h2d.pcie_xy_enc = socket_config->h2d.pcie_xy_enc;
+    } else {
+        socket.d2d.upstream_mesh_id = socket_config->d2d.upstream_mesh_id;
+        socket.d2d.upstream_chip_id = socket_config->d2d.upstream_chip_id;
+        socket.d2d.upstream_noc_y = socket_config->d2d.upstream_noc_y;
+        socket.d2d.upstream_noc_x = socket_config->d2d.upstream_noc_x;
+        socket.d2d.upstream_bytes_acked_addr = socket_config->d2d.upstream_bytes_acked_addr;
+    }
 #endif
     return socket;
 }
@@ -225,6 +272,7 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
 void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_pages) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
+    ASSERT(num_bytes <= socket.fifo_curr_size);
     if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
         num_bytes += socket.fifo_total_size - socket.fifo_curr_size;
     }
@@ -269,19 +317,13 @@ void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t c
 }
 
 #ifndef COMPILE_FOR_TRISC
-void socket_notify_sender(const SocketReceiverInterface& socket) {
-    // TODO: Store noc encoding in struct?
-    auto upstream_bytes_acked_noc_addr =
-        get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
-    noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
-}
 
 void fabric_socket_notify_sender(
     const SocketReceiverInterface& socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
     auto upstream_bytes_acked_noc_addr =
-        get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
+        get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr);
     fabric_set_unicast_route(fabric_header_addr, socket);
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
@@ -289,6 +331,39 @@ void fabric_socket_notify_sender(
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
+
+// Stateful version: route and NOC address are pre-computed by the caller.
+// Avoids redundant get_noc_addr and fabric_set_unicast_route calls in hot loops.
+FORCE_INLINE void fabric_socket_notify_sender_stateful(
+    const SocketReceiverInterface& socket,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr,
+    uint64_t upstream_bytes_acked_noc_addr) {
+    fabric_header_addr->to_noc_unicast_inline_write(
+        NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+}
+
+void socket_notify_sender(const SocketReceiverInterface& socket) {
+    if (socket.is_h2d) {
+        volatile tt_l1_ptr receiver_socket_md* socket_config =
+            reinterpret_cast<volatile tt_l1_ptr receiver_socket_md*>(socket.config_addr);
+        socket_config->bytes_acked = socket.bytes_acked;
+        uint32_t local_bytes_acked_addr = socket.config_addr + offsetof(receiver_socket_md, bytes_acked);
+        uint64_t pcie_addr = (static_cast<uint64_t>(socket.h2d.bytes_acked_addr_hi) << 32) |
+                             static_cast<uint64_t>(socket.h2d.bytes_acked_addr_lo);
+        noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_index, local_bytes_acked_addr, socket.h2d.pcie_xy_enc, pcie_addr, sizeof(socket.bytes_acked));
+    } else {
+        auto upstream_bytes_acked_noc_addr =
+            get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr);
+        noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
+    }
+}
+
 #endif
 
 void update_socket_config(const SocketReceiverInterface& socket) {

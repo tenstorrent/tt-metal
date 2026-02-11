@@ -129,12 +129,21 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
-    out->set_value(ttnn::multiply(a->get_value(), b->get_value()));
+    out->set_value(ttnn::multiply(
+        a->get_value(),
+        b->get_value(),
+        /* fast_and_approximate_mode*/ true));
     autograd::GradFunction grad = [a, b, out]() {
         tt::tt_metal::MemoryConfig mem_config;
         // TODO: support broadcasting (or not)
-        auto a_grad = ttnn::multiply(out->get_grad(), b->get_value());
-        auto b_grad = ttnn::multiply(out->get_grad(), a->get_value());
+        auto a_grad = ttnn::multiply(
+            out->get_grad(),
+            b->get_value(),
+            /* fast_and_approximate_mode*/ true);
+        auto b_grad = ttnn::multiply(
+            out->get_grad(),
+            a->get_value(),
+            /* fast_and_approximate_mode*/ true);
 
         a->add_grad(a_grad);
         b->add_grad(b_grad);
@@ -148,7 +157,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b) {
     auto out = autograd::create_tensor(ttnn::multiply(a->get_value(), b));
     autograd::GradFunction grad = [a, b, out]() {
-        auto a_grad = ttnn::multiply(out->get_grad(), b);
+        auto a_grad = ttnn::multiply(out->get_grad(), b, /* fast_and_approximate_mode*/ true);
 
         a->add_grad(a_grad);
     };

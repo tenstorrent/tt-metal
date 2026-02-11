@@ -18,6 +18,45 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
+struct DistributedConfig {
+    bool enable_ddp = false;
+    bool enable_tp = false;
+};
+
+class ParallelismContext {
+public:
+    // Configure from device config flags
+    // For TP+DP: dp_axis=0, tp_axis=1
+    // For TP only: tp_axis=0
+    // For DP only: dp_axis=0
+    ParallelismContext(const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config);
+
+    // Axis queries
+    [[nodiscard]] std::optional<uint32_t> get_ddp_axis() const {
+        return m_ddp_axis;
+    }
+    [[nodiscard]] std::optional<uint32_t> get_tp_axis() const {
+        return m_tp_axis;
+    }
+
+    // Size queries (computed from mesh_device->shape())
+    [[nodiscard]] const uint32_t get_ddp_size() const;
+    [[nodiscard]] const uint32_t get_tp_size() const;
+
+    [[nodiscard]] const bool is_tp_enabled() const {
+        return m_tp_axis.has_value();
+    }
+    [[nodiscard]] const bool is_ddp_enabled() const {
+        return m_ddp_axis.has_value();
+    }
+
+private:
+    std::optional<uint32_t> m_ddp_axis = std::nullopt;
+    std::optional<uint32_t> m_tp_axis = std::nullopt;
+    uint32_t m_num_ddp_devices = 1U;
+    uint32_t m_num_tp_devices = 1U;
+};
+
 class AutoContext {
 public:
     // Delete copy constructor and assignment operator to prevent copying
@@ -69,6 +108,10 @@ public:
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
+    [[nodiscard]] const ParallelismContext& get_parallelism_context() const;
+
+    void initialize_parallelism_context(const DistributedConfig& config);
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
@@ -86,6 +129,8 @@ private:
     std::unique_ptr<core::distributed::CCLResources> m_ccl_resources;
 
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
+
+    std::unique_ptr<ParallelismContext> m_parallelism_context;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

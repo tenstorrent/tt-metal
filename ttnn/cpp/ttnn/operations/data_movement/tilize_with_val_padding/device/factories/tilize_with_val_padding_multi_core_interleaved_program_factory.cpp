@@ -95,14 +95,14 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
     if (!core_range.empty()) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range,
             ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core, num_tiles_per_row}});
     }
     if (has_cliff) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});

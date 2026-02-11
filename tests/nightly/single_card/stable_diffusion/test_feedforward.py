@@ -1,1 +1,1 @@
-../../../../models/demos/wormhole/stable_diffusion/tests/test_feedforward.py
+../../../../models/demos/vision/generative/stable_diffusion/wormhole/tests/test_feedforward.py

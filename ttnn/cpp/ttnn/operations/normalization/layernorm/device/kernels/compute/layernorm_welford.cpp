@@ -7,22 +7,20 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "compute_kernel_api/welford.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/compute_kernel_hw_startup.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/welford.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
 namespace kutil = norm::kernel_util;
 namespace generic = kutil::generic;
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -320,4 +318,3 @@ void MAIN {
 
     }  // NCHt loop
 }
-}  // namespace NAMESPACE

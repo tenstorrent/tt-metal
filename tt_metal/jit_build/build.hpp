@@ -15,7 +15,12 @@
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
-#include "llrt/hal.hpp"
+
+namespace tt::jit_build::utils {
+
+class FileGroupRenamer;
+
+}  // namespace tt::jit_build::utils
 
 namespace tt::tt_metal {
 
@@ -52,9 +57,11 @@ public:
         uint64_t build_key,
         size_t fw_compile_hash,
         tt::ARCH arch,
+        uint32_t max_cbs,
         const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
+    uint32_t get_max_cbs() const { return max_cbs_; };
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
@@ -65,6 +72,7 @@ public:
 
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};
+    uint32_t max_cbs_{};
 
     // Paths
     std::string root_;
@@ -112,7 +120,7 @@ protected:
     vector_cache_aligned<std::string> srcs_;
     vector_cache_aligned<std::string> objs_;
 
-    std::string link_objs_;
+    std::string extra_link_objs_;
 
     // Default compiler optimization setting
     // Used when JitBuildSettings is not provided
@@ -123,15 +131,18 @@ protected:
     std::string default_linker_opt_level_;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
-    size_t compile(const std::string& out_dir, const JitBuildSettings* settings) const;
+    size_t compile(
+        const std::string& out_dir,
+        const JitBuildSettings* settings,
+        jit_build::utils::FileGroupRenamer& renamer) const;
     void compile_one(
         const std::string& out_dir,
         const JitBuildSettings* settings,
         const std::string& src,
-        const std::string& obj) const;
+        const std::string& obj,
+        const std::string& obj_temp_path) const;
     bool need_link(const std::string& out_dir) const;
-    void link(const std::string& out_dir, const JitBuildSettings* settings) const;
-    void link_impl(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
+    void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
     std::string weakened_firmware_name() const;
     void extract_zone_src_locations(const std::string& out_dir) const;

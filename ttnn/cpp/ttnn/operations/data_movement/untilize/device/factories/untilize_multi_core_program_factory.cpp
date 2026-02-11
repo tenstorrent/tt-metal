@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,9 +14,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "untilize_multi_core_program_factory.hpp"
-#include "untilize_multi_core_block_program_factory.hpp"
-#include "untilize_multi_core_parallelize_column_program_factory.hpp"
-#include "untilize_single_core_program_factory.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 
 using namespace tt::constants;
@@ -51,7 +48,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t tile_width = tile_shape[1];
 
     bool input_is_sharded = a.is_sharded();
-    bool output_is_sharded = output.is_sharded();
 
     uint32_t num_tiles_per_row = tensor_width / tile_width;
     uint32_t num_tiles_per_col = tensor_height / tile_height;
@@ -72,6 +68,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t num_tiles_per_input_block = num_tiles_per_row;
     uint32_t num_input_blocks_per_full_core = num_rows_per_full_core;
     uint32_t num_input_blocks_per_cliff_core = num_rows_per_cliff_core;
+    uint32_t num_shards = 0;
     if (input_is_sharded) {
         ShardSpec input_shard_spec = a.shard_spec().value();
         uint32_t input_shard_height = input_shard_spec.shape[0];
@@ -87,6 +84,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         num_tiles_per_input_block = input_shard_width / tile_width;
         num_input_blocks_per_full_core = input_shard_height / tile_height;
         num_input_blocks_per_cliff_core = 0;
+
+        uint32_t num_shards_height = tt::div_up(tensor_height, input_shard_height);
+        num_shards = num_shards_height * num_input_blocks_across_width;
     }
 
     // Input CB
@@ -155,7 +155,12 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        uint32_t output_shard_width = output.shard_spec().value().shape[1];
+        uint32_t output_shard_width;
+        if (output.shard_spec().has_value()) {
+            output_shard_width = output.shard_spec().value().shape[1];
+        } else {
+            output_shard_width = output.nd_shard_spec().value().shard_shape[-1];
+        }
         output_num_blocks_across_width = tensor_width / output_shard_width;
     }
     uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
@@ -189,8 +194,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     // Compute kernel file
     std::string compute_kernel;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH)) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = std::string(
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
@@ -249,7 +253,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     // Note: For sharded input, these are the only cores used
     bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
     std::vector<CoreCoord> full_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
-    for (uint32_t i = 0; i < full_cores.size(); ++i) {
+    uint32_t num_full_cores =
+        input_is_sharded ? std::min(static_cast<uint32_t>(full_cores.size()), num_shards) : full_cores.size();
+    for (uint32_t i = 0; i < num_full_cores; ++i) {
         CoreCoord core = full_cores[i];
         uint32_t height_wise_input_block_start_index =
             (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
@@ -307,9 +313,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             num_unpadded_cols_per_input_block,
             width_wise_output_block_start_index,
             num_cols_already_processed_in_first_output_block};
-        if (output_is_sharded) {
-            shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
-        }
 
         // Compute run-time args
         std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
@@ -354,9 +357,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             num_unpadded_cols_per_input_block,
             width_wise_output_block_start_index,
             num_cols_already_processed_in_first_output_block};
-        if (output_is_sharded) {
-            shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
-        }
 
         // Reader run-time args (always reading interleaved input as cliff core does not exist for sharded input)
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;

@@ -7,21 +7,19 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/welford.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/welford.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/transpose_wh.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
 namespace generic = norm::kernel_util::generic;
-
-namespace NAMESPACE {
 
 template <
     tt::CBIndex cb_in,
@@ -208,7 +206,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     cb_pop_front(cb_in, num_to_sync);
 }
 
-void MAIN {
+void kernel_main() {
     namespace kutil = norm::kernel_util;
 
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -475,4 +473,3 @@ void MAIN {
         cb_pop_front(cb_ex, onetile);
     }  // NCHt loop
 }
-}  // namespace NAMESPACE

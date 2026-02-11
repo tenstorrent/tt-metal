@@ -57,19 +57,6 @@ Tensor BcastTo::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     CMAKE_UNIQUE_NAMESPACE::check_shape(input, output_shape);
-
-    TT_FATAL(
-        input.dtype() == DataType::BFLOAT16 or input.dtype() == DataType::FLOAT32,
-        "For input dtype {}, only bfloat16 and float32 are supported",
-        input.dtype());
-
-    if (output.has_value()) {
-        TT_FATAL(
-            output.value().dtype() == DataType::BFLOAT16 or output.value().dtype() == DataType::FLOAT32,
-            "For output dtype {}, only bfloat16 and float32 are supported",
-            output.value().dtype());
-    }
-
     return ttnn::prim::bcast_to(input, output_shape, memory_config, output);
 }
 }  // namespace ttnn::operations::experimental

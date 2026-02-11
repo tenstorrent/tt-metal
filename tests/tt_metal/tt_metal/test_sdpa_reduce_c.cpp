@@ -299,6 +299,10 @@ TEST_F(UnitMeshCQSingleCardFixture, NIGHTLY_SdpaReduceC) {
     /**
      * Parameters to sweep over for correctness.
      */
+    // std::vector<uint32_t> q_chunk_sizes = {1};
+    // std::vector<uint32_t> k_chunk_sizes = {1};
+    // std::vector<bool> fp32_dest_acc_ens = {true};
+    // std::vector<bool> do_eltwise = {true};
     std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
     std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
     std::vector<bool> fp32_dest_acc_ens = {false, true};

@@ -23,9 +23,14 @@ on:
         required: false
         type: boolean
         default: false
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   smoke:
+    timeout-minutes: 30
     runs-on: >-
       ${{
         (format('tt-ubuntu-2204-{0}-stable', inputs.runner))
@@ -84,6 +89,7 @@ jobs:
           echo "Memory limit validated: ${memory_bytes} bytes"
 
       - name: Install packages
+        timeout-minutes: 10
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
@@ -109,6 +115,14 @@ jobs:
         run: |
           rm -f /work/coverage/*.profraw || true
 
+      - name: Set up env vars for watcher
+        if: ${{ inputs.enable-watcher == true }}
+        run: |
+          echo "Enabling TT Metal Watcher"
+          echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+
       - name: Run a test
         id: test
         timeout-minutes: 15
@@ -116,7 +130,6 @@ jobs:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
-          # TT_METAL_WATCHER: 5 TODO(#25305): Re-enable watcher after the race condition is fixed.
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
           /usr/bin/${{ inputs.product }}-validation-smoke

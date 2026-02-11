@@ -10,23 +10,15 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
-namespace operations::normalization {
 
-struct ExecuteLayerNorm {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        float epsilon = 1e-12,
-        const std::optional<const ttnn::Tensor>& weight = std::nullopt,
-        const std::optional<const ttnn::Tensor>& bias = std::nullopt,
-        const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config = std::nullopt,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-};
-
-}  // namespace operations::normalization
-
-constexpr auto layer_norm =
-    ttnn::register_operation<"ttnn::layer_norm", ttnn::operations::normalization::ExecuteLayerNorm>();
+Tensor layer_norm(
+    const Tensor& input_tensor,
+    float epsilon = 1e-12,
+    const std::optional<const Tensor>& weight = std::nullopt,
+    const std::optional<const Tensor>& bias = std::nullopt,
+    const std::optional<const Tensor>& residual_input_tensor = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<const prim::LayerNormProgramConfig>& program_config = std::nullopt,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn
