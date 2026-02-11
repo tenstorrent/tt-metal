@@ -673,16 +673,16 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
                     logger.warning(
                         f"Mistral 24B currently supports only 1 image per prompt, got {len(image)}. Using first image."
                     )
-                image = image[0] if image else None
+                image = image[0] if image is not None else None
 
             # Prepare vision inputs
-            vision_images.append([image] if image else None)
+            vision_images.append([image] if image is not None else None)
 
             # Create vision mask to identify image token positions in the sequence
             prompt_tokens = [int(tokens[user_id, i]) for i in range(prompt_lens[user_id])]
 
             # Use create_vision_mask if available, otherwise create simple mask
-            if image:
+            if image is not None:
                 try:
                     from models.common.llama_models import create_vision_mask
 
