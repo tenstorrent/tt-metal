@@ -129,6 +129,13 @@ void copy_to_host(
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
+void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<QueueId> cq_id) {
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
+    tensor_impl::copy_to_host(device_tensor, host_tensor, blocking, cq_id);
+    GraphTracker::instance().track_function_end(host_tensor);
+}
+
 Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id) {
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return input_tensor;
