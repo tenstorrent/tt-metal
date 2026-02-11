@@ -1243,6 +1243,9 @@ bool write_to_device_buffer(
                     use_pinned_transfer = true;
                 }
             }
+            if (has_pinned_inputs) {
+                log_info(tt::LogMetal, "Sharded using pinned transfer: {}", use_pinned_transfer);
+            }
         }
 
         ShardedBufferWriteDispatchParams dispatch_params(
