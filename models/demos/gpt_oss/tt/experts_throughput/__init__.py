@@ -37,6 +37,7 @@ Usage:
 
 import ttnn
 from typing import Optional
+from models.demos.gpt_oss.config import MeshConfig
 from .config import (
     ThroughputExpertConfig,
     ThroughputProgramConfig,
@@ -92,6 +93,8 @@ class ThroughputExperts:
         mesh_device,
         config: ThroughputExpertConfig,
         state_dict: dict,
+        ccl_manager,
+        mesh_config: MeshConfig,
         program_config: ThroughputProgramConfig = None,
         weight_dtype=ttnn.bfloat4_b,
         tensor_cache_path: str = None,
@@ -120,6 +123,8 @@ class ThroughputExperts:
         mesh_shape = mesh_device.shape
 
         self.mesh_device = mesh_device
+        self.mesh_config = mesh_config
+        self.ccl_manager = ccl_manager
         self.config = config
         self.program_config = program_config or ThroughputProgramConfig()
 
@@ -150,6 +155,7 @@ class ThroughputExperts:
             mesh_device=mesh_device,
             config=config,
             state_dict=state_dict,
+            mesh_config=self.mesh_config,
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
         )
@@ -243,6 +249,8 @@ class ThroughputExperts:
             combine_config=self.combine_config_decode,
             program_config=self.program_config,
             mesh_device=self.mesh_device,
+            mesh_config=self.mesh_config,
+            ccl_manager=self.ccl_manager,
         )
 
     def forward_prefill(
@@ -276,6 +284,8 @@ class ThroughputExperts:
             combine_config=self.combine_config_prefill,
             program_config=self.program_config,
             mesh_device=self.mesh_device,
+            mesh_config=self.mesh_config,
+            ccl_manager=self.ccl_manager,
             chunk_size=chunk_size,
         )
 

@@ -116,7 +116,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     return out
 
 
-def apply_allreduce(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: int, hidden_size: int):
+def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """
     Apply tensor parallel allreduce if needed.
 
