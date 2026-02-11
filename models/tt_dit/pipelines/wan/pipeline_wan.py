@@ -168,11 +168,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         # See what options we have for topology. We should consider reusing CCL managers
-        self.encoder_ccl_manager = CCLManager(
-            mesh_device=mesh_device,
-            num_links=num_links,
-            topology=ttnn.Topology.Linear,
-        )
+        self.encoder_ccl_manager = self.vae_ccl_manager
 
         self.is_fsdp = is_fsdp
         self.parallel_config = parallel_config
@@ -409,11 +405,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt: Union[str, List[str]] = None,
         num_videos_per_prompt: int = 1,
         max_sequence_length: int = 226,
-        device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ):
-        # device = device or self._execution_device
-        device = "cpu"
         dtype = dtype or self.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
@@ -440,16 +433,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         prompt_embeds = self.tt_umt5_encoder(tt_prompt)[-1]
-        # prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(prompt_embeds)[0])
-
-        # prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
         prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
 
         # NOTE: while the reference impl does not pad to max_sequence_length, for some reason this seems to be necessary for correctness in this pipeline.
         # TODO: investigate
-        # prompt_embeds = torch.stack(
-        #    [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
-        # )
         prompt_embeds = ttnn.stack(
             [
                 ttnn.concat(
@@ -470,14 +457,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         _, seq_len, _ = prompt_embeds.shape
-        # prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
         prompt_embeds = ttnn.repeat(prompt_embeds, (1, num_videos_per_prompt, 1))
-        prompt_embeds = ttnn.view(prompt_embeds, (batch_size * num_videos_per_prompt, seq_len, -1))
-
-        # pytorch adapter
-        prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(prompt_embeds)[0]).to(dtype=dtype, device=device)
-
-        return prompt_embeds
+        prompt_embeds_1BLP = ttnn.view(prompt_embeds, (1, batch_size * num_videos_per_prompt, seq_len, -1))
+        return prompt_embeds_1BLP
 
     def encode_prompt(
         self,
@@ -488,7 +470,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         max_sequence_length: int = 226,
-        device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ):
         r"""
@@ -512,14 +493,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
-            device: (`torch.device`, *optional*):
-                torch device
             dtype: (`torch.dtype`, *optional*):
                 torch dtype
         """
-        # device = device or self._execution_device
-        device = "cpu"
-
         prompt = [prompt] if isinstance(prompt, str) else prompt
         if prompt is not None:
             batch_size = len(prompt)
@@ -531,7 +507,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prompt=prompt,
                 num_videos_per_prompt=num_videos_per_prompt,
                 max_sequence_length=max_sequence_length,
-                device=device,
                 dtype=dtype,
             )
 
@@ -555,7 +530,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prompt=negative_prompt,
                 num_videos_per_prompt=num_videos_per_prompt,
                 max_sequence_length=max_sequence_length,
-                device=device,
                 dtype=dtype,
             )
 
@@ -816,7 +790,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             prompt_embeds=prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
             max_sequence_length=max_sequence_length,
-            device=device,
         )
         if profiler:
             profiler.end("encoder", profiler_iteration)
