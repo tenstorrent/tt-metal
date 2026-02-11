@@ -17,7 +17,7 @@ class Linear(Module):
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, activation_fn=None, mesh_device=None):
+    def __init__(self, in_features, out_features, bias=True, activation_fn=None, mesh_device=None, dtype=ttnn.bfloat16):
         super().__init__()
 
         self.in_features = in_features
@@ -45,8 +45,8 @@ class Linear(Module):
             packer_l1_acc=True,
         )
 
-        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device)
-        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device) if bias else None
+        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device, dtype=dtype) if bias else None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:

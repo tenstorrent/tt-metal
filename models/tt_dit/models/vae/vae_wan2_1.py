@@ -450,6 +450,7 @@ class WanResidualBlock:
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
+            dtype=conv_dtype,
         )
         self.conv1 = WanCausalConv3d(
             in_channels=in_dim,
@@ -468,6 +469,7 @@ class WanResidualBlock:
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
+            dtype=conv_dtype,
         )
         self.conv2 = WanCausalConv3d(
             in_channels=out_dim,
@@ -485,6 +487,7 @@ class WanResidualBlock:
                 in_features=in_dim,
                 out_features=out_dim,
                 mesh_device=mesh_device,
+                dtype=conv_dtype,
             )
         else:
             self.conv_shortcut = None
@@ -1161,7 +1164,8 @@ class WanDecoder3d:
             norm_eps=1e-6,
             norm_elementwise_affine=True,
             bias=False,
-            mesh_device=mesh_device
+            mesh_device=mesh_device,
+            dtype=conv_dtype,
             # embedding_dim=out_dim, norm_eps=1e-12, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
         )
         self.conv_out = WanCausalConv3d(
@@ -1299,6 +1303,7 @@ class WanDecoder:
             in_features=aligned_channels(z_dim),
             out_features=aligned_channels(z_dim),
             mesh_device=mesh_device,
+            dtype=conv_dtype,
         )
 
         self.decoder = WanDecoder3d(
@@ -1456,7 +1461,8 @@ class WanEncoder3D:
             norm_eps=1e-6,
             norm_elementwise_affine=True,
             bias=False,
-            mesh_device=mesh_device
+            mesh_device=mesh_device,
+            dtype=conv_dtype,
             # embedding_dim=out_dim, norm_eps=1e-12, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
         )
         self.conv_out = WanCausalConv3d(
@@ -1566,6 +1572,7 @@ class WanEncoder:
             in_features=aligned_channels(self.out_channels),
             out_features=aligned_channels(self.out_channels),
             mesh_device=mesh_device,
+            dtype=conv_dtype,
         )
         self.cached_conv_count = count_convs(self.encoder)
 
