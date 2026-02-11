@@ -15,11 +15,11 @@
 
 using namespace ckernel;
 
-template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, int NUM_FIDELITY_PHASES = 0>
+template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, MathFidelity math_fidelity>
 inline void sdpa_bcast_col_srcb_reuse_configure_mop(
     const std::uint32_t num_faces = 4, const std::uint32_t acc_to_dest = 0) {
     LLK_ASSERT(num_faces == 2, "num_faces must be 1, 2, or 4");
-    constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     constexpr uint addr_mod = ADDR_MOD_0;
     uint innerloop = 16 >> 3;  // 8 rows per eltwise op at a time.
     uint outerloop = num_faces;
@@ -38,7 +38,8 @@ inline void sdpa_bcast_col_srcb_reuse_configure_mop(
         tmp.program();
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         if constexpr (high_fidelity) {
-            ckernel_template tmp(num_faces, NUM_FIDELITY_PHASES, TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_0, 0));
+            ckernel_template tmp(
+                num_faces, to_underlying(math_fidelity), TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_0, 0));
             tmp.set_last_inner_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_2, 0));
             tmp.set_last_outer_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
             tmp.program();
@@ -80,10 +81,10 @@ template <
     uint32_t num_tiles,
     DstSync Dst,
     bool is_fp32_dest_acc_en,
-    int NUM_FIDELITY_PHASES = 0,
+    MathFidelity math_fidelity,
     bool clear_dest = false>
 inline void _llk_math_sdpa_bcast_col_srcb_reuse_(uint dst_index) {
-    constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
@@ -117,9 +118,10 @@ inline void _llk_math_sdpa_bcast_col_srcb_reuse_(uint dst_index) {
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, int NUM_FIDELITY_PHASES, std::uint32_t FIDELITY_INCREMENT>
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity>
 inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_faces) {
-    constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
+    constexpr std::uint32_t FIDELITY_INCREMENT = 1;
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     // Use srcA for data movement
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
@@ -167,19 +169,15 @@ inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, int MATH_FIDELITY_DESC = 0>
+template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, MathFidelity math_fidelity>
 inline void _llk_math_sdpa_bcast_col_srcb_reuse_init_(const std::uint32_t num_faces, const std::uint32_t acc_to_dest) {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    constexpr int MATH_FIDELITY_INCREMENT = get_math_fidelity_increment(MATH_FIDELITY_DESC);
 
-    sdpa_bcast_col_srcb_reuse_configure_addrmod<eltwise_binary_type, MATH_FIDELITY_PHASES, MATH_FIDELITY_INCREMENT>(
-        num_faces);
+    sdpa_bcast_col_srcb_reuse_configure_addrmod<eltwise_binary_type, math_fidelity>(num_faces);
 
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
-        sdpa_bcast_col_srcb_reuse_configure_mop<eltwise_binary_type, num_tiles, MATH_FIDELITY_PHASES>(
-            num_faces, acc_to_dest);
+        sdpa_bcast_col_srcb_reuse_configure_mop<eltwise_binary_type, num_tiles, math_fidelity>(num_faces, acc_to_dest);
     }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);

@@ -17,7 +17,7 @@ using namespace ckernel;
 
 namespace ckernel {
 
-constexpr uint32_t transpose_dest_tile_offset = 64;  // 1 tile x 64 rows per tile
+constexpr std::uint32_t transpose_dest_tile_offset = 64;  // 1 tile x 64 rows per tile
 
 // Configure address modifiers for single face transpose
 template <bool is_32bit>
@@ -37,7 +37,7 @@ inline void deepseek_moe_gate_transpose_dest_single_face_configure_addrmod() {
         .set(ADDR_MOD_3);
 }
 
-template <uint32_t num_tiles = 1, bool is_32bit>
+template <std::uint32_t num_tiles = 1, bool is_32bit>
 inline void deepseek_moe_gate_transpose_dest_single_face_step0_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
@@ -66,15 +66,15 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step0_configure_mop() {
             TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
             TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
         });
-    uint d2b_instr = lltt::replay_insn(math::replay_buf_offset, 8);
-    uint b2d_instr = lltt::replay_insn(math::replay_buf_offset + 8, 8);
+    std::uint32_t d2b_instr = lltt::replay_insn(math::replay_buf_offset, 8);
+    std::uint32_t b2d_instr = lltt::replay_insn(math::replay_buf_offset + 8, 8);
 
     ckernel_template tmp(num_tiles, 1, d2b_instr, TT_OP_TRNSPSRCB);
     tmp.set_end_op(b2d_instr);
     tmp.program();
 }
 
-template <uint32_t num_tiles = 1, bool is_32bit>
+template <std::uint32_t num_tiles = 1, bool is_32bit>
 inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
@@ -100,13 +100,13 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop() {
             TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
             TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
         });
-    uint replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
 }
 
-template <uint32_t num_tiles = 1, bool is_32bit>
+template <std::uint32_t num_tiles = 1, bool is_32bit>
 inline void deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     load_replay_buf(
@@ -122,7 +122,7 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop() {
             // Move 1 row from SrcB back to DEST
             TTI_MOVB2D(0, 16, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 0);
         });
-    uint replay_instr = lltt::replay_insn(math::replay_buf_offset, 4);
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 4);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
