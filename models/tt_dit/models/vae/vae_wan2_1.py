@@ -160,7 +160,6 @@ class WanAttentionBlock:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.height_parallel.mesh_axis,
             )
-
         if self.parallel_config.width_parallel.factor > 1:
             x_BTHWC = ttnn.experimental.all_gather_async(
                 x_BTHWC,
@@ -348,14 +347,12 @@ class WanCausalConv3d:
 
         returns: (B, T, H, W, C) fractured on H and W
         """
-
         # NOTE: T padding is handled explicitly and depends on the cache
         t_front_padding = self.external_padding[0]
         if cache_x_BTHWC is not None and t_front_padding > 0:
             # concat on T
             x_BTHWC = ttnn.concat([cache_x_BTHWC, x_BTHWC], dim=1)
             t_front_padding -= cache_x_BTHWC.shape[1]
-
         if t_front_padding > 0:
             # Padding only works on the lowest 3 dims. reshape input.
             B, T, H, W, C = x_BTHWC.shape
