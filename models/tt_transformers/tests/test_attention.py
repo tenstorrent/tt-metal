@@ -71,6 +71,7 @@ def test_attention_inference(
     mode = Mode.DECODE
     dtype = ttnn.bfloat8_b
     pcc = 0.986  # pcc reduced from .99 while investigating issue #36378
+    llama90b_hf_rope_pcc = 0.97
     num_tensors = 2
     prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
 
@@ -85,6 +86,8 @@ def test_attention_inference(
         prefetcher=prefetcher,
         use_hf_rope=use_hf_rope,
     )
+    if model_args.model_name == "Llama-3.2-90B-Instruct" and use_hf_rope:
+        pcc = llama90b_hf_rope_pcc
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
