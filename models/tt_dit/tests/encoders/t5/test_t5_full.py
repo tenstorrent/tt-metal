@@ -104,9 +104,6 @@ def test_t5_encoder(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
-    # See weight state dict key names
-    # logger.info(f"print huggingface state dict keys: {hf_model.state_dict().keys()}")
-
     # === TT-DiT T5 ====
     config = T5Config(
         vocab_size=hf_model.config.vocab_size,
