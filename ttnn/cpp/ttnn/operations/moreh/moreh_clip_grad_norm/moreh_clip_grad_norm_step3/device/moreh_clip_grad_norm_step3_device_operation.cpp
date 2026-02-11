@@ -19,7 +19,6 @@ void MorehClipGradNormStep3Operation::validate_inputs(
 
     ttnn::operations::check_tensor(tensor_args.clip_coef_clamped, "moreh_clip_grad_norm_step3", "clip_coef_clamped");
 };
-;
 
 void MorehClipGradNormStep3Operation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

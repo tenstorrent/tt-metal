@@ -19,7 +19,6 @@ void MorehClipGradNormStep1Operation::validate_inputs(
 
     ttnn::operations::check_tensor(tensor_args.tmp_pow_sum, "moreh_clip_grad_norm_step1", "tmp_pow_sum");
 };
-;
 
 void MorehClipGradNormStep1Operation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
