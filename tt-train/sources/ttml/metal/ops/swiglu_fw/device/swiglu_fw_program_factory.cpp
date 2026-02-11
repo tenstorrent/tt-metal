@@ -41,15 +41,12 @@ constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 constexpr auto kW1CbIndex = tt::CBIndex::c_1;
 constexpr auto kW2CbIndex = tt::CBIndex::c_2;
 constexpr auto kW3CbIndex = tt::CBIndex::c_3;
-// CBs with intermediate computations (used when row of M fits in L1 with flash-attention optimization)
-constexpr auto kXW1PartialCbIndex = tt::CBIndex::c_4;  // keeps track of partial (X @ W1) [r, k]
-constexpr auto kXW3PartialCbIndex = tt::CBIndex::c_5;  // keeps track of partial (X @ W3) [r, k]
-constexpr auto kXW1CbIndex = tt::CBIndex::c_6;         // keeps track of (X @ W1) [r, k]
-constexpr auto kXW3CbIndex = tt::CBIndex::c_7;         // keeps track of (X @ W3) [r, k]
-constexpr auto kMCbIndex = tt::CBIndex::c_8;           // keeps track of M[r, k]
-constexpr auto kYPartialCbIndex = tt::CBIndex::c_9;    // keeps track of partial Y[r, c]
+// CBs with intermediate computations (L1 acc eliminates partial CBs c_4, c_5, c_9)
+constexpr auto kXW1CbIndex = tt::CBIndex::c_6;  // (X @ W1)[r, :] - L1 acc target
+constexpr auto kXW3CbIndex = tt::CBIndex::c_7;  // (X @ W3)[r, :] - L1 acc target
+constexpr auto kMCbIndex = tt::CBIndex::c_8;    // M[r, k_block]
 // CB with output data
-constexpr auto kYCbIndex = tt::CBIndex::c_10;  // keeps track of final Y[r, c]
+constexpr auto kYCbIndex = tt::CBIndex::c_10;  // Y[r, c_block] - L1 acc target
 
 const std::string kRowOfMFitsInL1DefineKey = "ROW_OF_M_FITS_IN_L1";
 
@@ -215,21 +212,17 @@ bool row_of_m_fits_in_l1_check(
     const uint64_t w2_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w2
     const uint64_t w3_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w3
 
-    // Memory for output CBs (always needed regardless of algorithm)
-    const uint64_t y_partial_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_y_partial
-    const uint64_t y_memory = twice_block_size * bfloat16_single_tile_size_bytes;          // cb_y
+    // Memory for output CB (L1 acc eliminates cb_y_partial)
+    const uint64_t y_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_y (L1 acc target)
 
-    // Additional memory ONLY needed for "M fits in L1" algorithm
-    const uint64_t xw1_partial_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_xw1_partial
-    const uint64_t xw3_partial_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_xw3_partial
-    const uint64_t xw1_memory = hidden_Wt_rounded_up * bfloat16_single_tile_size_bytes;      // cb_xw1 (full row)
-    const uint64_t xw3_memory = hidden_Wt_rounded_up * bfloat16_single_tile_size_bytes;      // cb_xw3 (full row)
-    const uint64_t m_memory = hidden_Wt_rounded_up * bfloat16_single_tile_size_bytes;        // cb_m (full row)
+    // Memory for "M fits in L1" algorithm (L1 acc eliminates cb_xw1_partial, cb_xw3_partial)
+    const uint64_t xw1_memory = hidden_Wt_rounded_up * bfloat16_single_tile_size_bytes;  // cb_xw1 (L1 acc target)
+    const uint64_t xw3_memory = hidden_Wt_rounded_up * bfloat16_single_tile_size_bytes;  // cb_xw3 (L1 acc target)
+    const uint64_t m_memory = hidden_Wt_rounded_up * bfloat16_single_tile_size_bytes;    // cb_m
 
-    // Total L1 memory required for "M fits in L1" algorithm
-    const uint64_t required_L1_in_bytes = input_memory + w1_memory + w2_memory + w3_memory + y_partial_memory +
-                                          y_memory + xw1_partial_memory + xw3_partial_memory + xw1_memory + xw3_memory +
-                                          m_memory;
+    // Total L1 memory (3 fewer CBs than before thanks to L1 accumulation)
+    const uint64_t required_L1_in_bytes =
+        input_memory + w1_memory + w2_memory + w3_memory + y_memory + xw1_memory + xw3_memory + m_memory;
 
     return required_L1_in_bytes <= available_L1_in_bytes;
 }
@@ -389,28 +382,21 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // - Using all CBs as fp32 showed no observable precision improvement in tests.
     [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    // W1/W3 CBs use larger size when batching is enabled for reduced mcast overhead
     [[maybe_unused]] auto cb_w1 = create_circular_buffer(
         program, all_cores, kW1CbIndex, data_format, bfloat16_single_tile_size_bytes, w1_w3_cb_tiles);
-    // W2 CB uses same batched size as W1/W3 for reduced mcast overhead
     [[maybe_unused]] auto cb_w2 = create_circular_buffer(
         program, all_cores, kW2CbIndex, data_format, bfloat16_single_tile_size_bytes, w2_cb_tiles);
     [[maybe_unused]] auto cb_w3 = create_circular_buffer(
         program, all_cores, kW3CbIndex, data_format, bfloat16_single_tile_size_bytes, w1_w3_cb_tiles);
-    // Partial CBs for flash-attention optimization (accumulate XW1/XW3 across p_blocks)
-    [[maybe_unused]] auto cb_x_w1_partial = create_circular_buffer(
-        program, all_cores, kXW1PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw1);
-    [[maybe_unused]] auto cb_x_w3_partial = create_circular_buffer(
-        program, all_cores, kXW3PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw3);
-    // XW1, XW3, and M CBs for full row caching
+    // L1 accumulation targets: XW1, XW3 (full row), M (full row)
+    // No partial CBs needed - L1 acc accumulates directly into final CBs
     [[maybe_unused]] auto cb_x_w1 = create_circular_buffer(
         program, all_cores, kXW1CbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw1);
     [[maybe_unused]] auto cb_x_w3 = create_circular_buffer(
         program, all_cores, kXW3CbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw3);
     [[maybe_unused]] auto cb_m = create_circular_buffer(
         program, all_cores, kMCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_m);
-    [[maybe_unused]] auto cb_y_partial = create_circular_buffer(
-        program, all_cores, kYPartialCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    // L1 accumulation target: Y output (no cb_y_partial needed)
     [[maybe_unused]] auto cb_y = create_circular_buffer(
         program, all_cores, kYCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
