@@ -40,26 +40,23 @@ def _ensure_tt_device_tensor(x, tt_device, ttnn):
 def _tt_relu_with_fallback(hidden_state, tt_device, ttnn):
     """Apply ReLU on device if possible, fallback to host otherwise."""
     try:
+        # ttnn.relu requires TILE_LAYOUT; convert if needed
+        if hasattr(hidden_state, "layout") and hidden_state.layout != ttnn.TILE_LAYOUT:
+            hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT)
         return ttnn.relu(hidden_state)
     except Exception:
-        try:
-            # Some runtimes only support activation kernels in TILE layout.
-            if hasattr(hidden_state, "layout") and hidden_state.layout != ttnn.TILE_LAYOUT:
-                hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT)
-            return ttnn.relu(hidden_state)
-        except Exception:
-            # Host fallback when device relu is unavailable.
-            x_host = hidden_state.cpu()
-            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-            x_torch = x_host.to_torch()
-            x_torch = torch.relu(x_torch)
-            return ttnn.from_torch(
-                x_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=tt_device,
-            )
+        # Fallback to host relu if ttnn.relu is unavailable
+        x_host = hidden_state.cpu()
+        if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
+            x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
+        x_torch = x_host.to_torch()
+        x_torch = torch.relu(x_torch)
+        return ttnn.from_torch(
+            x_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=tt_device,
+        )
 
 
 class DPTPreActResidualLayerTT(nn.Module):
@@ -103,20 +100,6 @@ class DPTPreActResidualLayerTT(nn.Module):
         self._tt_bn1 = None
         self._tt_bn2 = None
 
-    @staticmethod
-    def _fuse_conv_bn(conv: nn.Conv2d, bn: nn.BatchNorm2d) -> tuple[torch.Tensor, torch.Tensor]:
-        # Fold BN into conv for inference: y = BN(Conv(x)) -> Conv'(x)
-        w = conv.weight.detach()
-        b = conv.bias.detach() if conv.bias is not None else torch.zeros(w.shape[0], dtype=w.dtype, device=w.device)
-        gamma = bn.weight.detach()
-        beta = bn.bias.detach()
-        mean = bn.running_mean.detach()
-        var = bn.running_var.detach()
-        inv_std = gamma / torch.sqrt(var + bn.eps)
-        fused_w = w * inv_std.reshape(-1, 1, 1, 1)
-        fused_b = (b - mean) * inv_std + beta
-        return fused_w, fused_b
-
     def _tt_convolution(self, which: int, x):
         import tt_lib.fallback_ops as fallback_ops  # type: ignore
         import ttnn  # type: ignore
@@ -125,18 +108,12 @@ class DPTPreActResidualLayerTT(nn.Module):
         cache = self._tt_conv1 if which == 1 else self._tt_conv2
 
         if cache is None:
-            if self.use_batch_norm:
-                bn = self.batch_norm1 if which == 1 else self.batch_norm2
-                fused_w, fused_b = self._fuse_conv_bn(conv, bn)
-                wt = torch_to_tt_tensor_rm(fused_w, self.tt_device, put_on_device=True)
-                bs = torch_to_tt_tensor_rm(fused_b, self.tt_device, put_on_device=True)
-            else:
-                wt = torch_to_tt_tensor_rm(conv.weight.detach(), self.tt_device, put_on_device=True)
-                bs = (
-                    torch_to_tt_tensor_rm(conv.bias.detach(), self.tt_device, put_on_device=True)
-                    if conv.bias is not None
-                    else None
-                )
+            wt = torch_to_tt_tensor_rm(conv.weight.detach(), self.tt_device, put_on_device=True)
+            bs = (
+                torch_to_tt_tensor_rm(conv.bias.detach(), self.tt_device, put_on_device=True)
+                if conv.bias is not None
+                else None
+            )
             cache = fallback_ops.Conv2d(
                 in_channels=conv.in_channels,
                 out_channels=conv.out_channels,
@@ -204,12 +181,16 @@ class DPTPreActResidualLayerTT(nn.Module):
 
             hidden_state = self._tt_convolution(1, hidden_state)
             hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
+            hidden_state = self._tt_batch_norm(1, hidden_state)
+            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
 
             # Device ReLU with fallback to host
             hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
             hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
 
             hidden_state = self._tt_convolution(2, hidden_state)
+            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
+            hidden_state = self._tt_batch_norm(2, hidden_state)
             hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             # residual add on device
             return ttnn.add(hidden_state, residual)
