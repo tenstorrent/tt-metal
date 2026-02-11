@@ -57,11 +57,28 @@ struct AddcdivOperation {
         const std::optional<Tensor>& output = std::nullopt);
 };
 
+// Lerp Operation (linear interpolation: out = input + weight * (end - input))
+struct LerpOperation {
+    static Tensor invoke(
+        const Tensor& input,
+        const Tensor& end,
+        float weight,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt);
+    static Tensor invoke(
+        const Tensor& input,
+        const Tensor& end,
+        const Tensor& weight,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt);
+};
+
 }  // namespace operations::ternary
 
 // Register the operations
 constexpr auto where = ttnn::register_operation<"ttnn::where", operations::ternary::WhereOperation>();
 constexpr auto addcmul = ttnn::register_operation<"ttnn::addcmul", operations::ternary::AddcmulOperation>();
 constexpr auto addcdiv = ttnn::register_operation<"ttnn::addcdiv", operations::ternary::AddcdivOperation>();
+constexpr auto lerp = ttnn::register_operation<"ttnn::lerp", operations::ternary::LerpOperation>();
 
 }  // namespace ttnn

@@ -28,8 +28,10 @@ enum class TernaryCompositeOpType {
 
 Tensor _addcmul(const Tensor&, const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _addcdiv(const Tensor&, const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
-Tensor _lerp(const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _lerp_overload(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
+Tensor _lerp(
+    const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+Tensor _lerp_overload(
+    const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 Tensor _mac(const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _mac_overload(const Tensor&, float, float, const std::optional<MemoryConfig>&);
 
@@ -55,11 +57,20 @@ struct OpHandler<TernaryCompositeOpType::ADDCDIV> {
 template <>
 struct OpHandler<TernaryCompositeOpType::LERP> {
     static Tensor handle(
-        const Tensor& t1, const Tensor& t2, const Tensor& t3, const std::optional<MemoryConfig>& mem_cfg) {
-        return _lerp(t1, t2, t3, mem_cfg);
+        const Tensor& t1,
+        const Tensor& t2,
+        const Tensor& t3,
+        const std::optional<MemoryConfig>& mem_cfg,
+        const std::optional<Tensor>& output) {
+        return _lerp(t1, t2, t3, mem_cfg, output);
     }
-    static Tensor handle(const Tensor& t1, const Tensor& t2, float value, const std::optional<MemoryConfig>& mem_cfg) {
-        return _lerp_overload(t1, t2, value, mem_cfg);
+    static Tensor handle(
+        const Tensor& t1,
+        const Tensor& t2,
+        float value,
+        const std::optional<MemoryConfig>& mem_cfg,
+        const std::optional<Tensor>& output) {
+        return _lerp_overload(t1, t2, value, mem_cfg, output);
     }
 };
 
