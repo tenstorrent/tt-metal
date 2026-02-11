@@ -229,6 +229,10 @@ class Model:
 
         return instance
 
+    def switch_mode(self, mode: Mode):
+        # No-op; required by tt_transformers generator interface.
+        return None
+
     def _forward_layers_and_head(
         self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True, user_id=0
     ):
@@ -340,8 +344,8 @@ class Model:
         else:
             # Slice cos/sin matrices for prefill sequence length (matches tt-transformers model.py lines 156-159)
             rope_mats = [
-                self.rope_setup.cos_matrix[:, :, :seq_len, :],
-                self.rope_setup.sin_matrix[:, :, :seq_len, :],
+                self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+                self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
             ]
 
         # Forward through layers and head (shared with decode)
@@ -493,8 +497,8 @@ class Model:
         # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
         seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
         rot_mats_global = [
-            self.rope_setup.cos_matrix[:, :, :seq_len, :],
-            self.rope_setup.sin_matrix[:, :, :seq_len, :],
+            self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+            self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
         ]
         rot_mats_local = None
 
