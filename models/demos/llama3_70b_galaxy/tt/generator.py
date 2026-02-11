@@ -15,7 +15,8 @@ from models.tt_transformers.tt.common import (
     copy_host_to_device,
     num_blocks_in_seq,
     get_block_size,
-    ImageMedia,
+    InterleavedTextMedia,
+    Role,
 )
 
 
@@ -23,26 +24,10 @@ from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
 
 
-class Role(Enum):
-    system = "system"
-    user = "user"
-    assistant = "assistant"
-    ipython = "ipython"
-
-
 class StopReason(Enum):
     end_of_turn = "end_of_turn"
     end_of_message = "end_of_message"
     out_of_tokens = "out_of_tokens"
-
-
-InterleavedTextMedia = Union[
-    str,
-    # Specific modalities can be placed here, but not generic attachments
-    # since models don't consume them in a generic way
-    ImageMedia,
-    List[Union[str, ImageMedia]],
-]
 
 
 class BuiltinTool(Enum):

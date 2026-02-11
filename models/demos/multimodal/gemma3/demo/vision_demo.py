@@ -2,10 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from enum import Enum
 from io import BytesIO
 from pathlib import Path
-from typing import List, Literal, Optional, Union
+from typing import Literal, Optional
 
 import requests
 from loguru import logger
@@ -13,7 +12,7 @@ from PIL import Image as PIL_Image
 from pydantic import BaseModel
 
 from models.common.llama_models import sample_top_p
-from models.tt_transformers.tt.common import ImageMedia
+from models.tt_transformers.tt.common import ImageMedia, InterleavedTextMedia, Role
 from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
@@ -31,22 +30,6 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
-
-
-class Role(Enum):
-    system = "system"
-    user = "user"
-    assistant = "assistant"
-    ipython = "ipython"
-
-
-InterleavedTextMedia = Union[
-    str,
-    # Specific modalities can be placed here, but not generic attachments
-    # since models don't consume them in a generic way
-    ImageMedia,
-    List[Union[str, ImageMedia]],
-]
 
 
 class UserMessage(BaseModel):

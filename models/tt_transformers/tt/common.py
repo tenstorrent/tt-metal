@@ -7,7 +7,7 @@ import os
 import re
 from enum import Enum
 from types import SimpleNamespace
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import torch
 from loguru import logger
@@ -29,6 +29,22 @@ class ImageMedia(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+
+
+class Role(Enum):
+    system = "system"
+    user = "user"
+    assistant = "assistant"
+    ipython = "ipython"
+
+
+InterleavedTextMedia = Union[
+    str,
+    # Specific modalities can be placed here, but not generic attachments
+    # since models don't consume them in a generic way
+    ImageMedia,
+    List[Union[str, ImageMedia]],
+]
 
 
 class Mode(Enum):
