@@ -6,6 +6,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "api/compute/tilize.h"
 #include "api/compute/cb_api.h"
+#include "internal/circular_buffer_interface.h"
 
 /**
  * @file tilize_helpers.hpp
@@ -43,12 +44,12 @@
  *       WaitMode::WaitBlock,
  *       TilizeSpeedMode::Fast>(64, num_blocks);
  *
- *   // With data type reconfiguration
+ *   // With unpack and pack data type reconfiguration
  *   compute_kernel_lib::tilize<new_cb, cb_out,
  *       InitUninitMode::InitAndUninit,
  *       WaitMode::WaitBlock,
  *       TilizeSpeedMode::Standard,
- *       old_cb>(16, num_blocks);
+ *       ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(16, num_blocks);
  *
  *   // Non-tile-aligned: per-iteration pages
  *   compute_kernel_lib::tilize<cb_in, cb_out>(
@@ -70,6 +71,21 @@ namespace tilize_config {
 
 // Sentinel value for invalid/unset circular buffer ID
 constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
+
+/**
+ * @brief Controls register datatype reconfiguration mode for tilize operations
+ *
+ * NoReconfigure - no register datatype reconfiguration (default)
+ * UnpackReconfigure - reconfigure only unpack registers (srcA/srcB)
+ * PackReconfigure - reconfigure only pack registers (output)
+ * UnpackAndPackReconfigure - reconfigure both unpack and pack registers
+ */
+enum class ReconfigureRegisterDatatypeMode : uint8_t {
+    NoReconfigure,            // No reconfiguration (default)
+    UnpackReconfigure,        // Reconfigure unpack registers (srcA/srcB)
+    PackReconfigure,          // Reconfigure pack registers (output)
+    UnpackAndPackReconfigure  // Reconfigure both unpack and pack registers
+};
 
 /**
  * @brief Controls init/uninit behavior for tilize operations
@@ -214,7 +230,7 @@ public:
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Controls input synchronization strategy (default: Wait)
  * @tparam speed_mode Explicit tilize speed mode selection (default: Standard)
- * @tparam reconfig_from_cb Previous CB for DT tracking (default: INVALID_CB = disabled)
+ * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  *
  * @param block_width_tiles Block width in tiles (FIRST runtime argument for consistency)
  * @param num_blocks Number of blocks to process
@@ -233,22 +249,31 @@ public:
  *          TilizeSpeedMode::Fast>(64, 5);
  *
  * @example
- *   // Data type reconfiguration
+ *   // Unpack and pack data type reconfiguration
  *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
  *          TilizeSpeedMode::Standard,
- *          old_cb>(16, 5);
+ *          ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(16, 5);
  *
  * @example
- *   // Fast + DT reconfiguration
+ *   // Only unpack reconfiguration (for srcA/srcB registers)
  *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          TilizeSpeedMode::Fast,
- *          old_cb>(64, 5);
+ *          TilizeSpeedMode::Standard,
+ *          ReconfigureRegisterDatatypeMode::UnpackReconfigure>(16, 5);
+ *
+ * @example
+ *   // Only pack reconfiguration (for output register)
+ *   using namespace compute_kernel_lib::tilize_config;
+ *   tilize<new_cb, cb_out,
+ *          InitUninitMode::InitAndUninit,
+ *          WaitMode::WaitBlock,
+ *          TilizeSpeedMode::Standard,
+ *          ReconfigureRegisterDatatypeMode::PackReconfigure>(16, 5);
  *
  * @example
  *   // Per-iteration pages (asymmetric input/output - convert_to_hwc pattern)
@@ -295,7 +320,8 @@ template <
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::TilizeSpeedMode speed_mode = tilize_config::TilizeSpeedMode::Standard,
-    uint32_t reconfig_from_cb = tilize_config::INVALID_CB>
+    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
+        tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
 ALWI void tilize(
     uint32_t block_width_tiles,
     uint32_t num_blocks,
