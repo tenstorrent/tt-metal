@@ -248,12 +248,13 @@ def prepare_gpt_oss_generator_args(
         ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
+            # "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts (128k prompt)
             1,  # data_parallel
             128,  # batch_size (32 per row, but only 1 real user per row)
             1,  # repeat_batches
             128 * 1024,  # max_seq_len (128k tokens)
-            50,  # max_generated_tokens (reduced for long context)
+            130000,  # max_generated_tokens (reduced for long context)
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # 2048 blocks for 128k
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
