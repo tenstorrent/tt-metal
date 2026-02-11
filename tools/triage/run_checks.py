@@ -206,20 +206,6 @@ class BrokenCore:
         return f"{self.risc_name} at {self.location.to_user_str()}"
 
 
-@dataclass(frozen=True)
-class BrokenDevice:
-    device: Device
-    error: Exception | None = None
-
-    def __hash__(self):
-        return hash(self.device)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, BrokenDevice):
-            return False
-        return self.device == other.device
-
-
 class RunChecks:
     def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
         self.devices = devices
@@ -236,14 +222,14 @@ class RunChecks:
         }
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
-        self._broken_devices: set[BrokenDevice] = set()
+        self._broken_devices: set[Device] = set()
         self._broken_cores: dict[Device, set[BrokenCore]] = {}
         self._skip_lock = threading.Lock()
 
     def get_device_by_unique_id(self, unique_id: int) -> Device | None:
         return self._unique_id_to_device.get(unique_id)
 
-    def get_broken_devices(self) -> set[BrokenDevice]:
+    def get_broken_devices(self) -> set[Device]:
         with self._skip_lock:
             return self._broken_devices
 
@@ -283,19 +269,18 @@ class RunChecks:
                 for device in self.devices:
                     # Skipping broken devices
                     with self._skip_lock:
-                        key = BrokenDevice(device)
-                        if key in self._broken_devices:
+                        if device in self._broken_devices:
                             continue
                     try:
                         check_result = check(device)
                     except TimeoutDeviceRegisterError as e:
                         with self._skip_lock:
-                            self._broken_devices.add(BrokenDevice(device, e))
+                            self._broken_devices.add(device)
                             if device.is_local:
                                 # We are classifying remote devices as broken since we cannot access them if their local device is broken
                                 for remote_device in device.remote_devices:
                                     # Broken remote devices will inherit the error from the local device
-                                    self._broken_devices.add(BrokenDevice(remote_device, e))
+                                    self._broken_devices.add(remote_device)
                         if print_broken_devices:
                             log_warning(
                                 f"Triage broke device {device.id} with: {e}. This device will be skipped from now on."
@@ -393,7 +378,7 @@ class RunChecks:
                             self._broken_cores[location._device] = {BrokenCore(location, risc_name, e)}
                     if print_broken_cores:
                         log_warning(
-                            f"Triage broke {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}. This core will be skipped from now on."
+                            f"Triage broke {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}."
                         )
                     continue
                 except Exception as e:

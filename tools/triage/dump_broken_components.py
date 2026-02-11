@@ -24,7 +24,7 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.device import Device
 from ttexalens.tt_exalens_lib import read_word_from_device
 
-from run_checks import run as get_run_checks, BrokenDevice, BrokenCore, RunChecks
+from run_checks import run as get_run_checks, BrokenCore, RunChecks
 from triage import ScriptConfig, run_script, triage_field, collection_serializer
 
 script_config = ScriptConfig(
@@ -104,8 +104,8 @@ class DeviceHealthSummary:
 def collect_device_health_summary(run_checks: RunChecks) -> DeviceHealthSummary:
     broken_devices = run_checks.get_broken_devices()
     for device in run_checks.devices:
-        if BrokenDevice(device=device) in broken_devices:
-            return DeviceHealthSummary(device=device, broken_cores=f"Device is broken so it is skipped.")
+        if device in broken_devices:
+            return DeviceHealthSummary(device=device, broken_cores=f"[error]Device is broken so it is skipped.[/]")
         else:
             broken_cores = run_checks.get_broken_cores()
             return DeviceHealthSummary(
