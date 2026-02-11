@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import diffusers
@@ -25,27 +24,13 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
+from ...utils.tracing import Tracer
 from .prompt_encoder import PromptEncoder
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
 
     from PIL import Image
-
-
-@dataclass
-class PipelineTrace:
-    tid: int
-    spatial_input: ttnn.Tensor
-    prompt_input: ttnn.Tensor
-    timestep_input: ttnn.Tensor
-    guidance_input: ttnn.Tensor
-    sigma_difference_input: ttnn.Tensor
-    latents_output: ttnn.Tensor
-    spatial_rope_cos: ttnn.Tensor
-    spatial_rope_sin: ttnn.Tensor
-    prompt_rope_cos: ttnn.Tensor
-    prompt_rope_sin: ttnn.Tensor
 
 
 class Flux2Pipeline:
@@ -174,6 +159,8 @@ class Flux2Pipeline:
             self.transformers.append(tt_transformer)
             ttnn.synchronize_device(submesh_device)
 
+        self._step_inner_tracers = [Tracer(self._step_inner, device=device) for device in self._submesh_devices]
+
         self._pos_embed = torch_transformer.pos_embed
 
         self._image_processor = VaeImageProcessor()
@@ -208,8 +195,6 @@ class Flux2Pipeline:
 
             if self.encoder_device is not None:
                 ttnn.synchronize_device(self.encoder_device)
-
-        self._traces = None
 
     @contextmanager
     def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
@@ -355,49 +340,20 @@ class Flux2Pipeline:
                 tt_prompt_embeds = tensor.from_torch(
                     prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
                     device=submesh_device,
-                    on_host=traced,
                 )
 
-                tt_initial_latents = tensor.from_torch(
-                    latents, device=submesh_device, on_host=traced, mesh_axes=[None, sp_axis, None]
-                )
+                tt_initial_latents = tensor.from_torch(latents, device=submesh_device, mesh_axes=[None, sp_axis, None])
 
-                tt_guidance = tensor.from_torch(guidance.unsqueeze(1), device=submesh_device, on_host=traced)
+                tt_guidance = tensor.from_torch(guidance.unsqueeze(1), device=submesh_device)
 
                 tt_spatial_rope_cos = tensor.from_torch(
-                    spatial_rope_cos, device=submesh_device, on_host=traced, mesh_axes=[sp_axis, None]
+                    spatial_rope_cos, device=submesh_device, mesh_axes=[sp_axis, None]
                 )
                 tt_spatial_rope_sin = tensor.from_torch(
-                    spatial_rope_sin, device=submesh_device, on_host=traced, mesh_axes=[sp_axis, None]
+                    spatial_rope_sin, device=submesh_device, mesh_axes=[sp_axis, None]
                 )
-                tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=submesh_device, on_host=traced)
-                tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=submesh_device, on_host=traced)
-
-                if traced:
-                    if self._traces is None:
-                        tt_initial_latents = tt_initial_latents.to(submesh_device)
-                        tt_prompt_embeds = tt_prompt_embeds.to(submesh_device)
-                        tt_guidance = tt_guidance.to(submesh_device)
-                        tt_spatial_rope_cos = tt_spatial_rope_cos.to(submesh_device)
-                        tt_spatial_rope_sin = tt_spatial_rope_sin.to(submesh_device)
-                        tt_prompt_rope_cos = tt_prompt_rope_cos.to(submesh_device)
-                        tt_prompt_rope_sin = tt_prompt_rope_sin.to(submesh_device)
-                    else:
-                        ttnn.copy_host_to_device_tensor(tt_initial_latents, self._traces[i].spatial_input)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_embeds, self._traces[i].prompt_input)
-                        ttnn.copy_host_to_device_tensor(tt_guidance, self._traces[i].guidance_input)
-                        ttnn.copy_host_to_device_tensor(tt_spatial_rope_cos, self._traces[i].spatial_rope_cos)
-                        ttnn.copy_host_to_device_tensor(tt_spatial_rope_sin, self._traces[i].spatial_rope_sin)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_rope_cos, self._traces[i].prompt_rope_cos)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_rope_sin, self._traces[i].prompt_rope_sin)
-
-                        tt_initial_latents = self._traces[i].spatial_input
-                        tt_prompt_embeds = self._traces[i].prompt_input
-                        tt_guidance = self._traces[i].guidance_input
-                        tt_spatial_rope_cos = self._traces[i].spatial_rope_cos
-                        tt_spatial_rope_sin = self._traces[i].spatial_rope_sin
-                        tt_prompt_rope_cos = self._traces[i].prompt_rope_cos
-                        tt_prompt_rope_sin = self._traces[i].prompt_rope_sin
+                tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=submesh_device)
+                tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=submesh_device)
 
                 tt_prompt_embeds_list.append(tt_prompt_embeds)
                 tt_latents_step_list.append(tt_initial_latents)
@@ -411,41 +367,33 @@ class Flux2Pipeline:
 
             for i, t in enumerate(tqdm.tqdm(timesteps)):
                 with timer.time_step("denoising_step") if timer else nullcontext():
-                    sigma_difference = sigmas[i + 1] - sigmas[i]
+                    sigma_difference = (sigmas[i + 1] - sigmas[i]).item()
 
                     tt_timestep_list = []
-                    tt_sigma_difference_list = []
-                    for submesh_nr, submesh_device in enumerate(self._submesh_devices):
+                    for submesh_device in self._submesh_devices:
                         tt_timestep = ttnn.full(
                             [1, 1],
                             fill_value=t,
                             layout=ttnn.TILE_LAYOUT,
                             dtype=ttnn.float32,
-                            device=submesh_device if not traced else None,
+                            device=submesh_device,
                         )
                         tt_timestep_list.append(tt_timestep)
 
-                        tt_sigma_difference = ttnn.full(
-                            [1, 1],
-                            fill_value=sigma_difference,
-                            layout=ttnn.TILE_LAYOUT,
-                            dtype=ttnn.bfloat16,
-                            device=submesh_device if not traced else None,
-                        )
-                        tt_sigma_difference_list.append(tt_sigma_difference)
+                    reuse_tensors = i > 0 and traced
 
                     tt_latents_step_list = self._step(
                         timestep=tt_timestep_list,
-                        guidance=tt_guidance_list,
-                        latents=tt_latents_step_list,
+                        guidance=None if reuse_tensors else tt_guidance_list,
+                        latents=None if reuse_tensors else tt_latents_step_list,
                         cfg_enabled=False,
-                        prompt_embeds=tt_prompt_embeds_list,
+                        prompt_embeds=None if reuse_tensors else tt_prompt_embeds_list,
                         cfg_scale=1.0,
-                        sigma_difference=tt_sigma_difference_list,
-                        spatial_rope_cos=tt_spatial_rope_cos_list,
-                        spatial_rope_sin=tt_spatial_rope_sin_list,
-                        prompt_rope_cos=tt_prompt_rope_cos_list,
-                        prompt_rope_sin=tt_prompt_rope_sin_list,
+                        sigma_difference=sigma_difference,
+                        spatial_rope_cos=None if reuse_tensors else tt_spatial_rope_cos_list,
+                        spatial_rope_sin=None if reuse_tensors else tt_spatial_rope_sin_list,
+                        prompt_rope_cos=None if reuse_tensors else tt_prompt_rope_cos_list,
+                        prompt_rope_sin=None if reuse_tensors else tt_prompt_rope_sin_list,
                         spatial_sequence_length=spatial_sequence_length,
                         prompt_sequence_length=prompt_sequence_length,
                         traced=traced,
@@ -522,18 +470,18 @@ class Flux2Pipeline:
         prompt: ttnn.Tensor,
         timestep: ttnn.Tensor,
         guidance: ttnn.Tensor,
-        submesh_index: int,
         spatial_rope_cos: ttnn.Tensor,
         spatial_rope_sin: ttnn.Tensor,
         prompt_rope_cos: ttnn.Tensor,
         prompt_rope_sin: ttnn.Tensor,
         spatial_sequence_length: int,
         prompt_sequence_length: int,
-    ) -> ttnn.Tensor:
+        submesh_id: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         if cfg_enabled and self._parallel_config.cfg_parallel.factor == 1:
             latent = ttnn.concat([latent, latent])
 
-        return self.transformers[submesh_index].forward(
+        noise_pred = self.transformers[submesh_id].forward(
             spatial=latent,
             prompt=prompt,
             timestep=timestep,
@@ -544,115 +492,53 @@ class Flux2Pipeline:
             prompt_sequence_length=prompt_sequence_length,
         )
 
+        # Make latents an output, because inputs are copied to the trace region before executing a
+        # trace and might be overwritten during execution.
+        return latent, noise_pred
+
     def _step(
         self,
         *,
         cfg_enabled: bool,
         cfg_scale: float,
-        latents: list[ttnn.Tensor],  # device tensor
-        timestep: list[ttnn.Tensor],  # host tensor
-        guidance: list[ttnn.Tensor],  # device tensor
-        prompt_embeds: list[ttnn.Tensor],  # device tensor
-        sigma_difference: list[ttnn.Tensor],  # device tensor
-        spatial_rope_cos: list[ttnn.Tensor],
-        spatial_rope_sin: list[ttnn.Tensor],
-        prompt_rope_cos: list[ttnn.Tensor],
-        prompt_rope_sin: list[ttnn.Tensor],
+        sigma_difference: float,
+        latents: list[ttnn.Tensor] | None,
+        timestep: list[ttnn.Tensor],
+        guidance: list[ttnn.Tensor] | None,
+        prompt_embeds: list[ttnn.Tensor] | None,
+        spatial_rope_cos: list[ttnn.Tensor] | None,
+        spatial_rope_sin: list[ttnn.Tensor] | None,
+        prompt_rope_cos: list[ttnn.Tensor] | None,
+        prompt_rope_sin: list[ttnn.Tensor] | None,
         spatial_sequence_length: int,
         prompt_sequence_length: int,
         traced: bool,
     ) -> list[ttnn.Tensor]:
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
 
-        if traced and self._traces is None:
-            self._traces = []
-            for submesh_id, submesh_device in enumerate(self._submesh_devices):
-                timestep_device = timestep[submesh_id].to(submesh_device)
-                sigma_difference_device = sigma_difference[submesh_id].to(submesh_device)
-
-                pred = self._step_inner(
-                    cfg_enabled=cfg_enabled,
-                    latent=latents[submesh_id],
-                    prompt=prompt_embeds[submesh_id],
-                    timestep=timestep_device,
-                    guidance=guidance[submesh_id],
-                    spatial_rope_cos=spatial_rope_cos[submesh_id],
-                    spatial_rope_sin=spatial_rope_sin[submesh_id],
-                    prompt_rope_cos=prompt_rope_cos[submesh_id],
-                    prompt_rope_sin=prompt_rope_sin[submesh_id],
-                    spatial_sequence_length=spatial_sequence_length,
-                    prompt_sequence_length=prompt_sequence_length,
-                    submesh_index=submesh_id,
-                )
-
-                trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-                pred = self._step_inner(
-                    cfg_enabled=cfg_enabled,
-                    latent=latents[submesh_id],
-                    prompt=prompt_embeds[submesh_id],
-                    timestep=timestep_device,
-                    guidance=guidance[submesh_id],
-                    spatial_rope_cos=spatial_rope_cos[submesh_id],
-                    spatial_rope_sin=spatial_rope_sin[submesh_id],
-                    prompt_rope_cos=prompt_rope_cos[submesh_id],
-                    prompt_rope_sin=prompt_rope_sin[submesh_id],
-                    spatial_sequence_length=spatial_sequence_length,
-                    prompt_sequence_length=prompt_sequence_length,
-                    submesh_index=submesh_id,
-                )
-                ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
-
-                for device in self._submesh_devices:
-                    ttnn.synchronize_device(device)
-
-                self._traces.append(
-                    PipelineTrace(
-                        spatial_input=latents[submesh_id],
-                        prompt_input=prompt_embeds[submesh_id],
-                        timestep_input=timestep_device,
-                        guidance_input=guidance[submesh_id],
-                        spatial_rope_cos=spatial_rope_cos[submesh_id],
-                        spatial_rope_sin=spatial_rope_sin[submesh_id],
-                        prompt_rope_cos=prompt_rope_cos[submesh_id],
-                        prompt_rope_sin=prompt_rope_sin[submesh_id],
-                        latents_output=pred,
-                        sigma_difference_input=sigma_difference_device,
-                        tid=trace_id,
-                    )
-                )
-
+        latents_out = []
         noise_pred_list = []
-        if traced:
-            for submesh_id, submesh_device in enumerate(self._submesh_devices):
-                ttnn.copy_host_to_device_tensor(timestep[submesh_id], self._traces[submesh_id].timestep_input)
-                ttnn.copy_host_to_device_tensor(
-                    sigma_difference[submesh_id], self._traces[submesh_id].sigma_difference_input
-                )
-                ttnn.execute_trace(submesh_device, self._traces[submesh_id].tid, cq_id=0, blocking=False)
-                noise_pred_list.append(self._traces[submesh_id].latents_output)
 
-            # TODO: If we don't do this, we get noise when tracing is enabled. But why, since sigma
-            # difference is only used outside of tracing region?
-            sigma_difference_device = [trace.sigma_difference_input for trace in self._traces]
-        else:
-            for submesh_id in range(len(self._submesh_devices)):
-                noise_pred = self._step_inner(
-                    cfg_enabled=cfg_enabled,
-                    latent=latents[submesh_id],
-                    prompt=prompt_embeds[submesh_id],
-                    timestep=timestep[submesh_id],
-                    guidance=guidance[submesh_id],
-                    spatial_rope_cos=spatial_rope_cos[submesh_id],
-                    spatial_rope_sin=spatial_rope_sin[submesh_id],
-                    prompt_rope_cos=prompt_rope_cos[submesh_id],
-                    prompt_rope_sin=prompt_rope_sin[submesh_id],
-                    spatial_sequence_length=spatial_sequence_length,
-                    prompt_sequence_length=prompt_sequence_length,
-                    submesh_index=submesh_id,
-                )
-                noise_pred_list.append(noise_pred)
+        for submesh_id in range(len(self._submesh_devices)):
+            inner = self._step_inner_tracers[submesh_id] if traced else self._step_inner
 
-            sigma_difference_device = sigma_difference
+            latent, noise_pred = inner(
+                cfg_enabled=cfg_enabled,
+                latent=latents[submesh_id] if latents is not None else None,
+                prompt=prompt_embeds[submesh_id] if prompt_embeds is not None else None,
+                timestep=timestep[submesh_id],
+                guidance=guidance[submesh_id] if guidance is not None else None,
+                spatial_rope_cos=spatial_rope_cos[submesh_id] if spatial_rope_cos is not None else None,
+                spatial_rope_sin=spatial_rope_sin[submesh_id] if spatial_rope_sin is not None else None,
+                prompt_rope_cos=prompt_rope_cos[submesh_id] if prompt_rope_cos is not None else None,
+                prompt_rope_sin=prompt_rope_sin[submesh_id] if prompt_rope_sin is not None else None,
+                spatial_sequence_length=spatial_sequence_length,
+                prompt_sequence_length=prompt_sequence_length,
+                submesh_id=submesh_id,
+            )
+
+            latents_out.append(latent)
+            noise_pred_list.append(noise_pred)
 
         if cfg_enabled:
             if self._parallel_config.cfg_parallel.factor == 1:
@@ -681,10 +567,10 @@ class Flux2Pipeline:
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
             ttnn.synchronize_device(submesh_device)  # Helps with accurate time profiling.
-            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference_device[submesh_id])
-            ttnn.add_(latents[submesh_id], noise_pred_list[submesh_id])
+            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference)
+            ttnn.add_(latents_out[submesh_id], noise_pred_list[submesh_id])
 
-        return latents
+        return latents_out
 
     def _patchify(self, latents: torch.Tensor) -> torch.Tensor:
         # N, H, W, C -> N, (H / P) * (W / P), C * P * P
