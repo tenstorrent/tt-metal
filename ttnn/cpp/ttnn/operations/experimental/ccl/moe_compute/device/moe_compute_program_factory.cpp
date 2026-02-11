@@ -91,6 +91,18 @@ get_cores(ttnn::MeshDevice* mesh_device) {
         matmul_bounding_box};
 }
 
+std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& cores, const ttnn::MeshDevice& device) {
+    std::vector<uint32_t> flat_physical_core_coords;
+    flat_physical_core_coords.reserve(2 * cores.size());
+
+    for (const auto& c : cores) {
+        const auto pc = device.worker_core_from_logical_core(c);
+        flat_physical_core_coords.push_back(pc.x);
+        flat_physical_core_coords.push_back(pc.y);
+    }
+
+    return ccl::common::stringify(flat_physical_core_coords);
+}
 }  // namespace
 
 namespace ttnn::experimental::prim {
@@ -158,27 +170,27 @@ MoEComputeMeshWorkloadFactory::create_at(
     const ttnn::Tensor& tilize_per_expert_total_tokens_output_tensor = tensor_return_value.at(0);
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
-    const ttnn::Tensor& output_tensor = tensor_return_value.at(3);
+    const ttnn::Tensor& tilize_output_tensor = tensor_return_value.at(3);
 
     [[maybe_unused]] const auto& tilize_per_expert_total_tokens_output_shape =
         tilize_per_expert_total_tokens_output_tensor.tensor_spec().logical_shape();
     [[maybe_unused]] const auto& tilize_expert_activation_output_shape =
         tilize_expert_activation_output_tensor.tensor_spec().logical_shape();
     [[maybe_unused]] const auto& tilize_e_t_output_shape = tilize_e_t_output_tensor.tensor_spec().logical_shape();
-    [[maybe_unused]] const auto& output_shape = output_tensor.tensor_spec().logical_shape();
+    [[maybe_unused]] const auto& output_shape = tilize_output_tensor.tensor_spec().logical_shape();
 
     [[maybe_unused]] const uint32_t tilize_per_expert_total_tokens_output_pages =
         get_num_pages_st(tilize_per_expert_total_tokens_output_tensor);
     [[maybe_unused]] const uint32_t tilize_expert_activation_output_pages =
         get_num_pages_st(tilize_expert_activation_output_tensor);
     [[maybe_unused]] const uint32_t tilize_e_t_output_pages = get_num_pages_st(tilize_e_t_output_tensor);
-    [[maybe_unused]] const uint32_t output_pages = get_num_pages_st(output_tensor);
+    [[maybe_unused]] const uint32_t output_pages = get_num_pages_st(tilize_output_tensor);
 
     const uint32_t tilize_per_expert_total_tokens_output_page_size =
         get_page_size_st(tilize_per_expert_total_tokens_output_tensor);
     const uint32_t tilize_expert_activation_output_page_size = get_page_size_st(tilize_expert_activation_output_tensor);
     const uint32_t tilize_e_t_output_page_size = get_page_size_st(tilize_e_t_output_tensor);
-    [[maybe_unused]] const uint32_t output_page_size = get_page_size_st(output_tensor);
+    [[maybe_unused]] const uint32_t output_page_size = get_page_size_st(tilize_output_tensor);
 
     [[maybe_unused]] const uint32_t tilize_per_expert_total_tokens_output_aligned_page_size =
         get_aligned_page_size_st(tilize_per_expert_total_tokens_output_tensor);
@@ -186,7 +198,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         get_aligned_page_size_st(tilize_expert_activation_output_tensor);
     [[maybe_unused]] const uint32_t tilize_e_t_output_aligned_page_size =
         get_aligned_page_size_st(tilize_e_t_output_tensor);
-    [[maybe_unused]] const uint32_t output_aligned_page_size = get_aligned_page_size_st(output_tensor);
+    [[maybe_unused]] const uint32_t output_aligned_page_size = get_aligned_page_size_st(tilize_output_tensor);
 
     // Mesh
     auto* mesh_device = tilize_input_tensor.device();
@@ -308,21 +320,32 @@ MoEComputeMeshWorkloadFactory::create_at(
      */
     uint32_t tilize_output_cb_id = tt::CBIndex::c_0;
     [[maybe_unused]] uint32_t cb_s2c_in_id = tt::CBIndex::c_0;
-    [[maybe_unused]] uint32_t combine_input_cb_id = tt::CBIndex::c_0;
+    uint32_t combine_input_cb_id = tt::CBIndex::c_14; // TODO, cleaner to make this c_1 and change all the others
 
     // All cores (not just Tilize and Matmul)
-    CoreRangeSet shard_cores = output_tensor.memory_config().shard_spec()->grid;
     const uint32_t shared_cb_num_pages = output_pages / shard_cores.num_cores();
+    CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
     auto output_cb = tt::tt_metal::create_cb(
         tilize_output_cb_id,
         program,
         shard_cores,
         output_page_size,
         shared_cb_num_pages,
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype()),
-        output_tensor.buffer());
+        tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype()),
+        tilize_output_tensor.buffer());
     tt::tt_metal::CBHandle sharded_output_cb_handle = std::get<1>(output_cb);
-
+    
+    // MoE output for combine uses the same buffer as input but create a new CB to manage control flow
+    auto combine_input_cb = tt::tt_metal::create_cb(
+        combine_input_cb_id,
+        program,
+        shard_cores,
+        output_page_size,
+        output_pages / shard_cores.size(),
+        tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype()),
+        tilize_output_tensor.buffer());
+    tt::tt_metal::CBHandle combine_input_cb_handle = std::get<1>(combine_input_cb);
+    
     //-------------------------------------------------------------------------
     // Tilize CBs
     //-------------------------------------------------------------------------
@@ -520,7 +543,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
-    // Note: cb_s2c_in is handled separately as it is allocated on Tilize, Matmul, and (future) Combine cores
+    // Note: cb_s2c_in and cb_c2s_out are handled separately as it is allocated on Tilize, Matmul, and (future) Combine cores
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
         {"cb_r2c_w0", tt::CBIndex::c_1, tt::DataFormat::Bfp4_b, true, 14 * 6},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
@@ -859,12 +882,20 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Create compile args for the program
     const auto matmul_tensors =
-        std::vector<const ttnn::Tensor*>{&matmul_w0_w1_tensor, &matmul_w2_tensor, &output_tensor};
+        std::vector<const ttnn::Tensor*>{&matmul_w0_w1_tensor, &matmul_w2_tensor, &tilize_output_tensor};
 
     std::vector<uint32_t> matmul_compile_time_args;
     for (const auto& tensor : matmul_tensors) {
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(matmul_compile_time_args);
     }
+    
+    const uint32_t tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+    //const uint32_t num_tokens_total = operation_attributes.num_tokens_total;
+    const uint32_t output_height_shard_dim = operation_attributes.output_height_shard_dim;
+    const uint32_t output_width_shard_dim = operation_attributes.output_width_shard_dim;
+    const uint32_t output_shard_width_tiles = hidden_size / tile_width / output_width_shard_dim;
+    const auto input_dataformat = std::get<2>(sharded_cb_specs.back());
 
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
@@ -877,6 +908,14 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tokens_per_chunk", tokens_per_chunk},
         {"tilize_drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
         {"tilize_drain_core_noc_y", (uint32_t)tilize_drain_core_physical.y},
+        // NCT args for sharded output for combine
+        {"combine_shard_width_tiles", output_shard_width_tiles},
+        {"tile_height", tile_height},
+        {"tile_width", tile_width},
+        {"tile_width_size_bytes", tile_width * tt::datum_size(tilize_output_dataformat)},
+        {"num_tokens_total", tokens},
+        {"height_shard_dim", output_height_shard_dim},
+        {"width_shard_dim", output_width_shard_dim},
     };
 
     // Create kernels for the program
@@ -889,6 +928,10 @@ MoEComputeMeshWorkloadFactory::create_at(
             .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
+    
+    const auto& output_shard_cores = operation_attributes.output_shard_cores;
+    std::map<std::string, std::string> dm1_defines = {
+        {"OUTPUT_SHARD_CORE_MAP", detail::serialize_physical_core_coords(output_shard_cores, *device)}};
 
     auto matmul_dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
@@ -898,6 +941,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = matmul_compile_time_args,
+            .defines = dm1_defines,
             .named_compile_args = matmul_named_compile_time_args});
 
     auto matmul_compute_kernel_handle = tt::tt_metal::CreateKernel(
@@ -1000,7 +1044,8 @@ MoEComputeMeshWorkloadFactory::create_at(
          .tilize_cores = tilize_cores,
          .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
          .matmul_cores = matmul_cores,
-         .sharded_output_cb_handle = sharded_output_cb_handle}};
+         .sharded_output_cb_handle = sharded_output_cb_handle}
+         .combine_input_cb_handle=combine_input_cb_handle};
 }
 
 void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
@@ -1012,14 +1057,17 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     const ttnn::Tensor& tilize_per_expert_total_tokens_output_tensor = tensor_return_value.at(0);
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
-    const ttnn::Tensor& output_tensor = tensor_return_value.at(3);
+    const ttnn::Tensor& tilize_output_tensor = tensor_return_value.at(3);
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
         // Update sharded circular buffer address
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
-            program, shared_variables.sharded_output_cb_handle, *output_tensor.buffer());
+            program, shared_variables.sharded_output_cb_handle, *tilize_output_tensor.buffer());
+            
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, shared_variables.combine_input_cb_handle, *tilize_output_tensor.buffer());
 
         //-------------------------------------------------------------------------
         // Tilize
@@ -1056,7 +1104,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                 auto& matmul_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
                 matmul_runtime_args.at(2) = tensor_args.matmul_w0_w1_tensor.buffer()->address();
                 matmul_runtime_args.at(3) = tensor_args.matmul_w2_tensor.buffer()->address();
-                matmul_runtime_args.at(4) = output_tensor.buffer()->address();
+                matmul_runtime_args.at(4) = tilize_output_tensor.buffer()->address();
             }
         }
     }
