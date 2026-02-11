@@ -9,7 +9,22 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/fabric/topology_solver.hpp>
+
+namespace tt::tt_fabric {
+
+// Forward declarations
+template <typename NodeId>
+class AdjacencyGraph;
+
+template <typename TargetNode, typename GlobalNode>
+class MappingConstraints;
+
+enum class ConnectionValidationMode;
+
+template <typename TargetNode, typename GlobalNode>
+struct MappingResult;
+
+}  // namespace tt::tt_fabric
 
 namespace tt::tt_fabric::detail {
 

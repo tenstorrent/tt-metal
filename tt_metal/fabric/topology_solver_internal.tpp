@@ -17,6 +17,7 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_fabric::detail {
 
