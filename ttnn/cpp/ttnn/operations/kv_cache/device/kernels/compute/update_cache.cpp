@@ -29,26 +29,32 @@ void kernel_main() {
         // Untilize input (standalone operation)
         compute_kernel_lib::untilize<Wt, in_cb, untilized_in_cb>(1);
 
-        reconfig_data_format_srca(in_cb, cache_cb);
+        // Track previous CBs for inner loop reconfiguration
+        uint32_t prev_cb_srca = in_cb;
+        uint32_t prev_cb_output = untilized_in_cb;
+
         for (uint32_t u = 0; u < u_count; ++u) {
-            // Untilize cache blocks
-            compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(granularity);
+            // Untilize cache blocks with reconfiguration
+            compute_kernel_lib::untilize<
+                Wt,
+                cache_cb,
+                untilized_cache_cb,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                granularity);
 
-            reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
-            pack_reconfig_data_format(untilized_cache_cb, out_cb);
-
-            // Wait on writer to update block. Tilize with DT reconfiguration.
+            // Wait on writer to update block. Tilize with reconfiguration
             compute_kernel_lib::tilize<
                 untilized_cache2_cb,  // input_cb
                 out_cb,               // output_cb
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-                cache_cb>(     // reconfig_from_cb (for DT restoration)
-                Wt,            // block_width_tiles
-                granularity);  // num_blocks
-
-            pack_reconfig_data_format(out_cb, untilized_cache_cb);
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                Wt,          // block_width_tiles
+                granularity  // num_blocks
+            );
         }
         reconfig_data_format_srca(cache_cb, in_cb);
     }

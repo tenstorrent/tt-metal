@@ -6,7 +6,7 @@
 
 #include "api/compute/reduce.h"
 #include "api/compute/transpose_wh.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 constexpr uint32_t ONE_TILE = 1;
