@@ -178,7 +178,7 @@ def read_wait_globals(
     """
 
     # Skipping because we cannot read NCRISC private memory on wormhole
-    # On blackhole there's an issue where we can break the device when reding from NCRISC tt-exalens:#895
+    # On blackhole there's an issue where triage can break the device when reading from NCRISC tt-exalens:#895
     if risc_name == "ncrisc":
         return None
 
