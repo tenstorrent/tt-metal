@@ -23,7 +23,12 @@ on:
 jobs:
   metalium-basic:
     timeout-minutes: 45
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
+    runs-on: >-
+      ${{
+        (github.workflow == 'Blackhole post-commit tests' && github.ref_name == 'main' && inputs.runner == 'P150b-viommu')
+          && 'tt-ubuntu-2204-p150b-viommu-post-commit'
+          || format('tt-ubuntu-2204-{0}-stable', inputs.runner)
+      }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
