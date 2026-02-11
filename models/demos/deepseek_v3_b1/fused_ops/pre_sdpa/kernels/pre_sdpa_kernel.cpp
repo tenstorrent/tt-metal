@@ -178,7 +178,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("cqh_target_noc_coords_row6"),
             get_named_compile_time_arg_val("cqh_target_noc_coords_row7"),
         },
-        get_write_ptr(cqh_receiver_in_cb),  // Write to intermediate CB for tilization
+        get_write_ptr(cqh_receiver_in_cb),
     };
 
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
@@ -319,7 +319,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
-    // BRISC: Receiver args for SDPA input cores (matching gather pattern: NCRISC sender, BRISC receiver)
+    // BRISC: Receiver args for SDPA input cores
     deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_args{
         get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_id"),
         get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_id"),
@@ -502,7 +502,6 @@ void kernel_main() {
     };
 
     // CreateQHeads compute args (tilization on SDPA input cores)
-    // All args prefixed with "cqh_" to avoid name collisions with other ops (e.g., RoPE's "out_cb")
     deepseek_b1_ops::CreateQHeads::ComputeArgs create_q_heads_args{
         get_named_compile_time_arg_val("cqh_receiver_in_cb"),
         get_named_compile_time_arg_val("cqh_out_cb"),
