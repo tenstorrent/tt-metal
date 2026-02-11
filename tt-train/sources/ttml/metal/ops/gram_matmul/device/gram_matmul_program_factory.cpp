@@ -88,7 +88,6 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
     Program program = CreateProgram();
 
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& config = operation_attributes.config;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
@@ -109,8 +108,9 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
      */
     auto in0_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     auto in0_tile_size = tt::tile_size(in0_data_format);
-    auto in1_data_format = datatype_to_dataformat_converter(weight_tensor.dtype());
-    auto in1_tile_size = tt::tile_size(in1_data_format);
+    // in1 reads from the same input tensor (transpose is done on-the-fly in compute)
+    auto in1_data_format = in0_data_format;
+    auto in1_tile_size = in0_tile_size;
     auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
     auto out_tile_size = tt::tile_size(output_data_format);
 
@@ -122,13 +122,11 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
     auto in0_tensor_shape = input_tensor.padded_shape();
-    auto in1_tensor_shape = weight_tensor.padded_shape();
     // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M
     uint32_t K = in0_tensor_shape[-1];
     uint32_t M = input_tensor.physical_volume() / K;
-    uint32_t N = in1_tensor_shape[-1];
-
-    // Output is always square: M == N (enforced by validation)
+    // Output is square: N == M (Gram matrix)
+    uint32_t N = M;
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
@@ -224,7 +222,8 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
     std::map<std::string, std::string> defines;
 
     uint32_t in0_addr = input_tensor.buffer()->address();
-    uint32_t in1_addr = weight_tensor.buffer()->address();
+    // in1 reads from the same tensor as in0 (no materialized transpose)
+    uint32_t in1_addr = in0_addr;
     uint32_t out_addr = tensor_return_value.buffer()->address();
 
     /**
@@ -313,7 +312,7 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
         in1_is_output_writer,
         true,  // is_injector_core
     };
-    append_accessors(in1_sender_compile_time_args, weight_tensor, tensor_return_value);
+    append_accessors(in1_sender_compile_time_args, input_tensor, tensor_return_value);
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "tt-train/sources/ttml/metal/ops/gram_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -341,7 +340,7 @@ GramMatmulProgramFactory::cached_program_t GramMatmulProgramFactory::create(
         in1_is_output_writer,
         false,  // is_injector_core
     };
-    append_accessors(in1_receiver_compile_time_args, weight_tensor, tensor_return_value);
+    append_accessors(in1_receiver_compile_time_args, input_tensor, tensor_return_value);
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "tt-train/sources/ttml/metal/ops/gram_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -498,7 +497,8 @@ void GramMatmulProgramFactory::override_runtime_arguments(
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
 
     auto in0_addr = tensor_args.input_tensor.buffer()->address();
-    auto in1_addr = tensor_args.weight_tensor.buffer()->address();
+    // in1 reads from the same tensor (no materialized transpose)
+    auto in1_addr = in0_addr;
     auto out_addr = tensor_return_value.buffer()->address();
 
     // RT args layout: [in_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k, out_addr]

@@ -9,7 +9,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
-#include <ttnn/operations/data_movement/transpose/transpose.hpp>
 
 #include "gram_matmul_program_factory.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -34,7 +33,7 @@ void GramMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input = tensor_args.input_tensor;
     const auto& config = operation_attributes.config;
 
-    // Basic device/storage checks (input_tensor only; weight_tensor is the internally-created transpose)
+    // Basic device/storage checks
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "gram_matmul input must be on device");
     TT_FATAL(input.buffer() != nullptr, "gram_matmul input must be allocated in a device buffer");
 
@@ -132,17 +131,13 @@ ttml::metal::ops::gram_matmul::device::GramMatmulDeviceOperation::tensor_return_
         true /*fp32_acc*/,
         true /*packer_acc*/);
 
-    // Compute X^T by transposing the last two dimensions.
-    // This creates a separate DRAM buffer that the program factory reads as the "weight" tensor.
-    auto transposed = ttnn::transpose(input_tensor, -2, -1);
-
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .config = config,
             .output_mem_config = memory_config,
             .output_dtype = dtype,
             .compute_kernel_config = kernel_config_val},
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .weight_tensor = transposed});
+        OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
 
 }  // namespace ttnn::prim

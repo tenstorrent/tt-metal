@@ -56,7 +56,7 @@ void matmul_blocks(
                     in0_index,
                     in1_index,
                     dst_index,
-                    false /*transpose*/,
+                    true /*transpose: in1 tiles are X[n,k], HW transposes to X^T[k,n]*/,
                     subblock_w,
                     subblock_h,
                     K_block_tiles);
@@ -134,7 +134,7 @@ void kernel_main() {
             mm_block_init_short(
                 in0_cb,
                 in1_cb,
-                false /*transpose*/,
+                true /*transpose: in1 tiles are X[n,k], HW transposes to X^T[k,n]*/,
                 current_subblock_w /*ct_dim*/,
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);

@@ -51,7 +51,8 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<out_tensor_args_cta_offset>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
 
-    const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
+    // in1 reads from the original X [M, K] with transposed block indexing
+    const TensorShape2D in1_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
@@ -121,7 +122,7 @@ void kernel_main() {
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
-                    read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                    read_in1_block_transposed_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
                         in1_start_address,

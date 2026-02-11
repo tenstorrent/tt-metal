@@ -143,6 +143,51 @@ void read_in1_block_sync(
 }
 
 /**
+ * Read a [K_block, N_block] block for in1 by reading from an [M, K] tensor with transposed indexing.
+ * For CB position (k_row, n_col), reads tile X[n, k] = tile_id (n * logical_K + k).
+ * Combined with transpose=true in the compute kernel, this produces X^T[k, n] on the fly.
+ *
+ * shape: the original [M, K] tensor shape (d0 = M_tiles, d1 = K_tiles).
+ * k_start..k_end: K tile range (rows of the in1 block).
+ * n_start..n_end: N tile range (cols of the in1 block, which correspond to M rows of X).
+ */
+template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void read_in1_block_transposed_sync(
+    const TensorAccessorType& tensor_accessor,
+    const TensorShape2D& shape,
+    uint32_t write_ptr,
+    uint32_t tile_size_bytes,
+    uint32_t k_start,
+    uint32_t k_end,
+    uint32_t n_start,
+    uint32_t n_end) {
+    ASSERT(k_end > k_start);
+    ASSERT(n_end > n_start);
+    // CB layout: [K_block, N_block] row-major
+    for (uint32_t k = k_start; k < k_end; k++) {
+        for (uint32_t n = n_start; n < n_end; n++) {
+            if (n >= shape.logical_d0) {
+                // n indexes M dimension of X; beyond logical M -> zero pad
+                write_ptr += tile_size_bytes;
+                continue;
+            }
+            if (k < shape.logical_d1) {
+                // k indexes K dimension of X; read tile X[n, k]
+                uint32_t tile_id = n * shape.logical_d1 + k;
+                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+            } else {
+                // k beyond logical K -> zero pad
+                fill_zeros_async(write_ptr, tile_size_bytes);
+            }
+            write_ptr += tile_size_bytes;
+        }
+        // finish up incrementing write_ptr if (n_end - n_start) < N_block_tiles
+        write_ptr += (N_block_tiles - (n_end - n_start)) * tile_size_bytes;
+    }
+    noc_async_read_barrier();
+}
+
+/**
  * Write a block of output to a potentially padded tensor.
  * Skip writing when M >= logical_M or N >= logical_N
  */

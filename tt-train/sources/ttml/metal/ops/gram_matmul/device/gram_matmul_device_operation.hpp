@@ -42,7 +42,7 @@ struct GramMatmulDeviceOperation {
 namespace ttnn::prim {
 
 // Compute Gram matrix G = X @ X^T.  Takes a single input tensor X.
-// The transpose is created internally.
+// The transpose is performed on-the-fly in the compute kernel (no materialized X^T).
 ttml::metal::ops::gram_matmul::device::GramMatmulDeviceOperation::tensor_return_value_t ttml_gram_matmul(
     const ttnn::Tensor& input_tensor,
     const std::optional<const ttml::metal::ops::gram_matmul::device::GramMatmulConfig>& config,
