@@ -196,21 +196,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-  blackhole-demo-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-
   ttnn-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit
@@ -225,7 +210,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-
   ops-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit
@@ -268,6 +252,34 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       enable-watcher: ${{ inputs.enable-watcher || false }}
+  metalium-basic-tests:
+    needs: [build-artifact, generate-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      per-test-timeout: 11
+      runner: ${{ matrix.platform }}
+      product: tt-metalium
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  ttnn-basic-tests:
+    needs: [build-artifact, generate-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      per-test-timeout: 11
+      runner: ${{ matrix.platform }}
+      product: tt-nn
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
@@ -285,35 +297,20 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
-  blackhole-20-cores-tests:
+  # Multi-card post-commit tests
+  blackhole-multi-card-fast-unit-tests:
+    if: ${{ !contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') }}
     needs: [build-artifact, generate-matrix]
     secrets: inherit
-    uses: ./.github/workflows/blackhole-20-cores-tests.yaml
+    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+        test-group: [ "BH-LLMBox", "BH-LoudBox"]
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-
-  # Multi-card post-commit tests
-  blackhole-multi-card-post-commit-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-post-commit-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu" ]
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
+      fast-only: true

@@ -3,63 +3,33 @@ name: "(Blackhole) Blackhole nightly tests"
 on:
   workflow_dispatch:
     inputs:
-      run_bh_single_card_nightly_demos:
-        description: 'Run Blackhole single card nightly demo tests'
-        required: false
-        type: boolean
-        default: false
-      run_bh_multi_card_nightly_demo_tests:
-        description: 'Run Blackhole multi card nightly demo tests'
-        required: false
-        type: boolean
-        default: false
-      run_bh_multi_card_nightly_unit_tests:
-        description: 'Run Blackhole multi card nightly unit tests'
+      run_bh_multi_card_unit_tests:
+        description: 'Run Blackhole multi card unit tests'
         required: false
         type: boolean
         default: true
-      run_bh_ttnn_stress_tests:
-        description: 'Run Blackhole nightly ttnn stress tests'
+      bh_multi_card_system_type:
+        description: 'Select system type to test (for multi-card unit tests only)'
         required: false
-        type: boolean
-        default: false
-      run_bh_llmbox:
-        description: 'Run multi-card tests on Quietbox (4xP150)'
-        required: false
-        type: boolean
-        default: true
-      run_bh_deskbox:
-        description: 'Run multi-card tests on DeskBox (2xP150)'
-        required: false
-        type: boolean
-        default: false
-      run_bh_loudbox:
-        description: 'Run multi-card tests on LoudBox (8xP150)'
-        required: false
-        type: boolean
-        default: true
-      run_bh_p300:
-        description: 'Run multi-card tests on P300 (1xP300)'
-        required: false
-        type: boolean
-        default: false
-      run_bh_quietbox_2:
-        description: 'Run multi-card tests on QuietBox 2 (2xP300) (formerly called BH QB GE)'
-        required: false
-        type: boolean
-        default: true
-      nightly-multi-card-model:
-        description: 'Select model to test (for multi-card demo tests only)'
-        required: false
-        default: 'all'
+        default: "all"
         type: choice
         options:
           - all
-          - llama3.1-8b
-          - llama3.3-70b
-          - qwen3-32b
-          - flux.1-dev
-          - wan2.2-t2v-a14b
+          - Quietbox (4xP150)
+          - DeskBox (2xP150)
+          - LoudBox (8xP150)
+          - P300 (1xP300)
+          - QuietBox 2 (2xP300)
+      run_grid_override_tests:
+        description: 'Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)'
+        required: false
+        type: boolean
+        default: false
+      run_bh_ttnn_stress_tests:
+        description: 'Run Blackhole ttnn stress tests'
+        required: false
+        type: boolean
+        default: false
       platform:
         required: false
         type: choice
@@ -86,56 +56,26 @@ on:
         description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
-      run_bh_single_card_nightly_demos:
-        description: 'Run Blackhole single card nightly demo tests'
+      run_bh_multi_card_unit_tests:
+        description: 'Run Blackhole multi card unit tests'
         required: false
         type: boolean
-        default: false
-      run_bh_multi_card_nightly_demo_tests:
-        description: 'Run Blackhole multi card nightly demo tests'
+        default: true
+      bh_multi_card_system_type:
+        description: 'Select system type to test (for multi-card unit tests only)'
         required: false
-        type: boolean
-        default: false
-      run_bh_multi_card_nightly_unit_tests:
-        description: 'Run Blackhole multi card nightly unit tests'
+        default: "all"
+        type: string
+      run_grid_override_tests:
+        description: 'Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)'
         required: false
         type: boolean
         default: false
       run_bh_ttnn_stress_tests:
-        description: 'Run Blackhole nightly ttnn stress tests'
+        description: 'Run Blackhole ttnn stress tests'
         required: false
         type: boolean
         default: false
-      run_bh_llmbox:
-        description: 'Run multi-card tests on Quietbox (4xP150)'
-        required: false
-        type: boolean
-        default: true
-      run_bh_deskbox:
-        description: 'Run multi-card tests on DeskBox (2xP150)'
-        required: false
-        type: boolean
-        default: false
-      run_bh_loudbox:
-        description: 'Run multi-card tests on LoudBox (8xP150)'
-        required: false
-        type: boolean
-        default: true
-      run_bh_p300:
-        description: 'Run multi-card tests on P300 (1xP300)'
-        required: false
-        type: boolean
-        default: false
-      run_bh_quietbox_2:
-        description: 'Run multi-card tests on QuietBox 2 (2xP300)'
-        required: false
-        type: boolean
-        default: true
-      nightly-multi-card-model:
-        description: 'Select model to test for multi-card demo tests (all, llama3.1-8b, llama3.3-70b, qwen3-32b, flux.1-dev, wan2.2-t2v-a14b)'
-        required: false
-        type: string
-        default: 'all'
       platform:
         required: false
         type: string
@@ -166,20 +106,6 @@ jobs:
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-  bh-nightly:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bh_single_card_nightly_demos }}
-    needs: build-artifact
-    uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        card_type: ["P100", "P150", "p150b"]  # P100, P150 -> CIv1, p150b -> CIv2; mapped to jobs in impl workflow
-    secrets: inherit
-    with:
-      runner-label: ${{ matrix.card_type }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   blackhole-multi-card-tests-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -189,59 +115,29 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "Quietbox (4xP150) tests", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
-            {"name": "DeskBox (2xP150) tests", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
-            {"name": "LoudBox (8xP150) tests", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-functional", "num_devices": 8, "key": "loudbox"},
-            {"name": "P300 (1xP300) tests", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"},
-            {"name": "QuietBox 2 (2xP300) tests", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}
+            {"name": "Quietbox (4xP150)", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
+            {"name": "DeskBox (2xP150)", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
+            {"name": "LoudBox (8xP150)", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-functional", "num_devices": 8, "key": "loudbox"},
+            {"name": "P300 (1xP300)", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"},
+            {"name": "QuietBox 2 (2xP300)", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}
           ]'
-
-          # If schedule, include all systems
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          # Schedule or "all": use all systems; otherwise filter by selected system name
+          selected_system_type="${{ inputs.bh_multi_card_system_type || 'all' }}"
+          if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
             matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
-            echo "Matrix output: $matrix_output"
-            echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
-            exit 0
+          else
+            filtered=$(echo "$all_systems" | jq -c --arg name "$selected_system_type" '[.[] | select(.name == $name)]')
+            if [[ "$filtered" == "[]" ]]; then
+              echo "Error: No system found matching bh_multi_card_system_type=\"$selected_system_type\". Valid options: all, or one of the system names from the matrix." >&2
+              exit 1
+            fi
+            matrix_output=$(echo "{\"test-group\": $filtered}" | jq -c .)
           fi
-
-          # Build list of selected keys based on inputs
-          selected_keys=()
-          [[ "${{ inputs.run_bh_llmbox }}" == "true" ]] && selected_keys+=("llmbox")
-          [[ "${{ inputs.run_bh_deskbox }}" == "true" ]] && selected_keys+=("deskbox")
-          [[ "${{ inputs.run_bh_loudbox }}" == "true" ]] && selected_keys+=("loudbox")
-          [[ "${{ inputs.run_bh_p300 }}" == "true" ]] && selected_keys+=("p300")
-          [[ "${{ inputs.run_bh_quietbox_2 }}" == "true" ]] && selected_keys+=("quietbox_2")
-
-          # If no systems were selected, fail fast with a clear error message.
-          if [ ${#selected_keys[@]} -eq 0 ]; then
-            echo "Error: No systems selected for blackhole-multi-card-tests-matrix. At least one of the following inputs must be set to true: run_bh_llmbox, run_bh_deskbox, run_bh_loudbox, run_bh_p300, run_bh_quietbox_2." >&2
-            exit 1
-          fi
-          # Filter all_systems by selected keys using jq (-c for compact single-line output)
-          keys_json=$(printf '%s\n' "${selected_keys[@]}" | jq -R . | jq -sc .)
-          echo "Selected keys: $keys_json"
-          filtered=$(echo "$all_systems" | jq -c --argjson keys "$keys_json" '[.[] | select(.key as $k | $keys | index($k))]')
-          matrix_output="{\"test-group\": $filtered}"
+          echo "Selected system type: $selected_system_type"
           echo "Matrix output: $matrix_output"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
-  blackhole-multi-card-demo-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_demo_tests }}
-    needs: [build-artifact, blackhole-multi-card-tests-matrix ]
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.blackhole-multi-card-tests-matrix.outputs.matrix) }}
-    with:
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      extra-tag: ${{ matrix.test-group.extra-tag }}
-      num_devices: ${{ matrix.test-group.num_devices }}
-      model: ${{ inputs.nightly-multi-card-model || 'all' }}
   blackhole-multi-card-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_unit_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_unit_tests }}
     needs: [build-artifact, blackhole-multi-card-tests-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
@@ -254,6 +150,18 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      fast-only: false
+  blackhole-grid-override-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_grid_override_tests }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-grid-override-tests-impl.yaml
+    with:
+      arch_name: blackhole
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      runner-label: P150b
   blackhole-ttnn-stress-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_ttnn_stress_tests }}
     needs: build-artifact
@@ -267,10 +175,6 @@ jobs:
             runner-label: P150b
           - name: LLMBox ttnn stress tests
             runner-label: BH-LLMBox
-          - name: DeskBox ttnn stress tests
-            runner-label: BH-DeskBox
-          - name: LoudBox ttnn stress tests
-            runner-label: BH-LoudBox
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group.runner-label }}

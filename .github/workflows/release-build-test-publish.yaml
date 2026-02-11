@@ -111,23 +111,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ["P100", "P150", "p150b"]
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      regenerate-ttnn-cache: false
-
-  blackhole-multi-card-demo-tests:
-    needs: build-artifact
-    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
         test-group:
+          - name: P150 Demo tests
+            runner-label: P150
+            extra-tag: pipeline-perf
+            num_devices: 1
           - name: LLMBox Demo tests
             runner-label: BH-LLMBox
             extra-tag: pipeline-perf
