@@ -42,6 +42,7 @@ constexpr uint32_t mm_cores_y = get_compile_time_arg_val(19);
 constexpr uint32_t N_block_wt = get_compile_time_arg_val(20);
 constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(21);
 constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(22);
+constexpr uint32_t chunk_width_in_mm_blocks = get_compile_time_arg_val(23);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -62,7 +63,7 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 23;
+    constexpr uint32_t ct_idx = 24;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -166,12 +167,11 @@ void kernel_main() {
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
 #ifdef FUSE_MM_OP_SIGNALER
-                if (!do_reduce) {
-                    // Wait for matmul to produce this chunk of output before reading it
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target + 1);
-                    mm_sem_target++;
-                }
+                // Wait for matmul to produce this chunk of output before reading it
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem),
+                    mm_sem_target + chunk_width_in_mm_blocks);
+                mm_sem_target += chunk_width_in_mm_blocks;
 #endif
                 for (uint32_t i = 0; i < ring_size; i++) {
                     DPRINT << "************************************************" << ENDL();
