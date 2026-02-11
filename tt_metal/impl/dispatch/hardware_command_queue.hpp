@@ -11,7 +11,6 @@
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "event.hpp"
-#include "host_runtime_commands.hpp"
 #include "launch_message_ring_buffer_state.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
