@@ -23,20 +23,26 @@ permissions:
 
 jobs:
   nightly-debug:
-    name: apc nightly debug run (${{ matrix.platform }}${{ matrix.enable-watcher && ' with watcher' || '' }})
+    name: apc nightly debug run (${{ matrix.platform }})
     strategy:
       matrix:
-        include:
-          - platform: "Ubuntu 22.04"
-            enable-watcher: false
-          - platform: "Ubuntu 22.04"
-            enable-watcher: true
-          - platform: "Ubuntu 24.04"
-            enable-watcher: false
+        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
       platform: ${{ matrix.platform }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      enable-watcher: ${{ matrix.enable-watcher }}
+
+  nightly-debug-watcher:
+    name: apc nightly debug run (Ubuntu 22.04 with watcher)
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
+    secrets: inherit
+    with:
+      build-type: RelWithDebInfo
+      platform: "Ubuntu 22.04"
+      enable-lto: ${{ inputs.enable-lto || false }}
+      enable-watcher: true
+      run-profiler-regression: false
+      run-models-unit-tests: false
+      run-ops-unit-tests: false
