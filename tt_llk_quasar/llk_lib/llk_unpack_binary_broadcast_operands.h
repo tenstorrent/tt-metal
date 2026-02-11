@@ -76,7 +76,7 @@ inline void _llk_unpack_binary_broadcast_operands_mop_config_(
  */
 template <BroadcastType BROADCAST_TYPE>
 inline void _llk_unpack_binary_broadcast_operands_init_(
-    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles = NUM_TILES_PER_UNPACK)
+    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles = NUM_TILES)
 {
     _llk_unpack_binary_broadcast_operands_mop_config_<BROADCAST_TYPE>(buf_desc_id_0, buf_desc_id_1, num_tiles);
 }

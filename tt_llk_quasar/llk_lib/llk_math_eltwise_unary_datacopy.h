@@ -110,7 +110,7 @@ inline void _llk_math_eltwise_unary_datacopy_addrmod_(const std::uint32_t num_ro
  * If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids -> set this value to 4
  */
 template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN>
-inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_per_matrix, const std::uint32_t num_matrices)
+inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_per_matrix, const std::uint32_t num_matrices = NUM_TILES)
 {
     // MOVA2D/MOVB2D can move 1, 4 or 8 rows, need to check which
     // For Float32 or Integer dest, ELWADD will be used for rebiasing, can only move MATH_ROWS

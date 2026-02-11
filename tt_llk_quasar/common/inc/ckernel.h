@@ -9,6 +9,7 @@
 #define tt_reg_ptr          __attribute__((rvtt_reg_ptr))
 #include <cstdint>
 
+#include "ckernel_addrmod.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 // #include "fw_debug.h"
@@ -871,6 +872,25 @@ inline void finish_using_replay_mmio_load()
         TTI_REPLAY(0, 1, 1, 0, 0, 1); // Load a NOP, use done=1 to flip replay_instrn_bank_write_id
         TTI_NOP;
     }
+}
+
+/**
+ * @brief Zeroes out all dest banks, should only be done at kernel start
+ * WARNING: Uses an addrmod, make sure it does not conflict with other addrmods
+ */
+inline void zeroacc()
+{
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0}}.set(ADDR_MOD_5);
+
+    TTI_ZEROACC(p_zeroacc::CLR_ALL, 0, 0, ADDR_MOD_5, 0);
+}
+
+/**
+ * @brief Zero source registers A&B, usually done at unpack start
+ */
+inline void zerosrc()
+{
+    TTI_ZEROSRC(0, 0, 0, 0, 0, p_zerosrc::ALL_BANKS, p_zerosrc::CLR_AB);
 }
 
 } // namespace ckernel

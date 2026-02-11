@@ -46,6 +46,15 @@ struct TileShape
     bool narrow_tile;
 };
 
+// TODO: AM; rename enum values, issue #1275
+enum ThreadId
+{
+    BriscThreadId  = 0,
+    UnpackThreadId = 1,
+    MathThreadId   = 2,
+    PackThreadId   = 3
+};
+
 // For instructions that address lower/upper 16 bits of a register
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)

@@ -142,17 +142,6 @@ inline void _inc_dst_addr_()
 }
 
 /**
- * @brief Zeroes out all dest banks, should only be done at kernel start
- * WARNING: Uses an addrmod, make sure it does not conflict with other addrmods
- */
-inline void _zero_dest_reg_()
-{
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0}}.set(ADDR_MOD_5);
-
-    TTI_ZEROACC(p_zeroacc::CLR_ALL, 0, 0, ADDR_MOD_5, 0);
-}
-
-/**
  * @brief Sets destination register base address depending on tile idx
  * @param tile_idx: Tile index in the dest reg
  * 16bit dest reg data format -> tile_idx = 0 - 7
