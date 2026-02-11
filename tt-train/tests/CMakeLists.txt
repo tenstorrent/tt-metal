@@ -118,15 +118,21 @@ gtest_discover_tests(ttml_tests)
 ############################################################################################################################
 
 if(TARGET benchmark::benchmark)
-    set(BENCHMARK_SOURCES benchmark/matmuls_benchmark.cpp)
-
-    add_executable(ttml_benchmarks ${BENCHMARK_SOURCES})
-    target_link_libraries(
-        ttml_benchmarks
-        PUBLIC
-            ttml
-            TTNN::TTNN
-            benchmark::benchmark
+    set(BENCHMARK_SOURCES
+        benchmark/matmuls_benchmark.cpp
+        benchmark/from_vector_benchmark.cpp
     )
-    target_include_directories(ttml_benchmarks PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+
+    foreach(BENCH_SRC ${BENCHMARK_SOURCES})
+        get_filename_component(BENCH_TARGET ${BENCH_SRC} NAME_WE)
+        add_executable(${BENCH_TARGET} ${BENCH_SRC})
+        target_link_libraries(
+            ${BENCH_TARGET}
+            PUBLIC
+                ttml
+                TTNN::TTNN
+                benchmark::benchmark
+        )
+        target_include_directories(${BENCH_TARGET} PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+    endforeach()
 endif()
