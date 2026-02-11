@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import fcntl
 import itertools
+import json
 import math
+import os
 from itertools import takewhile
 from pathlib import Path
 from types import NoneType
@@ -571,6 +574,101 @@ def sub_state_dicts(
 
 TENSOR_CACHE_EXTENSION = ".tensorbin"
 
+# Cache specs dumping for conversion optimization
+_CACHE_SPECS_DUMP_ENV_VAR = "DEEPSEEK_V3_DUMP_CACHE_SPECS"
+
+
+def _enum_name_or_str(obj: Any) -> str | None:
+    """Get the name of an enum or return the string representation."""
+    if obj is None:
+        return None
+    if hasattr(obj, "name"):
+        return obj.name
+    return str(obj)
+
+
+def _memory_config_to_dict(memory_config: ttnn.MemoryConfig | None) -> dict[str, Any] | None:
+    """Convert a MemoryConfig to a dictionary for JSON serialization."""
+    if memory_config is None:
+        return None
+    # Use the built-in to_json() method for proper serialization, then parse it
+    # This handles CoreRangeSet and other complex types correctly
+    try:
+        return json.loads(memory_config.to_json())
+    except (AttributeError, TypeError):
+        # Fallback to manual conversion if to_json() is not available
+        # This handles the case where grid might be a CoreRangeSet
+        grid_dict = None
+        if memory_config.shard_spec is not None and memory_config.shard_spec.grid is not None:
+            grid = memory_config.shard_spec.grid
+            # Handle CoreRangeSet - convert to list of ranges
+            if hasattr(grid, "__iter__"):
+                # It's a CoreRangeSet (iterable of CoreRange objects)
+                grid_dict = [
+                    {
+                        "start": (core_range.start.x, core_range.start.y),
+                        "end": (core_range.end.x, core_range.end.y),
+                    }
+                    for core_range in grid
+                ]
+            elif hasattr(grid, "start") and hasattr(grid, "end"):
+                # It's a single CoreRange
+                grid_dict = {
+                    "start": (grid.start.x, grid.start.y),
+                    "end": (grid.end.x, grid.end.y),
+                }
+
+        return {
+            "memory_layout": _enum_name_or_str(memory_config.memory_layout),
+            "buffer_type": _enum_name_or_str(memory_config.buffer_type),
+            "shard_spec": (
+                {
+                    "grid": grid_dict,
+                    "shape": list(memory_config.shard_spec.shape) if memory_config.shard_spec.shape else None,
+                    "orientation": _enum_name_or_str(memory_config.shard_spec.orientation),
+                }
+                if memory_config.shard_spec is not None
+                else None
+            ),
+        }
+
+
+def _get_relative_cache_path(path: Path) -> str | None:
+    """Extract the relative cache path from an absolute path."""
+    if not path.is_absolute():
+        return str(path)
+    path_str = str(path)
+    mesh_idx = path_str.find("mesh_")
+    if mesh_idx == -1:
+        return None
+    parts = path_str[mesh_idx:].split("/", 1)
+    if len(parts) < 2:
+        return None
+    return parts[1]
+
+
+def _append_cache_specs_record(record: dict[str, Any]) -> None:
+    """Append a cache specs record to the JSONL file specified by the environment variable."""
+    dump_path_str = os.getenv(_CACHE_SPECS_DUMP_ENV_VAR)
+    if not dump_path_str:
+        return
+
+    dump_path = Path(dump_path_str)
+    try:
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        with dump_path.open("a") as f:
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            except Exception:
+                pass
+            f.write(json.dumps(record, sort_keys=True) + "\n")
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"Failed to append cache specs record to {dump_path}: {e}")
+
 
 def shard_and_save(
     path: Path,
@@ -643,11 +741,36 @@ def shard_and_save(
             memory_config=memory_config,
         )
 
-    # Ensure the path has an appropriate extension
     if not path.name.endswith(TENSOR_CACHE_EXTENSION):
         path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
 
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    _append_cache_specs_record(
+        {
+            "event": "deepseek_v3.cache_tensor_spec",
+            "pid": os.getpid(),
+            "cache_file_path": str(path),
+            "cache_file_relpath": _get_relative_cache_path(path),
+            "torch_shape": list(tensor.shape),
+            "torch_dtype": str(tensor.dtype),
+            "requested_dtype": _enum_name_or_str(dtype),
+            "requested_layout": _enum_name_or_str(layout),
+            "requested_memory_config": _memory_config_to_dict(memory_config),
+            "shard_dims": list(shard_dims),
+            "remove_dims": list(remove_dims),
+            "mesh_shape": list(mesh_device.shape),
+            "mesh_num_devices": mesh_device.get_num_devices(),
+            "dtype_is_tilized": dtype in {ttnn.bfloat4_b, ttnn.bfloat8_b},
+            "shard_device_impl_uses_dram_interleaved_workaround": memory_config == ttnn.DRAM_MEMORY_CONFIG,
+            "torch_impl": _torch_impl,
+            "status": "ok",
+            "result_shape": list(ttnn_tensor.shape),
+            "result_dtype": _enum_name_or_str(ttnn_tensor.dtype),
+            "result_layout": _enum_name_or_str(ttnn_tensor.layout),
+            "result_memory_config": _memory_config_to_dict(ttnn_tensor.memory_config()),
+        }
+    )
 
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
@@ -691,7 +814,7 @@ def _shard_device_impl(
         layout == ttnn.ROW_MAJOR_LAYOUT and dtype_is_tilized
     ), "Row-major layout is not supported for tilized dtypes"
     if dtype_is_tilized:
-        layout = ttnn.TILE_LAYOUT  # Force tiled layout for tilized dtypes
+        layout = ttnn.TILE_LAYOUT
 
     if isinstance(remove_dims, bool):
         remove_dims = (remove_dims, remove_dims)
@@ -703,11 +826,7 @@ def _shard_device_impl(
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
 
-    # NOTE: START OF THE WORKAROUND for issues #28715, #28805, #28806, #28807
-
-    if (
-        memory_config != ttnn.DRAM_MEMORY_CONFIG
-    ):  # TODO: remove these workaround once issues #28715, #28805, #28806, #28807 are resolved and implement things properly
+    if memory_config != ttnn.DRAM_MEMORY_CONFIG:
         ttnn_tensor = ttnn.from_torch(
             tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
         )
@@ -730,9 +849,7 @@ def _shard_device_impl(
         if remove_dims[0]:
             new_tensor_shape.pop(shard_dims[0])
     else:
-        if (
-            None not in shard_dims and shard_dims[0] > shard_dims[1]
-        ):  # We will squeeze the least significant dimension first
+        if None not in shard_dims and shard_dims[0] > shard_dims[1]:
             shard_dims = (shard_dims[1], shard_dims[0])
             remove_dims = (remove_dims[1], remove_dims[0])
         if remove_dims[1]:
@@ -740,7 +857,7 @@ def _shard_device_impl(
         if remove_dims[0]:
             new_tensor_shape.pop(shard_dims[0])
 
-    new_tensor_shape = [1] * sum(remove_dims) + new_tensor_shape  # Keep the number of dimensions the same
+    new_tensor_shape = [1] * sum(remove_dims) + new_tensor_shape
     ttnn_tensor = ttnn_tensor.reshape(new_tensor_shape)
 
     return ttnn_tensor
@@ -757,9 +874,7 @@ def _shard_torch_impl(
     layout: ttnn.Layout | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> SavedWeight:
-    if (
-        shard_dims[0] == shard_dims[1]
-    ):  # This is a lil hacky case for when we want to shard a single dim over all devices
+    if shard_dims[0] == shard_dims[1]:
         assert remove_dims[0] == remove_dims[1], "If sharding a single dim, both remove_dim values must be the same"
         remove_dims = (remove_dims[0],)
         shard_dims = (shard_dims[0],)
@@ -767,7 +882,6 @@ def _shard_torch_impl(
     else:
         sharding_shape = (mesh_device.shape[0], mesh_device.shape[1])
 
-    # Create the ttnn sharded tensor
     return ttnn.from_host_shards(
         [
             ttnn.from_torch(
