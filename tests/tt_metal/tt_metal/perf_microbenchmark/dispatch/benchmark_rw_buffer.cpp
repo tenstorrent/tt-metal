@@ -168,17 +168,17 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
 static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
     auto page_size = FIXED_PAGE_SIZE;
     auto transfer_size = state.range(0);
-    auto buffer_type = BUFFER_TYPES[state.range(1)];
-    auto contiguity_factor = state.range(2);  // Controls pages per contiguous chunk
+    auto contiguity_factor = state.range(1);  // Controls pages per contiguous chunk
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
     [[maybe_unused]] auto device_id = state.range(3);
 
     log_debug(
         LogTest,
-        "Running WriteSharded Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Contiguity: {}, Device ID: {}",
+        "Running WriteSharded Benchmark for Page Size: {}, Transfer Size: {}, Contiguity: {}, Buffer Type: {}, Device ID: {}",
         page_size,
         transfer_size,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         contiguity_factor,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         device_id);
 
     // Compute sharding parameters based on buffer type
@@ -248,17 +248,17 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
 static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
     auto page_size = FIXED_PAGE_SIZE;
     auto transfer_size = state.range(0);
-    auto buffer_type = BUFFER_TYPES[state.range(1)];
-    auto contiguity_factor = state.range(2);  // Controls pages per contiguous chunk
+    auto contiguity_factor = state.range(1);  // Controls pages per contiguous chunk
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
     [[maybe_unused]] auto device_id = state.range(3);
 
     log_debug(
         LogTest,
-        "Running WritePinnedMemorySharded Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Contiguity: {}, Device ID: {}",
+        "Running WritePinnedMemorySharded Benchmark for Page Size: {}, Transfer Size: {}, Contiguity: {}, Buffer Type: {}, Device ID: {}",
         page_size,
         transfer_size,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         contiguity_factor,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         device_id);
 
     // Check if memory pinning with NOC mapping is supported
@@ -451,7 +451,7 @@ int main(int argc, char** argv) {
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
-        auto sharded_benchmark_args = {TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, CONTIGUITY_ARGS, {device_id}};
+        auto sharded_benchmark_args = {TRANSFER_SIZE_ARGS, CONTIGUITY_ARGS, BUFFER_TYPE_ARGS, {device_id}};
         auto compute_min = [](const std::vector<double>& v) -> double { return *std::min_element(v.begin(), v.end()); };
         auto compute_max = [](const std::vector<double>& v) -> double { return *std::max_element(v.begin(), v.end()); };
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
