@@ -1,13 +1,7 @@
-# RVC Nano
+# RVC Tenstorrent model bring-up
 
-A minimal, dependency-light subset of the original RVC (Retrieval-based Voice Conversion) project.
-The goal is to keep core voice-conversion functionality while making the codebase easier to
-port to other platforms and easier to embed in constrained environments.
+A bring up demo of RVC models in tenstorrent devices
 
-## Goals
-- Minimal dependencies and small runtime footprint
-- Keep core RVC inference functionality
-- Clean, portable architecture for non-Python or accelerator-backed ports
 
 ## Getting started
 Install the package (editable is fine for local work):
@@ -54,11 +48,6 @@ Expected layout after download:
 If you need the full-featured project (training, CLI, API), use the upstream repository:
 https://github.com/RVC-Project/Retrieval-based-Voice-Conversion
 
-## Repository structure (high level)
-- `rvc/`: core Python package
-- `rvc/vc/`: VC pipeline and inference code
-- `rvc/synthesizer/`: model definitions
-- `rvc/configs/`: config loader
 
 ## Status
 Early and intentionally minimal. Expect missing features and breaking changes while the
@@ -68,5 +57,3 @@ interface is refined.
 Heavily inspired by RVC (Retrieval-based Voice Conversion) and please see the original repo
 https://github.com/RVC-Project/Retrieval-based-Voice-Conversion
 
-## License
-See `LICENSE`.
