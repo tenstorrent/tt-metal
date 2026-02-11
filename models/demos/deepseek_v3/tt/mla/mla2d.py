@@ -81,13 +81,11 @@ class MLA2D(MLA1D):
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=0,
                 dim=2,
-                topology=ttnn.Topology.Linear,
             ),
             "seq_rs_prefill": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=0,
                 dim=2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,
             ),
         }
 
