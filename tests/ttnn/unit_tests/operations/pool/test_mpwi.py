@@ -8,11 +8,9 @@ import math
 import pytest
 
 from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run_max_pool2d_with_indices
-from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
 
 
 @pytest.mark.parametrize("in_c", [1, 16, 24, 32, 40, 48, 56, 64])
-@skip_with_watcher("Test is not passing with watcher enabled github issue #37195")
 def test_mpwi_20_core_C_dims(device, in_c):
     in_n = 1
     in_h = 159
