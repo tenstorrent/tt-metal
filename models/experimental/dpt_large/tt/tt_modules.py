@@ -89,6 +89,39 @@ def build_attn_padding_mask_4d(
     return mask
 
 
+def _to_torch_attn_mask(attn_mask, dtype: torch.dtype, device: torch.device) -> Optional[torch.Tensor]:
+    """Convert TT/torch attention masks to torch [B|1, H|1, S, S] form."""
+    if attn_mask is None:
+        return None
+
+    if ttnn is not None and isinstance(attn_mask, ttnn.Tensor):
+        attn_mask_host = attn_mask.cpu()
+        if hasattr(attn_mask_host, "layout") and attn_mask_host.layout == ttnn.TILE_LAYOUT:
+            attn_mask_host = attn_mask_host.to(ttnn.ROW_MAJOR_LAYOUT)
+        mask_torch = attn_mask_host.to_torch()
+    elif torch.is_tensor(attn_mask):
+        mask_torch = attn_mask
+    else:
+        mask_torch = torch.as_tensor(attn_mask)
+
+    if mask_torch.dim() == 2:
+        mask_torch = mask_torch.unsqueeze(0).unsqueeze(0)
+    elif mask_torch.dim() == 3:
+        mask_torch = mask_torch.unsqueeze(1)
+    elif mask_torch.dim() != 4:
+        raise ValueError(f"Unsupported attention mask shape: {tuple(mask_torch.shape)}")
+
+    return mask_torch.to(dtype=dtype, device=device)
+
+
+def _apply_attn_mask(attn_logits: torch.Tensor, attn_mask) -> torch.Tensor:
+    """Apply additive attention mask before softmax."""
+    if attn_mask is None:
+        return attn_logits
+    mask_torch = _to_torch_attn_mask(attn_mask, dtype=attn_logits.dtype, device=attn_logits.device)
+    return attn_logits + mask_torch
+
+
 class TTLinear:
     def __init__(
         self,
@@ -160,6 +193,11 @@ class TTPatchEmbedding:
         output_mem: Optional[ttnn.MemoryConfig] = None,
     ):
         # conv_weight: [out_c, in_c, k, k]
+        if fallback_ops is None:
+            raise RuntimeError(
+                "TTPatchEmbedding requires tt_lib.fallback_ops. "
+                "Install TT runtime dependencies or disable TT device execution."
+            )
         wt = _tt_from_torch_rm(conv_weight, device)
         bs = _tt_from_torch_rm(conv_bias, device)
         self.conv = fallback_ops.Conv2d(
@@ -366,6 +404,7 @@ class TTAttention:
             v_ = v.view(B, N, H, D).permute(0, 2, 1, 3)
             scale = 1.0 / math.sqrt(D)
             attn = torch.matmul(q_, k_.transpose(-2, -1)) * scale
+            attn = _apply_attn_mask(attn, mm_opts.get("attn_mask"))
             attn = torch.softmax(attn, dim=-1)
             ctx_ = torch.matmul(attn, v_)
             ctx_host = ctx_.permute(0, 2, 1, 3).contiguous().view(B, N, C)

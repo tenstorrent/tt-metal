@@ -91,6 +91,7 @@ class DPTTTPipeline:
 
     # ------------------------------------------------------------------ plumbing
     def to(self, device: str):
+        self.device = device
         self.backbone.to(device)
         self.reassembly.to(device)
         self.fusion_head.to(device)

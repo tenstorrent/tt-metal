@@ -106,7 +106,8 @@ class TTLayerConfig:
 
 def vit_block_config(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     if config.device.endswith("n300"):
-        grid = (8, 8)
+        # Single-card N300 often exposes a harvested 8x7 worker grid.
+        grid = (8, 7)
         math = "hi-fi2"
     elif config.device.endswith("n150"):
         grid = (6, 6)
@@ -253,7 +254,8 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        grid = (8, 8)
+        # Single-card N300 often exposes a harvested 8x7 worker grid.
+        grid = (8, 7)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
@@ -264,9 +266,9 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
 
     prog_cfgs = _build_perf_program_configs(config, grid)
     head_seq_tiles = prog_cfgs.get("_head_seqL_t__x")
-    # Disable custom attention configs if forced or if sharding would exceed grid height
+    # Disable custom attention configs if forced or if sharding would exceed grid width.
     disable_attn_pc = getattr(config, "tt_force_default_attention_programs", False)
-    if head_seq_tiles is not None and head_seq_tiles > grid[1]:
+    if head_seq_tiles is not None and head_seq_tiles > grid[0]:
         disable_attn_pc = True
 
     qk_pc = None if disable_attn_pc else prog_cfgs.get("query_by_key_matmul_program_config")

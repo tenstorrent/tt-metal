@@ -38,8 +38,7 @@ def main():
     parser.add_argument("--images-dir", type=str, default=None, help="Directory of images.")
     parser.add_argument("--device", type=str, default="cpu", help="cpu|wormhole_n300|wormhole_n150|blackhole")
     parser.add_argument("--tt-run", action="store_true", help="Run TT pipeline (requires --device != cpu).")
-    parser.add_argument("--height", type=int, default=384)
-    parser.add_argument("--width", type=int, default=384)
+    parser.add_argument("--image-size", type=int, default=384, help="Square model input size.")
     parser.add_argument("--dump-depth", type=str, default=None)
     parser.add_argument("--dump-depth-color", type=str, default=None)
     parser.add_argument("--dump-perf", type=str, default=None)
@@ -62,7 +61,7 @@ def main():
 
     use_tt = bool(args.tt_run)
     config = DPTLargeConfig(
-        image_size=args.height,
+        image_size=args.image_size,
         patch_size=16,
         device=args.device,
         allow_cpu_fallback=not use_tt,
@@ -122,8 +121,8 @@ def main():
             fps=fps,
             device=args.device,
             dtype="bfloat16",
-            input_h=args.height,
-            input_w=args.width,
+            input_h=args.image_size,
+            input_w=args.image_size,
             batch_size=1,
             modules=["backbone", "reassembly", "fusion_head"] if use_tt else ["cpu_fallback"],
         )
@@ -148,9 +147,9 @@ def main():
                 num_heads=16,
                 intermediate_size=4096,
             ),
-            input_shape=[1, 3, args.height, args.width],
+            input_shape=[1, 3, args.image_size, args.image_size],
             patch_size=16,
-            num_tokens=(args.height // 16) * (args.width // 16) + 1,
+            num_tokens=(args.image_size // 16) * (args.image_size // 16) + 1,
             device=args.device,
             dtype="bfloat16",
             mode=perf.get("mode", "unknown"),

@@ -14,14 +14,32 @@ from .tt_configs import TTLayerConfig
 from models.common.utility_functions import torch_to_tt_tensor_rm
 
 
+def _ensure_tt_device_tensor(x, tt_device, ttnn):
+    if tt_device is None or not isinstance(x, ttnn.Tensor):
+        return x
+    try:
+        if x.storage_type() == ttnn.StorageType.DEVICE:
+            return x
+    except Exception:
+        return x
+    try:
+        return x.to(tt_device)
+    except Exception:
+        x_host = x.cpu()
+        if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
+            x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
+        x_torch = x_host.to_torch()
+        return ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=tt_device)
+
+
 class DPTReassembleLayerTT(nn.Module):
     """
     TT-aware variant of Hugging Face's `DPTReassembleLayer`.
 
     It projects from the ViT hidden size to a per-scale channel size, then
     performs up/down sampling depending on the `factor`. On TT devices the
-    projection runs via `fallback_ops.Conv2d`, while upsampling falls back to
-    bilinear interpolation for now.
+    projection runs via `fallback_ops.Conv2d`; upsampling uses host
+    ConvTranspose2d parity and rematerializes outputs on TT.
     """
 
     def __init__(self, hidden_size: int, channels: int, factor: float, tt_device=None, memcfg=None):
@@ -69,13 +87,19 @@ class DPTReassembleLayerTT(nn.Module):
         import tt_lib.fallback_ops as fallback_ops  # type: ignore
         import ttnn  # type: ignore
 
-        # For now we approximate ConvTranspose2d with bilinear interpolate on TT.
+        # Preserve HF behavior for upsampling by using the learned ConvTranspose2d
+        # weights on host, then materializing the result back on TT device.
         if self.factor > 1:
-            return fallback_ops.interpolate(
-                x,
-                scale_factor=self.factor,
-                mode="bilinear",
-                align_corners=False,
+            x_host = x.cpu()
+            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
+                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
+            x_torch = x_host.to_torch().to(dtype=self.resize.weight.dtype)
+            y_torch = self.resize(x_torch)
+            return ttnn.from_torch(
+                y_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.tt_device,
             )
 
         if isinstance(self.resize, nn.Identity):
@@ -315,7 +339,12 @@ class DPTReassembly(nn.Module):
                     )
                     and not isinstance(hidden_state, ttnn.Tensor)
                 ):
-                    hidden_state = torch_to_tt_tensor_rm(hidden_state, self.tt_device, put_on_device=True)
+                    hidden_state = ttnn.from_torch(
+                        hidden_state,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=self.tt_device,
+                    )
             except Exception:
                 pass
 
@@ -352,6 +381,7 @@ class DPTReassembly(nn.Module):
                         padding=1,
                     )
                 x = self._tt_convs[stage_idx](x)
+                x = _ensure_tt_device_tensor(x, self.tt_device, ttnn)
                 outputs.append(x)
             else:
                 outputs.append(conv(x))

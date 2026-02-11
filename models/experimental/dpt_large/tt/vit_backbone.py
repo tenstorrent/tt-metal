@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import logging
 from typing import Dict, List, Optional
 
@@ -88,7 +89,18 @@ class DPTViTBackboneTTNN(torch.nn.Module):
 
             # Use config.device for TT accelerator selection so the host can remain on CPU.
             if self.config.enable_tt_device and self.config.device != "cpu":
-                self.tt_device = ttnn.open_device(device_id=0)
+                # `fallback_ops` conversion wrappers expect MeshDevice-based tensors.
+                if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape"):
+                    try:
+                        self.tt_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), physical_device_ids=[0])
+                    except Exception:
+                        self.tt_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
+                else:
+                    self.tt_device = ttnn.open_device(device_id=0)
+                try:
+                    ttnn.SetDefaultDevice(self.tt_device)
+                except Exception:
+                    pass
                 self.TTTransformerBlock = TTTransformerBlock
                 self.TTPatchEmbedding = TTPatchEmbedding
                 # Pass through TT layer config only for perf encoder path
@@ -129,6 +141,39 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             self.tt_cls_token = sd["dpt.embeddings.cls_token"]
 
     # ------------------------------------------------------------------ backbone implementations
+    def _pos_embed_for_hw(self, h_patches: int, w_patches: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        """Resize checkpoint positional embeddings to the runtime patch grid."""
+        pos_embed = self.tt_pos_embed.to(dtype=dtype, device=device)
+        target_patches = int(h_patches) * int(w_patches)
+        target_seq = target_patches + 1
+        if pos_embed.shape[1] == target_seq:
+            return pos_embed
+
+        cls_pos = pos_embed[:, :1, :]
+        patch_pos = pos_embed[:, 1:, :]
+        src_patches = int(patch_pos.shape[1])
+        src_h = math.isqrt(src_patches)
+
+        if src_h * src_h == src_patches:
+            patch_pos_2d = patch_pos.reshape(1, src_h, src_h, -1).permute(0, 3, 1, 2)
+            patch_pos_resized = torch.nn.functional.interpolate(
+                patch_pos_2d,
+                size=(h_patches, w_patches),
+                mode="bicubic",
+                align_corners=False,
+            )
+            patch_pos_resized = patch_pos_resized.permute(0, 2, 3, 1).reshape(1, target_patches, -1)
+        else:
+            patch_pos_1d = patch_pos.transpose(1, 2)
+            patch_pos_resized = torch.nn.functional.interpolate(
+                patch_pos_1d,
+                size=target_patches,
+                mode="linear",
+                align_corners=False,
+            ).transpose(1, 2)
+
+        return torch.cat([cls_pos, patch_pos_resized], dim=1)
+
     def _forward_cpu_backbone(self, pixel_values: torch.Tensor, return_tt: bool = False) -> ViTBackboneOutputs:
         """Reference CPU backbone using HF DPT encoder."""
         patch = self.config.patch_size
@@ -141,7 +186,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         feats: Dict[int, torch.Tensor] = {}
         token_maps: Dict[int, torch.Tensor] = {}
 
-        safe_out = [min(i, self.config.num_hidden_layers - 1) for i in self.config.output_layers]
+        max_idx = max(0, int(self.config.num_hidden_layers) - 1)
+        safe_out = [min(max(int(i), 0), max_idx) for i in self.config.output_layers]
         for idx in safe_out:
             tokens = hidden_states[idx + 1]  # includes CLS at position 0
             token_maps[idx + 1] = tokens
@@ -187,7 +233,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
 
         cls = self.tt_cls_token.expand(B, -1, -1)  # [B, 1, C]
         tokens_torch = torch.cat([cls, patch_tokens], dim=1)  # [B, N+1, C]
-        tokens_torch = tokens_torch + self.tt_pos_embed  # broadcasted positional embedding
+        pos_embed = self._pos_embed_for_hw(H, W, dtype=tokens_torch.dtype, device=tokens_torch.device)
+        tokens_torch = tokens_torch + pos_embed
 
         # Perf path only: pad sequence to tile multiple for sharded program configs.
         orig_len = tokens_torch.shape[1]
@@ -271,7 +318,10 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             import ttnn  # type: ignore
 
             try:
-                ttnn.close_device(self.tt_device)
+                if hasattr(ttnn, "MeshDevice") and isinstance(self.tt_device, ttnn.MeshDevice):
+                    ttnn.close_mesh_device(self.tt_device)
+                else:
+                    ttnn.close_device(self.tt_device)
             finally:
                 self.tt_device = None
         except Exception:

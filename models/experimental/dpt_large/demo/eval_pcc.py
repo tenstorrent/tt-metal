@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from models.common.utility_functions import comp_pcc
 from ..tt.config import DPTLargeConfig
 from ..tt.fallback import DPTFallbackPipeline
 
@@ -25,22 +26,6 @@ def _collect_images(args) -> list[str]:
             imgs = imgs[: int(args.limit)]
         return imgs
     raise ValueError("Provide either --image or --images-dir.")
-
-
-def pearson_cc(a: np.ndarray, b: np.ndarray) -> float:
-    a = np.asarray(a, dtype=np.float64).reshape(-1)
-    b = np.asarray(b, dtype=np.float64).reshape(-1)
-    mask = np.isfinite(a) & np.isfinite(b)
-    if not np.any(mask):
-        return float("nan")
-    a = a[mask]
-    b = b[mask]
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if denom == 0.0:
-        return float("nan")
-    return float(np.dot(a, b) / denom)
 
 
 def _fps_from_ms(latency_ms: float) -> float:
@@ -152,16 +137,21 @@ def main():
 
         # PCC: compare per-image TT vs CPU, then summarize.
         pccs: list[float] = []
+        pcc_pass_flags: list[bool] = []
         for img in images:
             depth_cpu = cpu.forward(img, normalize=True)
             depth_tt = tt.forward(img, normalize=True)
-            pccs.append(pearson_cc(depth_cpu, depth_tt))
+            passed, pcc = comp_pcc(depth_cpu, depth_tt, pcc=0.99)
+            pccs.append(float(pcc))
+            pcc_pass_flags.append(bool(passed))
 
     result["tt"] = {k: v for k, v in tt_stats.items() if k != "last_output"}
     result["pcc"] = {
         "mean": float(np.nanmean(pccs)) if len(pccs) else float("nan"),
         "min": float(np.nanmin(pccs)) if len(pccs) else float("nan"),
         "per_image": pccs,
+        "threshold": 0.99,
+        "all_pass": all(pcc_pass_flags) if len(pcc_pass_flags) else False,
     }
 
     if args.dump_json:
