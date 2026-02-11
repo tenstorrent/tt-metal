@@ -1921,6 +1921,17 @@ class ReduceGolden:
 
 
 @register_golden
+class ReduceBlockMaxRowGolden:
+    def __call__(self, operand, ct_dim, data_format, dimensions):
+        operand = operand.reshape(dimensions)
+        output = torch.zeros(dimensions)
+        for i in range(dimensions[0]):
+            output[i, 0] = torch.max(operand[i, : ct_dim * 32])
+
+        return output
+
+
+@register_golden
 class ReduceGapoolGolden(FidelityMasking):
     """Golden for GAPOOL reduce (Sum/Average pooling) with fidelity masking.
 

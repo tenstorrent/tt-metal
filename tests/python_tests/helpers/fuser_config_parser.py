@@ -8,7 +8,13 @@ from typing import Any, Dict, Type
 
 import yaml
 from helpers.format_config import DataFormat
-from helpers.fused_fpu import DatacopyFpu, EltwiseFpu, MatmulFpu, ReduceFpu
+from helpers.fused_fpu import (
+    DatacopyFpu,
+    EltwiseFpu,
+    MatmulFpu,
+    ReduceBlockMaxFpu,
+    ReduceFpu,
+)
 from helpers.fused_math import ComputeNode, ComputePipeline
 from helpers.fused_operand import OperandRegistry
 from helpers.fused_operation import FusedOperation
@@ -16,6 +22,7 @@ from helpers.fused_packer import Packer
 from helpers.fused_sfpu import BinarySfpu, UnarySfpu
 from helpers.fused_unpacker import (
     MatmulUnpacker,
+    ReduceBlockMaxUnpacker,
     Unpacker,
     UnpackerA,
     UnpackerAB,
@@ -43,6 +50,7 @@ UNPACKER_MAP: Dict[str, Type[Unpacker]] = {
     "UnpackerAB": UnpackerAB,
     "UnpackerTilizeA": UnpackerTilizeA,
     "MatmulUnpacker": MatmulUnpacker,
+    "ReduceBlockMaxUnpacker": ReduceBlockMaxUnpacker,
 }
 
 PACKER_MAP: Dict[str, Type[Packer]] = {
@@ -182,6 +190,8 @@ def parse_math_operation(
             fpu = DatacopyFpu()
         elif fpu_type == "Matmul":
             fpu = MatmulFpu()
+        elif fpu_type == "ReduceBlockMax":
+            fpu = ReduceBlockMaxFpu()
         else:
             raise ValueError(f"Unsupported FPU type: {fpu_type}")
 

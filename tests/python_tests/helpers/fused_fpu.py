@@ -10,6 +10,7 @@ from .golden_generators import (
     DataCopyGolden,
     EltwiseBinaryGolden,
     MatmulGolden,
+    ReduceBlockMaxRowGolden,
     ReduceGolden,
     get_golden_generator,
 )
@@ -510,3 +511,74 @@ class DatacopyFpu(Fpu):
     ) -> str:
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
         return f"_llk_math_eltwise_unary_datacopy_uninit_<{broadcast_type}, false>();\n"
+
+
+class ReduceBlockMaxFpu(Fpu):
+    def supported_unpackers(self) -> List["Unpacker"]:
+        from .fused_unpacker import ReduceBlockMaxUnpacker
+
+        return [ReduceBlockMaxUnpacker]
+
+    def init(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+    ) -> str:
+        ct_dim = operation.ct_dim
+        dest_acc = config.dest_acc.value
+        return f"_llk_math_reduce_block_max_row_init_<{ct_dim}, {dest_acc}>();\n"
+
+    def calculate(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+        tile_idx: int,
+    ) -> str:
+        ct_dim = operation.ct_dim
+        dest_acc = config.dest_acc.value
+        if tile_idx % ct_dim != 0:
+            return ""
+        return f"_llk_math_reduce_block_max_row_<{ct_dim}, {dest_acc}>({tile_idx});\n"
+
+    def uninit(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+    ) -> str:
+        return "_llk_math_reduce_block_max_row_uninit_();\n"
+
+    def golden(
+        self,
+        tensor_a: torch.Tensor,
+        tensor_b: torch.Tensor,
+        tensor_dst: torch.Tensor,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        ct_dim = operation.ct_dim
+        output_format = operation.output.data_format
+        dimensions = operation.max_output_dimensions
+
+        generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
+        src_a_reduced_tensor = generate_golden(
+            tensor_a, ct_dim, output_format, dimensions
+        ).flatten()
+
+        dest_golden_tensor = generate_golden(
+            tensor_dst, ct_dim, output_format, dimensions
+        ).flatten()
+
+        numel = min(src_a_reduced_tensor.numel(), dest_golden_tensor.numel())
+        golden_tensor = torch.zeros(numel)
+
+        for i in range(numel):
+            golden_tensor[i] = max(src_a_reduced_tensor[i], dest_golden_tensor[i])
+
+        return (tensor_a, tensor_b, golden_tensor)
+
+    def get_headers(self) -> List[str]:
+        return ["llk_math_reduce_custom.h"]

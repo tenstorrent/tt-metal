@@ -544,9 +544,9 @@ class ComputePipeline:
             )
 
         dimensions = operation.output.dimensions
-        num_elements = dimensions[0] * dimensions[1]
-
-        return tensor_dst.flatten()[:num_elements].reshape(dimensions)
+        return tensor_dst.reshape(operation.max_output_dimensions)[
+            : dimensions[0], : dimensions[1]
+        ]
 
     def __str__(self):
         str = ""
