@@ -554,6 +554,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 
     // Append common args provided by the build state
     cmd += lflags;
+    cmd += this->extra_link_objs_;
     cmd += link_objs;
     std::string elf_name = out_dir + this->target_name_ + ".elf";
     jit_build::utils::FileRenamer elf_file(elf_name);
@@ -626,17 +627,36 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
     }
 }
 
-void JitBuildState::build(const JitBuildSettings* settings) const {
+void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     // ZoneScoped;
-    string out_dir = (settings == nullptr)
-                         ? this->out_path_ + this->target_name_ + "/"
-                         : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
+    auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
+    std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
+
+    // If no link targets are provided, use the current build state as the only link target
+    const JitBuildState* self = this;
+    if (link_targets.empty()) {
+        link_targets = std::span<const JitBuildState* const>(&self, 1);
+    }
+
     size_t num_objs = this->objs_.size();
     std::vector<bool> compiled(num_objs, true);
 
     fs::create_directories(out_dir);
-    if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
-        std::string link_objs = this->extra_link_objs_ + " ";
+    size_t num_compiled = compile(out_dir, settings);
+
+    bool any_needs_link = num_compiled > 0;
+    if (!any_needs_link) {
+        for (const auto* target : link_targets) {
+            string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
+            if (target->need_link(target_out_dir)) {
+                any_needs_link = true;
+                break;
+            }
+        }
+    }
+
+    if (any_needs_link) {
+        string link_objs;
         for (size_t i = 0; i < num_objs; ++i) {
             auto temp_obj = out_dir + this->temp_objs_[i];
             if (!fs::exists(temp_obj)) {
@@ -652,10 +672,18 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
             link_objs += temp_obj;
             link_objs += " ";
         }
-        link(out_dir, settings, link_objs);
-        if (this->is_fw_) {
-            weaken(out_dir);
+
+        for (const auto* target : link_targets) {
+            string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
+            fs::create_directories(target_out_dir);
+            if (num_compiled > 0 || target->need_link(target_out_dir)) {
+                target->link(target_out_dir, settings, link_objs);
+                if (target->is_fw_) {
+                    target->weaken(target_out_dir);
+                }
+            }
         }
+
         // Rename the temporary .o and .dephash files after linking is done.
         fs::path src_path = out_dir;
         fs::path dst_path = out_dir;
@@ -678,45 +706,18 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     extract_zone_src_locations(out_dir);
 }
 
-void JitBuildState::link_to_processor(
-    const JitBuildState& processor_build_state, const JitBuildSettings* settings) const {
-    TT_ASSERT(!this->is_fw_);
-    TT_ASSERT(!processor_build_state.is_fw_);
-    TT_ASSERT(settings != nullptr);
-
-    TT_ASSERT(this->core_type_ == processor_build_state.core_type_);
-    TT_ASSERT(this->processor_class_ == processor_build_state.processor_class_);
-
-    const string orig_processor_out_dir =
-        processor_build_state.out_path_ + settings->get_full_kernel_name() + processor_build_state.target_name_ + "/";
-    TT_ASSERT(fs::exists(orig_processor_out_dir));
-
-    const string out_dir = this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
-
-    fs::create_directories(out_dir);
-
-    string link_objs;
-    for (const string& obj : processor_build_state.objs_) {
-        const string obj_path = orig_processor_out_dir + obj;
-        TT_ASSERT(fs::exists(obj_path));
-        link_objs += obj_path + " ";
-    }
-    for (const auto& obj : tt_metal::MetalContext::instance().hal().get_jit_build_query().link_objs(
-             {.is_fw = processor_build_state.is_fw_,
-              .core_type = processor_build_state.core_type_,
-              .processor_class = processor_build_state.processor_class_,
-              .processor_id = static_cast<uint32_t>(processor_build_state.processor_id_)})) {
-        link_objs += this->env_.root_ + obj + " ";
-    }
-
-    link(out_dir, settings, link_objs);
-}
-
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
 
     build.build(settings);
     write_successful_jit_build_marker(build, settings);
+}
+
+void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
+    TT_ASSERT(!targets.empty());
+    const JitBuildState& primary = *targets[0];
+    primary.build(settings, targets);
+    write_successful_jit_build_marker(primary, settings);
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
@@ -730,14 +731,6 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
     for (const auto& build : build_subset) {
         write_successful_jit_build_marker(build, settings);
     }
-}
-
-void jit_link_additional_processor(
-    const JitBuildState& orig_processor_build_state,
-    const JitBuildState& additional_processor_build_state,
-    const JitBuildSettings* additional_processor_settings) {
-    additional_processor_build_state.link_to_processor(orig_processor_build_state, additional_processor_settings);
-    write_successful_jit_build_marker(additional_processor_build_state, additional_processor_settings);
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
