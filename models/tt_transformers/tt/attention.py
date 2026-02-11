@@ -7,7 +7,6 @@ import math
 import torch
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
@@ -522,7 +521,7 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _hf_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
-        int_current_pos = int(to_torch_auto_compose(current_pos)[0])
+        int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
 
         q_heads_1BQD = ttnn.experimental.rotary_embedding(
             q_heads_pre_rot_1BQD,
