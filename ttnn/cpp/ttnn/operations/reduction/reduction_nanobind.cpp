@@ -27,12 +27,7 @@ void py_module(nb::module_& mod) {
     export_enum<ttnn::operations::reduction::ReduceType>(mod, "ReduceType");
 
     // Generic reductions
-    detail::bind_reduction_operation(mod, ttnn::sum);
-    detail::bind_reduction_operation(mod, ttnn::mean);
-    detail::bind_reduction_operation(mod, ttnn::max);
-    detail::bind_reduction_operation(mod, ttnn::min);
-    detail::bind_reduction_operation(mod, ttnn::std);
-    detail::bind_reduction_operation(mod, ttnn::var);
+    detail::bind_generic_reductions(mod);
 
     // Special reductions
     detail::bind_reduction_argmax_operation(mod);

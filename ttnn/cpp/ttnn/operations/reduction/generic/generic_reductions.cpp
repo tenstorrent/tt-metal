@@ -503,3 +503,127 @@ template struct Reduce<ReduceType::Min>;
 template struct Reduce<ReduceType::Std>;
 template struct Reduce<ReduceType::Var>;
 }  // namespace ttnn::operations::reduction
+
+namespace ttnn {
+
+Tensor sum(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::Reduce<operations::reduction::ReduceType::Sum>::invoke(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor mean(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::Reduce<operations::reduction::ReduceType::Mean>::invoke(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor max(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::Reduce<operations::reduction::ReduceType::Max>::invoke(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor min(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::Reduce<operations::reduction::ReduceType::Min>::invoke(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor std(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::Reduce<operations::reduction::ReduceType::Std>::invoke(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor var(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::Reduce<operations::reduction::ReduceType::Var>::invoke(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+}  // namespace ttnn
