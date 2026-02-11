@@ -23,61 +23,6 @@ protected:
     }
 };
 
-/* <float, ttnn::DataType::FLOAT32> */
-TEST_F(TensorUtilsTest, TestFloat32ToFromTensor) {
-    /* This test fails if the numbers are converted to BFloat16 inside from_vector. */
-    auto* device = &ttml::autograd::ctx().get_device();
-    std::vector<float> test_data = {1.5F, 1.05F, 1.005F, 1.0005F, 1.00005F};
-
-    auto shape = ttnn::Shape({1, 1, 1, 5});
-    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device);
-
-    auto vec_back = ttml::core::to_vector<float>(tensor);
-
-    ASSERT_EQ(vec_back.size(), test_data.size());
-    for (size_t i = 0; i < test_data.size(); i++) {
-        EXPECT_EQ(vec_back[i], test_data[i]);
-    }
-}
-
-TEST_F(TensorUtilsTest, TestFloat32ToFromTensorLarge) {
-    /* This test fails if the numbers are converted to BFloat16 inside from_vector. */
-    auto* device = &ttml::autograd::ctx().get_device();
-    std::vector<float> test_data;
-    uint32_t vec_size = 50304;
-    for (size_t i = 0; i < vec_size; i++) {
-        test_data.push_back(1.0005F);
-    }
-
-    auto shape = ttnn::Shape({1, 1, 1, vec_size});
-    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device);
-
-    auto vec_back = ttml::core::to_vector<float>(tensor);
-
-    ASSERT_EQ(vec_back.size(), test_data.size());
-    for (size_t i = 0; i < test_data.size(); i++) {
-        EXPECT_EQ(vec_back[i], test_data[i]);
-    }
-}
-
-TEST_F(TensorUtilsTest, TestFloat32ToFromTensorLargeWithBatch) {
-    auto* device = &ttml::autograd::ctx().get_device();
-    std::vector<float> test_data;
-    uint32_t batch_size = 256;
-    uint32_t vec_size = 256 * batch_size;
-    for (size_t i = 0; i < vec_size; i++) {
-        test_data.push_back(i / 100.f);
-    }
-
-    auto shape = ttnn::Shape({batch_size, 1, 1, vec_size / batch_size});
-    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device);
-    auto vec_back = ttml::core::to_vector<float>(tensor);
-    ASSERT_EQ(vec_back.size(), test_data.size());
-    for (size_t i = 0; i < test_data.size(); i++) {
-        EXPECT_EQ(vec_back[i], test_data[i]);
-    }
-}
-
 /* Typed tests for <uint32_t, UINT32> and <int32_t, INT32> */
 struct Uint32Config {
     using scalar_t = uint32_t;
@@ -89,11 +34,11 @@ struct Int32Config {
 };
 
 template <typename Config>
-class TensorUtilsIntOrUintTest : public TensorUtilsTest {};
+class TtmlFromVectorIntUintTest : public TensorUtilsTest {};
 using IntOrUintConfigs = ::testing::Types<Uint32Config, Int32Config>;
-TYPED_TEST_SUITE(TensorUtilsIntOrUintTest, IntOrUintConfigs);
+TYPED_TEST_SUITE(TtmlFromVectorIntUintTest, IntOrUintConfigs);
 
-TYPED_TEST(TensorUtilsIntOrUintTest, ToFromTensorEven) {
+TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorEven) {
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data = {1, 5, 10, 15};
@@ -109,7 +54,7 @@ TYPED_TEST(TensorUtilsIntOrUintTest, ToFromTensorEven) {
     }
 }
 
-TYPED_TEST(TensorUtilsIntOrUintTest, ToFromTensorOdd) {
+TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorOdd) {
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data = {30, 20, 2};
@@ -125,7 +70,7 @@ TYPED_TEST(TensorUtilsIntOrUintTest, ToFromTensorOdd) {
     }
 }
 
-TYPED_TEST(TensorUtilsIntOrUintTest, ToFromTensorLargeWithBatch) {
+TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorLargeWithBatch) {
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data;
@@ -138,6 +83,25 @@ TYPED_TEST(TensorUtilsIntOrUintTest, ToFromTensorLargeWithBatch) {
     auto shape = ttnn::Shape({batch_size, 1, 1, vec_size / batch_size});
     auto tensor = ttml::core::from_vector<scalar_t, TypeParam::tensor_dtype>(test_data, shape, device);
     auto vec_back = ttml::core::to_vector<scalar_t>(tensor);
+    ASSERT_EQ(vec_back.size(), test_data.size());
+    for (size_t i = 0; i < test_data.size(); i++) {
+        EXPECT_EQ(vec_back[i], test_data[i]);
+    }
+}
+
+TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorTypeLimits) {
+    using scalar_t = typename TypeParam::scalar_t;
+    auto lowest = std::numeric_limits<scalar_t>::lowest();
+    auto max = std::numeric_limits<scalar_t>::max();
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<scalar_t> test_data = {lowest, max, 0};
+
+    auto shape = ttnn::Shape({1, 1, 1, 3});
+    auto tensor = ttml::core::from_vector<scalar_t, TypeParam::tensor_dtype>(test_data, shape, device);
+
+    auto vec_back = ttml::core::to_vector<scalar_t>(tensor);
+
     ASSERT_EQ(vec_back.size(), test_data.size());
     for (size_t i = 0; i < test_data.size(); i++) {
         EXPECT_EQ(vec_back[i], test_data[i]);
@@ -161,11 +125,11 @@ struct Bfloat16Bf16Config {
 };
 
 template <typename Config>
-class TensorUtilsBf16Test : public TensorUtilsTest {};
+class TtmlFromVectorBf16Test : public TensorUtilsTest {};
 using Bf16Configs = ::testing::Types<FloatBf16Config, Bfloat16Bf16Config>;
-TYPED_TEST_SUITE(TensorUtilsBf16Test, Bf16Configs);
+TYPED_TEST_SUITE(TtmlFromVectorBf16Test, Bf16Configs);
 
-TYPED_TEST(TensorUtilsBf16Test, ToFromTensorLargeWithBatch) {
+TYPED_TEST(TtmlFromVectorBf16Test, ToFromTensorLargeWithBatch) {
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data;
@@ -189,7 +153,7 @@ TYPED_TEST(TensorUtilsBf16Test, ToFromTensorLargeWithBatch) {
     }
 }
 
-TYPED_TEST(TensorUtilsBf16Test, ToFromTensorLarge) {
+TYPED_TEST(TtmlFromVectorBf16Test, ToFromTensorLarge) {
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data;
@@ -211,7 +175,7 @@ TYPED_TEST(TensorUtilsBf16Test, ToFromTensorLarge) {
     }
 }
 
-TYPED_TEST(TensorUtilsBf16Test, ToFromTensorBatch) {
+TYPED_TEST(TtmlFromVectorBf16Test, ToFromTensorBatch) {
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data = {
@@ -231,7 +195,7 @@ TYPED_TEST(TensorUtilsBf16Test, ToFromTensorBatch) {
     }
 }
 
-TYPED_TEST(TensorUtilsBf16Test, ToFromTensorEven) {
+TYPED_TEST(TtmlFromVectorBf16Test, ToFromTensorEven) {
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data = {
@@ -251,7 +215,7 @@ TYPED_TEST(TensorUtilsBf16Test, ToFromTensorEven) {
     }
 }
 
-TYPED_TEST(TensorUtilsBf16Test, ToFromTensorGPT2Tokenizer) {
+TYPED_TEST(TtmlFromVectorBf16Test, ToFromTensorGPT2Tokenizer) {
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t N = 50304;
@@ -268,7 +232,7 @@ TYPED_TEST(TensorUtilsBf16Test, ToFromTensorGPT2Tokenizer) {
     }
 }
 
-TYPED_TEST(TensorUtilsBf16Test, ToFromTensorOdd) {
+TYPED_TEST(TtmlFromVectorBf16Test, ToFromTensorOdd) {
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data = {
@@ -278,6 +242,81 @@ TYPED_TEST(TensorUtilsBf16Test, ToFromTensorOdd) {
     auto tensor = ttml::core::from_vector<scalar_t, TypeParam::tensor_dtype>(test_data, shape, device);
 
     auto vec_back = ttml::core::to_vector<scalar_t>(tensor);
+
+    ASSERT_EQ(vec_back.size(), test_data.size());
+    for (size_t i = 0; i < test_data.size(); i++) {
+        EXPECT_EQ(vec_back[i], test_data[i]);
+    }
+}
+
+class TtmlFromVectorFloat32Test : public TensorUtilsTest {};
+
+/* <float, ttnn::DataType::FLOAT32> */
+TEST_F(TtmlFromVectorFloat32Test, TestFloat32ToFromTensor) {
+    /* This test fails if the numbers are converted to BFloat16 inside from_vector. */
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<float> test_data = {1.5F, 1.05F, 1.005F, 1.0005F, 1.00005F};
+
+    auto shape = ttnn::Shape({1, 1, 1, 5});
+    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device);
+
+    auto vec_back = ttml::core::to_vector<float>(tensor);
+
+    ASSERT_EQ(vec_back.size(), test_data.size());
+    for (size_t i = 0; i < test_data.size(); i++) {
+        EXPECT_EQ(vec_back[i], test_data[i]);
+    }
+}
+
+TEST_F(TtmlFromVectorFloat32Test, TestFloat32ToFromTensorLarge) {
+    /* This test fails if the numbers are converted to BFloat16 inside from_vector. */
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<float> test_data;
+    uint32_t vec_size = 50304;
+    for (size_t i = 0; i < vec_size; i++) {
+        test_data.push_back(1.0005F);
+    }
+
+    auto shape = ttnn::Shape({1, 1, 1, vec_size});
+    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device);
+
+    auto vec_back = ttml::core::to_vector<float>(tensor);
+
+    ASSERT_EQ(vec_back.size(), test_data.size());
+    for (size_t i = 0; i < test_data.size(); i++) {
+        EXPECT_EQ(vec_back[i], test_data[i]);
+    }
+}
+
+TEST_F(TtmlFromVectorFloat32Test, TestFloat32ToFromTensorLargeWithBatch) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<float> test_data;
+    uint32_t batch_size = 256;
+    uint32_t vec_size = 256 * batch_size;
+    for (size_t i = 0; i < vec_size; i++) {
+        test_data.push_back(i / 100.f);
+    }
+
+    auto shape = ttnn::Shape({batch_size, 1, 1, vec_size / batch_size});
+    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device);
+    auto vec_back = ttml::core::to_vector<float>(tensor);
+    ASSERT_EQ(vec_back.size(), test_data.size());
+    for (size_t i = 0; i < test_data.size(); i++) {
+        EXPECT_EQ(vec_back[i], test_data[i]);
+    }
+}
+
+TEST_F(TtmlFromVectorFloat32Test, TestFloat32ToFromTensorLimits) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto min = std::numeric_limits<float>::min();
+    auto lowest = std::numeric_limits<float>::lowest();
+    auto max = std::numeric_limits<float>::max();
+    std::vector<float> test_data = {min, lowest, max};
+
+    auto shape = ttnn::Shape({1, 1, 1, 3});
+    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device);
+
+    auto vec_back = ttml::core::to_vector<float>(tensor);
 
     ASSERT_EQ(vec_back.size(), test_data.size());
     for (size_t i = 0; i < test_data.size(); i++) {
