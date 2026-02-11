@@ -60,6 +60,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         }
     }
 
+    template <bool SEND_CREDITS_DURING_CALL>
     FORCE_INLINE void send_completion_credit(uint8_t src_id = 0) {
         // Increment completion counter
         if constexpr (enable_first_level_ack) {
@@ -72,7 +73,9 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
             completion_counter[src_id]++;
             completion_counter_l1_ptr[src_id] = completion_counter[src_id];
         }
-        update_sender_side_credits();
+        if constexpr (SEND_CREDITS_DURING_CALL) {
+            update_sender_side_credits();
+        }
     }
 
         // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
@@ -121,7 +124,11 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         // Send packed ACK credits - add packed value directly (formats must match!)
         // Used for batch ACK sending when first-level ACK is enabled
         // ASSUMES: Sender->receiver and receiver->sender use SAME packing format (8-bit on BH)
-        template <size_t VC_NUM_SENDER_CHANNELS, bool wait_for_txq, typename PackedValueType>
+        template <
+            size_t VC_NUM_SENDER_CHANNELS,
+            bool wait_for_txq,
+            bool SEND_CREDITS_DURING_CALL,
+            typename PackedValueType>
         FORCE_INLINE void send_packed_ack_credits(const PackedValueType& packed_value) {
             if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
                 // Use safe CreditPacking helper to add packed values without carries between channels
@@ -178,10 +185,13 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                 }
                 // Wait for eth queue if requested (safer but slower)
 
-                if constexpr (wait_for_txq) {
-                    while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
+                if constexpr (SEND_CREDITS_DURING_CALL) {
+                    if constexpr (wait_for_txq) {
+                        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+                        }
+                    }
+                    update_sender_side_credits();
                 }
-                // update_sender_side_credits();
             }
         }
 
@@ -232,16 +242,21 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
         }
     }
 
+    template <bool SEND_CREDITS_DURING_CALL>
     FORCE_INLINE void send_completion_credit(uint8_t src_id = 0) {
         if constexpr (enable_first_level_ack) {
             // Packed mode: all senders use shared register 0 (src_id ignored)
-            remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[0], 1);
+            if constexpr (SEND_CREDITS_DURING_CALL) {
+                remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[0], 1);
+            }
         } else {
             WATCHER_RING_BUFFER_PUSH(0xcc200000 | src_id);
             WATCHER_RING_BUFFER_PUSH(sender_channel_packets_completed_stream_ids[src_id]);
             // Unpacked mode: each sender uses dedicated register (sender-channel-based)
             // Matches pre-cdfbd972cde working implementation
-            remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
+            if constexpr (SEND_CREDITS_DURING_CALL) {
+                remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
+            }
         }
     }
 
@@ -253,7 +268,7 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
 
     // Send packed ACK credits directly to the shared stream register
     // Used for batch ACK sending when first-level ACK is enabled
-    template <size_t VC_NUM_SENDER_CHANNELS, bool wait_for_txq, typename PackedValueType>
+    template <size_t VC_NUM_SENDER_CHANNELS, bool wait_for_txq, bool SEND_CREDITS_DURING_CALL, typename PackedValueType>
     FORCE_INLINE void send_packed_ack_credits(const PackedValueType& packed_value) {
         if constexpr (enable_first_level_ack) {
             // All channels use register 0 when enable_first_level_ack is true
@@ -264,26 +279,29 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
             static_assert(sizeof(typename PackedValueType::storage_type) <= 8,
                          "Packed value storage too large");
             if constexpr (sizeof(typename PackedValueType::storage_type) <= 4) {
-                if constexpr (wait_for_txq) {
-                    while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+                if constexpr (SEND_CREDITS_DURING_CALL) {
+                    if constexpr (wait_for_txq) {
+                        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+                        }
                     }
                 }
                 if constexpr (VC_NUM_SENDER_CHANNELS <= 2) {  // TODO: generalize for multi-VC
                     WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
-                    remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
+                    if constexpr (SEND_CREDITS_DURING_CALL) {
+                        remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
+                    }
                 } else {
                     WATCHER_RING_BUFFER_PUSH(0xa4000000 | (packed_value.get() & 0xFFFF));
                     remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
                     auto stream_id_1 = stream_id + 1;
 
-                    if constexpr (wait_for_txq) {
-                        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+                    if constexpr (SEND_CREDITS_DURING_CALL) {
+                        if constexpr (wait_for_txq) {
+                            while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+                            }
                         }
+                        remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
                     }
-                    WATCHER_RING_BUFFER_PUSH(0xa4100000 | ((packed_value.get() >> 16) & 0xFFFF));
-                    while (internal_::eth_txq_is_busy(receiver_txq_id)) {
-                    }
-                    remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
                 }
             } else {
                 // uint32_t reg0_val = packed_value.get() & 0x0000FFFF;
@@ -600,25 +618,25 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
         SenderChannelFromReceiverCounterCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
 }
 
-template <bool CHECK_BUSY>
+template <bool CHECK_BUSY, bool SEND_CREDITS_DURING_CALL>
 FORCE_INLINE void receiver_send_completion_ack(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
         };
     }
-    receiver_channel_response_credit_sender.send_completion_credit(src_id);
+    receiver_channel_response_credit_sender.template send_completion_credit<SEND_CREDITS_DURING_CALL>(src_id);
 }
 
 // MUST CHECK !is_eth_txq_busy() before calling
-template <bool CHECK_BUSY>
+template <bool CHECK_BUSY, bool SEND_CREDITS_DURING_CALL>
 FORCE_INLINE void receiver_send_completion_ack(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender) {
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
         };
     }
-    receiver_channel_response_credit_sender.send_completion_credit();
+    receiver_channel_response_credit_sender.template send_completion_credit<SEND_CREDITS_DURING_CALL>();
 }
 
 template <bool CHECK_BUSY>

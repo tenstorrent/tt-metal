@@ -1736,8 +1736,6 @@ FORCE_INLINE  void sender_side_process_completions_from_receiver(
     }
 }
 
-size_t n_packets = 0;
-size_t n_completions_total = 0;
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
@@ -1842,7 +1840,6 @@ FORCE_INLINE
                     .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
             if (completions_since_last_check) {
                 outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
-                n_packets += completions_since_last_check;
                 // WATCHER_RING_BUFFER_PUSH(0xAA000000 |
                 // sender_channel_from_receiver_credits.to_sender_packets_completed_stream);
                 // WATCHER_RING_BUFFER_PUSH(0xAA100000 | completions_since_last_check);
@@ -1955,16 +1952,6 @@ FORCE_INLINE
     return false;
 }
 
-int receiver_packets_received = 0;
-int receiver_ack_credits_sent = 0;
-int receiver_packets_forwarded = 0;
-int receiver_completion_credits_sent = 0;
-
-int last_receiver_packets_received = 0;
-int last_receiver_ack_credits_sent = 0;
-int last_receiver_packets_forwarded = 0;
-int last_receiver_completion_credits_sent = 0;
-
 void set_state_for_batched_credit_transfer_to_sender_over_ethernet() {
     while (internal_::eth_txq_is_busy(receiver_txq_id)) {
     }
@@ -1979,6 +1966,7 @@ void stateful_send_batched_credits_to_sender_over_ethernet() {
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
 }
 
+// static bool has_credits_to_send = false;
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -2131,7 +2119,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // CURRENTLY DOES NOT SEND
             receiver_channel_response_credit_sender.template send_packed_ack_credits<
                 decltype(credits_view)::NUM_CHANNELS_VALUE,
-                ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(packed_num_packets);
+                ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK,
+                !multi_txq_enabled>(packed_num_packets);
+            // if constexpr (multi_txq_enabled) {
+            //     has_credits_to_send = true;
+            // }
         }
     }
 
@@ -2158,7 +2150,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         if constexpr (enable_first_level_ack && USE_PACKED_COMPLETION_ACK_CREDITS) {
             // Packed mode: receiver-channel-based, no src_id needed
             WATCHER_RING_BUFFER_PUSH(0xcc100000);
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            // don't send credit here if multi_txq_enabled, because we send all credits back one-shot in
+            // stateful_send_batched_credits_to_sender_over_ethernet
+            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK, !multi_txq_enabled>(
                 receiver_channel_response_credit_sender);
         } else {
             // Unpacked mode: sender-channel-based, must pass src_id
@@ -2169,9 +2163,14 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
             WATCHER_RING_BUFFER_PUSH(0xcc200000 | src_ch_id);
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            // don't send credit here if multi_txq_enabled, because we send all credits back one-shot in
+            // stateful_send_batched_credits_to_sender_over_ethernet
+            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK, !multi_txq_enabled>(
                 receiver_channel_response_credit_sender, src_ch_id);
         }
+        // if constexpr (multi_txq_enabled) {
+        //     has_credits_to_send = true;
+        // }
         receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
         completion_counter.increment();
     }
@@ -2179,10 +2178,15 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     // send batched credits to sender side - because they are all unbounded counters, this is safe to
     // do whenever
     if constexpr (multi_txq_enabled) {
-        // don't need to check for busy because all txqs are always the same
-        // and we do this unconditionally. In the worst case, txq will drop this
-        // request but then latch the next one
+        // don't need to check for busy because all txq registers are always the same (same src, dest, size)
+        // because the credits are all unbounded counters and located contiguously in memory and we do this
+        // unconditionally. In the worst case, txq will drop this request during this specific call/iteraton
+        // but we are guaranteed to come back to it eventually
+        // if (has_credits_to_send) {
+        //     while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
         stateful_send_batched_credits_to_sender_over_ethernet();
+        // has_credits_to_send = false;
+        // }
     }
 
     return progress;
@@ -2383,7 +2387,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
 
-    size_t n_packets = 0;
     size_t did_nothing_count = 0;
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
@@ -2423,7 +2426,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     receiver_channel_pointers_ch1.reset();
 #endif  // FABRIC_2D_VC1_ACTIVE
 
-    // No longer needed: with first-level acks enabled by default, src_ch_id is not used for credit routing
+    // when first level acks are enabled, then credit packing is enabled and src_ch_id is no longer used for credit
+    // routing
     if constexpr (!ENABLE_FIRST_LEVEL_ACK_VC0) {
         if constexpr (skip_src_ch_id_update) {
             receiver_channel_pointers_ch0.set_src_chan_id(BufferIndex{0}, remote_worker_sender_channel);
@@ -2441,6 +2445,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();
     auto sender_channel_from_receiver_credits =
         init_sender_channel_from_receiver_credits_flow_controllers<NUM_SENDER_CHANNELS>();
+
+    // with multi_txq_enabled, credits (receiver to sender) are unbounded counters in L1 and are stored
+    // contiguously in memory. The receiver core is the only one using TXQ1 (receiver txq) and it is only
+    // sending credits to the sender core, so we can make the eth txq (1) stateful with the same src address,
+    // dest address, and size throughout the lifetime of the router (we do not need to reprogram it every
+    // time we send credits);
+    if constexpr (multi_txq_enabled && is_receiver_channel_serviced[0]) {
+        set_state_for_batched_credit_transfer_to_sender_over_ethernet();
+    }
 
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
@@ -2664,7 +2677,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 } else {
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
-
                         did_nothing_count = 0;
                         run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                     }
