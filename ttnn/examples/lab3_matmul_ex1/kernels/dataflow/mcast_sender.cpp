@@ -29,9 +29,9 @@ void kernel_main() {
     const auto src_addr_gen = TensorAccessor(src_layout_args, src_base_addr, tile_size_bytes);
 
     ////////// SEMAPHORE SETUP //////////
-    volatile tt_l1_ptr uint32_t* sender_sem_ptr =
+    volatile tt_l1_ptr uint32_t* receivers_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receivers_ready_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* receiver_sem_ptr =
+    volatile tt_l1_ptr uint32_t* tile_sent_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_sent_semaphore_addr);
 
     // Precompute multicast addresses (these don't change per tile)
@@ -49,8 +49,8 @@ void kernel_main() {
         noc_async_read_barrier();
 
         // Wait for all receivers to signal they're ready for next tile
-        noc_semaphore_wait(sender_sem_ptr, num_receivers);
-        noc_semaphore_set(sender_sem_ptr, 0);
+        noc_semaphore_wait(receivers_ready_sem_ptr, num_receivers);
+        noc_semaphore_set(receivers_ready_sem_ptr, 0);
 
         // Multicast tile to all receiver cores
         uint64_t tile_mcast_addr =
@@ -64,7 +64,7 @@ void kernel_main() {
         noc_async_writes_flushed();
 
         // Signal receivers that tile has been sent by multicasting VALID to receiver semaphore
-        *receiver_sem_ptr = VALID;
+        *tile_sent_sem_ptr = VALID;
         noc_semaphore_set_multicast(tile_sent_semaphore_addr, receiver_sem_mcast_addr, num_receivers);
 
         // Wait for multicast to complete before freeing CB slot
