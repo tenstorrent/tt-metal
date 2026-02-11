@@ -27,6 +27,7 @@ Real issues encountered and their solutions.
   - [Hostname Not Found in FSD](#hostname-not-found-in-fsd)
   - [UMD Firmware Version Mismatch - Links Not Detected](#umd-firmware-version-mismatch---links-not-detected)
   - [QSFP Connections Missing Between Hosts](#qsfp-connections-missing-between-hosts)
+  - [Diagnosing Bad Cables via Swap Test](#diagnosing-bad-cables-via-swap-test)
   - [Transient Ethernet Connectivity Loss](#transient-ethernet-connectivity-loss)
   - [Z Ports Showing Down](#z-ports-showing-down)
   - [Trace Connections Hanging After Reset](#trace-connections-hanging-after-reset-30-failure-rate)
@@ -512,6 +513,50 @@ Physical Discovery found 12 missing port/cable connections:
 6. If issue persists after cable swap, escalate to syseng for hardware investigation
 
 In the example above, QSFPs on C02U08 were found to be down. Reseating the cables resolved the issue.
+
+---
+
+## Diagnosing Bad Cables via Swap Test
+
+**Symptom**: Validation consistently shows missing QSFP_DD port/channel connections for a specific port, and reseating the cable doesn't help.
+
+Example output:
+```
+Physical Discovery found 2 missing channel connections:
+  - PhysicalChannelEndpoint{hostname='bh-glx-110-d02u02', tray_id=4, asic_channel=AsicChannel{asic_location=5, channel_id=2}} <-> PhysicalChannelEndpoint{hostname='bh-glx-110-d02u08', tray_id=3, asic_channel=AsicChannel{asic_location=5, channel_id=2}}
+
+Physical Discovery found 1 missing port/cable connections:
+  - PhysicalPortEndpoint{hostname='bh-glx-110-d02u02', tray_id=4, port_type=QSFP_DD, port_id=1} <-> PhysicalPortEndpoint{hostname='bh-glx-110-d02u08', tray_id=3, port_type=QSFP_DD, port_id=1}
+```
+
+**Diagnosis - The Cable Swap Test**:
+
+To determine if the issue is with the cable or the port, swap the suspect cable with a known-good cable on an adjacent port:
+
+1. **Note the failing port** (e.g., `port_id=1` on `tray_id=4`)
+2. **Swap the cable** to a different port (e.g., swap with the cable on `port_id=2`)
+3. **Re-run validation**
+4. **Observe where the error appears**:
+   - **Error follows the cable** (now shows `port_id=2`) → **Cable is bad**
+   - **Error stays on original port** (`port_id=1`) → **Port may be bad** (escalate to syseng)
+
+**Example from real debugging session**:
+
+| Step | Action | Result |
+|------|--------|--------|
+| Initial | Validation on port 1 | Error: `port_id=1, asic_location=5` missing |
+| Reseat | Reseated cable on port 1 | Same error |
+| Swap | Swapped cable from port 1 to port 2 | Error changed to `port_id=2, asic_location=1` |
+| Conclusion | Error followed the cable | **Cable is bad** |
+
+**Solution**:
+- If cable is bad → Replace the cable
+- If port is bad → Escalate to syseng for hardware investigation
+
+**Requesting cable replacement**: Contact the datacenter team in `#exabox-infra` with:
+- Host pair affected
+- Tray IDs and port IDs
+- Results of the swap test
 
 ---
 
