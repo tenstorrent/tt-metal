@@ -19,7 +19,7 @@ template <
     tilize_config::InitUninitMode init_uninit_mode,
     tilize_config::WaitMode wait_mode,
     tilize_config::TilizeSpeedMode speed_mode,
-    uint32_t reconfig_from_cb>
+    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
 ALWI void tilize(
     uint32_t block_width_tiles,
     uint32_t num_blocks,
@@ -32,31 +32,65 @@ ALWI void tilize(
         "Invalid input_cb: must be less than 32");
     static_assert(output_cb < 32,
         "Invalid output_cb: must be less than 32");
-    static_assert(
-        (reconfig_from_cb == tilize_config::INVALID_CB) ||
-        init_uninit_mode != tilize_config::InitUninitMode::Neither,
-        "Data type reconfiguration requires either init or uninit: "
-        "cannot use InitUninitMode::Neither with reconfig_from_cb");
+
+    // Runtime parameter validation
+    ASSERT(block_width_tiles > 0);
+    ASSERT(num_blocks > 0);
 
     // Determine if we're using fast tilize mode (explicit, NOT auto-detected)
     constexpr bool use_fast = (speed_mode == tilize_config::TilizeSpeedMode::Fast);
 
     // Determine if we're doing data type reconfiguration
-    constexpr bool use_dt = (reconfig_from_cb != tilize_config::INVALID_CB);
+    constexpr bool use_unpack_reconfig =
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure) ||
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
+
+    constexpr bool use_pack_reconfig =
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
+
+    // Validate NonTileAlignedCBWaitConfig parameters
+    if (config.mode != tilize_config::NonTileAlignedMode::Disabled) {
+        ASSERT(config.value > 0);
+    }
+
+    // TODO don't wait more than buffer size
+
+    // Validate input CB page size for standard tile-aligned mode
+    if (config.mode == tilize_config::NonTileAlignedMode::Disabled) {
+        UNPACK({
+            uint32_t operand_id = get_operand_id(input_cb);
+            uint32_t input_page_size_units = get_local_cb_interface(operand_id).fifo_page_size;
+            // fifo_page_size is in 16-byte units, convert to actual bytes
+            uint32_t input_page_size = input_page_size_units << 4;
+            // uint8, uint16,bfp16, uint32,fp32 -> don't hardcode values
+            ASSERT(input_page_size == 1024 || input_page_size == 2048 || input_page_size == 4096);
+        })
+    }
+
+    // Reconfigure register datatypes if requested
+    if constexpr (use_unpack_reconfig) {
+        // Reconfigure srcA for unpack
+        reconfig_data_format_srca(input_cb);
+
+        if constexpr (use_fast) {
+            // Reconfigure srcB only in fast mode
+            reconfig_data_format_srcb(input_cb);
+        }
+    }
+
+    if constexpr (use_pack_reconfig) {
+        // Reconfigure output for pack
+        pack_reconfig_data_format(output_cb);
+    }
 
     // Compile-time initialization based on InitUninitMode
     if constexpr (
         init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == tilize_config::InitUninitMode::InitOnly) {
 
-        if constexpr (use_dt && use_fast) {
-            // Fast data type reconfiguration mode
-            fast_tilize_init_with_dt(input_cb, block_width_tiles, output_cb);
-        } else if constexpr (use_dt) {
-            // Standard data type reconfiguration mode
-            tilize_init_short_with_dt(reconfig_from_cb, input_cb, block_width_tiles, output_cb);
-        } else if constexpr (use_fast) {
-            // Fast tilize mode (no DT reconfiguration)
+        if constexpr (use_fast) {
+            // Fast tilize mode
             fast_tilize_init(input_cb, block_width_tiles, output_cb);
         } else {
             // Standard tilize mode
@@ -152,11 +186,8 @@ ALWI void tilize(
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
 
         if constexpr (use_fast) {
-            // Fast tilize mode (works with both DT and non-DT)
+            // Fast tilize mode
             fast_tilize_uninit(input_cb, output_cb);
-        } else if constexpr (use_dt) {
-            // Standard data type reconfiguration mode
-            tilize_uninit_with_dt(input_cb, reconfig_from_cb, output_cb);
         } else {
             // Standard tilize mode
             tilize_uninit(input_cb, output_cb);
