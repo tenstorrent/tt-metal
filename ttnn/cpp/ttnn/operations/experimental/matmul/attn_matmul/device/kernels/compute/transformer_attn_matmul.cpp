@@ -58,27 +58,31 @@ void kernel_main() {
                     tile_regs_release();
                     cb_push_back(cb_intermed0, onetile);
 
-                    // untilize tile and write to CBIndex::c_25
-                    reconfig_data_format_srca(cb_in1, cb_intermed0);
-                    compute_kernel_lib::untilize<onetile, cb_intermed0, cb_intermed1>(1);
+                    // untilize tile and write to CBIndex::c_25 with reconfiguration
+                    compute_kernel_lib::untilize<
+                        onetile,
+                        cb_intermed0,
+                        cb_intermed1,
+                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
 
-                    reconfig_data_format_srca(cb_intermed0, cb_in1);
-                    mm_init_short(cb_in0, cb_in1, transpose_hw);
+                    mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
                 }
                 cb_pop_front(cb_in0, Kt);
 
                 // cb_intermed2 comes from reader; untilized row-major tile
-                pack_reconfig_data_format(cb_intermed1, out_cb_id);
-
-                // tilize CB::intermed2 and write to CBIndex::c_16
+                // tilize CB::intermed2 and write to CBIndex::c_16 with reconfiguration
                 compute_kernel_lib::tilize<
                     cb_intermed2,
                     out_cb_id,
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-                    cb_in1>(onetile, 1);
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                    onetile, 1);
 
+                // TODO return here when we start autotuning fast tilize
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
             }

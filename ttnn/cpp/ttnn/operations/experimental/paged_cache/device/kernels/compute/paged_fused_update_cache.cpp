@@ -44,24 +44,23 @@ void kernel_main() {
             untilize<Wt, in1_cb, untilized_in_cb, compute_kernel_lib::untilize_config::InitUninitMode::InitOnly>(1);
     }
 
-    reconfig_data_format_srca(in_cb, cache_cb);
-    pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        // Untilize a block from the cache
-        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
+        // Untilize a block from the cache with reconfiguration from previous iteration
+        compute_kernel_lib::untilize<
+            Wt,
+            cache_cb,
+            untilized_cache_cb,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(1);
 
-        reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
-        pack_reconfig_data_format(untilized_cache_cb, out_cb);
-
-        // Wait on writer to update block. Tilize.
+        // Wait on writer to update block. Tilize with reconfiguration
         compute_kernel_lib::tilize<
             untilized_cache2_cb,
             out_cb,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-            cache_cb>(Wt, 1);
-
-        pack_reconfig_data_format(out_cb, untilized_cache_cb);
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(Wt, 1);
     }
 }

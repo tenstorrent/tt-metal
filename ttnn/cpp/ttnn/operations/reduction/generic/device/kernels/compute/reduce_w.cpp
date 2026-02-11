@@ -6,7 +6,7 @@
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
 #include "api/compute/reduce.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #else
 #include "api/compute/matmul.h"

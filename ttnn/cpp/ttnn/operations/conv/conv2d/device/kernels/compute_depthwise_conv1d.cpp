@@ -128,9 +128,14 @@ void kernel_main() {
         for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
             uint32_t i = in0_block_h_i * in0_num_blocks_w + in0_block_w_i;
             if constexpr (tilize_in0) {
-                reconfig_data_format_srca(in0_cb_id);
-                pack_reconfig_data_format(tilized_in0_cb_id);
-                compute_kernel_lib::tilize<in0_cb_id, tilized_in0_cb_id>(in0_block_w, in0_num_subblocks_read);
+                compute_kernel_lib::tilize<
+                    in0_cb_id,
+                    tilized_in0_cb_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                    in0_block_w, in0_num_subblocks_read);
             }
             reconfig_data_format_srca(tilized_in0_cb_id);
             pack_reconfig_data_format(eltwise_mul_partials_cb);
