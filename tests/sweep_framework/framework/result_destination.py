@@ -407,7 +407,6 @@ class FileResultDestination(ResultDestination):
                 backend="n/a",
                 data_source="ttnn op test",
                 input_hash=raw.get("input_hash"),
-                config_id=raw.get("config_id"),
                 message=_coerce_to_optional_string(raw.get("message", None)),
                 exception=_coerce_to_optional_string(raw.get("exception", None)),
                 metrics=_collect_all_metrics(raw),
