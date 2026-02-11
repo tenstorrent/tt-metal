@@ -30,11 +30,13 @@ inline void sdpa_bcast_col_srcb_reuse_configure_mop(
         ckernel_template tmp(
             num_tiles, num_faces, TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_0, 0));
         tmp.set_last_inner_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     } else if constexpr (eltwise_binary_type == ELWSUB) {
         ckernel_template tmp(
             num_tiles, num_faces, TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_0, 0));
         tmp.set_last_inner_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_2, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         if constexpr (high_fidelity) {
@@ -46,6 +48,7 @@ inline void sdpa_bcast_col_srcb_reuse_configure_mop(
         } else {
             ckernel_template tmp(num_tiles, num_faces, TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_0, 0));
             tmp.set_last_inner_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_2, 0));
+            tmp.set_last_outer_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
             tmp.program();
         }
     }
@@ -94,21 +97,20 @@ inline void _llk_math_sdpa_bcast_col_srcb_reuse_(uint dst_index) {
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         // Row and no broadcasted behaves similarly
         if constexpr (high_fidelity) {
-#pragma GCC unroll 0
             for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num++) {
                 ckernel_template::run();
             }
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 8, 0, p_setrwc::SET_BD);
         } else {
             ckernel_template::run();
         }
     }
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 8, 0, p_setrwc::SET_BD);
+
     if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB)) {
         ckernel_template::run();
     } else if constexpr (eltwise_binary_type == ELWMUL) {
         // Row and no broadcasted behaves similarly
         if constexpr (high_fidelity) {
-#pragma GCC unroll 0
             for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num++) {
                 ckernel_template::run();
             }
@@ -165,6 +167,12 @@ inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_
                 .dest = {.incr = static_cast<int16_t>(16 + (4 - num_faces) * 16)},
             }
                 .set(ADDR_MOD_2);
+            addr_mod_t{
+                .srca = {.incr = 0},
+                .srcb = {.incr = 8},
+                .dest = {.incr = 0, .clr = 1},
+            }
+                .set(ADDR_MOD_3);
         }
     }
 }
