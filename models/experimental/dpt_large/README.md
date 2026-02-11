@@ -69,7 +69,7 @@ Hardware PCC test (TT vs CPU reference):
 pytest -q models/experimental/dpt_large/tests/test_tt_pcc.py
 ```
 
-Hardware perf smoke test (writes perf report CSV):
+Hardware perf smoke test (writes `generated/dpt_large_tt_perf_smoke.json`):
 
 ```sh
 pytest -q models/experimental/dpt_large/tests/test_tt_perf.py -s
