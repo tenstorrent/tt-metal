@@ -17,7 +17,7 @@
 
 namespace ttnn::operations::reduction::accumulation {
 
-Tensor CumsumOperation::invoke(
+Tensor cumsum_impl(
     const Tensor& input_tensor,
     const int32_t& dim,
     std::optional<ttnn::DataType> dtype,
@@ -35,3 +35,18 @@ Tensor CumsumOperation::invoke(
 }
 
 }  // namespace ttnn::operations::reduction::accumulation
+
+namespace ttnn {
+
+Tensor cumsum(
+    const Tensor& input,
+    const int32_t& dim,
+    std::optional<DataType> dtype,
+    const bool& reverse_order,
+    std::optional<Tensor> optional_out,
+    const std::optional<MemoryConfig>& memory_config) {
+    return operations::reduction::accumulation::cumsum_impl(
+        input, dim, dtype, reverse_order, std::move(optional_out), memory_config);
+}
+
+}  // namespace ttnn
