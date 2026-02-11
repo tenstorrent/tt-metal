@@ -350,19 +350,19 @@ def test_distributed_layernorm(
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("group_count", [32])
 @pytest.mark.parametrize(
     "mesh_axis",
     [1, None],
 )
 @pytest.mark.parametrize(
-    "input_shape",
+    ("group_count", "input_shape"),
     [
-        (1, 512, 128, 128),
-        (1, 512, 256, 256),
-        (1, 512, 512, 512),
-        (1, 256, 512, 512),
-        (1, 256, 1024, 1024),
+        (32, (1, 512, 128, 128)),
+        (32, (1, 512, 256, 256)),
+        (32, (1, 512, 512, 512)),
+        (32, (1, 256, 512, 512)),
+        (32, (1, 256, 1024, 1024)),
+        (8, (1, 64, 1024, 1024)),
     ],
 )
 def test_group_norm(
