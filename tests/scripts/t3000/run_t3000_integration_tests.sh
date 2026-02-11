@@ -46,8 +46,8 @@ run_t3000_llama3_tests() {
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
   # Run test model for llama3 8B with HF-style rope
-  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k full --use_hf_rope ; fail+=$?
-  HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model_prefill.py --use_hf_rope ; fail+=$?
+  HF_MODEL=$llama8b TT_CACHE_PATH=$TT_CACHE_HOME/$llama8b pytest models/tt_transformers/tests/test_model.py -k full --use_hf_rope ; fail+=$?
+  HF_MODEL=$llama8b TT_CACHE_PATH=$TT_CACHE_HOME/$llama8b pytest models/tt_transformers/tests/test_model_prefill.py --use_hf_rope ; fail+=$?
   echo "LOG_METAL: Llama3 tests for $hf_model with HF-style rope completed"
 
   # Run chunked prefill test for llama3-1B
@@ -130,7 +130,7 @@ run_t3000_llama3_accuracy_tests() {
     echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
 
   # Run test accuracy for llama3 8B with HF-style rope
-  HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --use_hf_rope; fail+=$?
+  HF_MODEL=$llama8b TT_CACHE_PATH=$TT_CACHE_HOME/$llama8b pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --use_hf_rope; fail+=$?
   echo "LOG_METAL: Llama3 accuracy tests for $hf_model with HF-style rope completed"
   done
 
