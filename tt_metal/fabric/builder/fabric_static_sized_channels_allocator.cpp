@@ -334,7 +334,8 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
         }};
 
-    auto get_num_buffer_slots = [](Topology topology, size_t arch_index) -> const std::vector<PerVcBufferSlots>& {
+    auto get_num_buffer_slots =
+        [](Topology topology, size_t arch_index, bool vc1_needed) -> const std::vector<PerVcBufferSlots>& {
         // Architecture-specific buffer slot configurations per VC
         // Format: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver}
         static const std::vector<std::vector<PerVcBufferSlots>> mesh_buffer_slot_options = {
@@ -399,7 +400,9 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
             other_buffer_slot_options);
 
-        if (topology == Topology::Mesh || topology == Topology::Torus) {
+        // If VC1 is needed (e.g., for inter-mesh communication), use mesh options even for non-mesh topologies
+        // because mesh options support VC1, while other options don't
+        if (vc1_needed || topology == Topology::Mesh || topology == Topology::Torus) {
             return mesh_slots.get()[arch_index];
         }
         return other_slots.get()[arch_index];
@@ -484,9 +487,15 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             size_t vc0_sender_buffer_slots, vc0_receiver_buffer_slots;
             size_t vc1_sender_buffer_slots, vc1_receiver_buffer_slots;
 
+            bool vc1_needed_mux =
+                (num_used_sender_channels_per_vc[1] > 0) || (num_used_receiver_channels_per_vc[1] > 0);
+            const auto& mux_buffer_options =
+                (topology == Topology::Mesh || topology == Topology::Torus || vc1_needed_mux)
+                    ? get_num_buffer_slots(topology, arch_index, vc1_needed_mux)
+                    : default_with_tensix_buffer_slot_options[arch_index];
             // get the optimal buffer slots for MUX mode (per-VC)
             get_optimal_num_slots_per_vc(
-                default_with_tensix_buffer_slot_options[arch_index],
+                mux_buffer_options,
                 num_used_sender_channels_per_vc[0],
                 num_used_receiver_channels_per_vc[0],
                 num_used_sender_channels_per_vc[1],
@@ -514,9 +523,10 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     size_t vc0_sender_buffer_slots, vc0_receiver_buffer_slots;
     size_t vc1_sender_buffer_slots, vc1_receiver_buffer_slots;
 
+    bool vc1_needed = (num_used_sender_channels_per_vc[1] > 0) || (num_used_receiver_channels_per_vc[1] > 0);
     // Get optimal buffer slots considering both VCs
     get_optimal_num_slots_per_vc(
-        get_num_buffer_slots(topology, arch_index),
+        get_num_buffer_slots(topology, arch_index, vc1_needed),
         num_used_sender_channels_per_vc[0],
         num_used_receiver_channels_per_vc[0],
         num_used_sender_channels_per_vc[1],

@@ -1000,6 +1000,16 @@ ChipId GetPCIeDeviceID(ChipId device_id) {
 
 ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
 
+distributed::MeshShape GetDefaultMeshShape() {
+    // Get the default mesh shape from the mesh graph descriptor
+    // This returns the shape defined in the default textproto for the cluster type
+    // (e.g., 8x4 for Galaxy, 2x4 for T3K, 1x2 for P300)
+    auto& control_plane = MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    // Query mesh 0 (the default/primary mesh)
+    return mesh_graph.get_mesh_shape(tt::tt_fabric::MeshId(0));
+}
+
 std::string SerializeClusterDescriptor() {
     std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
     return path.string();
