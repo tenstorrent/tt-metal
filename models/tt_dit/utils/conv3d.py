@@ -20,7 +20,7 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
-def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
+def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size):
     config_to_blocking = {
         # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
         (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
@@ -45,7 +45,7 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
     else:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
     return ttnn.Conv3dConfig(
-        weights_dtype=ttnn.bfloat16,
+        weights_dtype=weights_dtype,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
         W_out_block=W_out_block,

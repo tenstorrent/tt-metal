@@ -12,38 +12,6 @@ import ttnn
 from ..parallel.config import vae_neighbor_pad
 
 
-def get_conv3d_config(in_channels, grid_size):
-    shape_to_blocking = {
-        # (60, 106, 768): (128, 96, 1, 2, 16),
-        # (120, 212, 512): (128, 128, 1, 8, 4),
-        # (240, 424, 256): (128, 128, 4, 4, 2),
-        # (480, 848, 128): (128, 128, 1, 2, 16),
-        768: (128, 96, 1, 2, 16),
-        512: (128, 128, 1, 8, 4),
-        256: (128, 128, 4, 4, 2),
-        128: (128, 128, 1, 2, 16),
-    }
-    blocking = shape_to_blocking.get((in_channels), None)
-    if blocking is None:
-        C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 128, 32, 1, 2, 16
-        logger.warning(
-            f"No blocking found for input shape {in_channels}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
-        )
-    else:
-        C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
-    return ttnn.Conv3dConfig(
-        weights_dtype=ttnn.bfloat16,
-        # weights_dtype=ttnn.float32,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
-        T_out_block=T_out_block,
-        W_out_block=W_out_block,
-        H_out_block=H_out_block,
-        C_out_block=C_out_block,
-        C_in_block=C_in_block,
-        compute_with_storage_grid_size=grid_size,
-    )
-
-
 def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=16):
     """Prepare weights and bias for TTNN."""
     C_in = weight.shape[1]
@@ -68,7 +36,7 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=16)
     tt_weight = ttnn.from_torch(
         w,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        conv_config.weights_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=mesh_device,
         mesh_mapper=None,
@@ -79,7 +47,7 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=16)
         tt_bias = ttnn.from_torch(
             bias.reshape(1, -1),
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=conv_config.weights_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=mesh_device,
             mesh_mapper=None,

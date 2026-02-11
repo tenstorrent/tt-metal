@@ -69,8 +69,7 @@ class WanAttentionBlock:
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            # math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -91,8 +90,7 @@ class WanAttentionBlock:
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            # fp32_dest_acc_en=True,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
         device_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -285,6 +283,7 @@ class WanCausalConv3d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
+            conv_dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
 
@@ -293,7 +292,7 @@ class WanCausalConv3d:
             math_fidelity=ttnn.MathFidelity.HiFi3,  # Do not use HiFi4.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
         self.mask_cache = {}
@@ -504,7 +503,7 @@ class WanResidualBlock:
             math_fidelity=ttnn.MathFidelity.HiFi3,  # Do not use HiFi4.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -761,6 +760,7 @@ class WanConv2d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
+            conv_dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
         logger.info(f"Loaded conv_config: {self.conv_config}")
@@ -770,7 +770,7 @@ class WanConv2d:
             math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
         self.mask_cache = {}
