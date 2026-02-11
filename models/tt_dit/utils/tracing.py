@@ -65,7 +65,8 @@ class Tracer:
             self._args = _tree_map(self._move_to_device_if_tensor, args, path_label="args")
             self._kwargs = _tree_map(self._move_to_device_if_tensor, kwargs, path_label="kwargs")
 
-            # compile
+            # prepare trace capture - running twice before capturing is necessary for some models
+            self._function(*self._args, **self._kwargs)
             self._function(*self._args, **self._kwargs)
 
             # capture trace
@@ -122,6 +123,9 @@ class Tracer:
         raise ValueError(msg)
 
     def _update_input(self, prev: Any, new: Any, *, path_label: str) -> None:
+        if new is None and isinstance(prev, ttnn.Tensor):
+            return
+
         if type(new) is not type(prev):
             msg = f"input '{path_label}' type {type(new)} does not match the initial type {type(prev)}"
             raise TypeError(msg)
@@ -152,7 +156,7 @@ def _verify_value(value: Any, *, path_label: str) -> Any:
     return value
 
 
-def _tree_map(f: Callable, x: Any, /, *xs: Any, path_label: str) -> Any:
+def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> Any:
     """Apply a function to leaves of nested data structures.
 
     Recursively traverses nested structures (tuples, lists, dicts) and applies
@@ -174,13 +178,13 @@ def _tree_map(f: Callable, x: Any, /, *xs: Any, path_label: str) -> Any:
         ValueError: If the input structures don't have matching types at
             corresponding positions, or if dicts have different keys.
     """
-    tx = type(x)
-    for y in xs:
-        if type(y) is not tx:
-            msg = f"types of '{path_label}' should be the same: {tx} != {type(y)}"
-            raise ValueError(msg)
+    if isinstance(x, (tuple, list, dict)):
+        for y in xs:
+            if y is not None and not isinstance(y, type(x)):
+                msg = f"types of '{path_label}' should be the same: {type(x)} != {type(y)}"
+                raise ValueError(msg)
 
-    if isinstance(x, tuple):
+    if isinstance(x, tuple) and all(isinstance(y, tuple) for y in xs):
         for y in xs:
             if len(x) != len(y):
                 msg = f"tuple lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
@@ -190,7 +194,7 @@ def _tree_map(f: Callable, x: Any, /, *xs: Any, path_label: str) -> Any:
             _tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))
         )
 
-    if isinstance(x, list):
+    if isinstance(x, list) and all(isinstance(y, list) for y in xs):
         for y in xs:
             if len(x) != len(y):
                 msg = f"list lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
@@ -198,7 +202,7 @@ def _tree_map(f: Callable, x: Any, /, *xs: Any, path_label: str) -> Any:
 
         return [_tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))]
 
-    if isinstance(x, dict):
+    if isinstance(x, dict) and all(isinstance(y, dict) for y in xs):
         for y in xs:
             if x.keys() != y.keys():
                 msg = f"dict keys of '{path_label}' should be the same: {x.keys()} != {y.keys()}"
