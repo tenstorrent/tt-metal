@@ -1989,14 +1989,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
     // Stateless credit view/updater - zero cost instantiation
-    using CreditsViewT = ReceiverPacketCreditsViewFor<to_receiver_pkts_sent_id>;
-    using CreditsUpdaterT = ReceiverPacketCreditsUpdaterFor<to_receiver_pkts_sent_id>;
-    static_assert(
-        sizeof(CreditsViewT) == 1 && std::is_trivially_default_constructible_v<CreditsViewT>,
-        "Credits view must be stateless with trivial default constructor");
-    static_assert(
-        sizeof(CreditsUpdaterT) == 1 && std::is_trivially_default_constructible_v<CreditsUpdaterT>,
-        "Credits updater must be stateless with trivial default constructor");
+    using CreditsViewT = ReceiverPacketCreditsViewFor<receiver_channel, to_receiver_pkts_sent_id>;
+    using CreditsUpdaterT = ReceiverPacketCreditsUpdaterFor<receiver_channel, to_receiver_pkts_sent_id>;
 
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter();
@@ -2103,13 +2097,6 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 receiver_channel_pointers.m.unsent_messages--;
             } else {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-
-                if constexpr (enable_first_level_ack) {
-                    // With first-level acks enabled by default, send ACK based on receiver channel index
-                    // Send first-level ACK via receiver_send_received_ack (counter-based for BH)
-                    receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                        receiver_channel_response_credit_sender, receiver_channel, 1);
-                }
             }
         }
     }
