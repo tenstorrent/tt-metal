@@ -849,47 +849,15 @@ public:
         const auto device_ids = get_global_node_ids();
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
 
-        // To support device meshes that do not have wraparound connections, Ring topology is handled separately
-        if (topology_ != Topology::Ring) {
-            // Handle mesh, torus, neighbor exchange and linear topologies with directional neighbors
-            const std::vector<RoutingDirection> directions = {
-                RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto cluster_t = cluster.get_cluster_type();
 
-            for (const auto& src_node : device_ids) {
-                for (const auto& direction : directions) {
-                    // Check if neighbor exists in this direction
-                    const auto& neighbors =
-                        tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(
-                            src_node, direction);
+        const bool is_galaxy =
+            (cluster_t == tt::tt_metal::ClusterType::GALAXY ||
+             cluster_t == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY);
 
-                    if (!neighbors.empty()) {
-                        // Get the first (and should be only) neighbor mesh
-                        auto neighbor_mesh_it = neighbors.begin();
-                        const auto& neighbor_chips = neighbor_mesh_it->second;
-
-                        if (!neighbor_chips.empty()) {
-                            // Get the first (and should be only) neighbor chip
-                            FabricNodeId neighbor(neighbor_mesh_it->first, neighbor_chips[0]);
-
-                            // Only add if neighbor exists and is different from source
-                            bool is_valid_neighbor = (neighbor != src_node);
-
-                            // For linear topology, also check if devices are on the same line
-                            if (topology_ == Topology::Linear) {
-                                is_valid_neighbor &= are_devices_linear({src_node, neighbor});
-                            }
-
-                            if (is_valid_neighbor) {
-                                pairs.emplace_back(src_node, neighbor);
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // If a Ring topology is used, only the devices on the perimeter of a mesh participate in the test.
-            // Instead of using physical wraparound connections, a large "ring" is formed with the perimeter devices, as
-            // is enforced by the get_wrap_around_mesh_ring_neighbors function.
+        // non-wraparound Ring topology uses perimeter ring
+        if (!is_galaxy && topology_ == Topology::Ring) {
             for (const auto& src_node : device_ids) {
                 auto ring_neighbors = get_wrap_around_mesh_ring_neighbors(src_node, device_ids);
                 if (ring_neighbors.has_value()) {
@@ -899,6 +867,61 @@ public:
                     }
                     if (backward_neighbor != src_node) {
                         pairs.emplace_back(src_node, backward_neighbor);
+                    }
+                }
+            }
+            return pairs;
+        }
+
+        const std::vector<RoutingDirection> directions = {
+            RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+
+        // Galaxy Ring/Torus uses coordinate-based neighbors, all others use control plane
+        const bool use_coordinate_neighbors =
+            is_galaxy && (topology_ == Topology::Ring || topology_ == Topology::Torus);
+
+        for (const auto& src_node : device_ids) {
+            for (const auto& direction : directions) {
+                std::optional<FabricNodeId> neighbor_opt;
+
+                if (use_coordinate_neighbors) {
+                    // Coordinate-based neighbor lookup with boundary wrapping
+                    const auto src_coord = get_device_coord(src_node);
+                    const auto neighbor_coord = src_coord.get_neighbor(
+                        mesh_shape_,
+                        get_step_for_direction(direction),
+                        get_dim_for_direction(direction),
+                        get_boundary_mode_for_dimension(get_dim_for_direction(direction)));
+
+                    if (neighbor_coord.has_value()) {
+                        neighbor_opt = get_fabric_node_id(neighbor_coord.value());
+                    }
+                } else {
+                    // Control plane neighbor lookup
+                    const auto& neighbors =
+                        tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(
+                            src_node, direction);
+
+                    if (!neighbors.empty()) {
+                        auto neighbor_mesh_it = neighbors.begin();
+                        const auto& neighbor_chips = neighbor_mesh_it->second;
+                        if (!neighbor_chips.empty()) {
+                            neighbor_opt = FabricNodeId(neighbor_mesh_it->first, neighbor_chips[0]);
+                        }
+                    }
+                }
+
+                // Validate and add neighbor
+                if (neighbor_opt.has_value()) {
+                    const auto& neighbor = neighbor_opt.value();
+                    bool is_valid = (neighbor != src_node);
+
+                    if (is_valid && topology_ == Topology::Linear) {
+                        is_valid = are_devices_linear({src_node, neighbor});
+                    }
+
+                    if (is_valid) {
+                        pairs.emplace_back(src_node, neighbor);
                     }
                 }
             }
