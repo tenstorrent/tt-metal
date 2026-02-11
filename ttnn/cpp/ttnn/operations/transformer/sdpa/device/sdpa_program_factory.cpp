@@ -52,7 +52,8 @@ struct CoreChainInfo {
     CoreCoord next_physical = CoreCoord{0, 0};
     uint32_t next_core_q_chunks = 0;
     bool use_mcast = false;
-    uint32_t mcast_num_dests = 0;  // receiver count (chain_size - 1), injector only
+    uint32_t mcast_num_dests = 0;    // num_dests for mcast API (includes self if injector inside rect)
+    uint32_t mcast_sender_wait = 0;  // number of actual receivers that signal back (always chain_size - 1)
 };
 
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
@@ -735,23 +736,23 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 continue;  // No chain needed for single core
             }
 
-            // Find first core with single head segment as chain start (injector)
+            // Find chain start (injector), rotating preferred position per head to
+            // spread injectors across different physical columns for DRAM BW.
+            const std::size_t preferred_start = head_id % segments.size();
             std::optional<std::size_t> chain_start_idx;
-            for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
+
+            // First pass: prefer cores handling only one head segment
+            for (std::size_t offset = 0; offset < segments.size(); ++offset) {
+                std::size_t idx = (preferred_start + offset) % segments.size();
                 const auto& seg = segments[idx];
                 const auto& work = core_work[seg.core_idx];
 
-                // Skip cores that don't handle this head
                 if (seg.head_work_index >= work.head_work.size()) {
                     continue;
                 }
-
-                // Check if this core already participates in a chain (conflict detection)
                 if (core_chain_info[seg.core_idx].participates) {
-                    continue;  // Skip - already in a chain
+                    continue;
                 }
-
-                // Prefer cores handling only one head segment
                 if (work.head_work.size() == 1) {
                     chain_start_idx = idx;
                     break;
@@ -760,7 +761,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
             // If no single-segment core found, try any core not in a chain
             if (!chain_start_idx.has_value()) {
-                for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
+                for (std::size_t offset = 0; offset < segments.size(); ++offset) {
+                    std::size_t idx = (preferred_start + offset) % segments.size();
                     const auto& seg = segments[idx];
                     if (!core_chain_info[seg.core_idx].participates) {
                         chain_start_idx = idx;
@@ -795,7 +797,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 segments.size(),
                 start);
 
-            for (std::size_t idx = start; idx < segments.size(); ++idx) {
+            // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1
+            // Exclude segments with different q_chunk_count than the injector (uneven tail).
+            std::vector<std::size_t> chain_order;
+            const auto& start_seg = segments[start];
+            const uint32_t ref_q_count =
+                core_work[start_seg.core_idx].head_work[start_seg.head_work_index].q_chunk_count;
+            for (std::size_t step = 0; step < segments.size(); ++step) {
+                std::size_t idx = (start + step) % segments.size();
                 const auto& seg = segments[idx];
                 const uint32_t core_idx = seg.core_idx;
 
@@ -803,19 +812,31 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                     continue;
                 }
 
-                const auto& hw = core_work[core_idx].head_work[seg.head_work_index];
-                auto& chain = core_chain_info[core_idx];
-
-                // Check for conflict (core already in a different chain)
-                if (chain.participates) {
+                if (core_chain_info[core_idx].participates) {
                     log_debug(
                         tt::LogOp,
                         "WARNING: Core {} already participates in chain (batch={}, head={}), skipping rest",
                         core_idx,
-                        chain.batch,
-                        chain.head);
+                        core_chain_info[core_idx].batch,
+                        core_chain_info[core_idx].head);
                     break;
                 }
+
+                // Skip cores with different q_chunk_count (e.g. uneven tail)
+                const auto& hw = core_work[core_idx].head_work[seg.head_work_index];
+                if (hw.q_chunk_count != ref_q_count) {
+                    continue;
+                }
+
+                chain_order.push_back(idx);
+            }
+
+            for (std::size_t pos = 0; pos < chain_order.size(); ++pos) {
+                const std::size_t idx = chain_order[pos];
+                const auto& seg = segments[idx];
+                const uint32_t core_idx = seg.core_idx;
+                const auto& hw = core_work[core_idx].head_work[seg.head_work_index];
+                auto& chain = core_chain_info[core_idx];
 
                 chain.participates = true;
                 chain.batch = hw.batch;
@@ -823,28 +844,29 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 chain.q_chunk_start = hw.q_chunk_start;
                 chain.q_chunk_count = hw.q_chunk_count;
 
-                if (idx == start) {
+                if (pos == 0) {
                     chain.is_injector = true;
                 }
-                if (idx == segments.size() - 1) {
+                if (pos == chain_order.size() - 1) {
                     chain.is_sink = true;
                 }
 
-                // Set prev core coordinates
-                if (idx > start) {
-                    const uint32_t prev_core_idx = segments[idx - 1].core_idx;
+                // Set prev core coordinates (previous in wrap order)
+                if (pos > 0) {
+                    const uint32_t prev_core_idx = segments[chain_order[pos - 1]].core_idx;
                     if (prev_core_idx < core_work.size()) {
                         chain.prev_physical = core_work[prev_core_idx].physical_core;
                     }
                 }
 
-                // Set next core coordinates and q_chunk count
-                if (idx + 1 < segments.size()) {
-                    const uint32_t next_core_idx = segments[idx + 1].core_idx;
+                // Set next core coordinates and q_chunk count (next in wrap order)
+                if (pos + 1 < chain_order.size()) {
+                    const std::size_t next_idx = chain_order[pos + 1];
+                    const uint32_t next_core_idx = segments[next_idx].core_idx;
                     if (next_core_idx < core_work.size() &&
-                        segments[idx + 1].head_work_index < core_work[next_core_idx].head_work.size()) {
+                        segments[next_idx].head_work_index < core_work[next_core_idx].head_work.size()) {
                         chain.next_physical = core_work[next_core_idx].physical_core;
-                        const auto& next_hw = core_work[next_core_idx].head_work[segments[idx + 1].head_work_index];
+                        const auto& next_hw = core_work[next_core_idx].head_work[segments[next_idx].head_work_index];
                         chain.next_core_q_chunks = next_hw.q_chunk_count;
                     }
                 }
@@ -944,24 +966,52 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         if (all_eligible && !candidates.empty()) {
             mcast_chains = candidates.size();
             for (const auto& cand : candidates) {
-                const uint32_t injector_idx = cand.core_indices[0];
                 const uint32_t chain_size = cand.core_indices.size();
                 const uint32_t num_receivers = chain_size - 1;
 
-                const CoreCoord first_receiver_phys = core_work[cand.core_indices[1]].physical_core;
-                const CoreCoord last_receiver_phys = core_work[cand.core_indices[chain_size - 1]].physical_core;
+                // Find the injector (may not be at index 0 due to rotation)
+                uint32_t injector_idx = cand.core_indices[0];
+                for (const auto& ci : cand.core_indices) {
+                    if (core_chain_info[ci].is_injector) {
+                        injector_idx = ci;
+                        break;
+                    }
+                }
+
+                // Mcast rect covers the full row (min to max physical X across all chain cores).
+                // The mcast API excludes the source from destinations automatically.
+                uint32_t min_x = core_work[cand.core_indices[0]].physical_core.x;
+                uint32_t max_x = min_x;
+                for (size_t ci = 1; ci < cand.core_indices.size(); ++ci) {
+                    uint32_t x = core_work[cand.core_indices[ci]].physical_core.x;
+                    min_x = std::min(min_x, x);
+                    max_x = std::max(max_x, x);
+                }
+                const uint32_t injector_y = core_work[injector_idx].physical_core.y;
+                const CoreCoord rect_start = CoreCoord{min_x, injector_y};
+                const CoreCoord rect_end = CoreCoord{max_x, injector_y};
+
+                // When the injector is geometrically inside the mcast rect (not at min or max X),
+                // the hardware counts it as a destination slot, so num_dests must include it.
+                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
+                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
+                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
 
                 // Configure injector
                 auto& injector_chain = core_chain_info[injector_idx];
                 injector_chain.use_mcast = true;
-                injector_chain.prev_physical = first_receiver_phys;  // mcast rect start
-                injector_chain.next_physical = last_receiver_phys;   // mcast rect end
-                injector_chain.mcast_num_dests = num_receivers;
+                injector_chain.prev_physical = rect_start;  // mcast rect start
+                injector_chain.next_physical = rect_end;    // mcast rect end
+                injector_chain.mcast_num_dests = mcast_num_dests;
+                injector_chain.mcast_sender_wait = num_receivers;
                 injector_chain.next_core_q_chunks = cand.ref_q_chunks;
 
-                // Configure receivers
-                for (size_t ci = 1; ci < cand.core_indices.size(); ++ci) {
-                    auto& receiver_chain = core_chain_info[cand.core_indices[ci]];
+                // Configure receivers (all non-injector cores)
+                for (const auto& ci : cand.core_indices) {
+                    if (ci == injector_idx) {
+                        continue;
+                    }
+                    auto& receiver_chain = core_chain_info[ci];
                     receiver_chain.use_mcast = true;
                     receiver_chain.prev_physical = core_work[injector_idx].physical_core;
                     receiver_chain.is_sink = true;
@@ -969,13 +1019,16 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
                 log_debug(
                     tt::LogOp,
-                    "Head: mcast enabled - {} receivers, injector core {} -> rect ({},{}) to ({},{})",
+                    "Head: mcast enabled - {} receivers, injector core {} (phys_x={}), num_dests={} -> rect ({},{}) to "
+                    "({},{})",
                     num_receivers,
                     injector_idx,
-                    first_receiver_phys.x,
-                    first_receiver_phys.y,
-                    last_receiver_phys.x,
-                    last_receiver_phys.y);
+                    core_work[injector_idx].physical_core.x,
+                    mcast_num_dests,
+                    rect_start.x,
+                    rect_start.y,
+                    rect_end.x,
+                    rect_end.y);
             }
         }
 
@@ -1081,6 +1134,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
             reader_args.push_back(chain.next_core_q_chunks);
             reader_args.push_back(chain.mcast_num_dests);
+            reader_args.push_back(chain.mcast_sender_wait);
         }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
