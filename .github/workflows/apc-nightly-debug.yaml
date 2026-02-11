@@ -16,7 +16,7 @@ on:
       enable-watcher:
         default: false
         type: boolean
-        description: "Enable watcher (Ubuntu 22.04 only)"
+        description: "Enable watcher"
 
 permissions:
   actions: read
