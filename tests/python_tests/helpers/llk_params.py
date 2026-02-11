@@ -240,6 +240,10 @@ class MathFidelity(Enum):
     HiFi3 = 3
     HiFi4 = 4
 
+    @property
+    def cpp_enum_value(self):
+        return f"ckernel::MathFidelity::{self.name}"
+
 
 class NarrowTile(Enum):
     Yes = True

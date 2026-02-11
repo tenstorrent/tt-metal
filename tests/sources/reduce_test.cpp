@@ -51,7 +51,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 void run_kernel(const volatile struct RuntimeParams *params)
 {
-    const std::uint32_t math_fid         = 4;
+    constexpr MathFidelity math_fid      = MathFidelity::HiFi4;
     const bool is_int_fpu_en             = false;
     const bool enforce_fp32_accumulation = false;
     _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();

@@ -20,7 +20,7 @@
 
 using namespace ckernel;
 
-template <int MATH_FIDELITY_DESC, int THROTTLE_LEVEL>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline void matmul_configure_addrmod(
     const bool transpose,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -29,9 +29,7 @@ inline void matmul_configure_addrmod(
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face            = false)
 {
-    constexpr int NUM_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    constexpr bool high_fidelity      = (NUM_FIDELITY_PHASES > 0);
-    constexpr int FIDELITY_INCREMENT  = high_fidelity ? get_math_fidelity_increment(MATH_FIDELITY_DESC) : 0;
+    constexpr std::uint32_t fidelity_increment = is_high_fidelity(math_fidelity) ? 1 : 0;
 
     const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
     const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
@@ -65,7 +63,7 @@ inline void matmul_configure_addrmod(
         .srca     = {.incr = 0, .clr = 1, .cr = 1},
         .srcb     = {.incr = 0, .clr = 1, .cr = 1},
         .dest     = {.incr = 0, .clr = 1, .cr = 1},
-        .fidelity = {.incr = FIDELITY_INCREMENT, .clr = 0},
+        .fidelity = {.incr = fidelity_increment, .clr = 0},
         .bias     = {.incr = 1},
     }
         .set(ADDR_MOD_5);
@@ -298,7 +296,7 @@ inline void matmul_configure_addrmod(
     }
 }
 
-template <int NUM_FIDELITY_PHASES>
+template <MathFidelity math_fidelity>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -316,7 +314,7 @@ inline void matmul_configure_mop(
     // Col major layout in dest only impacs destination address increment
     // if col major layout faces are ordered as f0,f2,f1,f3
 
-    constexpr bool high_fidelity = NUM_FIDELITY_PHASES > 0;
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
@@ -431,7 +429,7 @@ inline void matmul_configure_mop(
     }
 
     // TODO: can we commonize this?
-    constexpr std::uint32_t inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
+    constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
     ckernel_template tmp(1 /* outer loop */, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len));
 
     if constexpr (high_fidelity)
@@ -455,7 +453,7 @@ inline void matmul_configure_mop(
     tmp.program();
 }
 
-template <int THROTTLE_LEVEL, bool HIGH_FIDELITY>
+template <int THROTTLE_LEVEL, bool high_fidelity>
 void run_throttled_sequence(const std::uint32_t t_dim, const bool reuse_a)
 {
     if constexpr (THROTTLE_LEVEL == 1)
@@ -520,7 +518,7 @@ void run_throttled_sequence(const std::uint32_t t_dim, const bool reuse_a)
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
         TTI_NOP;
         TTI_NOP;
-        if constexpr (HIGH_FIDELITY)
+        if constexpr (high_fidelity)
         {
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
         }
@@ -557,7 +555,7 @@ void run_throttled_sequence(const std::uint32_t t_dim, const bool reuse_a)
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
         TTI_NOP;
-        if constexpr (HIGH_FIDELITY)
+        if constexpr (high_fidelity)
         {
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
         }
@@ -591,7 +589,7 @@ void run_throttled_sequence(const std::uint32_t t_dim, const bool reuse_a)
  * Level 4: throttle to 40% of max
  * Level 5: throttle to 33% of max
  */
-template <int NUM_FIDELITY_PHASES, int THROTTLE_LEVEL>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline void matmul_configure_mop_throttled(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -608,8 +606,7 @@ inline void matmul_configure_mop_throttled(
     // by changing address increment amount via addr_mods
     // Col major layout in dest only impacs destination address increment
     // if col major layout faces are ordered as f0,f2,f1,f3
-
-    constexpr bool high_fidelity = NUM_FIDELITY_PHASES > 0;
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     static_assert((THROTTLE_LEVEL > 0) && (THROTTLE_LEVEL <= 5), "MM throttling only enabled for THROTTLE_LEVEL={1,2,3,4,5}");
     LLK_ASSERT(
         (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) && !partial_face,
@@ -634,7 +631,7 @@ inline void matmul_configure_mop_throttled(
         run_throttled_sequence<THROTTLE_LEVEL, high_fidelity>(t_dim, reuse_a);
     }
 
-    constexpr std::uint32_t outer_loops        = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? NUM_FIDELITY_PHASES : 1);
+    constexpr std::uint32_t outer_loops        = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? to_underlying(math_fidelity) : 1);
     const std::uint32_t inner_loops            = (!is_in1_16x32) ? 2 : 1;
     constexpr std::uint32_t loop_instruction_0 = (THROTTLE_LEVEL == 5)   ? lltt::replay_insn(ckernel::math::replay_buf_offset + 1, 8)
                                                  : (THROTTLE_LEVEL == 4) ? lltt::replay_insn(ckernel::math::replay_buf_offset + 2, 6)
@@ -678,7 +675,7 @@ inline void matmul_configure_mop_throttled(
     tmp.program();
 }
 
-template <int MATH_FIDELITY_DESC, int THROTTLE_LEVEL = 0>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -689,7 +686,7 @@ inline void _llk_math_matmul_init_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim         = 1)
 {
-    matmul_configure_addrmod<MATH_FIDELITY_DESC, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     if (t_dim > 1)
@@ -708,15 +705,14 @@ inline void _llk_math_matmul_init_(
         TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     }
 
-    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_mop_throttled<MATH_FIDELITY_PHASES, THROTTLE_LEVEL>(
+        matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
             ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
-        matmul_configure_mop<MATH_FIDELITY_PHASES>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
@@ -727,14 +723,13 @@ inline void _llk_math_matmul_uninit_()
     TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
 }
 
-template <int MATH_FIDELITY_DESC, int THROTTLE_LEVEL = 0>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
-    const bool reuse_a                = ct_dim >= rt_dim;
-    const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;
-    const std::uint32_t rut_dim       = reuse_a ? ct_dim : rt_dim; // reuse-dim
-    constexpr int NUM_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    constexpr bool high_fidelity      = NUM_FIDELITY_PHASES > 0;
+    const bool reuse_a           = ct_dim >= rt_dim;
+    const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;
+    const std::uint32_t rut_dim  = reuse_a ? ct_dim : rt_dim; // reuse-dim
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
@@ -746,7 +741,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
             {
                 if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
                 {
-                    for (std::uint32_t phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                    for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
                     {
                         ckernel_template::run();
                     }
@@ -781,7 +776,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
             {
                 if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
                 {
-                    for (std::uint32_t phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                    for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
                     {
                         ckernel_template::run();
                     }
@@ -826,7 +821,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
                         dst_index + (reuse_a ? ct_dim * (t + 1) + rut : t + 1 + rut * ct_dim));
                     if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
                     {
-                        for (std::uint32_t phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                        for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
                         {
                             ckernel_template::run();
                         }

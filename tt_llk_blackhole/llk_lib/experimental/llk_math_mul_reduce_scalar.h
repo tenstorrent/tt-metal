@@ -46,27 +46,23 @@ using namespace ckernel;
  * @brief Execute GAPOOL operations with optional high fidelity phases
  *
  * Executes the appropriate number of GAPOOL instructions based on fidelity level.
- * For high fidelity (MATH_FIDELITY_PHASES > 0), executes MATH_FIDELITY_PHASES - 1
+ * For high fidelity (math_fidelity > LoFi), executes Number of Fidelity Phases - 1
  * iterations with ADDR_MOD_2, followed by one final GAPOOL with ADDR_MOD_0.
  *
- * @tparam MATH_FIDELITY_PHASES Number of fidelity phases (0, 2, 3, or 4)
+ * @tparam math_fidelity: MathFidelity value LoFi, HiFi2, HiFi3, HiFi4
  */
-template <int MATH_FIDELITY_PHASES>
+template <MathFidelity math_fidelity>
 inline void execute_high_fidelity_gapool()
 {
-    static_assert(
-        MATH_FIDELITY_PHASES == 0 || MATH_FIDELITY_PHASES == 2 || MATH_FIDELITY_PHASES == 3 || MATH_FIDELITY_PHASES == 4,
-        "MATH_FIDELITY_PHASES must be 0, 2, 3, or 4");
-
-    if constexpr (MATH_FIDELITY_PHASES >= 2)
+    if constexpr (math_fidelity >= MathFidelity::HiFi2)
     {
         TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0);
     }
-    if constexpr (MATH_FIDELITY_PHASES >= 3)
+    if constexpr (math_fidelity >= MathFidelity::HiFi3)
     {
         TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0);
     }
-    if constexpr (MATH_FIDELITY_PHASES >= 4)
+    if constexpr (math_fidelity >= MathFidelity::HiFi4)
     {
         TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0);
     }
@@ -152,14 +148,13 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(std::uint32_t idst = 0
  * Sets up address modifiers for source A, source B, destination, and fidelity
  * registers based on the specified math fidelity level.
  *
- * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
+ * @tparam MathFidelity math_fidelity -> MathFidelity value LoFi, HiFi2, HiFi3, HiFi4
  */
-template <int MATH_FIDELITY_DESC>
+template <MathFidelity math_fidelity>
 inline void mul_reduce_scalar_configure_addrmod()
 {
-    constexpr int NUM_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    constexpr int FIDELITY_INCREMENT  = get_math_fidelity_increment(MATH_FIDELITY_DESC);
-    constexpr bool HIGH_FIDELITY      = NUM_FIDELITY_PHASES > 0;
+    constexpr std::uint32_t FIDELITY_INCREMENT = 1;
+    constexpr bool HIGH_FIDELITY               = is_high_fidelity(math_fidelity);
 
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_0);
     addr_mod_t {.srca = {.incr = 16}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.clr = 1}}.set(ADDR_MOD_1);
@@ -180,10 +175,10 @@ inline void mul_reduce_scalar_configure_addrmod()
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
  * @tparam enforce_fp32_accumulation If true, enforces FP32 accumulation (requires is_fp32_dest_acc_en)
  */
-template <bool is_fp32_dest_acc_en, int MATH_FIDELITY_DESC = 0, bool enforce_fp32_accumulation = false>
+template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void _llk_math_mul_reduce_scalar_init_()
 {
-    mul_reduce_scalar_configure_addrmod<MATH_FIDELITY_DESC>();
+    mul_reduce_scalar_configure_addrmod<math_fidelity>();
 
     if constexpr (enforce_fp32_accumulation)
     {
@@ -204,27 +199,26 @@ inline void _llk_math_mul_reduce_scalar_init_()
  * @param narrow_tile If true, process only 2 row tiles instead of full tile
  * @param num_faces Number of faces (1, 2, or 4)
  */
-template <int MATH_FIDELITY_DESC = 0>
+template <MathFidelity math_fidelity>
 inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, bool narrow_tile = false, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    const std::uint32_t num_row_tiles  = narrow_tile ? 2 : ((num_faces > 1) ? num_faces / 2 : 1);
+    const std::uint32_t num_row_tiles = narrow_tile ? 2 : ((num_faces > 1) ? num_faces / 2 : 1);
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     for (std::uint32_t row_tile = 0; row_tile < num_row_tiles; row_tile++)
     {
-        execute_high_fidelity_gapool<MATH_FIDELITY_PHASES>();
+        execute_high_fidelity_gapool<math_fidelity>();
 
         if ((!narrow_tile) && (num_faces > 1))
         {
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
 
-            execute_high_fidelity_gapool<MATH_FIDELITY_PHASES>();
+            execute_high_fidelity_gapool<math_fidelity>();
         }
 
         if (row_tile == 0)
@@ -248,11 +242,9 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, bool nar
  *
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
  */
-template <int MATH_FIDELITY_DESC = 0>
+template <MathFidelity math_fidelity>
 inline void _llk_math_mul_reduce_scalar_()
 {
-    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-
     // Copy row 0 from dest to srcB (rows 16-31 as scratch) and transpose
     TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
     TTI_GATESRCRST(0b1, 0b1);
@@ -268,7 +260,7 @@ inline void _llk_math_mul_reduce_scalar_()
 
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 0);
 
-    execute_high_fidelity_gapool<MATH_FIDELITY_PHASES>();
+    execute_high_fidelity_gapool<math_fidelity>();
 }
 
 /**

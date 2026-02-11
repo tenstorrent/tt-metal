@@ -42,7 +42,7 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TileShape& tile
     constexpr static std::uint32_t eltwise_binary_op_clr_srcAB_valid =
         eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, EN_DST_ACC_EN, SRCB_BROADCAST_TYPE, ADDR_MOD_1>();
 
-    constexpr std::uint32_t replay_buf_len = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : static_cast<std::uint32_t>(MATH_FIDELITY_TYPE) - 1;
+    constexpr std::uint32_t replay_buf_len = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
 
     if constexpr (EN_DST_ACC_EN)
     {

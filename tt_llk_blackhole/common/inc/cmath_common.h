@@ -214,14 +214,9 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
            ((output_df == to_underlying(DataFormat::Int32)) || (output_df == to_underlying(DataFormat::Float32)));
 }
 
-inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)
+inline constexpr bool is_high_fidelity(const MathFidelity math_fidelity_desc)
 {
-    return (math_fidelity_desc & 0x7);
-}
-
-inline constexpr int get_math_fidelity_increment(const int math_fidelity_desc)
-{
-    return ((math_fidelity_desc >> 3) & 0x1) + 1;
+    return math_fidelity_desc != MathFidelity::LoFi;
 }
 
 // Returns the offset represented in DEST rows for a given face of a given tile.

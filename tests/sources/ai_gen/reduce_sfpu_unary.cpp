@@ -88,7 +88,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     const bool is_int_fpu_en  = false; // Not using int-FPU path
     const bool fp32_transpose = false; // No fp32 transpose on reduce path
 
-    constexpr std::uint32_t math_fid = 4;
+    constexpr MathFidelity math_fid = MathFidelity::HiFi4;
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid>();
     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid, is_int_fpu_en, fp32_transpose>(0);
 

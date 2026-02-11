@@ -116,7 +116,7 @@ inline void eltwise_binary_reuse_dest_helper_func(
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam Dst: Destination sync mode
  * @tparam is_fp32_dest_acc_en: Enable FP32 destination accumulator
- * @tparam NUM_FIDELITY_PHASES: Number of fidelity phases for high-fidelity math
+ * @tparam math_fidelity: Number of fidelity phases for high-fidelity math
  * @tparam binary_reuse_dest: Reuse destination as source type
  * @param num_faces: Number of faces to process (1, 2, or 4)
  * @param dst_index: Tile index into the destination register
@@ -127,12 +127,12 @@ template <
     BroadcastType src_b_bcast_type,
     DstSync Dst,
     bool is_fp32_dest_acc_en,
-    int NUM_FIDELITY_PHASES                      = 0,
+    MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, std::uint32_t dst_index, const bool clear_fp32_dst_acc)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    constexpr bool high_fidelity          = (NUM_FIDELITY_PHASES > 0);
+    constexpr bool high_fidelity          = is_high_fidelity(math_fidelity);
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -210,12 +210,12 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, std::uint32
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType bcast_type,
-    int NUM_FIDELITY_PHASES                      = 0,
+    MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    constexpr bool high_fidelity      = (NUM_FIDELITY_PHASES > 0);
+    constexpr bool high_fidelity      = is_high_fidelity(math_fidelity);
     const std::uint32_t addr_mod      = ADDR_MOD_0;
     constexpr std::uint32_t innerloop = 16 >> 3; // 8 rows per eltwise op at a time.
 
@@ -238,7 +238,7 @@ inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0, co
     }
     else if constexpr (eltwise_binary_type == ELWMUL)
     {
-        ckernel_template tmp(high_fidelity ? NUM_FIDELITY_PHASES : outerloop, innerloop, eltwise_binary_func<ELWMUL>(0, 0, broadcast_type, addr_mod));
+        ckernel_template tmp(high_fidelity ? to_underlying(math_fidelity) : outerloop, innerloop, eltwise_binary_func<ELWMUL>(0, 0, broadcast_type, addr_mod));
         if constexpr (high_fidelity)
         {
             tmp.set_last_inner_loop_instr(eltwise_binary_func<ELWMUL>(0, 0, broadcast_type, ADDR_MOD_2)); // Incr fidelity last inst of inner loop
@@ -265,7 +265,7 @@ inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0, co
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
-    int MATH_FIDELITY_DESC                       = 0,
+    MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, const std::uint32_t acc_to_dest)
 {
@@ -273,11 +273,11 @@ inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, const 
     LLK_ASSERT(
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
-    constexpr int MATH_FIDELITY_PHASES    = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    constexpr int MATH_FIDELITY_INCREMENT = get_math_fidelity_increment(MATH_FIDELITY_DESC);
 
-    eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, MATH_FIDELITY_INCREMENT>();
-    eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, MATH_FIDELITY_PHASES, binary_reuse_dest>(acc_to_dest, num_faces);
+    constexpr std::uint32_t math_fidelity_increment = 1;
+
+    eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity_increment>();
+    eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest>(acc_to_dest, num_faces);
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -336,7 +336,7 @@ inline void eltwise_binary_configure_addrmod()
         .set(ADDR_MOD_1);
 }
 
-template <EltwiseBinaryType eltwise_binary_type, int NUM_FIDELITY_PHASES = 0>
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity>
 inline void _llk_math_eltwise_binary_init_(std::uint32_t srca_reuse_count = 4)
 {
     eltwise_binary_configure_addrmod();

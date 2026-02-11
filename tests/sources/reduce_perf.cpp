@@ -77,7 +77,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
-    constexpr std::uint32_t MATH_FIDELITY = 4;
+    constexpr MathFidelity MATH_FIDELITY = MathFidelity::HiFi4;
 
     // todo: INT32 reduce is not supported yet
     constexpr bool ENFORCE_FP32_ACC = false;

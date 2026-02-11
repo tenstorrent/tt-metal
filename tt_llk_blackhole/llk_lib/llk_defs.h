@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "tensix_types.h"
 
 namespace ckernel
@@ -109,6 +111,14 @@ enum ReluType
     ZERO_RELU,
     MIN_THRESHOLD_RELU,
     MAX_THRESHOLD_RELU,
+};
+
+enum class MathFidelity : std::uint8_t
+{
+    LoFi  = 0,
+    HiFi2 = 2,
+    HiFi3 = 3,
+    HiFi4 = 4
 };
 
 constexpr bool UnpackToDestEn  = true;

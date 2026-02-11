@@ -66,7 +66,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     // Initialize math for element-wise subtraction
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWSUB, BROADCAST_TYPE>(num_faces, 0);
+    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWSUB, BROADCAST_TYPE, MathFidelity::LoFi>(num_faces, 0);
 
     // Perform element-wise subtraction
     for (int block = 0; block < num_blocks; block++)
@@ -74,7 +74,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
         _llk_math_wait_for_dest_available_<dest_sync>();
         for (int tile = 0; tile < num_tiles_in_block; tile++)
         {
-            _llk_math_eltwise_binary_<EltwiseBinaryType::ELWSUB, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en>(
+            _llk_math_eltwise_binary_<EltwiseBinaryType::ELWSUB, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi>(
                 num_faces, tile /* dst_index */, false /* clear_fp32_dst_acc */);
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

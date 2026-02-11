@@ -47,7 +47,7 @@ inline void _llk_math_reduce_col_mop_config_(const TileShape& tile_shape)
     // 16)
     const std::uint32_t MOP_OUTER_LOOP          = 1;
     const std::uint32_t MOP_INNER_LOOP          = (tile_shape.num_faces >= 2) ? (tile_shape.num_faces >> 1) : tile_shape.num_faces;
-    constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : static_cast<std::uint32_t>(MATH_FIDELITY_TYPE) - 1;
+    constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     constexpr bool RUN_FID_LOOPS       = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
     const std::uint32_t replay_buf_len = 2 + (2 * NUM_FIDELITY_PHASES);
 
@@ -102,7 +102,7 @@ template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_row_mop_config_(const TileShape& tile_shape)
 {
     constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : static_cast<std::uint32_t>(MATH_FIDELITY_TYPE) - 1;
+    constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
     constexpr std::uint32_t MOP_INNER_LOOP      = 1;
     // Replay buf max len is 32, NUM_FIDELITY_PHASES will be larger than 3, hypothetical limit of 19 + 12 = 31
@@ -218,7 +218,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const TileShape& tile_shape)
 {
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
     constexpr std::uint32_t MOP_INNER_LOOP      = 1;
-    constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : static_cast<std::uint32_t>(MATH_FIDELITY_TYPE) - 1;
+    constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     const std::uint32_t replay_buf_len          = 6 + tile_shape.num_faces - 1 + ((tile_shape.num_faces - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES);
     constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
 
@@ -295,13 +295,13 @@ inline void _llk_math_reduce_scalar_mop_config_(const TileShape& tile_shape)
 template <ReduceDim REDUCE_DIM, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_addrmod_()
 {
-    constexpr bool high_fidelity     = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
-    constexpr int FIDELITY_INCREMENT = high_fidelity ? 1 : 0;
+    constexpr bool high_fidelity               = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
 
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ((REDUCE_DIM == ReduceDim::REDUCE_COL) ? 16 : 0)}, .fidelity = {.incr = 0, .clr = 1}}
         .set(ADDR_MOD_0);
 
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = FIDELITY_INCREMENT}}.set(ADDR_MOD_2);
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = fidelity_increment}}.set(ADDR_MOD_2);
 
     if constexpr (REDUCE_DIM == ReduceDim::REDUCE_COL)
     {

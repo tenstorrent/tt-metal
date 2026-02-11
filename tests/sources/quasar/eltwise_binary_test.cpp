@@ -95,7 +95,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
     // Initialize eltwise binary operation with proper TileShape
     TileShape tile_shape = {.num_faces = params->num_faces, .face_r_dim = params->TEST_FACE_R_DIM, .face_c_dim = params->TEST_FACE_C_DIM, .narrow_tile = false};
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, static_cast<MathFidelity>(MATH_FIDELITY)>(tile_shape);
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(tile_shape);
 
     // Perform eltwise binary operation for each tile
     for (int i = 0; i < params->TILE_CNT; ++i)

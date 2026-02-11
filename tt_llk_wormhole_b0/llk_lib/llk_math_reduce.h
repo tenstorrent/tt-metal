@@ -19,21 +19,20 @@ using namespace ckernel;
 // local function declarations
 inline void reduce_configure_addrmod();
 
-template <ReduceDim dim, int num_fidelity_phases>
+template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop();
 
 template <
     PoolType type,
     ReduceDim dim,
     bool is_fp32_dest_acc_en,
-    int MATH_FIDELITY_DESC         = 0,
+    MathFidelity math_fidelity,
     bool is_int_fpu_en             = false,
     bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = false, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    constexpr bool HIGH_FIDELITY       = MATH_FIDELITY_PHASES > 0;
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     if constexpr (dim == ReduceDim::REDUCE_ROW)
@@ -43,7 +42,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
         {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         }
-        else if constexpr (HIGH_FIDELITY)
+        else if constexpr (high_fidelity)
         {
             ckernel_template::run();
             TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
@@ -57,7 +56,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
         {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         }
-        else if constexpr (HIGH_FIDELITY)
+        else if constexpr (high_fidelity)
         {
             ckernel_template::run();
         }
@@ -121,7 +120,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
             /*
             if constexpr (is_fp32_dest_acc_en) {
-                if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                if (0 == (((std::uint32_t)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
                     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
                     TTI_SFPLOAD(0, 0, 3, 0);
                     TTI_SFP_STOCH_RND(0,0,0,0,0,8);
@@ -169,7 +168,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
             {
                 TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
-            else if constexpr (HIGH_FIDELITY)
+            else if constexpr (high_fidelity)
             {
                 ckernel_template::run();
                 TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
@@ -183,7 +182,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
             {
                 TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
-            else if constexpr (HIGH_FIDELITY)
+            else if constexpr (high_fidelity)
             {
                 ckernel_template::run();
             }
@@ -246,7 +245,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
                 TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
                 /*
                 if constexpr (is_fp32_dest_acc_en) {
-                    if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                    if (0 == (((std::uint32_t)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
                         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
                         TTI_SFPLOAD(0, 0, 3, 0);
                         TTI_SFP_STOCH_RND(0,0,0,0,0,8);
@@ -286,7 +285,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
             }
             else
             {
-                if constexpr (HIGH_FIDELITY)
+                if constexpr (high_fidelity)
                 {
                     ckernel_template::run();
                 }
@@ -306,7 +305,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
                 }
                 else
                 {
-                    if constexpr (HIGH_FIDELITY)
+                    if constexpr (high_fidelity)
                     {
                         ckernel_template::run();
                     }
@@ -331,7 +330,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
             }
             else
             {
-                if constexpr (HIGH_FIDELITY)
+                if constexpr (high_fidelity)
                 {
                     ckernel_template::run();
                     TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
@@ -349,7 +348,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
         }
         else
         {
-            if constexpr (HIGH_FIDELITY)
+            if constexpr (high_fidelity)
             {
                 ckernel_template::run();
             }
@@ -384,9 +383,9 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
         }
         else
         {
-            if constexpr (HIGH_FIDELITY)
+            if constexpr (high_fidelity)
             {
-                for (int i = 0; i < MATH_FIDELITY_PHASES - 1; i++)
+                for (int i = 0; i < to_underlying(math_fidelity) - 1; i++)
                 {
                     TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0);
                 }
@@ -396,12 +395,11 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
     }
 }
 
-template <PoolType type, int MATH_FIDELITY_DESC>
+template <PoolType type, MathFidelity math_fidelity>
 inline void reduce_configure_addrmod()
 {
-    constexpr int NUM_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    constexpr int FIDELITY_INCREMENT  = get_math_fidelity_increment(MATH_FIDELITY_DESC);
-    constexpr bool HIGH_FIDELITY      = NUM_FIDELITY_PHASES > 0;
+    constexpr bool high_fidelity               = is_high_fidelity(math_fidelity);
+    constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
 
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_0);
 
@@ -419,41 +417,41 @@ inline void reduce_configure_addrmod()
     }
         .set(ADDR_MOD_2);
 
-    if constexpr (HIGH_FIDELITY)
+    if constexpr (high_fidelity)
     {
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = FIDELITY_INCREMENT}}.set(ADDR_MOD_3);
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = fidelity_increment}}.set(ADDR_MOD_3);
     }
 }
 
-template <ReduceDim dim, int num_fidelity_phases>
+template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop()
 {
+    constexpr int inner_loop_len = to_underlying(math_fidelity);
     if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
-        ckernel_template tmp(1, num_fidelity_phases, TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 4));
+        ckernel_template tmp(1, inner_loop_len, TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 4));
         tmp.set_last_inner_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4));
         tmp.set_last_outer_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4));
         tmp.program();
     }
     else
     {
-        ckernel_template tmp(1, num_fidelity_phases, TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0));
+        ckernel_template tmp(1, inner_loop_len, TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0));
         tmp.set_last_inner_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0));
         tmp.set_last_outer_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0));
         tmp.program();
     }
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, int MATH_FIDELITY_DESC = 0, bool enforce_fp32_accumulation = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_init_()
 {
-    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    constexpr bool HIGH_FIDELITY       = MATH_FIDELITY_PHASES > 0;
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
-    reduce_configure_addrmod<type, MATH_FIDELITY_DESC>();
-    if constexpr (HIGH_FIDELITY)
+    reduce_configure_addrmod<type, math_fidelity>();
+    if constexpr (high_fidelity)
     {
-        reduce_configure_mop<dim, MATH_FIDELITY_PHASES>();
+        reduce_configure_mop<dim, math_fidelity>();
     }
 
     if constexpr (enforce_fp32_accumulation)

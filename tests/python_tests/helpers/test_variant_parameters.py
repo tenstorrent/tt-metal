@@ -186,7 +186,7 @@ class MATH_FIDELITY(TemplateParameter):
     math_fidelity: MathFidelity
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t MATH_FIDELITY = {self.math_fidelity.value};"
+        return f"constexpr ckernel::MathFidelity MATH_FIDELITY = {self.math_fidelity.cpp_enum_value};"
 
 
 @dataclass
