@@ -192,7 +192,6 @@ def get_devices(
 class BrokenCore:
     location: OnChipCoordinate
     risc_name: str
-    error: Exception | None = None
 
     def __hash__(self):
         return hash((self.location, self.risc_name))
@@ -373,9 +372,9 @@ class RunChecks:
                 except RiscHaltError as e:
                     with self._skip_lock:
                         if location._device in self._broken_cores.keys():
-                            self._broken_cores[location._device].add(BrokenCore(location, risc_name, e))
+                            self._broken_cores[location._device].add(BrokenCore(location, risc_name))
                         else:
-                            self._broken_cores[location._device] = {BrokenCore(location, risc_name, e)}
+                            self._broken_cores[location._device] = {BrokenCore(location, risc_name)}
                     if print_broken_cores:
                         log_warning(
                             f"Triage broke {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}."
