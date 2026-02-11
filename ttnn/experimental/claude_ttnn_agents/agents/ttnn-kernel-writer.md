@@ -5,6 +5,16 @@ model: opus
 color: green
 tools: Read, Write, Edit, Glob, Grep, Bash, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
 hooks:
+  PostToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: ".claude/scripts/hooks/kw-test-pass.sh"
+  PostToolUseFailure:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: ".claude/scripts/hooks/kw-test-fail.sh"
   Stop:
     - hooks:
         - type: command
@@ -141,19 +151,6 @@ Create or update a test file that verifies:
 - Multiple tensor sizes (widths, heights, batches)
 - Edge cases per the spec
 
-```bash
-.claude/scripts/dev-test.sh {test_file_path}
-```
-
-The `dev-test.sh` script automatically:
-- Enables watcher, lightweight asserts, and LLK asserts
-- Detects hangs via operation timeout and runs `tt-triage` automatically
-- Dumps watcher log on crash/hang
-- Kills stale processes and resets the device on failure
-- Leaves the system ready for the next invocation
-
-**Exit codes**: 0=PASS, 1=test failure, 2=hang (triage output in stderr). The script is idempotent — just re-run it after fixing code.
-
 **Test file template:**
 ```python
 import pytest
@@ -175,6 +172,24 @@ def test_functional_correctness(device):
 
     torch.testing.assert_close(output_torch, expected, rtol=..., atol=...)
 ```
+
+**Always run tests with `dev-test.sh`:**
+```bash
+.claude/scripts/dev-test.sh {test_file_path}
+```
+
+The script enables watcher, LLK asserts, lightweight kernel asserts, and automatic hang detection (5s dispatch timeout). It is idempotent — resets the device after any failure, so just fix your code and re-run.
+
+**Exit codes:**
+- **0** — PASS
+- **1** — Normal test failure (no hang). Look at pytest output for:
+  - **PCC/numerical mismatch**: Verify helper parameters match design
+  - **Watcher assert**: "tripped assert on line X" — check that line in the kernel
+  - **NoC error**: Usually unaligned reads/writes — check address and size alignment in reader/writer
+  - **Compile error**: Check includes and template parameters
+- **2** — HANG detected. The dispatch timeout fired, ran `tt-triage` to capture device state, then killed the operation. The script prints a **triage summary** (which cores are stuck and where) and the **watcher log**. Full triage at `/tmp/dev-test-triage.log`.
+  - The triage summary groups cores by callstack pattern. Look for `cb_wait_front()` — means CB sync mismatch. Verify you didn't add CB ops around helpers. Check the design's CB Sync Summary table. Count total push vs pop per CB.
+  - The pattern of *which* RISC-Vs are stuck tells you what's wrong (e.g. all compute cores stuck waiting = reader never pushed data).
 
 ## Kernel Helper Library Reference
 
@@ -270,24 +285,6 @@ compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
 - Add CB operations that helpers already handle
 
 If the design seems wrong, report back - don't silently deviate.
-
-## Debugging
-
-`dev-test.sh` automatically provides debug instrumentation. Read its output carefully.
-
-**Hang (exit code 2)**: The script runs `tt-triage` automatically on timeout and dumps the watcher log.
-- **Triage callstacks** show exactly where each RISC-V is stuck (e.g. spinning in `cb_wait_front`)
-- **Watcher log** shows waypoints (last code point reached), NoC sanitization errors, and assert failures
-- **Most common cause**: CB sync mismatch — verify you didn't add CB ops around helpers, check the design's CB Sync Summary table, count total push vs pop per CB
-
-**Test failure (exit code 1)**: Could be a watcher assert, NoC violation, or wrong values.
-- **Watcher assert**: Output will contain "tripped assert on line X" with the kernel name — check that line in the kernel
-- **NoC sanitization error**: Output will contain address/coordinate info for the illegal transaction — check reader/writer NoC addressing
-- **Wrong values**: Verify helper parameters match design, check scaler packing, add DPRINT for debugging
-
-**Compile error**: Include or syntax issue
-- Verify all helper includes are present
-- Check template parameters
 
 ## Final Deliverable
 

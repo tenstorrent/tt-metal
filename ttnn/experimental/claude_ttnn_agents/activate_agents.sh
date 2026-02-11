@@ -25,32 +25,14 @@ for agent in "$SCRIPT_DIR/agents/"*.md; do
     fi
 done
 
-# Copy scaffolder scripts (used by ttnn-operation-scaffolder agent)
-echo "Installing scaffolder scripts..."
-if [ -d "$SCRIPT_DIR/scripts/ttnn-operation-scaffolder" ]; then
-    cp -r "$SCRIPT_DIR/scripts/ttnn-operation-scaffolder" "$REPO_ROOT/.claude/scripts/"
-    chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.py 2>/dev/null || true
-    chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.sh 2>/dev/null || true
-    echo "  - ttnn-operation-scaffolder/"
+# Copy all scripts
+echo "Installing scripts..."
+if [ -d "$SCRIPT_DIR/scripts" ]; then
+    cp -r "$SCRIPT_DIR/scripts/"* "$REPO_ROOT/.claude/scripts/"
+    find "$REPO_ROOT/.claude/scripts" -name "*.sh" -exec chmod +x {} \;
+    find "$REPO_ROOT/.claude/scripts" -name "*.py" -exec chmod +x {} \;
+    echo "  - scripts/"
 fi
-
-# Copy logging scripts (used by agents for structured logging)
-echo "Installing logging scripts..."
-if [ -d "$SCRIPT_DIR/scripts/logging" ]; then
-    cp -r "$SCRIPT_DIR/scripts/logging" "$REPO_ROOT/.claude/scripts/"
-    chmod +x "$REPO_ROOT/.claude/scripts/logging/"*.sh 2>/dev/null || true
-    echo "  - logging/"
-fi
-
-# Copy standalone utility scripts
-echo "Installing utility scripts..."
-for script in "$SCRIPT_DIR/scripts/"*.sh; do
-    if [ -f "$script" ]; then
-        cp "$script" "$REPO_ROOT/.claude/scripts/"
-        chmod +x "$REPO_ROOT/.claude/scripts/$(basename "$script")"
-        echo "  - $(basename "$script")"
-    fi
-done
 
 # Copy reference documents
 echo "Installing reference documents..."
