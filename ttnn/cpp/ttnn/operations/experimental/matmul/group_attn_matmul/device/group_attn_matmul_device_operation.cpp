@@ -221,7 +221,6 @@ tt::stl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
         "Unexpected type {}",
         tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()));
     return operation::hash_operation<GroupAttnMatmulDeviceOperation>(
-        0,
         operation_attributes.transpose_hw,
         operation_attributes.out_subblock_w,
         operation_attributes.compute_with_storage_grid_size.str(),

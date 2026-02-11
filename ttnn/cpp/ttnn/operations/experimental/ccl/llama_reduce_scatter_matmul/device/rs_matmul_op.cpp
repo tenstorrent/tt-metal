@@ -95,8 +95,7 @@ tt::stl::hash::hash_t Matmul_RS::compute_program_hash(
         operation_attributes.rs_op.use_noc1_only,
         tensor_args.rs.input_tensor.dtype(),
         tensor_args.rs.input_tensor.memory_config(),
-        tensor_args.rs.input_tensor.device()->id(),
-        0);
+        tensor_args.rs.input_tensor.device()->id());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

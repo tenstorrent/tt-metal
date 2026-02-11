@@ -195,8 +195,7 @@ tt::stl::hash::hash_t DeepseekMoEReduceScatterDeviceOperation::compute_program_h
         operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.cluster_axis,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

@@ -99,8 +99,7 @@ tt::stl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
         args.use_noc1_only,
         args.cluster_axis,
         subdevice_core_range_set,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 Tensor all_gather_concat(

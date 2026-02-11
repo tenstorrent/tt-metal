@@ -125,7 +125,6 @@ tt::stl::hash::hash_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_prog
 
     operation::Hash hash = operation::hash_operation<RepeatAndInterleaveEltwiseMulDeviceOperation>(
         args,
-        0,
         input_tensor_a.dtype(),
         input_tensor_b.dtype(),
         input_tensor_a.memory_config(),

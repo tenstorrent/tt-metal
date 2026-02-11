@@ -75,7 +75,7 @@ tt::stl::hash::hash_t ConcatenateHeadsDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
     operation::Hash hash = operation::hash_operation<ConcatenateHeadsDeviceOperation>(
-        args.output_mem_config, 0, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
+        args.output_mem_config, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }

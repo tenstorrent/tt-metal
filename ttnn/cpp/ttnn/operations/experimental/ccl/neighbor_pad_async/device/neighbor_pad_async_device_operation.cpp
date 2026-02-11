@@ -109,8 +109,7 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.ring_size,
         args.secondary_cluster_axis,
         args.secondary_mesh_shape,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

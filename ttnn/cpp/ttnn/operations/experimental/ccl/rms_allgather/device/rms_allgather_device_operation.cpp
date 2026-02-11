@@ -241,8 +241,7 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
         args.cluster_axis,
         args.use_noc1_only,
         subdevice_core_range_set,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

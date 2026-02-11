@@ -52,8 +52,7 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         attributes.mm_cores_y,
         attributes.mm_block_ht,
         attributes.mm_block_wt,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

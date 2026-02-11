@@ -137,7 +137,7 @@ Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingDeviceOperation>(
-        args.seq_len, args.output_mem_config, 0, tensor_args.input, tensor_args.cos, tensor_args.sin);
+        args.seq_len, args.output_mem_config, tensor_args.input, tensor_args.cos, tensor_args.sin);
     return hash;
 }
 

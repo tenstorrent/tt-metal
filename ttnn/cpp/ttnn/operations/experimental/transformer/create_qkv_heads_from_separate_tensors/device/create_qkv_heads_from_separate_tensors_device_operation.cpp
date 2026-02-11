@@ -227,7 +227,6 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::program_factory_t
         operation_attributes.num_kv_heads,
         operation_attributes.head_dim,
         operation_attributes.transpose_k_heads,
-        0,
         tensor_args);
 }
 

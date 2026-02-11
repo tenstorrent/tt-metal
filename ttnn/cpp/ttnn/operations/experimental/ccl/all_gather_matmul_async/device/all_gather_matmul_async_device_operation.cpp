@@ -135,8 +135,7 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         operation_attributes.matmul,
         operation_attributes.all_gather_core_grid_offset,
         subdevice_core_range_set,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

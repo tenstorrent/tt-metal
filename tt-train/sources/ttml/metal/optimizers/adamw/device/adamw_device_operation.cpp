@@ -109,7 +109,7 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, 0, param_tensor.dtype(), param_logical_shape);
+        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
 
     return hash;
 }
