@@ -709,7 +709,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     has_tensix_extension(has_tensix_extension),
     // First level ack is enabled to support bubble flow control
     enable_first_level_ack(
-        config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus) {
+        config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus || config.topology == tt::tt_fabric::Topology::Mesh) {
     // NOTE: actual_sender_channels_per_vc and actual_receiver_channels_per_vc are:
     // 1. Stored as members for later use in compile-time args
     // 2. Used for connection validation

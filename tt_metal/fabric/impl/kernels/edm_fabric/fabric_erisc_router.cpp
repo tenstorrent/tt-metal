@@ -1646,16 +1646,31 @@ constexpr bool amortize_completion_acks_sender = false;
 
 
 template <typename ReceiverPointersT>
-FORCE_INLINE  void sender_side_process_completions_from_receiver(
+FORCE_INLINE void sender_side_process_completions_from_receiver(
     ReceiverPointersT& outbound_to_receiver_channel_pointers) {
     int32_t completions_since_last_check =
         outbound_to_receiver_channel_pointers
             .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
+
+        // n_completed += completions_since_last_check;
+        // if (n_completed > n_sent) {
+        //     WATCHER_RING_BUFFER_PUSH(0xdeadbee1);
+        //     // WATCHER_RING_BUFFER_PUSH(n_completed);
+        //     // WATCHER_RING_BUFFER_PUSH(n_sent);
+        //     // WATCHER_RING_BUFFER_PUSH(n_acked);
+        //     // for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        //     //     WATCHER_RING_BUFFER_PUSH(0xabcd0000 | i);
+        //     //     WATCHER_RING_BUFFER_PUSH(n_sent_by_channel[i]);
+        //     //     WATCHER_RING_BUFFER_PUSH(n_acked_by_channel[i]);
+        //     // }
+        //     hung = true;
+        // }
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         outbound_to_receiver_channel_pointers.increment_num_processed_completions(completions_since_last_check);
     }
 }
+
 
 ////////////////////////////////////
 ////////////////////////////////////
@@ -1686,6 +1701,10 @@ FORCE_INLINE
         SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry) {
+
+    // if (hung) {
+    //     return false;
+    // }
 
     bool progress = false;
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
@@ -1734,6 +1753,10 @@ FORCE_INLINE
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
 
+        // n_sent++;
+        // n_sent_by_channel[sender_channel_index]++;
+        WATCHER_RING_BUFFER_PUSH(0x50000000 | sender_channel_index | (n_sent_by_channel[sender_channel_index] << 8));
+
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -1751,6 +1774,21 @@ FORCE_INLINE
                     sender_channel_from_receiver_credits
                         .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
                 if (completions_since_last_check) {
+                    // n_completed += completions_since_last_check;
+                    // WATCHER_RING_BUFFER_PUSH(0xCCCC0000);
+                    // WATCHER_RING_BUFFER_PUSH(completions_since_last_check);
+                    // if (n_completed > n_sent) {
+                    //     WATCHER_RING_BUFFER_PUSH(0xdeadbee2);
+                    //     // WATCHER_RING_BUFFER_PUSH(n_completed);
+                    //     // WATCHER_RING_BUFFER_PUSH(n_sent);
+                    //     // WATCHER_RING_BUFFER_PUSH(n_acked);
+                    //     // for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+                    //     //     WATCHER_RING_BUFFER_PUSH(0xabcd0000 | i);
+                    //     //     WATCHER_RING_BUFFER_PUSH(n_sent_by_channel[i]);
+                    //     //     WATCHER_RING_BUFFER_PUSH(n_acked_by_channel[i]);
+                    //     // }
+                    //     hung = true;
+                    // }
                     outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
                     sender_channel_from_receiver_credits.increment_num_processed_completions(
                         completions_since_last_check);
@@ -1779,20 +1817,44 @@ FORCE_INLINE
 
     // Process ACKs from receiver
     if constexpr (enable_first_level_ack) {
-        auto new_acks_for_this_channel =
+        auto /*[*/new_acks_for_this_channel/*, new_acks_for_this_channel_packed]*/ =
             sender_channel_from_receiver_credits
                 .template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
+            // commenting out didn't outright fail (nd hang)
         if constexpr (multi_txq_enabled) {
+            // this is redundant actually
             new_acks_for_this_channel = new_acks_for_this_channel & (0xFF << (sender_channel_index * 8));
         }
         if (new_acks_for_this_channel != 0) {
-            constexpr uint8_t CHANNELS_IN_REG0 = 2;
+            WATCHER_RING_BUFFER_PUSH(0xAAAA0000 | sender_channel_index);
+            constexpr uint8_t CHANNELS_IN_REG0 = multi_txq_enabled ? MAX_ACK_CREDITS_PER_L1_WORD : MAX_ACK_CREDITS_PER_OVERLAY_REGISTER;
             constexpr uint32_t shift = multi_txq_enabled ? sender_channel_index * 8
                                        : sender_channel_index < CHANNELS_IN_REG0
                                            ? sender_channel_index * 8
                                            : (sender_channel_index - CHANNELS_IN_REG0) * 8;
 
             uint32_t new_acks_unpacked = new_acks_for_this_channel >> shift;
+
+            // n_acked += new_acks_unpacked;
+            // n_acked_by_channel[sender_channel_index] += new_acks_unpacked;
+            // if (n_acked > n_sent || n_acked_by_channel[sender_channel_index] > n_sent_by_channel[sender_channel_index]) {
+            //     WATCHER_RING_BUFFER_PUSH(new_acks_unpacked);
+            //     WATCHER_RING_BUFFER_PUSH(0xdeadbee0);
+            //     WATCHER_RING_BUFFER_PUSH(new_acks_for_this_channel_packed);
+            //     WATCHER_RING_BUFFER_PUSH(sender_channel_from_receiver_credits.m.acks_received_and_processed);
+            //     WATCHER_RING_BUFFER_PUSH(n_completed);
+            //     WATCHER_RING_BUFFER_PUSH(n_sent);
+            //     WATCHER_RING_BUFFER_PUSH(n_acked);
+            //     WATCHER_RING_BUFFER_PUSH(0xabcd0000 | sender_channel_index);
+            //     WATCHER_RING_BUFFER_PUSH(n_sent_by_channel[sender_channel_index]);
+            //     WATCHER_RING_BUFFER_PUSH(n_acked_by_channel[sender_channel_index]);
+            //     // for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+            //     //     WATCHER_RING_BUFFER_PUSH(0xabcd0000 | i);
+            //     //     WATCHER_RING_BUFFER_PUSH(n_sent_by_channel[i]);
+            //     //     WATCHER_RING_BUFFER_PUSH(n_acked_by_channel[i]);
+            //     // }
+            //     hung = true;
+            // }
             // increment_num_processed_acks expects UNPACKED value (not packed!)
             // It internally calls add_to_channel<sender_channel_index>(current, delta)
             // where delta must be uint8_t. Passing packed value causes truncation.
@@ -2051,12 +2113,12 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
     }
     if (can_send_completion) {
-        WATCHER_RING_BUFFER_PUSH(0xcc000000);
+        // WATCHER_RING_BUFFER_PUSH(0xcc000000);
         // With first-level acks enabled, completions are tied to receiver channel index
         // Send completion ACK via receiver_send_completion_ack (counter-based for BH, stream for WH)
         if constexpr (enable_first_level_ack && USE_PACKED_COMPLETION_ACK_CREDITS) {
             // Packed mode: receiver-channel-based, no src_id needed
-            WATCHER_RING_BUFFER_PUSH(0xcc100000);
+            // WATCHER_RING_BUFFER_PUSH(0xcc100000);
             // don't send credit here if multi_txq_enabled, because we send all credits back one-shot in
             // stateful_send_batched_credits_to_sender_over_ethernet
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK, !multi_txq_enabled>(
@@ -2069,7 +2131,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             } else {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
-            WATCHER_RING_BUFFER_PUSH(0xcc200000 | src_ch_id);
+            // WATCHER_RING_BUFFER_PUSH(0xcc200000 | src_ch_id);
             // don't send credit here if multi_txq_enabled, because we send all credits back one-shot in
             // stateful_send_batched_credits_to_sender_over_ethernet
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK, !multi_txq_enabled>(

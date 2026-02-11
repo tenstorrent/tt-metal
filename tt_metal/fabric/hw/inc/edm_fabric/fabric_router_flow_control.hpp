@@ -135,8 +135,22 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                 // This replaces the previous manual byte-by-byte loop with optimized, tested code
                 using PackingType = tt::tt_fabric::CreditPacking<VC_NUM_SENDER_CHANNELS, 8>;  // 8-bit credits
 
-                constexpr size_t CREDITS_PER_WORD = 4;
+                constexpr size_t CREDITS_PER_WORD = MAX_ACK_CREDITS_PER_L1_WORD;
+                static_assert(MAX_ACK_CREDITS_PER_L1_WORD == MAX_PACKETS_RECEIVED_CREDITS_PER_LOCAL_MEMORY_WORD, "MAX_ACK_CREDITS_PER_L1_WORD must be equal to MAX_PACKETS_RECEIVED_CREDITS_PER_LOCAL_MEMORY_WORD. Supporting mismatch between these two is not yet implemented.");
 
+                auto sum_lower_word_credits = [](uint32_t current_val, uint32_t delta_val) -> uint32_t {                                                                                                                                                     
+                    //TODO: static assert that VC receiver channel num buffers < 128 (otherwise the below code will not work)
+
+                    // Using SIMD-in-register addition technique
+                    if constexpr (VC_NUM_SENDER_CHANNELS == 1) {
+                        // 1 channel: plain byte add, no cross-byte carry possible                                                                                                                                                                           
+                        return (current_val + delta_val) & 0xFFu;
+                    } else {                                                                                                                                                                                                                                 
+                        // 2-4 channels: small-delta XOR (delta bytes always < 128)
+                        constexpr uint32_t MSB_MASK = 0x80808080u;
+                        return ((current_val & ~MSB_MASK) + delta_val) ^ (current_val & MSB_MASK);
+                    }
+                };
                 if constexpr (VC_NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
                     // ≤4 channels: single word
                     // Safe multi-channel addition using masked-pair addition (branch-free)
@@ -146,13 +160,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                     uint32_t current_val = current.value;
                     uint32_t delta_val = delta.value;
 
-                    // Masked-pair addition: prevents carries between bytes
-                    // Add to bytes 0,2: any carry goes to bytes 1,3 which we mask out
-                    uint32_t b0_2 = current_val + (delta_val & 0x00FF00FFu);
-                    // Add to bytes 1,3: any carry goes to bytes 2,4 which we mask out
-                    uint32_t b1_3 = current_val + (delta_val & 0xFF00FF00u);
-                    // Combine: take bytes 0,2 from b0_2 and bytes 1,3 from b1_3
-                    uint32_t result = (b0_2 & 0x00FF00FFu) | (b1_3 & 0xFF00FF00u);
+                    uint32_t result = sum_lower_word_credits(current_val, delta_val);
 
                     ack_counters[0] = result;
                     ack_counters_base_l1_ptr[0] = result;
@@ -168,9 +176,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                     uint32_t delta_lower = static_cast<uint32_t>(packed_val & 0xFFFFFFFFULL);
 
                     // Masked-pair addition for lower 4 channels
-                    uint32_t b0_2_lower = current_lower + (delta_lower & 0x00FF00FFu);
-                    uint32_t b1_3_lower = current_lower + (delta_lower & 0xFF00FF00u);
-                    uint32_t result_lower = (b0_2_lower & 0x00FF00FFu) | (b1_3_lower & 0xFF00FF00u);
+                    uint32_t result_lower = sum_lower_word_credits(current_lower, delta_lower);
 
                     ack_counters[0] = result_lower;
                     ack_counters_base_l1_ptr[0] = result_lower;
@@ -270,6 +276,7 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     // Used for batch ACK sending when first-level ACK is enabled
     template <size_t VC_NUM_SENDER_CHANNELS, bool wait_for_txq, bool SEND_CREDITS_DURING_CALL, typename PackedValueType>
     FORCE_INLINE void send_packed_ack_credits(const PackedValueType& packed_value) {
+        static_assert(SEND_CREDITS_DURING_CALL, "SEND_CREDITS_DURING_CALL must be true");
         if constexpr (enable_first_level_ack) {
             // All channels use register 0 when enable_first_level_ack is true
             uint32_t stream_id = sender_channel_packets_ack_stream_ids[0];
@@ -279,43 +286,25 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
             static_assert(sizeof(typename PackedValueType::storage_type) <= 8,
                          "Packed value storage too large");
             if constexpr (sizeof(typename PackedValueType::storage_type) <= 4) {
-                if constexpr (SEND_CREDITS_DURING_CALL) {
-                    if constexpr (wait_for_txq) {
-                        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
-                        }
+                if constexpr (wait_for_txq) {
+                    while (internal_::eth_txq_is_busy(receiver_txq_id)) {
                     }
                 }
                 if constexpr (VC_NUM_SENDER_CHANNELS <= 2) {  // TODO: generalize for multi-VC
                     WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
-                    if constexpr (SEND_CREDITS_DURING_CALL) {
-                        remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
-                    }
+                    remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
                 } else {
                     WATCHER_RING_BUFFER_PUSH(0xa4000000 | (packed_value.get() & 0xFFFF));
                     remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
                     auto stream_id_1 = stream_id + 1;
 
-                    if constexpr (SEND_CREDITS_DURING_CALL) {
-                        if constexpr (wait_for_txq) {
-                            while (internal_::eth_txq_is_busy(receiver_txq_id)) {
-                            }
+                    if constexpr (wait_for_txq) {
+                        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
                         }
-                        remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
                     }
+                    remote_update_ptr_val<receiver_txq_id>(stream_id_1, static_cast<uint32_t>(packed_value.get()));
                 }
             } else {
-                // uint32_t reg0_val = packed_value.get() & 0x0000FFFF;
-                // if constexpr (wait_for_txq) {
-                //     while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
-                // }
-                // remote_update_ptr_val<receiver_txq_id>(stream_id, reg0_val);
-
-                // auto stream_id_1 = stream_id + 1;
-                // uint32_t reg1_val = packed_value.get() >> 16;
-                // while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
-                // remote_update_ptr_val<receiver_txq_id>(stream_id + 1, reg1_val);
-                // // Multi-register case - need to write to both stream_ids[0] and stream_ids[1]
-                // // For now, assume this is handled elsewhere or not needed
                 static_assert(
                     sizeof(typename PackedValueType::storage_type) <= 8,
                     "Multi-register packed ACK credits not yet implemented for stream registers");
@@ -501,6 +490,8 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
 
 template <bool enable_first_level_ack>
 struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
+    static constexpr uint8_t CREDIT_WIDTH = 8;
+    static constexpr uint8_t CHANNELS_IN_REG0 = MAX_ACK_CREDITS_PER_OVERLAY_REGISTER;
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver() = default;
 
     // Packing behavior: when enable_first_level_ack is true, all sender channels use
@@ -529,8 +520,6 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
             // Channel 0 or 1: read from first register
             // Channel 2+: read from second register
             // In reg1, channels are at offsets (ch_id - CHANNELS_IN_REG0) * CREDIT_WIDTH
-            constexpr uint8_t CREDIT_WIDTH = 8;
-            constexpr uint8_t CHANNELS_IN_REG0 = 2;
             constexpr size_t stream_reg_index = sender_channel_index < CHANNELS_IN_REG0 ? 0 : 1;
             constexpr size_t slot_in_reg = sender_channel_index < CHANNELS_IN_REG0 ? sender_channel_index : sender_channel_index - CHANNELS_IN_REG0;
             constexpr size_t shift_amount = slot_in_reg * CREDIT_WIDTH;
@@ -549,8 +538,6 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
             increment_local_update_ptr_val(to_sender_packets_acked_streams, -num_acks);
         } else {
             // Packed mode: pack decrement value into this channel's position and write to correct register
-            constexpr uint8_t CREDIT_WIDTH = 8;
-            constexpr uint8_t CHANNELS_IN_REG0 = 2;
             constexpr size_t stream_reg_index = sender_channel_index < CHANNELS_IN_REG0 ? 0 : 1;
             constexpr size_t slot_in_reg = sender_channel_index < CHANNELS_IN_REG0 ? sender_channel_index : sender_channel_index - CHANNELS_IN_REG0;
             constexpr size_t shift_amount = slot_in_reg * CREDIT_WIDTH;
@@ -766,7 +753,7 @@ template <uint8_t sender_channel_index, uint32_t base_stream_id>
 constexpr uint32_t get_sender_target_stream_id() {
     if constexpr (USE_PACKED_PACKET_SENT_CREDITS && receiver_credits_config::NEEDS_MULTI_REGISTER) {
         // Multi-register layout: reg0 has channels 0-1, reg1 has channels 2-4
-        constexpr uint8_t CHANNELS_IN_REG0 = 2;
+        constexpr uint8_t CHANNELS_IN_REG0 = MAX_PACKETS_RECEIVED_CREDITS_PER_OVERLAY_REGISTER;
         if constexpr (sender_channel_index < CHANNELS_IN_REG0) {
             return base_stream_id;
         } else {
@@ -813,7 +800,7 @@ FORCE_INLINE constexpr uint32_t build_packet_forward_value() {
         // For multi-register case, extract only the relevant register's portion
         if constexpr (VC_NEEDS_MULTI_REGISTER) {
             // Multi-register layout: reg0 has channels 0-1, reg1 has channels 2-4
-            constexpr uint8_t CHANNELS_IN_REG0 = 2;
+            constexpr uint8_t CHANNELS_IN_REG0 = MAX_PACKETS_RECEIVED_CREDITS_PER_OVERLAY_REGISTER;
             constexpr uint32_t reg1_shift = CHANNELS_IN_REG0 * receiver_credits_config::CREDIT_WIDTH;
 
             // Use VC-relative index to determine which register within this VC's register pair
