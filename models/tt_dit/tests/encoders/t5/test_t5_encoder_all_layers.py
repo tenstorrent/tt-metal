@@ -98,15 +98,17 @@ def test_t5_layers_individually(
         relative_attention_max_distance=hf_model.config.relative_attention_max_distance,
     )
 
-    tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
-    embeddings_state_dict = {}
-    for key, value in hf_model.state_dict().items():
-        if key.startswith("encoder.embed_tokens.") or key.startswith(
-            "encoder.block.0.layer.0.SelfAttention.relative_attention_bias."
-        ):
-            embeddings_state_dict[key] = value
+    state_dict = hf_model.state_dict()
 
-    tt_embedding.load_state_dict(embeddings_state_dict)
+    tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
+    embeddings_state_dict = {
+        "token_embedding_weights": state_dict["encoder.embed_tokens.weight"],
+        "relative_attention_bias_weights": state_dict[
+            "encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"
+        ],
+    }
+
+    tt_embedding.load_torch_state_dict(embeddings_state_dict)
 
     # time TT model inference only
     tt_start_time = time.time()
@@ -152,7 +154,7 @@ def test_t5_layers_individually(
         layer = i
 
         tt_encoder_layer = T5EncoderLayer(config, encoder_submesh, ccl_manager, parallel_config)
-        tt_encoder_layer.load_state_dict(substate(hf_model.state_dict(), f"encoder.block.{layer}"))
+        tt_encoder_layer.load_torch_state_dict(substate(hf_model.state_dict(), f"encoder.block.{layer}"))
 
         tt_layer_output = tt_encoder_layer(tt_embeddings_output, tt_position_bias)
 

@@ -22,9 +22,27 @@ namespace ttnn::graph {
 using IGraphProcessor = tt::tt_metal::IGraphProcessor;
 
 void py_graph_module_types(nb::module_& m) {
-    nb::enum_<IGraphProcessor::RunMode>(m, "RunMode")
-        .value("NORMAL", IGraphProcessor::RunMode::NORMAL)
-        .value("NO_DISPATCH", IGraphProcessor::RunMode::NO_DISPATCH);
+    nb::enum_<IGraphProcessor::RunMode>(m, "RunMode", R"doc(
+        Run mode for graph capture.
+
+        NORMAL: Operations execute normally on the device while being traced.
+                Programs are cached for future reuse.
+
+        NO_DISPATCH: Operations are traced but NOT executed on the device.
+                     Buffer allocations are mocked (address=0), and programs are
+                     compiled but not dispatched. This mode is useful for:
+                     - Measuring memory usage of models that don't fit in device memory
+                     - Analyzing operation graphs without hardware execution
+
+                     IMPORTANT: Programs are NOT cached during NO_DISPATCH mode because
+                     they contain invalid buffer addresses. This ensures that subsequent
+                     runs in NORMAL mode will create fresh programs with valid addresses.
+    )doc")
+        .value("NORMAL", IGraphProcessor::RunMode::NORMAL, "Execute operations normally while tracing")
+        .value(
+            "NO_DISPATCH",
+            IGraphProcessor::RunMode::NO_DISPATCH,
+            "Trace operations without executing on device (no program caching)");
 }
 
 void py_graph_module(nb::module_& m) {
@@ -80,7 +98,36 @@ void py_graph_module(nb::module_& m) {
         });
 
     const auto* doc_begin =
-        R"doc(begin_graph_capture()
+        R"doc(
+        Begin capturing a graph of operations.
+
+        This function starts recording all ttnn operations into a graph that can be
+        analyzed for memory usage, operation dependencies, and other metrics.
+
+        Args:
+            run_mode: Determines how operations are executed during capture.
+                - RunMode.NORMAL (default): Operations execute on the device normally.
+                  Programs are compiled and cached for reuse.
+                - RunMode.NO_DISPATCH: Operations are traced but NOT executed on device.
+                  Buffer allocations are mocked and programs are not dispatched.
+                  This allows profiling models that exceed device memory.
+
+                  NOTE: In NO_DISPATCH mode, programs are intentionally NOT cached
+                  because they contain invalid buffer addresses (address=0). This
+                  ensures that when you later run in NORMAL mode, fresh programs
+                  with valid addresses will be created.
+
+        Example:
+            >>> # Profile memory without execution
+            >>> ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+            >>> output = model(input_tensor)
+            >>> trace = ttnn.graph.end_graph_capture()
+            >>> peak_memory = ttnn.graph.extract_peak_L1_memory_usage(trace)
+
+            >>> # Normal execution with tracing
+            >>> ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            >>> output = model(input_tensor)
+            >>> trace = ttnn.graph.end_graph_capture()
     )doc";
 
     m.def(
