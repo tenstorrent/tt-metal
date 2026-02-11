@@ -30,8 +30,6 @@ import subprocess
 import json
 from tqdm import tqdm
 import argparse
-import shutil
-import glob
 from datetime import datetime
 from pathlib import Path
 
@@ -118,12 +116,15 @@ def get_machine_info():
                 "device_count": device_count,
             }
         return None
-    except:
+    except Exception:
         return None
 
 
 def load_valid_operations():
-    """Load valid operations from Allops.txt"""
+    """Load valid operations from Allops.txt.
+
+    Returns a set of normalized operation names (dot notation) for efficient lookup.
+    """
     valid_ops = set()
     allops_file = os.path.join(BASE_DIR, "tests/sweep_framework/Allops.txt")
 
@@ -132,10 +133,9 @@ def load_valid_operations():
             for line in f:
                 op_name = line.strip()
                 if op_name:
-                    # Convert from dot notation (ttnn.add) to both formats
-                    valid_ops.add(op_name)
-                    op_name_colons = op_name.replace(".", "::")
-                    valid_ops.add(op_name_colons)
+                    # Normalize to dot notation for consistent comparison
+                    normalized = normalize_op_name(op_name)
+                    valid_ops.add(normalized)
         print(f"📋 Loaded {len(valid_ops)} valid operations from Allops.txt")
         return valid_ops
     except FileNotFoundError:
@@ -198,19 +198,24 @@ def is_valid_operation(op_name, valid_operations, excluded_operations):
     """Check if operation should be included in the trace.
 
     Normalizes operation names to handle both C++ (::) and Python (.) formats.
+
+    Args:
+        op_name: Operation name to check (can be :: or . notation)
+        valid_operations: Pre-normalized set of valid operations (dot notation) or None
+        excluded_operations: Set of excluded operations (dot notation)
     """
-    # Normalize both the op_name and check against normalized exclusions
+    # Normalize the op_name once
     normalized_op = normalize_op_name(op_name)
 
+    # Check exclusions first (already normalized)
     if normalized_op in excluded_operations:
         return False
 
     if valid_operations is None:
         return op_name.startswith("ttnn::") or op_name.startswith("ttnn.") or op_name.startswith("ttnn::experimental::")
 
-    # Also normalize valid_operations for comparison if provided
-    normalized_valid = {normalize_op_name(op) for op in valid_operations}
-    return normalized_op in normalized_valid
+    # valid_operations is already normalized in load_valid_operations(), so direct lookup
+    return normalized_op in valid_operations
 
 
 def collect_operation_jsons(trace_dir):
@@ -586,7 +591,7 @@ def detect_pytest_tests(test_path):
                     return False
                 return True
         return False
-    except:
+    except Exception:
         return False
 
 
@@ -689,7 +694,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         # Clean up temp file
         try:
             os.remove(tmp_output_path)
-        except:
+        except OSError:
+            # Best-effort cleanup: ignore failures to remove the temp file
             pass
 
     # Collect generated JSON files from the unique subdirectory
@@ -781,20 +787,20 @@ def parse_shard_spec_string(shard_spec_str):
 
                     try:
                         result["grid"] = json.loads(test_json)
-                    except:
+                    except json.JSONDecodeError:
                         # Strategy 2: If strategy 1 failed, add all missing braces before final ']'
                         missing = open_count - close_count
                         test_json = grid_json[:-1] + ("}" * missing) + grid_json[-1]
                         try:
                             result["grid"] = json.loads(test_json)
-                        except:
+                        except json.JSONDecodeError:
                             # Both strategies failed, silently skip
                             pass
                 else:
                     # No missing braces, try to parse normally
                     try:
                         result["grid"] = json.loads(grid_json)
-                    except:
+                    except json.JSONDecodeError:
                         # Silently skip if parsing fails
                         pass
 
@@ -984,8 +990,12 @@ Examples (Import existing traces):
             return 1
         trace_dir = args.load
         test_source = os.path.basename(args.load)
-        # Find all JSON files in the trace directory
-        trace_files = [os.path.join(trace_dir, f) for f in os.listdir(trace_dir) if f.endswith(".json")]
+        # Find all JSON files in the trace directory, excluding metadata
+        trace_files = [
+            os.path.join(trace_dir, f)
+            for f in os.listdir(trace_dir)
+            if f.endswith(".json") and not f.startswith("_trace_")
+        ]
         if not trace_files:
             print(f"❌ Error: No JSON trace files found in {args.load}")
             return 1
@@ -1177,7 +1187,8 @@ Examples (Import existing traces):
                     try:
                         os.remove(trace_file)
                         cleaned_count += 1
-                    except:
+                    except OSError:
+                        # Best-effort cleanup: ignore failures
                         pass
                 if cleaned_count > 0:
                     print(f"✅ Cleaned up {cleaned_count} trace file(s)")

@@ -11,7 +11,6 @@ from the master JSON file and convert them into sweep test parameters.
 """
 
 import json
-import re
 import os
 import sys
 import ttnn
@@ -150,7 +149,7 @@ class MasterConfigLoader:
             import ast
 
             return ast.literal_eval(s)
-        except:
+        except (ValueError, SyntaxError, TypeError):
             # Fallback for simple cases
             if isinstance(s, list):
                 return s
@@ -452,12 +451,20 @@ class MasterConfigLoader:
     def parse_dtype(self, dtype_str: str) -> Any:
         """Convert dtype string to ttnn dtype"""
         dtype_mapping = {
+            # Legacy tracer format (namespace-style)
             "DataType::BFLOAT16": ttnn.bfloat16,
             "DataType::FLOAT32": ttnn.float32,
             "DataType::INT32": ttnn.int32,
             "DataType::UINT32": ttnn.uint32,
             "DataType::BFLOAT8_B": ttnn.bfloat8_b,
             "DataType::UINT16": ttnn.uint16,
+            # V2 tracer format (dot-style)
+            "DataType.BFLOAT16": ttnn.bfloat16,
+            "DataType.FLOAT32": ttnn.float32,
+            "DataType.INT32": ttnn.int32,
+            "DataType.UINT32": ttnn.uint32,
+            "DataType.BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType.UINT16": ttnn.uint16,
         }
         return dtype_mapping.get(dtype_str, ttnn.bfloat16)
 
@@ -505,15 +512,12 @@ class MasterConfigLoader:
         Returns:
             True if valid, False otherwise
         """
-        try:
-            if not mem_config:
-                return False
+        if not mem_config:
+            return False
 
-            # Trust traced configs - no validation needed
-            # Traced configs come from real model runs that worked
-            return True
-        except Exception:
-            return True  # If we can't check, assume valid
+        # Trust traced configs - no validation needed
+        # Traced configs come from real model runs that worked
+        return True
 
     def parse_memory_config(self, memory_config: Dict, tensor_shape: list = None) -> Any:
         """Convert memory config dict to ttnn memory config

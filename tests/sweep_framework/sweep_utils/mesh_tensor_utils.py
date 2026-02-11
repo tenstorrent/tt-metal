@@ -16,7 +16,7 @@ Environment Variables:
 import os
 import torch
 import ttnn
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Tuple
 import ast
 
 
@@ -87,8 +87,6 @@ def get_mesh_shape_from_machine_info(machine_info: Optional[Dict]) -> Optional[T
 
     # Handle both list and string formats
     if isinstance(mesh_shape, str):
-        import ast
-
         mesh_shape = ast.literal_eval(mesh_shape)
 
     if isinstance(mesh_shape, list) and len(mesh_shape) == 2:
@@ -216,8 +214,6 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None) -> torch.Tensor:
     Returns:
         torch.Tensor: Converted tensor
     """
-    import ttnn
-
     # Check if this is a mesh tensor by checking the device attribute
     try:
         device = ttnn_tensor.device()

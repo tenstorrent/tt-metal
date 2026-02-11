@@ -331,9 +331,11 @@ class VectorExportSource(VectorSource):
 
         # Log filtering results if filtering was enabled
         if mesh_filter and (filtered_count > 0 or machine_mismatch_count > 0):
+            total_filtered = filtered_count + machine_mismatch_count
             logger.info(
-                f"Filtered out {filtered_count} vectors (mesh mismatch: {filtered_count}, "
-                f"machine mismatch: {machine_mismatch_count}), loaded {len(all_vectors)} vectors"
+                f"Filtered out {total_filtered} vectors "
+                f"(mesh mismatch: {filtered_count}, machine mismatch: {machine_mismatch_count}), "
+                f"loaded {len(all_vectors)} vectors"
             )
 
         return all_vectors
