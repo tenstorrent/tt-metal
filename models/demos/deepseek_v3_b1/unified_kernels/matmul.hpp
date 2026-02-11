@@ -192,6 +192,8 @@ struct Matmul {
             }
 
             cb_push_back(args.out, out_w);
+            cb_wait_front(args.out, out_w);
+            cb_pop_front(args.out, out_w);
 #endif
         }
     };  // class Op

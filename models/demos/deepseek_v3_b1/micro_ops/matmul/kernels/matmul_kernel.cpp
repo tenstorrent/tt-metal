@@ -21,7 +21,9 @@ void kernel_main() {
 // ============================================================================
 // Define args per RISC (different compile-time arg layout per processor)
 // ============================================================================
+for (int loop_index = 0; loop_index < 500000000; loop_index++) {
 #if defined(COMPILE_FOR_NCRISC)
+
     // CTArgs type alias (required for Op template)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
 
@@ -49,6 +51,7 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
 #elif defined(COMPILE_FOR_TRISC)
+    MATH((llk_math_reconfig_remap(true)));
     // CTArgs type alias (required for Op template) - out_w, transpose, fused_activation are compile-time for TRISC
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
         get_named_compile_time_arg_val("matmul_out_w"),
@@ -77,5 +80,7 @@ void kernel_main() {
     // CTArgs, IsActiveCore, pop_in0=true, pop_in1=true
     // ========================================================================
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_active_core, true, true> matmul;
+
     matmul(matmul_args);
+}
 }

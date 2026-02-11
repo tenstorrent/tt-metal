@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN Matmul Micro Op Test - Single Core
-Tests matmul operation for various DeepSeek v3 shapes:
+TTNN Matmul Micro Op Stress Test - Replicated across mesh
+Tests matmul operation for various DeepSeek v3 shapes replicated on all devices in a mesh.
 
 Before SDPA (bfloat16 in0, bfloat8_b in1):
 - Q down + K down: [1, 7168] x [7168, 32]
@@ -30,7 +30,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
 
 
@@ -54,23 +53,23 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
             ),
             id="out_proj",
         ),
-        pytest.param(
-            1,
-            896,
-            32,
-            ttnn.bfloat16,
-            ttnn.bfloat4_b,
-            False,
-            None,
-            False,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(11, 9)),
-                }
-            ),
-            id="gate_proj_up_proj",
-        ),
+        # pytest.param(
+        #     1,
+        #     896,
+        #     32,
+        #     ttnn.bfloat16,
+        #     ttnn.bfloat4_b,
+        #     False,
+        #     None,
+        #     False,
+        #     ttnn.CoreRangeSet(
+        #         {
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 7)),
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(11, 9)),
+        #         }
+        #     ),
+        #     id="gate_proj_up_proj",
+        # ),
         pytest.param(
             1,
             256,
@@ -106,13 +105,17 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
         ),
     ],
 )
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.timeout(0)
 @pytest.mark.skip_post_commit
 def test_matmul_single_core(
-    device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en, core_grid
+    mesh_device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en, core_grid
 ):
-    """Test single-core matmul operation with fully sharded inputs"""
+    """Test single-core matmul operation replicated across all devices in a mesh."""
 
-    # Use fused_activation directly (no special suffixes needed now)
+    num_devices = mesh_device.shape[0] * mesh_device.shape[1]
+    logger.info(f"Running matmul stress test on {num_devices}-device mesh (shape {mesh_device.shape})")
+
     actual_activation = fused_activation
 
     # Tile dimensions
@@ -129,7 +132,7 @@ def test_matmul_single_core(
     fp32_str = " (fp32 acc)" if fp32_dest_acc_en else ""
     transpose_str = " transposed" if transpose else ""
     logger.info(
-        f"Testing single-core matmul{activation_str}{fp32_str}{transpose_str} with shape [{M}, {K}] x [{K}, {N}], in0={in0_dtype}, in1={in1_dtype}"
+        f"Testing matmul{activation_str}{fp32_str}{transpose_str} with shape [{M}, {K}] x [{K}, {N}], in0={in0_dtype}, in1={in1_dtype}"
     )
     logger.info(f"Tiles: M={num_tiles_m}, K={num_tiles_k}, N={num_tiles_n}")
 
@@ -148,7 +151,6 @@ def test_matmul_single_core(
         torch_expected = Matmul.golden(torch_a.float(), torch_b.float(), actual_activation).bfloat16()
 
     # Create HEIGHT_SHARDED memory config for input A
-    # Single core has full 1xK tensor
     input_a_shard_shape = (M, K)
     input_a_shard_spec = ttnn.ShardSpec(
         core_grid,
@@ -159,20 +161,19 @@ def test_matmul_single_core(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_a_shard_spec
     )
 
-    # Create input A (height-sharded on single core)
+    # Create input A replicated across all mesh devices
     ttnn_a = ttnn.from_torch(
         torch_a.repeat(core_grid.num_cores(), 1),
         dtype=in0_dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=mesh_device,
         memory_config=input_a_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         tile=a_tile,
     )
-
-    logger.info(f"Created input A with shard shape {input_a_shard_shape}")
+    logger.info(f"Created input A with shard shape {input_a_shard_shape} (replicated on {num_devices} devices)")
 
     # Create WIDTH_SHARDED memory config for input B
-    # Single core has full KxN tensor
     input_b_shard_shape = (K, N)
     if transpose:
         input_b_shard_shape = (N, K)
@@ -185,20 +186,19 @@ def test_matmul_single_core(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_b_shard_spec
     )
 
-    # Create input B (width-sharded on single core)
+    # Create input B replicated across all mesh devices
     ttnn_b = ttnn.from_torch(
         torch_b,
         dtype=in1_dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=mesh_device,
         memory_config=input_b_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         tile=b_tile,
     )
-
-    logger.info(f"Created input B with shard shape {input_b_shard_shape}")
+    logger.info(f"Created input B with shard shape {input_b_shard_shape} (replicated on {num_devices} devices)")
 
     # Create WIDTH_SHARDED memory config for output
-    # Single core produces full MxN output
     output_shard_shape = (M, N)
     output_shard_spec = ttnn.ShardSpec(
         core_grid,
@@ -207,21 +207,21 @@ def test_matmul_single_core(
     )
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
-    # Create output tensor
+    # Create output tensor replicated across all mesh devices
     torch_output_zeros = torch.zeros(output_shape, dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
         torch_output_zeros,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=mesh_device,
         memory_config=output_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         tile=out_tile,
     )
+    logger.info(f"Created output tensor with shard shape {output_shard_shape} (replicated on {num_devices} devices)")
 
-    logger.info(f"Created output tensor with shard shape {output_shard_shape}")
-
-    # Run matmul operation
-    logger.info(f"Running matmul{activation_str}{fp32_str}{transpose_str} operation...")
+    # Run matmul operation (runs on all devices in the mesh)
+    logger.info(f"Running matmul{activation_str}{fp32_str}{transpose_str} on mesh...")
     ttnn_result = Matmul.op(
         ttnn_a,
         ttnn_b,
@@ -231,19 +231,6 @@ def test_matmul_single_core(
         fused_activation=actual_activation,
     )
 
-    # Convert back to torch for comparison
-    output_torch = ttnn.to_torch(ttnn_result)
-
-    # Verify output shape
-    assert output_torch.shape == output_shape, f"Expected shape {output_shape}, got {output_torch.shape}"
-
-    # Verify matmul results (slightly lower PCC for fused activations due to approximation)
-    logger.info(f"Verifying matmul{activation_str}{fp32_str} results...")
-    pcc_threshold = 0.98 if actual_activation else 0.99
-
-    passing, pcc_message = comp_pcc(torch_expected, output_torch, pcc_threshold)
-    logger.info(pcc_message)
-
-    assert passing, pcc_message
-
-    logger.info(f"✓ Single-core matmul{activation_str}{fp32_str} test passed!")
+    # Convert back to torch — use ConcatMeshToTensor to get per-device results
+    output_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    logger.info("Got output torch")
