@@ -161,21 +161,17 @@ void kernel_main() {
 
             noc_async_writes_flushed();
         }
-        // DPRINT << "Send async sent on link0" << ENDL();
 
-        // for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
-        // }
-        // DPRINT << "Send async sent on link1" << ENDL();
+        if constexpr (aligned_partial_packet_size) {
+            write_data_to_remote_core_with_ack(
+                fabric_connection_2,
+                data_packet_header_addr_2,
+                l1_read_addr,
+                dst_addr,
+                downstream_bytes_sent_noc_addr,
+                aligned_partial_packet_size);
+        }
 
-        // if constexpr (aligned_partial_packet_size) {
-        //     write_data_to_remote_core_with_ack(
-        //         fabric_connection_2,
-        //         data_packet_header_addr_2,
-        //         l1_read_addr,
-        //         dst_addr,
-        //         downstream_bytes_sent_noc_addr,
-        //         aligned_partial_packet_size);
-        // }
         {
             DeviceZoneScopedN("sender push pages");
             socket_push_pages(sender_socket, 1);
