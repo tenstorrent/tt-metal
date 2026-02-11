@@ -270,7 +270,9 @@ class RunChecks:
                 result.append(check_result)
         return result
 
-    def run_per_device_check(self, check: Callable[[Device], object]) -> list[PerDeviceCheckResult] | None:
+    def run_per_device_check(
+        self, check: Callable[[Device], object], print_broken_devices: bool = True
+    ) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
         result: list[PerDeviceCheckResult] = []
         with create_progress() as progress:
@@ -283,9 +285,6 @@ class RunChecks:
                     with self._skip_lock:
                         key = BrokenDevice(device)
                         if key in self._broken_devices:
-                            # Find broken device to get the error
-                            broken_device = next(bd for bd in self._broken_devices if bd == key)
-                            # log_warning(f"Skipping device {device.id} with: {broken_device.error}")
                             continue
                     try:
                         check_result = check(device)
@@ -297,7 +296,10 @@ class RunChecks:
                                 for remote_device in device.remote_devices:
                                     # Broken remote devices will inherit the error from the local device
                                     self._broken_devices.add(BrokenDevice(remote_device, e))
-                        # log_warning(f"Skipping device {device.id} with: {e}")
+                        if print_broken_devices:
+                            log_warning(
+                                f"Triage broke device {device.id} with: {e}. This device will be skipped from now on."
+                            )
                         continue
                     # Use the common result collection helper
                     self._collect_results(
@@ -354,6 +356,7 @@ class RunChecks:
         block_filter: list[str] | str | None = None,
         core_filter: list[str] | str | None = None,
         skip_broken_cores: bool = False,
+        print_broken_cores: bool = True,
     ) -> list[PerCoreCheckResult] | None:
         """Run a check function on each RISC core in each block location, collecting results.
 
@@ -390,9 +393,6 @@ class RunChecks:
                         if location._device in self._broken_cores.keys():
                             key = BrokenCore(location, risc_name)
                             if key in self._broken_cores[location._device]:
-                                # Find broken core to get the error
-                                # broken_core = next(bc for bc in self._broken_cores[location._device] if bc == key)
-                                # log_warning(f"Skipping broken core {risc_name} at {location.to_user_str()} at device {location.device_id} with: {broken_core.error}")
                                 continue
                 try:
                     check_result = check(location, risc_name)
@@ -402,7 +402,10 @@ class RunChecks:
                             self._broken_cores[location._device].add(BrokenCore(location, risc_name, e))
                         else:
                             self._broken_cores[location._device] = {BrokenCore(location, risc_name, e)}
-                    # log_warning(f"Skipping broken core {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}")
+                    if print_broken_cores:
+                        log_warning(
+                            f"Triage broke {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}. This core will be skipped from now on."
+                        )
                     continue
 
                 # Use the common result collection helper

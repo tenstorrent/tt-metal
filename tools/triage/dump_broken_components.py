@@ -120,11 +120,12 @@ def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     run_checks = get_run_checks(args, context)
     # These are used to test health of devices and cores and populate broken_devices and broken_cores sets in RunChecks
-    run_checks.run_per_device_check(lambda device: probe_device(device))
+    run_checks.run_per_device_check(lambda device: probe_device(device), print_broken_devices=False)
     run_checks.run_per_core_check(
         lambda location, risc_name: probe_core(location, risc_name),
         block_filter=BLOCK_TYPES_TO_CHECK,
         core_filter=RISC_CORES_TO_CHECK,
+        print_broken_cores=False,
     )
     return collect_device_health_summary(run_checks)
 
