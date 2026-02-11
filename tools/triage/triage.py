@@ -38,6 +38,9 @@ Owner:
 """
 
 # Check if tt-exalens is installed
+from collections import defaultdict
+from enum import Enum
+import heapq
 import inspect
 import os
 import shutil
@@ -97,11 +100,18 @@ from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
 
 
+class ScriptPriority(Enum):
+    LOW = 0
+    MEDIUM = 1
+    HIGH = 2
+
+
 @dataclass
 class ScriptConfig:
     data_provider: bool = False
     disabled: bool = False
     depends: list[str] = field(default_factory=list)
+    priority: ScriptPriority = ScriptPriority.MEDIUM
 
 
 class ScriptArguments:
@@ -327,31 +337,48 @@ class TriageScript:
 
 
 def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
-    used_scripts: set[str] = set()
-    script_queue: list[TriageScript] = []
-    while len(scripts) > len(script_queue):
-        deployed_scripts: int = 0
-        for script_path, script in scripts.items():
-            if script_path in used_scripts:
-                continue
+    # Build graph and in-degree map
+    graph = defaultdict(list)  # dep_path -> list of scripts depending on it
+    in_degree = defaultdict(int)  # script_path -> number of unmet dependencies
 
-            # Check if all dependencies are met
-            if all(dep in used_scripts for dep in script.config.depends):
-                # Add script to the queue
-                script_queue.append(script)
-                used_scripts.add(script_path)
-                deployed_scripts += 1
+    for path, script in scripts.items():
+        in_degree[path] = len(script.config.depends)
+        for dep in script.config.depends:
+            graph[dep].append(path)
 
-        # Check circular dependency
-        if deployed_scripts == 0:
-            # If no scripts were deployed, it means there is a circular dependency or disabled script dependency
-            remaining_scripts = set(scripts.keys()) - used_scripts
-            raise ValueError(
-                f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
-                f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
-                f"  Please check if all dependencies are met and scripts are enabled."
-            )
-    return script_queue
+    # Min-heap for runnable scripts: (-priority, script name, script object)
+    # Negative priority because heapq is a min-heap
+    heap = []
+
+    # Initialize heap with scripts with in-degree 0 (no unmet dependencies)
+    for path, script in scripts.items():
+        if in_degree[path] == 0:
+            heapq.heappush(heap, (-script.config.priority.value, path, script))
+
+    result = []
+
+    while heap:
+        # Pop the highest priority ready script
+        _, path, script = heapq.heappop(heap)
+        result.append(script)
+
+        # Decrease in-degree of dependent scripts
+        for dep_path in graph[path]:
+            in_degree[dep_path] -= 1
+            if in_degree[dep_path] == 0:
+                dep_script = scripts[dep_path]
+                heapq.heappush(heap, (-dep_script.config.priority.value, dep_path, dep_script))
+
+    # If some scripts remain with non-zero in-degree, we have a cycle
+    if len(result) != len(scripts):
+        remaining_scripts = set(scripts.keys()) - {s.config.name for s in result}
+        raise ValueError(
+            f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
+            f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
+            f"  Please check if all dependencies are met and scripts are enabled."
+        )
+
+    return result
 
 
 # Purposely uninitialized global console object to ensure proper initialization only once later

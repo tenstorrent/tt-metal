@@ -26,10 +26,11 @@ from ttexalens.device import Device
 from ttexalens.tt_exalens_lib import read_word_from_device
 
 from run_checks import run as get_run_checks, BrokenCore, RunChecks
-from triage import ScriptConfig, run_script, triage_field, collection_serializer
+from triage import ScriptConfig, run_script, triage_field, collection_serializer, ScriptPriority
 
 script_config = ScriptConfig(
     depends=["run_checks"],
+    priority=ScriptPriority.HIGH,
 )
 
 _USER_VIEW = False
