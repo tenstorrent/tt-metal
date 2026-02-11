@@ -11,9 +11,6 @@
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
 
-RMSNormForwardDeviceOperation::program_factory_t RMSNormForwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return RMSNormForwardProgramFactory{};
 }
 
 void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
@@ -123,9 +120,8 @@ ttsl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        args, 0, input_tensor.dtype(), input_logical_shape);
 
     return hash;
 }

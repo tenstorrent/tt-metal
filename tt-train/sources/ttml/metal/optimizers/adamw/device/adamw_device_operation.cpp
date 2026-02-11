@@ -11,9 +11,6 @@
 
 namespace ttml::metal::optimizers::adamw::device {
 
-AdamWDeviceOperation::program_factory_t AdamWDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return AdamWProgramFactory{};
 }
 
 void AdamWDeviceOperation::validate_on_program_cache_miss(
@@ -108,17 +105,11 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& param_tensor = tensor_args.param;
     const auto& param_logical_shape = param_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     auto amsgrad = args.amsgrad;
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad,
-        stochastic_rounding,
-        max_exp_avg_sq_initialized,
-        program_factory.index(),
-        param_tensor.dtype(),
-        param_logical_shape);
+        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, 0, param_tensor.dtype(), param_logical_shape);
 
     return hash;
 }

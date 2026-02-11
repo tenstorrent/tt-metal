@@ -11,9 +11,6 @@
 
 namespace ttml::metal::optimizers::sgd_fused::device {
 
-SGDFusedDeviceOperation::program_factory_t SGDFusedDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return SGDFusedProgramFactory{};
 }
 
 void SGDFusedDeviceOperation::validate_on_program_cache_miss(
@@ -92,11 +89,10 @@ ttsl::hash::hash_t SGDFusedDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& param_tensor = tensor_args.param;
     const auto& param_logical_shape = param_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     auto nesterov = args.nesterov;
     auto momentum_initialized = tensor_args.momentum_buffer.has_value();
     auto hash = tt::tt_metal::operation::hash_operation<SGDFusedDeviceOperation>(
-        nesterov, momentum_initialized, program_factory.index(), param_tensor.dtype(), param_logical_shape);
+        nesterov, momentum_initialized, 0, param_tensor.dtype(), param_logical_shape);
 
     return hash;
 }
