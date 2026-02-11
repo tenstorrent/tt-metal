@@ -78,7 +78,7 @@ jobs:
 
   install-and-run-llama70b:
     name: TT-Installer and run Llama 70B Demo
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'topology-6u') }}
+    runs-on: ["topology-6u", "in-service", "bare-metal"]
     timeout-minutes: 120
     steps:
       - name: Prepare system
