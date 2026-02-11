@@ -17,11 +17,6 @@ HCSumReduceDeviceOperation::program_factory_t HCSumReduceDeviceOperation::select
     return HCSumReduceProgramFactory{};
 }
 
-void HCSumReduceDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void HCSumReduceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
