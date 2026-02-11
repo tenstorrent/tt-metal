@@ -50,8 +50,8 @@ void kernel_main() {
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
     constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
 
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -65,7 +65,7 @@ void kernel_main() {
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
         4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
     constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_A /
+        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_B /
         2;  // 32 * 3 = 96
             // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
 
@@ -81,14 +81,14 @@ void kernel_main() {
     // Ring setup
     //-------------------------------------------------------------------------
     // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_A;
+    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_B;
 
     // The number of steps to take in the all2all is the number of cores
     constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
 
     // The number of tiles to send in each step
     // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
-    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_A;  // max(num_w0_w1_tiles_w)
+    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_B;  // max(num_w0_w1_tiles_w)
 
     //-------------------------------------------------------------------------
     // Compute
@@ -183,7 +183,7 @@ void kernel_main() {
         cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
-            uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
+            uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
             cb_wait_front(cb_w2c_rdy, 1);
 
             uint32_t in2_offset = 0, in2_index = 0;
@@ -203,7 +203,7 @@ void kernel_main() {
                     if (dm1_tiles_remaining == 0) {
                         cb_pop_front(cb_w2c_rdy, 1);
                         cb_wait_front(cb_w2c_rdy, 1);
-                        dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+                        dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][++dm1_step];
                         in2_offset += tiles_per_step;
                         in2_index = in2_offset;
                     }

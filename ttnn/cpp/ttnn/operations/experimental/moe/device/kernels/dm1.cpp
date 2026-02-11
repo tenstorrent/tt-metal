@@ -51,8 +51,8 @@ void kernel_main() {
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
     constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
 
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
 
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
@@ -62,14 +62,14 @@ void kernel_main() {
     // Ring setup
     //-------------------------------------------------------------------------
     // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_A;
+    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_B;
 
     // The number of steps to take in the all2all is the number of cores
     constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
 
     // The number of tiles to send in each step
     // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
-    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_A;  // max(num_w0_w1_tiles_w)
+    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_B;  // max(num_w0_w1_tiles_w)
 
     //-------------------------------------------------------------------------
     // Ring NoC setup
