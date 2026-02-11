@@ -1216,10 +1216,12 @@ bool write_to_device_buffer(
                             uint64_t src_offset =
                                 static_cast<uint64_t>(host_range.host_page_start) * buffer.page_size();
                             const uint8_t* src_region_start = src_ptr + src_offset;
+                            uint32_t data_length = host_range.num_pages * buffer.page_size();
+                            const uint8_t* src_region_end = src_region_start + data_length;
 
                             // Check if within pinned region
                             if (src_region_start < pinned_host_base ||
-                                src_region_start >= pinned_host_base + pinned_size) {
+                                src_region_end > pinned_host_base + pinned_size) {
                                 all_aligned = false;
                                 break;
                             }
