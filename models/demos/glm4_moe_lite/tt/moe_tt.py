@@ -170,6 +170,9 @@ class Glm4MoeLiteMoERuntime:
     hidden_size: int
     moe_intermediate_size: int
 
+    # Memory config for decode-path expert intermediates (L1 or DRAM)
+    decode_memory_config: ttnn.MemoryConfig
+
 
 def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLiteMoERuntime:
     num_devices = _get_num_devices(device)
@@ -266,6 +269,9 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
         per_core_M=per_core_M,
     )
 
+    ep_l1 = _env_bool("GLM4_MOE_LITE_EP_L1", default=False)
+    decode_memory_config = ttnn.L1_MEMORY_CONFIG if ep_l1 else ttnn.DRAM_MEMORY_CONFIG
+
     return Glm4MoeLiteMoERuntime(
         expert_mapping_tensors=expert_mapping_tensors,
         remap_topk_mask=remap_topk_mask,
@@ -285,6 +291,7 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
         num_experts_per_tok=int(hparams.num_experts_per_tok),
         hidden_size=int(hparams.hidden_size),
         moe_intermediate_size=int(hparams.moe_intermediate_size),
+        decode_memory_config=decode_memory_config,
     )
 
 
@@ -925,6 +932,12 @@ def moe_sparse_experts_forward_tt(
     num_blocks = total_tokens // block
     expert_input = ttnn.reshape(post_dispatch, shape=(1, num_blocks, block, hidden_size))
 
+    # Use L1 for decode-sized sparse matmul intermediates when enabled.
+    # For large token counts (prefill), fall back to the caller's memory_config.
+    sparse_mc = rt.decode_memory_config if total_tokens <= block else memory_config
+    if sparse_mc is not ttnn.DRAM_MEMORY_CONFIG:
+        expert_input = ttnn.to_memory_config(expert_input, sparse_mc)
+
     if debug:
         print(
             "[glm4_moe_lite][moe_sparse] "
@@ -937,7 +950,7 @@ def moe_sparse_experts_forward_tt(
         expert_input,
         moe_w.w1_experts,
         sparsity=sparsity,
-        memory_config=memory_config,
+        memory_config=sparse_mc,
         program_config=rt.gate_up_program_config,
         is_input_a_sparse=False,
         is_input_b_sparse=True,
@@ -949,7 +962,7 @@ def moe_sparse_experts_forward_tt(
         expert_input,
         moe_w.w3_experts,
         sparsity=sparsity,
-        memory_config=memory_config,
+        memory_config=sparse_mc,
         program_config=rt.gate_up_program_config,
         is_input_a_sparse=False,
         is_input_b_sparse=True,
@@ -961,7 +974,7 @@ def moe_sparse_experts_forward_tt(
 
     gate = ttnn.silu(w1_out)
     ttnn.deallocate(w1_out, force=False)
-    x_ff = ttnn.mul(gate, w3_out, memory_config=memory_config)
+    x_ff = ttnn.mul(gate, w3_out, memory_config=sparse_mc)
     ttnn.deallocate(gate, force=False)
     ttnn.deallocate(w3_out, force=False)
 
@@ -973,7 +986,7 @@ def moe_sparse_experts_forward_tt(
         x_ff,
         moe_w.w2_experts,
         sparsity=sparsity,
-        memory_config=memory_config,
+        memory_config=sparse_mc,
         program_config=rt.down_program_config,
         is_input_a_sparse=True,
         is_input_b_sparse=False,
