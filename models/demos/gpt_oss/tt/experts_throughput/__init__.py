@@ -150,7 +150,7 @@ class ThroughputExperts:
             memory_config=prefill_memory_config,
         )
 
-        # Load weights
+        # Load weights (use DRAM sharded storage if program config requests it)
         self.weights = load_throughput_expert_weights(
             mesh_device=mesh_device,
             config=config,
@@ -158,6 +158,7 @@ class ThroughputExperts:
             mesh_config=self.mesh_config,
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
+            use_dram_sharded=self.program_config.use_dram_sharded,
         )
 
         # Create mapping tensors for all_to_all routing

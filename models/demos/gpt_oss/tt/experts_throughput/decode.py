@@ -72,6 +72,207 @@ def _apply_swiglu(
     return result
 
 
+def _expert_computation_dram_sharded(
+    post_dispatch: ttnn.Tensor,
+    weights: "ThroughputExpertWeights",
+    config: ThroughputExpertConfig,
+    program_config: ThroughputProgramConfig,
+    memory_config: ttnn.MemoryConfig,
+    total_tokens: int,
+) -> ttnn.Tensor:
+    """Compute expert MLP using per-expert DRAM sharded matmuls.
+
+    Loops over experts, computing each with a 2D DRAM sharded matmul that
+    reads weights directly from DRAM banks in parallel for maximum bandwidth.
+    Uses HiFi2 compute kernel since DRAM sharded matmuls are FLOP-bound
+    (not BW-bound), so higher math fidelity is essentially free.
+
+    Args:
+        post_dispatch: Input tensor [1, 1, total_tokens, H] in TILE layout
+        weights: Expert weights (DRAM sharded mode - lists of per-expert tensors)
+        config: Expert configuration
+        program_config: Program configuration with DRAM sharded helpers
+        memory_config: Output memory configuration
+        total_tokens: Total tokens after dispatch
+
+    Returns:
+        Expert output [1, num_experts_per_device, total_tokens, H]
+    """
+    H = config.hidden_size
+    I = config.intermediate_size
+
+    # Build DRAM sharded program configs for the matmul dimensions
+    # These are 2D matmuls: [total_tokens, K] x [K, N]
+    if weights.w1_w3_fused is not None:
+        fused_gate_up_prog = program_config.get_dram_sharded_config(m=total_tokens, k=H, n=I * 2)
+    else:
+        gate_up_prog = program_config.get_dram_sharded_config(m=total_tokens, k=H, n=I)
+    down_prog = program_config.get_dram_sharded_config(m=total_tokens, k=I, n=H)
+
+    # HiFi2 compute kernel: DRAM sharded matmuls are compute-bound (not BW-bound)
+    # so higher math fidelity is free. Matches tt_transformers pattern.
+    compute_kernel_hifi2 = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    expert_outputs = []
+    for expert_idx in range(config.num_experts_per_device):
+        # Input: [1, 1, total_tokens, H] — same input for all experts
+        # Weight: [1, 1, H, N] — DRAM width-sharded per expert
+
+        if weights.w1_w3_fused is not None:
+            # Fused gate+up: [1, 1, total_tokens, H] x [1, 1, H, 2*I] -> [1, 1, total_tokens, 2*I]
+            w1_w3_out = ttnn.matmul(
+                post_dispatch,
+                weights.w1_w3_fused[expert_idx],
+                program_config=fused_gate_up_prog,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=compute_kernel_hifi2,
+                dtype=ttnn.bfloat16,
+            )
+
+            # Add bias
+            ttnn.add(w1_w3_out, weights.w1_w3_bias_fused[expert_idx], output_tensor=w1_w3_out)
+
+            # Split into gate and up projections
+            shape = w1_w3_out.shape
+            w1_out = ttnn.slice(
+                w1_w3_out, [0, 0, 0, 0], [shape[0], shape[1], shape[2], I], [1, 1, 1, 1],
+            )
+            w3_out = ttnn.slice(
+                w1_w3_out, [0, 0, 0, I], [shape[0], shape[1], shape[2], I * 2], [1, 1, 1, 1],
+            )
+            ttnn.deallocate(w1_w3_out)
+        else:
+            # Separate gate and up projections
+            w1_out = ttnn.matmul(
+                post_dispatch,
+                weights.w1[expert_idx],
+                program_config=gate_up_prog,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=compute_kernel_hifi2,
+                dtype=ttnn.bfloat16,
+            )
+            ttnn.add(w1_out, weights.w1_bias[expert_idx], output_tensor=w1_out)
+
+            w3_out = ttnn.matmul(
+                post_dispatch,
+                weights.w3[expert_idx],
+                program_config=gate_up_prog,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=compute_kernel_hifi2,
+                dtype=ttnn.bfloat16,
+            )
+            ttnn.add(w3_out, weights.w3_bias[expert_idx], output_tensor=w3_out)
+
+        # SwiGLU activation
+        activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
+
+        # Down projection: [1, 1, total_tokens, I] x [1, 1, I, H] -> [1, 1, total_tokens, H]
+        expert_out = ttnn.matmul(
+            activated,
+            weights.w2[expert_idx],
+            program_config=down_prog,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_hifi2,
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.deallocate(activated)
+
+        # Add bias
+        ttnn.add(expert_out, weights.w2_bias[expert_idx], output_tensor=expert_out)
+
+        expert_outputs.append(expert_out)
+
+    ttnn.deallocate(post_dispatch)
+
+    # Stack expert outputs: list of [1, 1, total_tokens, H] -> [1, num_experts_per_device, total_tokens, H]
+    expert_output = ttnn.concat(expert_outputs, dim=1, memory_config=memory_config)
+    for t in expert_outputs:
+        ttnn.deallocate(t)
+
+    return expert_output
+
+
+def _expert_computation_batched(
+    post_dispatch: ttnn.Tensor,
+    weights: "ThroughputExpertWeights",
+    config: ThroughputExpertConfig,
+    program_config: ThroughputProgramConfig,
+    memory_config: ttnn.MemoryConfig,
+    total_tokens: int,
+) -> ttnn.Tensor:
+    """Compute expert MLP using legacy batched 4D matmuls.
+
+    All experts are computed in a single batched matmul where the expert
+    dimension is a batch dimension.
+
+    Args:
+        post_dispatch: Input tensor [1, num_experts_per_device, total_tokens, H] in TILE layout
+        weights: Expert weights (legacy batched mode - single 4D tensors)
+        config: Expert configuration
+        program_config: Program configuration
+        memory_config: Output memory configuration
+        total_tokens: Total tokens after dispatch
+
+    Returns:
+        Expert output [1, num_experts_per_device, total_tokens, H]
+    """
+    # Build 1D multicast program configs sized for total_tokens (M dimension)
+    down_matmul_config = program_config.get_down_config(n=config.hidden_size, m=total_tokens)
+
+    if weights.w1_w3_fused is not None:
+        assert weights.w1_w3_bias_fused is not None, "Fused bias must be present when using fused weights"
+
+        fused_gate_up_matmul_config = program_config.get_fused_gate_up_config(
+            n=config.intermediate_size * 2, m=total_tokens
+        )
+
+        w1_w3_out = ttnn.matmul(
+            post_dispatch, weights.w1_w3_fused, memory_config=memory_config, program_config=fused_gate_up_matmul_config
+        )
+        ttnn.deallocate(post_dispatch)
+
+        ttnn.add(w1_w3_out, weights.w1_w3_bias_fused, output_tensor=w1_w3_out)
+
+        shape = w1_w3_out.shape
+        w1_out = ttnn.slice(
+            w1_w3_out, [0, 0, 0, 0], [shape[0], shape[1], shape[2], config.intermediate_size], [1, 1, 1, 1],
+        )
+        w3_out = ttnn.slice(
+            w1_w3_out,
+            [0, 0, 0, config.intermediate_size],
+            [shape[0], shape[1], shape[2], config.intermediate_size * 2],
+            [1, 1, 1, 1],
+        )
+        ttnn.deallocate(w1_w3_out)
+    else:
+        assert weights.w1 is not None, "Unfused weights (w1) must be present when not using fused mode"
+        assert weights.w3 is not None, "Unfused weights (w3) must be present when not using fused mode"
+
+        gate_up_matmul_config = program_config.get_gate_up_config(n=config.intermediate_size, m=total_tokens)
+
+        w1_out = ttnn.matmul(
+            post_dispatch, weights.w1, memory_config=memory_config, program_config=gate_up_matmul_config
+        )
+        ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
+
+        w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config)
+        ttnn.deallocate(post_dispatch)
+        ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
+
+    activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
+
+    expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config, program_config=down_matmul_config)
+    ttnn.deallocate(activated)
+    ttnn.add(expert_output, weights.w2_bias, output_tensor=expert_output)
+
+    return expert_output
+
+
 def apply_allreduce(tensor, mesh_config, ccl_manager, mesh_device, hidden_size: int):
     """
     Apply tensor parallel allreduce if needed.
@@ -202,114 +403,39 @@ def decode_forward(
     # STEP 3: PREPARE DISPATCH OUTPUT FOR EXPERT COMPUTATION
     # ==========================================================================
     # dispatch_output: [1, 1, total_tokens, H] in ROW_MAJOR
-    # Convert to TILE layout and repeat across expert dimension for batched matmul.
-    # ttnn.matmul requires batch dims to match exactly (no broadcasting).
+    # Convert to TILE layout for matmul computation.
     post_dispatch = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, config.hidden_size))
     post_dispatch_rm = post_dispatch
     post_dispatch = ttnn.to_layout(post_dispatch, ttnn.TILE_LAYOUT)
     ttnn.deallocate(post_dispatch_rm)
 
-    # Repeat input across expert dimension:
-    # [1, 1, total_tokens, H] -> [1, num_experts_per_device, total_tokens, H]
-    post_dispatch = ttnn.repeat(post_dispatch, ttnn.Shape((1, config.num_experts_per_device, 1, 1)))
-
     memory_config = dispatch_config.memory_config
 
     # ==========================================================================
-    # STEP 4: EXPERT COMPUTATION - Gate/Up/Down projections with batched matmul
+    # STEP 4: EXPERT COMPUTATION - Gate/Up/Down projections
     # ==========================================================================
-    # Batched matmul: input repeated across expert dim, weights have expert dim.
-    #   Input:   [1, num_experts_per_device, total_tokens, H]
-    #   Weights: [1, num_experts_per_device, H, I (or 2*I for fused)]
-    #   Output:  [1, num_experts_per_device, total_tokens, I (or 2*I for fused)]
-    #
-    # All dispatched tokens are processed by all local experts. The combine
-    # step will select the correct expert output for each token.
+    if weights.dram_sharded:
+        # ==================================================================
+        # DRAM SHARDED PATH: Per-expert 2D matmuls with DRAM width-sharded weights
+        # ==================================================================
+        # Each expert is computed individually in a loop. Weights are stored as
+        # per-expert 2D DRAM width-sharded tensors, maximizing DRAM read bandwidth.
+        # Output: [1, num_experts_per_device, total_tokens, H]
 
-    # Build 1D multicast program configs sized for total_tokens (M dimension)
-    down_matmul_config = program_config.get_down_config(n=config.hidden_size, m=total_tokens)
-
-    # Choose between fused and unfused gate/up projection
-    if weights.w1_w3_fused is not None:
-        # ======================================================================
-        # FUSED PATH: Single matmul for gate+up projections
-        # ======================================================================
-        assert weights.w1_w3_bias_fused is not None, "Fused bias must be present when using fused weights"
-
-        # Get fused-specific matmul config (output size is 2*intermediate_size)
-        fused_gate_up_matmul_config = program_config.get_fused_gate_up_config(
-            n=config.intermediate_size * 2, m=total_tokens
+        expert_output = _expert_computation_dram_sharded(
+            post_dispatch, weights, config, program_config, memory_config, total_tokens
         )
-
-        # Fused projection: [1, E, total_tokens, H] x [1, E, H, 2*I] -> [1, E, total_tokens, 2*I]
-        # w1_w3_out = ttnn.matmul(post_dispatch, weights.w1_w3_fused, memory_config=memory_config)
-        # w1_w3_out = ttnn.matmul(post_dispatch, weights.w1_w3_fused, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
-        w1_w3_out = ttnn.matmul(
-            post_dispatch, weights.w1_w3_fused, memory_config=memory_config, program_config=fused_gate_up_matmul_config
-        )
-        ttnn.deallocate(post_dispatch)
-
-        # Add fused bias: [1, num_experts_per_device, 1, 2*I] broadcasts across total_tokens
-        ttnn.add(w1_w3_out, weights.w1_w3_bias_fused, output_tensor=w1_w3_out)
-
-        # Split into gate and up projections
-        # w1_w3_out: [1, num_experts_per_device, total_tokens, 2*intermediate_size]
-        # Split along last dimension: first half is gate, second half is up
-        shape = w1_w3_out.shape
-
-        # Extract gate projection (first half of last dimension)
-        w1_out = ttnn.slice(
-            w1_w3_out,
-            [0, 0, 0, 0],
-            [shape[0], shape[1], shape[2], config.intermediate_size],
-            [1, 1, 1, 1],
-        )
-
-        # Extract up projection (second half of last dimension)
-        w3_out = ttnn.slice(
-            w1_w3_out,
-            [0, 0, 0, config.intermediate_size],
-            [shape[0], shape[1], shape[2], config.intermediate_size * 2],
-            [1, 1, 1, 1],
-        )
-        ttnn.deallocate(w1_w3_out)
-
     else:
-        # ======================================================================
-        # UNFUSED PATH: Separate matmuls for gate and up projections
-        # ======================================================================
-        assert weights.w1 is not None, "Unfused weights (w1) must be present when not using fused mode"
-        assert weights.w3 is not None, "Unfused weights (w3) must be present when not using fused mode"
-        assert weights.w1_bias is not None, "Unfused bias (w1_bias) must be present when not using fused mode"
-        assert weights.w3_bias is not None, "Unfused bias (w3_bias) must be present when not using fused mode"
+        # ==================================================================
+        # LEGACY BATCHED PATH: Single 4D batched matmuls
+        # ==================================================================
+        # Repeat input across expert dimension for batched matmul:
+        # [1, 1, total_tokens, H] -> [1, num_experts_per_device, total_tokens, H]
+        post_dispatch = ttnn.repeat(post_dispatch, ttnn.Shape((1, config.num_experts_per_device, 1, 1)))
 
-        # Get unfused-specific matmul config (output size is intermediate_size)
-        gate_up_matmul_config = program_config.get_gate_up_config(n=config.intermediate_size, m=total_tokens)
-
-        # Gate projection (w1)
-        # w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config)
-        w1_out = ttnn.matmul(
-            post_dispatch, weights.w1, memory_config=memory_config, program_config=gate_up_matmul_config
+        expert_output = _expert_computation_batched(
+            post_dispatch, weights, config, program_config, memory_config, total_tokens
         )
-        # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
-        ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
-
-        # Up projection (w3)
-        w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config)
-        # w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config, program_config=gate_up_matmul_config)
-        ttnn.deallocate(post_dispatch)
-        # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
-        ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
-
-    # SwiGLU activation: (up + 1) * (gate * sigmoid(gate * alpha))
-    activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
-
-    # Down projection (w2): [1, E, total_tokens, I] x [1, E, I, H] -> [1, E, total_tokens, H]
-    # expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config)
-    expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config, program_config=down_matmul_config)
-    ttnn.deallocate(activated)
-    # Bias: [1, num_experts_per_device, 1, H] broadcasts across total_tokens
-    ttnn.add(expert_output, weights.w2_bias, output_tensor=expert_output)
 
     # ==========================================================================
     # STEP 5: PREPARE EXPERT OUTPUT FOR ALL_TO_ALL_COMBINE
