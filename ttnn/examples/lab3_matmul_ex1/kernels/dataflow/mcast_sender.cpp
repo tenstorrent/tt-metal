@@ -42,10 +42,10 @@ void kernel_main() {
     for (uint32_t tile_idx = 0; tile_idx < n_tiles; tile_idx++) {
         // Reserve space in circular buffer (blocking if full - enables double-buffering)
         cb_reserve_back(cb_id_in0, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        uint32_t cb_write_addr = get_write_ptr(cb_id_in0);
 
         // Read tile from DRAM into L1 circular buffer
-        noc_async_read_tile(tile_idx, src_addr_gen, l1_write_addr);
+        noc_async_read_tile(tile_idx, src_addr_gen, cb_write_addr);
         noc_async_read_barrier();
 
         // Wait for all receivers to signal they're ready for next tile
@@ -54,8 +54,8 @@ void kernel_main() {
 
         // Multicast tile to all receiver cores
         uint64_t tile_mcast_addr =
-            get_noc_multicast_addr(receiver_start_x, receiver_start_y, receiver_end_x, receiver_end_y, l1_write_addr);
-        noc_async_write_multicast(l1_write_addr, tile_mcast_addr, tile_size_bytes, num_receivers);
+            get_noc_multicast_addr(receiver_start_x, receiver_start_y, receiver_end_x, receiver_end_y, cb_write_addr);
+        noc_async_write_multicast(cb_write_addr, tile_mcast_addr, tile_size_bytes, num_receivers);
 
         // Flush is needed to ensure the multicast command is sent before the semaphore set command
         // because the commands go into separate command buffer FIFOs on some architectures and may not be

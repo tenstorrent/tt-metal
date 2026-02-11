@@ -46,12 +46,12 @@ void kernel_main() {
 
         // Reserve space for full batch (blocking if full - enables double-buffering)
         cb_reserve_back(cb_id_in0, tiles_per_batch);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        uint32_t cb_write_addr = get_write_ptr(cb_id_in0);
 
         // Read all tiles in batch from DRAM into L1
         for (uint32_t i = 0; i < tiles_per_batch; i++) {
-            noc_async_read_tile(batch_start_tile + i, src_addr_gen, l1_write_addr);
-            l1_write_addr += tile_size_bytes;
+            noc_async_read_tile(batch_start_tile + i, src_addr_gen, cb_write_addr);
+            cb_write_addr += tile_size_bytes;
         }
         noc_async_read_barrier();
 
@@ -62,12 +62,12 @@ void kernel_main() {
         noc_semaphore_set(receivers_ready_sem_ptr, 0);
 
         cb_wait_front(cb_id_in0, tiles_per_batch);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_in0);
+        uint32_t cb_read_addr = get_read_ptr(cb_id_in0);
 
         // Multicast entire batch to all receiver cores
         uint64_t batch_mcast_addr =
-            get_noc_multicast_addr(receiver_start_x, receiver_start_y, receiver_end_x, receiver_end_y, l1_read_addr);
-        noc_async_write_multicast(l1_read_addr, batch_mcast_addr, batch_size_bytes, num_receivers);
+            get_noc_multicast_addr(receiver_start_x, receiver_start_y, receiver_end_x, receiver_end_y, cb_read_addr);
+        noc_async_write_multicast(cb_read_addr, batch_mcast_addr, batch_size_bytes, num_receivers);
 
         noc_async_writes_flushed();
 
