@@ -143,7 +143,6 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset) {
     const auto& hal = MetalContext::instance().hal();
-    std::vector<uint32_t> max_rtas(kernels.size());
     uint32_t max_unique_rta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
@@ -158,7 +157,7 @@ uint32_t configure_rta_offsets_for_kernel_groups(
                 kg->launch_msg.view().kernel_config().rta_offset()[i].crta_offset() = RTA_CRTA_NO_ARGS_SENTINEL;
             }
         }
-        std::ranges::fill(max_rtas, 0);
+        std::vector<uint32_t> max_rtas(kg->kernel_ids.size(), 0);
         for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
             const auto& kernel = kernels.at(kg->kernel_ids[idx]);
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
@@ -206,23 +205,22 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t crta_base_offset) {
     const auto& hal = MetalContext::instance().hal();
-    std::vector<uint32_t> max_crtas(kernels.size(), 0);
     uint32_t max_crta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     // Compute CRTA offsets and sizes for each kernel group
     for (auto& kg : kernel_groups) {
-        std::ranges::fill(max_crtas, 0);
+        std::vector<uint32_t> crtas(kg->kernel_ids.size(), 0);
         for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
             const auto& kernel = kernels.at(kg->kernel_ids[idx]);
-            max_crtas[idx] = std::max<uint32_t>(max_crtas[idx], kernel->common_runtime_args().size());
+            crtas[idx] = kernel->common_runtime_args().size();
         }
 
         uint32_t offset = 0;
         kg->crta_offsets.resize(kg->kernel_ids.size());
         kg->crta_sizes.resize(kg->kernel_ids.size());
         for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
-            uint32_t size = max_crtas[idx] * sizeof(uint32_t);
+            uint32_t size = crtas[idx] * sizeof(uint32_t);
             kg->crta_offsets[idx] = crta_base_offset + offset;
             kg->crta_sizes[idx] = size;
             offset += size;
@@ -874,6 +872,12 @@ BatchedTransfers assemble_runtime_args_commands(
                         common_sub_cmds);
                     common_rt_data_and_sizes.clear();
                     common_rt_args_data.clear();
+                }
+
+                for (auto& data_per_kernel : common_rt_data_and_sizes) {
+                    for (auto& data_and_sizes : data_per_kernel) {
+                        RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
+                    }
                 }
             }
         }

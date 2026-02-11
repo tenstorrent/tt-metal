@@ -370,7 +370,7 @@ void verify_quasar_crtas(
 
     for (uint32_t dm_id = 0; dm_id < max_dms; dm_id++) {
         const auto& expected_crtas = per_kernel_crtas[dm_id];
-        uint32_t dm_crta_addr = results_base + (kCommonRTASeparation + dm_id * num_crtas) * sizeof(uint32_t);
+        uint32_t dm_crta_addr = results_base + ((kCommonRTASeparation + dm_id * num_crtas) * sizeof(uint32_t));
 
         std::vector<uint32_t> observed;
         tt_metal::detail::ReadFromDeviceL1(device, core, dm_crta_addr, num_crtas * sizeof(uint32_t), observed);
@@ -381,9 +381,9 @@ void verify_quasar_crtas(
     }
 
     // Address slot starts right after CRTA values
-    uint32_t addr_base = results_base + (kCommonRTASeparation + max_dms * num_crtas) * sizeof(uint32_t);
+    uint32_t addr_base = results_base + ((kCommonRTASeparation + max_dms * num_crtas) * sizeof(uint32_t));
     for (uint32_t dm_id = 0; dm_id < max_dms; dm_id++) {
-        uint32_t addr_offset = addr_base + dm_id * sizeof(uint32_t);
+        uint32_t addr_offset = addr_base + (dm_id * sizeof(uint32_t));
         std::vector<uint32_t> addr;
         tt_metal::detail::ReadFromDeviceL1(device, core, addr_offset, sizeof(uint32_t), addr);
         crta_addrs.push_back(addr[0]);
@@ -896,7 +896,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
 }
 
 // Quasar only test: Single kernel running on all 8 DM processors with shared CRTAs.
-// Verifies all DMs receive identical CRTA values from the same kernel
+// Verifies all DMs receive identical CRTA values at the same L1 address
 // TODO: Once SW supports multiple quasar clusters/cores, expand to multiple CoreRangeSets
 // to verify CRTA dispatch across different Kernel groups
 TEST_F(MeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
@@ -927,7 +927,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
 }
 
 // Quasar only test: 8 separate kernels, each running on a unique DM processor, with unique CRTAs.
-// Verifies each kernel receives its own distinct CRTA values via kernel_id indexing
+// Verifies each kernel receives its own distinct CRTA values at different L1 addresses
 // TODO: Once SW supports multiple quasar clusters/cores, expand to multiple CoreRangeSets
 // to verify CRTA dispatch across different Kernel groups
 TEST_F(MeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
