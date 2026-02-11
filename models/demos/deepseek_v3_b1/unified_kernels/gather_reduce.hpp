@@ -43,6 +43,20 @@ namespace deepseek_b1_ops {
 //   Sender: increments receiver semaphore after NOC write completion
 //   Receiver: waits on noc0/noc1 sender counts, then resets both semaphores to 0
 // ============================================================================
+
+#if defined(COMPILE_FOR_TRISC)
+// Helper functions to manipulate CB read pointer (from bmm_large_block_zm_fused_bias_activation_gathered.cpp)
+FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    return local_cb.fifo_rd_ptr;
+}
+
+FORCE_INLINE void update_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    local_cb.fifo_rd_ptr = val;
+}
+#endif
+
 struct GatherReduce {
     // ========================================================================
     // Runtime args structs - different layout per RISC
@@ -81,20 +95,33 @@ struct GatherReduce {
     using RTArgs = unified_kernels::SelectByRISCV<SenderArgs, ReceiverArgs, ComputeArgs>;
 
 #if defined(COMPILE_FOR_TRISC)
-    static inline void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    // in0_cb += in1_cb over num_tiles tiles, in place
+    static inline void add_tiles_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         add_tiles_init(in0_cb, in1_cb);
         cb_wait_front(in0_cb, num_tiles);
         cb_wait_front(in1_cb, num_tiles);
+
+        uint32_t in0_cb_base_rd_ptr = 0;
+        UNPACK(({ in0_cb_base_rd_ptr = get_local_cb_rd_ptr(in0_cb); }));
+
+        // Process tiles - element-wise add
+        tile_regs_acquire();
         for (uint32_t i = 0; i < num_tiles; i++) {
-            acquire_dst();
-            add_tiles(in0_cb, in1_cb, i, i, 0);
-            pack_tile(0, in0_cb);
-            release_dst();
+            add_tiles(in0_cb, in1_cb, i, i, i);
         }
-        cb_pop_front(in0_cb, num_tiles);
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < num_tiles; i++) {
+            pack_tile(i, in0_cb);
+        }
+        tile_regs_release();
+
+        // restore in0_cb read pointer to the beginning of the block so that the reduced tiles can be popped by the
+        // caller
+        UNPACK(({ update_local_cb_rd_ptr(in0_cb, in0_cb_base_rd_ptr); }));
+
+        // pop cb1 after reduction since it's no longer needed
         cb_pop_front(in1_cb, num_tiles);
-        cb_reserve_back(in0_cb, num_tiles);
-        cb_push_back(in0_cb, num_tiles);
     }
 #endif
 
@@ -178,7 +205,7 @@ struct GatherReduce {
             // TRISC - No-op (gather is dataflow only)
             // ================================================================
             if constexpr (IsReduceCore) {
-                add_block_inplace(args.in0_cb, args.in1_cb, args.num_tiles);
+                add_tiles_inplace(args.in0_cb, args.in1_cb, args.num_tiles);
             }
 #endif
         }

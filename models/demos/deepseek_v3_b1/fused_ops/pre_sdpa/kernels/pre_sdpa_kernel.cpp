@@ -403,9 +403,22 @@ void kernel_main() {
     // Mcast compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
 
+    // TRISC common runtime arg indices
+    [[maybe_unused]] constexpr uint32_t trisc_rta_matmul_cookie = 4;
+    constexpr uint32_t trisc_rta_matmul_half_boundary_col = 5;
+    constexpr uint32_t trisc_rta_matmul_k_offset_half1 = 6;
+    constexpr uint32_t trisc_rta_matmul_half0_in1 = 7;
+    constexpr uint32_t trisc_rta_matmul_half1_in1 = 8;
+    constexpr uint32_t trisc_rta_matmul_k_per_core = 9;
+    constexpr uint32_t trisc_rta_matmul_act_total_tiles = 10;
+    [[maybe_unused]] constexpr uint32_t trisc_rta_gather_reduce_cookie = 11;
+    constexpr uint32_t trisc_rta_gather_reduce_half0_dst_cb = 12;
+    constexpr uint32_t trisc_rta_gather_reduce_half1_dst_cb = 13;
+    constexpr uint32_t trisc_rta_gather_reduce_dst_num_tiles = 14;
+
     // Matmul CTArgs type alias (out_w is compile-time for TRISC)
-    constexpr uint32_t matmul_half_boundary_col = get_named_compile_time_arg_val("matmul_half_boundary_col");
-    constexpr uint32_t matmul_k_offset_half1 = get_named_compile_time_arg_val("matmul_k_offset_half1");
+    uint32_t matmul_half_boundary_col = get_common_arg_val<uint32_t>(trisc_rta_matmul_half_boundary_col);
+    uint32_t matmul_k_offset_half1 = get_common_arg_val<uint32_t>(trisc_rta_matmul_k_offset_half1);
     bool is_half0 = (my_logical_x_ < matmul_half_boundary_col);
     uint32_t k_offset = is_half0 ? 0 : matmul_k_offset_half1;
 
@@ -413,23 +426,23 @@ void kernel_main() {
         deepseek_b1_ops::KNSlicedMatmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w_per_core")>;
 
     // Matmul compute args (from compile-time args, passed to op as runtime args)
-    constexpr uint32_t matmul_half0_in1 = get_named_compile_time_arg_val("matmul_half0_in1");
-    constexpr uint32_t matmul_half1_in1 = get_named_compile_time_arg_val("matmul_half1_in1");
+    uint32_t matmul_half0_in1 = get_common_arg_val<uint32_t>(trisc_rta_matmul_half0_in1);
+    uint32_t matmul_half1_in1 = get_common_arg_val<uint32_t>(trisc_rta_matmul_half1_in1);
     uint32_t matmul_in1 = is_half0 ? matmul_half0_in1 : matmul_half1_in1;
     deepseek_b1_ops::KNSlicedMatmul::ComputeArgs matmul_args{
         get_named_compile_time_arg_val("matmul_in0"),
         matmul_in1,
         get_named_compile_time_arg_val("matmul_out"),
         k_offset,
-        get_named_compile_time_arg_val("matmul_k_per_core"),
-        get_named_compile_time_arg_val("matmul_act_total_tiles"),
+        get_common_arg_val<uint32_t>(trisc_rta_matmul_k_per_core),
+        get_common_arg_val<uint32_t>(trisc_rta_matmul_act_total_tiles),
     };
 
     // Gather compute args (no-op for TRISC)
     deepseek_b1_ops::GatherReduce::ComputeArgs gather_reduce_args{
-        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
+        get_common_arg_val<uint32_t>(trisc_rta_gather_reduce_half0_dst_cb),
+        get_common_arg_val<uint32_t>(trisc_rta_gather_reduce_half1_dst_cb),
+        get_common_arg_val<uint32_t>(trisc_rta_gather_reduce_dst_num_tiles),
     };
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)

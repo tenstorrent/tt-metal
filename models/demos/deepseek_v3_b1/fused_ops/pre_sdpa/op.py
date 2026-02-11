@@ -548,6 +548,7 @@ class PreSDPA:
         krope_cos_cb = 28  # Cos CB for RoPE
         krope_sin_cb = 29  # Sin CB for RoPE
         matmul_half1_weights_cb = 31  # Dedicated half1 weights CB for first matmul
+        gather_reduce_half1_scratch_cb = 32  # Dedicated half1 scratch CB for gather_reduce
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -638,13 +639,7 @@ class PreSDPA:
         # TRISC: KNSlicedMatmul args
         matmul_trisc_named_compile_time_args = [
             ("matmul_in0", matmul_input_cb),
-            ("matmul_half0_in1", matmul_half0_weights_cb),
-            ("matmul_half1_in1", matmul_half1_weights_cb),
             ("matmul_out", matmul_output_cb),
-            ("matmul_half_boundary_col", matmul_half_boundary_col),
-            ("matmul_k_offset_half1", matmul_k_offset_half1),
-            ("matmul_k_per_core", matmul_k_per_core),
-            ("matmul_act_total_tiles", matmul_act_total_tiles),
             ("matmul_out_w_per_core", matmul_out_w),
         ]
 
@@ -860,8 +855,7 @@ class PreSDPA:
             ("matmul_half_boundary_col", matmul_half_boundary_col),
             ("matmul_cols_per_half", matmul_cols_per_half),
             ("gather_reduce_half0_cb_id", rmsnorm2_input_cb),
-            # Reuse CB8 as half1 gather destination scratch; TRISC reduction consumes it before RMSNorm2 writes output.
-            ("gather_reduce_half1_cb_id", rmsnorm2_output_cb),
+            ("gather_reduce_half1_cb_id", gather_reduce_half1_scratch_cb),
         ]
 
         # Gather receiver compile-time args (named args for BRISC on rmsnorm core)
@@ -874,7 +868,7 @@ class PreSDPA:
             ("gather_reduce_noc0_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
             ("gather_reduce_noc1_receiver_semaphore_id", gather_reduce_noc1_receiver_semaphore_id),
             ("gather_reduce_half0_dst_cb", rmsnorm2_input_cb),
-            ("gather_reduce_half1_dst_cb", rmsnorm2_output_cb),
+            ("gather_reduce_half1_dst_cb", gather_reduce_half1_scratch_cb),
             ("gather_reduce_dst_num_tiles", rmsnorm2_num_tiles),
         ]
 
@@ -1186,16 +1180,29 @@ class PreSDPA:
                     page_size=rmsnorm2_page_size,
                     tile=rmsnorm2_tile_descriptor,
                 )
-                rmsnorm2_output_cb_core_ranges = matmul_weights_core_grid.merge(rmsnorm_core_grid)
+                rmsnorm2_output_cb_core_ranges = rmsnorm_core_grid
                 rmsnorm2_output_cb_descriptor = ttnn.CBDescriptor(
                     total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,  # 3 tiles
                     core_ranges=rmsnorm2_output_cb_core_ranges,
                     format_descriptors=[rmsnorm2_output_cb_format],
                 )
                 # CB8 lifecycle:
-                # 1) gather_reduce half1 writes partials here
-                # 2) TRISC reduction consumes CB8 while producing reduced output in CB7
-                # 3) RMSNorm2 writes its final normalized output back into CB8
+                # 1) RMSNorm2 writes normalized output here
+                # 2) Mcast2 reads from CB8 and writes to matmul2 input CB
+
+                # CB: gather_reduce half1 scratch buffer (3 tiles)
+                gather_reduce_half1_scratch_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=gather_reduce_half1_scratch_cb,
+                    data_format=data_format,
+                    page_size=rmsnorm2_page_size,
+                    tile=rmsnorm2_tile_descriptor,
+                )
+                gather_reduce_half1_scratch_core_ranges = matmul_weights_core_grid.merge(rmsnorm_core_grid)
+                gather_reduce_half1_scratch_cb_descriptor = ttnn.CBDescriptor(
+                    total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,  # 3 tiles
+                    core_ranges=gather_reduce_half1_scratch_core_ranges,
+                    format_descriptors=[gather_reduce_half1_scratch_cb_format],
+                )
 
                 # CB: RMSNorm output buffer (dynamically created)
                 rmsnorm_output_cb_format = ttnn.CBFormatDescriptor(
@@ -1633,10 +1640,23 @@ class PreSDPA:
                     + krope_trisc_named_compile_time_args,
                     # TRISC common runtime args: epsilon (used by rmsnorm compute)
                     trisc_common_runtime_args=[
-                        epsilon_packed,
-                        scalar_packed,
-                        scalar2_packed,
-                        kv_scalar_packed,
+                        epsilon_packed,  # idx 0
+                        scalar_packed,  # idx 1
+                        scalar2_packed,  # idx 2
+                        kv_scalar_packed,  # idx 3
+                        # K-split matmul section
+                        0xCAFE0001,  # idx 4 - cookie
+                        matmul_half_boundary_col,  # idx 5
+                        matmul_k_offset_half1,  # idx 6
+                        matmul_half0_weights_cb,  # idx 7
+                        matmul_half1_weights_cb,  # idx 8
+                        matmul_k_per_core,  # idx 9
+                        matmul_act_total_tiles,  # idx 10
+                        # gather_reduce section
+                        0xCAFE0002,  # idx 11 - cookie
+                        rmsnorm2_input_cb,  # idx 12 (half0 dst cb)
+                        gather_reduce_half1_scratch_cb,  # idx 13 (half1 dst cb)
+                        rmsnorm2_num_tiles,  # idx 14
                     ],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
@@ -1733,6 +1753,7 @@ class PreSDPA:
                     rmsnorm2_gamma_cb_descriptor,  # CB 6: RMSNorm2 gamma
                     rmsnorm2_input_cb_descriptor,  # CB 7: RMSNorm2 input
                     rmsnorm2_output_cb_descriptor,  # CB 8: RMSNorm2 output
+                    gather_reduce_half1_scratch_cb_descriptor,  # CB 32: gather_reduce half1 scratch
                     matmul2_input_cb_descriptor,  # CB 9: Matmul2 input
                     matmul2_weights_cb_descriptor,  # CB 10: Matmul2 weights
                     matmul2_output_cb_descriptor,  # CB 11: Matmul2 output (intermediate)
