@@ -135,7 +135,7 @@ static_assert(
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
-    100;//get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 0);
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 0);
 #else
     0;
 #endif
@@ -163,8 +163,8 @@ constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_STA
 constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
-constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = true;//get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
-constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = true;//get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 constexpr bool z_router_enabled = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 11);
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 12);
