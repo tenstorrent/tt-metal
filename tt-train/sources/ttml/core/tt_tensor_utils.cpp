@@ -133,9 +133,6 @@ tt::tt_metal::Tensor from_vector<bfloat16, ttnn::DataType::BFLOAT16>(
         output = ttnn::to_device(output, device, output_mem_config);
     } else {
         output = ttnn::to_device(output, device, output_mem_config);
-        if (layout == ttnn::Layout::TILE) {
-            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
-        }
     }
 
     return output;
