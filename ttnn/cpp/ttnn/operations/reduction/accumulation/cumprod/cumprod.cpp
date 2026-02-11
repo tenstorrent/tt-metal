@@ -17,10 +17,10 @@
 
 namespace ttnn::operations::reduction::accumulation {
 
-Tensor CumprodOperation::invoke(
+Tensor cumprod_impl(
     const Tensor& input_tensor,
     const int32_t& dim,
-    std::optional<DataType>& dtype,
+    std::optional<DataType> dtype,
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config) {
@@ -35,3 +35,18 @@ Tensor CumprodOperation::invoke(
 }
 
 }  // namespace ttnn::operations::reduction::accumulation
+
+namespace ttnn {
+
+Tensor cumprod(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    std::optional<DataType> dtype,
+    const bool& reverse_order,
+    std::optional<Tensor> optional_out,
+    const std::optional<MemoryConfig>& memory_config) {
+    return operations::reduction::accumulation::cumprod_impl(
+        input_tensor, dim, dtype, reverse_order, std::move(optional_out), memory_config);
+}
+
+}  // namespace ttnn
