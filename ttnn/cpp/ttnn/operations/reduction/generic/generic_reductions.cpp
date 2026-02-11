@@ -17,6 +17,17 @@
 
 namespace ttnn::operations::reduction {
 
+template <ReduceType reduce_type>
+Tensor reduce(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg = std::nullopt,
+    bool keepdim = false,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    float scalar = 1.0f,
+    bool correction = true,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
 std::tuple<ttnn::SmallVector<int>, ttnn::SmallVector<int>, ttnn::SmallVector<int>> get_slice_parameters(
@@ -425,7 +436,7 @@ Tensor non_height_width_reduce(
 }
 
 template <ReduceType reduce_type>
-Tensor Reduce<reduce_type>::invoke(
+Tensor reduce(
     const Tensor& input_tensor_arg,
     const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg,
     const bool keepdim,
@@ -496,12 +507,6 @@ Tensor pool_sum(
         /*sub_core_grids=*/std::nullopt);
 }
 
-template struct Reduce<ReduceType::Sum>;
-template struct Reduce<ReduceType::Mean>;
-template struct Reduce<ReduceType::Max>;
-template struct Reduce<ReduceType::Min>;
-template struct Reduce<ReduceType::Std>;
-template struct Reduce<ReduceType::Var>;
 }  // namespace ttnn::operations::reduction
 
 namespace ttnn {
@@ -515,7 +520,7 @@ Tensor sum(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::reduction::Reduce<operations::reduction::ReduceType::Sum>::invoke(
+    return operations::reduction::reduce<operations::reduction::ReduceType::Sum>(
         input_tensor_arg,
         dim_arg,
         keepdim,
@@ -535,7 +540,7 @@ Tensor mean(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::reduction::Reduce<operations::reduction::ReduceType::Mean>::invoke(
+    return operations::reduction::reduce<operations::reduction::ReduceType::Mean>(
         input_tensor_arg,
         dim_arg,
         keepdim,
@@ -555,7 +560,7 @@ Tensor max(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::reduction::Reduce<operations::reduction::ReduceType::Max>::invoke(
+    return operations::reduction::reduce<operations::reduction::ReduceType::Max>(
         input_tensor_arg,
         dim_arg,
         keepdim,
@@ -575,7 +580,7 @@ Tensor min(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::reduction::Reduce<operations::reduction::ReduceType::Min>::invoke(
+    return operations::reduction::reduce<operations::reduction::ReduceType::Min>(
         input_tensor_arg,
         dim_arg,
         keepdim,
@@ -595,7 +600,7 @@ Tensor std(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::reduction::Reduce<operations::reduction::ReduceType::Std>::invoke(
+    return operations::reduction::reduce<operations::reduction::ReduceType::Std>(
         input_tensor_arg,
         dim_arg,
         keepdim,
@@ -615,7 +620,7 @@ Tensor var(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::reduction::Reduce<operations::reduction::ReduceType::Var>::invoke(
+    return operations::reduction::reduce<operations::reduction::ReduceType::Var>(
         input_tensor_arg,
         dim_arg,
         keepdim,
