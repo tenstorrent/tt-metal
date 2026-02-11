@@ -194,7 +194,7 @@ class MeshFabric1DFixture : public BaseFabricFixture {
 public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
-    void SetupDevices() override {
+    void SetupDevices() override final {
         ValidateEnvironment();
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(GetDeterminedMeshShape()));
         device_open = true;
