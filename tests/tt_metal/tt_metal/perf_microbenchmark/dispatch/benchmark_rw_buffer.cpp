@@ -70,6 +70,10 @@ static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {64 * MB};
 static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
 static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
 
+// For sharded benchmarks: fixed page size and contiguity control
+static constexpr int64_t FIXED_PAGE_SIZE = 1024;
+static const std::vector<int64_t> CONTIGUITY_ARGS = {1, 2, 4, 8, 16, 32, 64, 128};
+
 static void BM_write(
     benchmark::State& state,
     const std::shared_ptr<MeshDevice>& mesh_device,
@@ -162,17 +166,19 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
 }
 
 static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
-    auto page_size = state.range(0);
-    auto transfer_size = state.range(1);
-    auto buffer_type = BUFFER_TYPES[state.range(2)];
+    auto page_size = FIXED_PAGE_SIZE;
+    auto transfer_size = state.range(0);
+    auto buffer_type = BUFFER_TYPES[state.range(1)];
+    auto contiguity_factor = state.range(2);  // Controls pages per contiguous chunk
     [[maybe_unused]] auto device_id = state.range(3);
 
     log_debug(
         LogTest,
-        "Running WriteSharded Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        "Running WriteSharded Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Contiguity: {}, Device ID: {}",
         page_size,
         transfer_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        contiguity_factor,
         device_id);
 
     // Compute sharding parameters based on buffer type
@@ -188,18 +194,30 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
         return;
     }
 
+    // Validate contiguity_factor
+    if (contiguity_factor <= 0) {
+        state.SkipWithError("Contiguity factor must be positive");
+        return;
+    }
+
+    // Clamp contiguity_factor to pages_per_core to avoid invalid layouts
+    uint64_t effective_contiguity = std::min(static_cast<uint64_t>(contiguity_factor), pages_per_core);
+
     // Compute actual buffer size based on pages_per_core
     uint64_t actual_buf_size = pages_per_core * num_cores * page_size;
 
-    // Create ShardSpecBuffer for BLOCK_SHARDED layout with 1 page width per core.
-    // This makes each core's host pages non-contiguous (strided by grid_x * page_size),
-    // preventing the dispatch layer from coalescing into one big copy per core and making
-    // performance dependent on page_size.
+    // Create ShardSpecBuffer with controlled contiguity.
+    // effective_contiguity controls how many pages each core gets in each contiguous chunk.
+    // tensor2d layout: [height = ceil(pages_per_core / effective_contiguity), width = num_cores * effective_contiguity]
+    // This creates ceil(pages_per_core / effective_contiguity) separate ranges per core,
+    // each containing up to effective_contiguity contiguous pages (last chunk may be smaller).
     CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
     std::array<uint32_t, 2> shard_shape = {static_cast<uint32_t>(pages_per_core), static_cast<uint32_t>(page_size)};
     std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
-    std::array<uint32_t, 2> tensor2d_shape_in_pages = {
-        static_cast<uint32_t>(pages_per_core * core_grid_size.y), static_cast<uint32_t>(core_grid_size.x)};
+    
+    uint32_t tensor_height = (pages_per_core + effective_contiguity - 1) / effective_contiguity;  // div_up
+    uint32_t tensor_width = num_cores * effective_contiguity;
+    std::array<uint32_t, 2> tensor2d_shape_in_pages = {tensor_height, tensor_width};
 
     ShardSpecBuffer shard_spec(
         core_sets, shard_shape, ShardOrientation::ROW_MAJOR, page_shape_array, tensor2d_shape_in_pages);
@@ -228,18 +246,19 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
 }
 
 static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
-    auto page_size = state.range(0);
-    auto transfer_size = state.range(1);
-    auto buffer_type = BUFFER_TYPES[state.range(2)];
+    auto page_size = FIXED_PAGE_SIZE;
+    auto transfer_size = state.range(0);
+    auto buffer_type = BUFFER_TYPES[state.range(1)];
+    auto contiguity_factor = state.range(2);  // Controls pages per contiguous chunk
     [[maybe_unused]] auto device_id = state.range(3);
 
     log_debug(
         LogTest,
-        "Running WritePinnedMemorySharded Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: "
-        "{}",
+        "Running WritePinnedMemorySharded Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Contiguity: {}, Device ID: {}",
         page_size,
         transfer_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        contiguity_factor,
         device_id);
 
     // Check if memory pinning with NOC mapping is supported
@@ -261,18 +280,30 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
         return;
     }
 
+    // Validate contiguity_factor
+    if (contiguity_factor <= 0) {
+        state.SkipWithError("Contiguity factor must be positive");
+        return;
+    }
+
+    // Clamp contiguity_factor to pages_per_core to avoid invalid layouts
+    uint64_t effective_contiguity = std::min(static_cast<uint64_t>(contiguity_factor), pages_per_core);
+
     // Compute actual buffer size based on pages_per_core
     uint64_t actual_buf_size = pages_per_core * num_cores * page_size;
 
-    // Create ShardSpecBuffer for BLOCK_SHARDED layout with 1 page width per core.
-    // This makes each core's host pages non-contiguous (strided by grid_x * page_size),
-    // preventing the dispatch layer from coalescing into one big copy per core and making
-    // performance dependent on page_size.
+    // Create ShardSpecBuffer with controlled contiguity.
+    // effective_contiguity controls how many pages each core gets in each contiguous chunk.
+    // tensor2d layout: [height = ceil(pages_per_core / effective_contiguity), width = num_cores * effective_contiguity]
+    // This creates ceil(pages_per_core / effective_contiguity) separate ranges per core,
+    // each containing up to effective_contiguity contiguous pages (last chunk may be smaller).
     CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
     std::array<uint32_t, 2> shard_shape = {static_cast<uint32_t>(pages_per_core), static_cast<uint32_t>(page_size)};
     std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
-    std::array<uint32_t, 2> tensor2d_shape_in_pages = {
-        static_cast<uint32_t>(pages_per_core * core_grid_size.y), static_cast<uint32_t>(core_grid_size.x)};
+    
+    uint32_t tensor_height = (pages_per_core + effective_contiguity - 1) / effective_contiguity;  // div_up
+    uint32_t tensor_width = num_cores * effective_contiguity;
+    std::array<uint32_t, 2> tensor2d_shape_in_pages = {tensor_height, tensor_width};
 
     ShardSpecBuffer shard_spec(
         core_sets, shard_shape, ShardOrientation::ROW_MAJOR, page_shape_array, tensor2d_shape_in_pages);
@@ -420,6 +451,7 @@ int main(int argc, char** argv) {
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
+        auto sharded_benchmark_args = {TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, CONTIGUITY_ARGS, {device_id}};
         auto compute_min = [](const std::vector<double>& v) -> double { return *std::min_element(v.begin(), v.end()); };
         auto compute_max = [](const std::vector<double>& v) -> double { return *std::max_element(v.begin(), v.end()); };
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
@@ -438,7 +470,7 @@ int main(int argc, char** argv) {
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
         benchmark::RegisterBenchmark("WriteSharded", BM_write_sharded, device)
-            ->ArgsProduct(benchmark_args)
+            ->ArgsProduct(sharded_benchmark_args)
             ->UseRealTime()
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
@@ -459,7 +491,7 @@ int main(int argc, char** argv) {
                 ->ComputeStatistics("min", compute_min)
                 ->ComputeStatistics("max", compute_max);
             benchmark::RegisterBenchmark("WritePinnedMemorySharded", BM_write_pinned_memory_sharded, device)
-                ->ArgsProduct(benchmark_args)
+                ->ArgsProduct(sharded_benchmark_args)
                 ->UseRealTime()
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
                 ->ComputeStatistics("min", compute_min)
