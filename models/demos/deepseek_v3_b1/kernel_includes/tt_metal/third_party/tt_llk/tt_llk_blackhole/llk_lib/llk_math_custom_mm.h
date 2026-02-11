@@ -172,7 +172,7 @@ inline void _llk_math_custom_mm_(
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-    // Run mop kt_dim - 1 times, the last inner dim is handled separately to chose whether to run finalization or not
+    // Run mop kt_dim - 1 times, the last inner dim is handled separately to choose whether to run finalization or not
     for (std::uint32_t i = 0; i < kt_dim - 1; i++) {
         TTI_MOP(1, 0, 0);
     }

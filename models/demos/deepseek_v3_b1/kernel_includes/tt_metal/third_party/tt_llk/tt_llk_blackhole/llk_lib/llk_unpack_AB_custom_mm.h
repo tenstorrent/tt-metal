@@ -108,7 +108,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
 
     // When ct_dim == 1 we alternate between full sequences for both contexts kt_dim times in total
     // When ct_dim > 1 we start with full context 0 and then alternate between reuse contexts 1 and 0 ct_dim - 1 times
-    // Since if ct_dim > 1 it must be even full seqence always lands on context 0
+    // Since if ct_dim > 1 it must be even full sequence always lands on context 0
     // thus instruction sequence is same for each kt_dim
     // Mop is configured such that it always covers two iterations of the inner dim loop,
     // this has two benefits:
@@ -128,14 +128,14 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
     // We just pick first ct_dim / 2 sequences (each sequence is 3 instructions plus first full one is
     // 2 additional instructions, thus getting the equation which calculates first half of the replay length)
     // Similarly second half is just {reuse context 0, reuse context 1} ct_dim / 4 times,
-    // which is just picking ct_dim / 2 seqeunces starting from the first reuse context 0 sequence
+    // which is just picking ct_dim / 2 sequences starting from the first reuse context 0 sequence
     // (each sequence is 3 instructions so replay length calculation is simpler)
-    // To be sure that everything fits, for max ct_dim of 16, second half has to issue 4 pairs of sequnces
+    // To be sure that everything fits, for max ct_dim of 16, second half has to issue 4 pairs of sequences
     // which is exactly what we recorded at the end
     // First sequence already has the first pair as full context 0 and reuse context 1
     // so it needs only 3 additional pair which are covered by the 4 pairs required for the second half
     // Special case is ct_dim == 2 where first half is just full context 0
-    // and second half is just reuse context 1 thus having a earlier staring index
+    // and second half is just reuse context 1 thus having an earlier starting index
 
     const std::uint32_t ctx0_full = lltt::replay_insn(0, 5);
     const std::uint32_t ctx1_full = lltt::replay_insn(5, 5);
