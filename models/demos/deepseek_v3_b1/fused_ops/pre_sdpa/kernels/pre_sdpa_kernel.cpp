@@ -549,12 +549,13 @@ void kernel_main() {
         // matmul_in1 and matmul2_in1 both point to the same merged CB.
         // One push covers the entire merged shard: buffer1 tiles + buffer2 tiles.
         constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
-        constexpr uint32_t matmul_k_num_tiles = get_named_compile_time_arg_val("matmul_k_num_tiles");
-        constexpr uint32_t matmul_out_w_per_core = get_named_compile_time_arg_val("matmul_out_w_per_core");
-        constexpr uint32_t matmul2_k_num_tiles = get_named_compile_time_arg_val("matmul2_k_num_tiles");
-        constexpr uint32_t matmul2_out_w_per_core = get_named_compile_time_arg_val("matmul2_out_w_per_core");
-        constexpr uint32_t merged_total_tiles =
-            (matmul_k_num_tiles * matmul_out_w_per_core) + (matmul2_k_num_tiles * matmul2_out_w_per_core);
+        constexpr uint32_t merged_total_tiles = get_named_compile_time_arg_val("merged_total_tiles");
+
+        // Byte offsets within the merged CB for each matmul's weights
+        constexpr uint32_t merged_mm_offset_bytes = get_named_compile_time_arg_val("merged_mm_offset_bytes");  // 0
+        constexpr uint32_t merged_mm2_offset_bytes =
+            get_named_compile_time_arg_val("merged_mm2_offset_bytes");  // 224 * 1088
+
         unified_kernels::setup_sharded_buffer(matmul2_in1, merged_total_tiles);
     }
     if constexpr (Core::is_qnope_core) {

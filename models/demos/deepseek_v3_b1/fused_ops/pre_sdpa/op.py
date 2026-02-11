@@ -318,6 +318,15 @@ class PreSDPA:
         matmul2_weights_shard_width = matmul2_weights_shard_shape[1]  # Width dimension
         matmul2_out_w = matmul2_weights_shard_width // matmul2_weights_tile.tile_shape[1]  # Per-core width in tiles
 
+        # Get merged weights shard spec
+        merged_weights_sample = merged_weights_tensors_per_device[0]
+        merged_weights_memory_config = merged_weights_sample.memory_config()
+        merged_weights_tile = merged_weights_sample.get_tile()
+        merged_weights_shard_shape = merged_weights_memory_config.shard_spec.shape
+        merged_total_tiles = (merged_weights_shard_shape[0] // merged_weights_tile.tile_shape[0]) * (
+            merged_weights_shard_shape[1] // merged_weights_tile.tile_shape[1]
+        )
+
         # Extract matmul3 weights core grid (for inferring QNOPE grid dimensions)
         matmul3_weights_sample = matmul3_weights_tensors_per_device[0]
         matmul3_weights_memory_config = matmul3_weights_sample.memory_config()
@@ -584,12 +593,23 @@ class PreSDPA:
         # num_tiles_k = number of 1x32 tiles in the input (same as mcast_dst_num_pages)
         matmul_num_tiles_k = mcast_dst_num_pages
 
+        # Merged weights parameters
+        # matmul reads from offset 0 (buffer1 is at the start)
+        # matmul2 reads from after buffer1 (buffer2 follows buffer1 in each shard)
+        merged_weights_tile_size = matmul_weights_tile.get_tile_size(matmul_weights_sample.dtype)  # 1088 for bfp8 32x32
+        mm_tiles_per_core = matmul_num_tiles_k * matmul1_out_w  # 224 tiles
+        merged_mm_offset_bytes = 0
+        merged_mm2_offset_bytes = mm_tiles_per_core * merged_weights_tile_size  # 224 * 1088
+
         # Matmul compile-time args (different per RISC, only pass what's used)
         # NCRISC: in1, num_tiles
         matmul_ncrisc_named_compile_time_args = [
             ("matmul_in1", merged_weights_cb),
             ("matmul_k_num_tiles", matmul_num_tiles_k),
             ("matmul_out_w_per_core", matmul1_out_w),
+            ("merged_total_tiles", merged_total_tiles),
+            ("merged_mm_offset_bytes", merged_mm_offset_bytes),
+            ("merged_mm2_offset_bytes", merged_mm2_offset_bytes),
         ]
         # BRISC: out
         matmul_brisc_named_compile_time_args = [
