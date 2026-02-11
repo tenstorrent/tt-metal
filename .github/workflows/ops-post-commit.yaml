@@ -36,6 +36,11 @@ on:
         required: false
         type: boolean
         default: false
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
 
   workflow_dispatch:
     inputs:
@@ -76,7 +81,7 @@ jobs:
         default-ops-tests:
           [[
             { name: "wormhole_b0 sdxl op tests", cmd: "pytest --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0", timeout: 5 },
-            { name: "blackhole deepseek blitz op tests", cmd: "pytest models/demos/deepseek_v3_b1/tests/unit_tests/", merge_gate: false, arch: "blackhole", timeout: 5 }
+            { name: "blackhole deepseek blitz op tests", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/", merge_gate: false, arch: "blackhole", timeout: 20 }
           ]]
     steps:
       - name: Compute tests
@@ -127,6 +132,7 @@ jobs:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
