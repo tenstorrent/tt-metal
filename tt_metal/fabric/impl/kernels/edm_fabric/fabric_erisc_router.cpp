@@ -1644,7 +1644,6 @@ FORCE_INLINE void update_bw_cycles(
 
 constexpr bool amortize_completion_acks_sender = false;
 
-
 template <typename ReceiverPointersT>
 FORCE_INLINE void sender_side_process_completions_from_receiver(
     ReceiverPointersT& outbound_to_receiver_channel_pointers) {
@@ -1652,20 +1651,6 @@ FORCE_INLINE void sender_side_process_completions_from_receiver(
         outbound_to_receiver_channel_pointers
             .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
-
-        // n_completed += completions_since_last_check;
-        // if (n_completed > n_sent) {
-        //     WATCHER_RING_BUFFER_PUSH(0xdeadbee1);
-        //     // WATCHER_RING_BUFFER_PUSH(n_completed);
-        //     // WATCHER_RING_BUFFER_PUSH(n_sent);
-        //     // WATCHER_RING_BUFFER_PUSH(n_acked);
-        //     // for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        //     //     WATCHER_RING_BUFFER_PUSH(0xabcd0000 | i);
-        //     //     WATCHER_RING_BUFFER_PUSH(n_sent_by_channel[i]);
-        //     //     WATCHER_RING_BUFFER_PUSH(n_acked_by_channel[i]);
-        //     // }
-        //     hung = true;
-        // }
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         outbound_to_receiver_channel_pointers.increment_num_processed_completions(completions_since_last_check);
     }
@@ -1702,10 +1687,6 @@ FORCE_INLINE
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry) {
 
-    // if (hung) {
-    //     return false;
-    // }
-
     bool progress = false;
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
@@ -1714,9 +1695,6 @@ FORCE_INLINE
 
     constexpr bool use_bubble_flow_control =
         sender_channel_is_traffic_injection_channel[sender_channel_index] && enable_deadlock_avoidance;
-    static_assert(
-        !use_bubble_flow_control || enable_first_level_ack,
-        "Bubble flow control and first level ack must be set to the same values");
 
     bool receiver_has_space_for_packet;
     if constexpr (use_bubble_flow_control) {
@@ -1733,7 +1711,7 @@ FORCE_INLINE
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
     if (can_send) {
-        WATCHER_RING_BUFFER_PUSH(0x55550000);
+        // WATCHER_RING_BUFFER_PUSH(0x55550000);
         did_something = true;
         progress = true;
 
@@ -1742,7 +1720,6 @@ FORCE_INLINE
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
-        // WATCHER_RING_BUFFER_PUSH(0x00005555);
         send_next_data<
             sender_channel_index,
             to_receiver_pkts_sent_id,
@@ -1752,10 +1729,6 @@ FORCE_INLINE
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
-
-        // n_sent++;
-        // n_sent_by_channel[sender_channel_index]++;
-        WATCHER_RING_BUFFER_PUSH(0x50000000 | sender_channel_index | (n_sent_by_channel[sender_channel_index] << 8));
 
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -1774,21 +1747,6 @@ FORCE_INLINE
                     sender_channel_from_receiver_credits
                         .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
                 if (completions_since_last_check) {
-                    // n_completed += completions_since_last_check;
-                    // WATCHER_RING_BUFFER_PUSH(0xCCCC0000);
-                    // WATCHER_RING_BUFFER_PUSH(completions_since_last_check);
-                    // if (n_completed > n_sent) {
-                    //     WATCHER_RING_BUFFER_PUSH(0xdeadbee2);
-                    //     // WATCHER_RING_BUFFER_PUSH(n_completed);
-                    //     // WATCHER_RING_BUFFER_PUSH(n_sent);
-                    //     // WATCHER_RING_BUFFER_PUSH(n_acked);
-                    //     // for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-                    //     //     WATCHER_RING_BUFFER_PUSH(0xabcd0000 | i);
-                    //     //     WATCHER_RING_BUFFER_PUSH(n_sent_by_channel[i]);
-                    //     //     WATCHER_RING_BUFFER_PUSH(n_acked_by_channel[i]);
-                    //     // }
-                    //     hung = true;
-                    // }
                     outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
                     sender_channel_from_receiver_credits.increment_num_processed_completions(
                         completions_since_last_check);
@@ -1799,12 +1757,7 @@ FORCE_INLINE
                 sender_channel_from_receiver_credits
                     .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
             if (completions_since_last_check) {
-                WATCHER_RING_BUFFER_PUSH(0x55551000);
                 outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
-                // WATCHER_RING_BUFFER_PUSH(0xAA000000 |
-                // sender_channel_from_receiver_credits.to_sender_packets_completed_stream);
-                // WATCHER_RING_BUFFER_PUSH(0xAA100000 | completions_since_last_check);
-                // WATCHER_RING_BUFFER_PUSH(0xAA200000 | outbound_to_receiver_channel_pointers.num_free_slots);
                 // TODO: need to grab credits from sender_channel_from_receiver_credits
                 send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                     local_sender_channel_worker_interface,
@@ -1817,16 +1770,14 @@ FORCE_INLINE
 
     // Process ACKs from receiver
     if constexpr (enable_first_level_ack) {
-        auto /*[*/new_acks_for_this_channel/*, new_acks_for_this_channel_packed]*/ =
+        auto new_acks_for_this_channel =
             sender_channel_from_receiver_credits
                 .template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
-            // commenting out didn't outright fail (nd hang)
         if constexpr (multi_txq_enabled) {
             // this is redundant actually
             new_acks_for_this_channel = new_acks_for_this_channel & (0xFF << (sender_channel_index * 8));
         }
         if (new_acks_for_this_channel != 0) {
-            WATCHER_RING_BUFFER_PUSH(0xAAAA0000 | sender_channel_index);
             constexpr uint8_t CHANNELS_IN_REG0 = multi_txq_enabled ? MAX_ACK_CREDITS_PER_L1_WORD : MAX_ACK_CREDITS_PER_OVERLAY_REGISTER;
             constexpr uint32_t shift = multi_txq_enabled ? sender_channel_index * 8
                                        : sender_channel_index < CHANNELS_IN_REG0
@@ -1834,27 +1785,6 @@ FORCE_INLINE
                                            : (sender_channel_index - CHANNELS_IN_REG0) * 8;
 
             uint32_t new_acks_unpacked = new_acks_for_this_channel >> shift;
-
-            // n_acked += new_acks_unpacked;
-            // n_acked_by_channel[sender_channel_index] += new_acks_unpacked;
-            // if (n_acked > n_sent || n_acked_by_channel[sender_channel_index] > n_sent_by_channel[sender_channel_index]) {
-            //     WATCHER_RING_BUFFER_PUSH(new_acks_unpacked);
-            //     WATCHER_RING_BUFFER_PUSH(0xdeadbee0);
-            //     WATCHER_RING_BUFFER_PUSH(new_acks_for_this_channel_packed);
-            //     WATCHER_RING_BUFFER_PUSH(sender_channel_from_receiver_credits.m.acks_received_and_processed);
-            //     WATCHER_RING_BUFFER_PUSH(n_completed);
-            //     WATCHER_RING_BUFFER_PUSH(n_sent);
-            //     WATCHER_RING_BUFFER_PUSH(n_acked);
-            //     WATCHER_RING_BUFFER_PUSH(0xabcd0000 | sender_channel_index);
-            //     WATCHER_RING_BUFFER_PUSH(n_sent_by_channel[sender_channel_index]);
-            //     WATCHER_RING_BUFFER_PUSH(n_acked_by_channel[sender_channel_index]);
-            //     // for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-            //     //     WATCHER_RING_BUFFER_PUSH(0xabcd0000 | i);
-            //     //     WATCHER_RING_BUFFER_PUSH(n_sent_by_channel[i]);
-            //     //     WATCHER_RING_BUFFER_PUSH(n_acked_by_channel[i]);
-            //     // }
-            //     hung = true;
-            // }
             // increment_num_processed_acks expects UNPACKED value (not packed!)
             // It internally calls add_to_channel<sender_channel_index>(current, delta)
             // where delta must be uint8_t. Passing packed value causes truncation.
