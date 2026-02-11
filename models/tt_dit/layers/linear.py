@@ -283,16 +283,9 @@ class RowParallelLinear(Module):
         )
 
         if self._mesh_axis_size > 1:
-            needs_reshape = len(output.shape) <= 3
-            if needs_reshape:
-                output = ttnn.unsqueeze(output, 0)
-
             output = self.ccl_manager.reduce_scatter(
-                output, dim=3, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output, dim=-1, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
-
-            if needs_reshape:
-                output = ttnn.squeeze(output, 0)
 
         return output
 
