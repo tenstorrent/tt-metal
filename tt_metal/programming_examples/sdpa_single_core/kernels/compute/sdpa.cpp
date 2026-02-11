@@ -450,9 +450,20 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     {
         tile_regs_wait();
         uint32_t dst_index = 0;
+        // Use fast exp with InputClamping::None and 32 iterations for 1.3x speedup
+        // When vector_mode is RC, use 32 iterations with VectorMode::None
+        // Otherwise, use 8 iterations with the original vector_mode
+        constexpr int iterations = (vector_mode == (int)VectorMode::RC) ? 32 : 8;
+        constexpr int vector_mode_exp = (vector_mode == (int)VectorMode::RC) ? (int)VectorMode::None : vector_mode;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
-                exp_packthread_tile<true, true>(dst_index++, vector_mode);
+                exp_packthread_tile<
+                    true,   // approx
+                    true,   // fast_and_approx
+                    false,  // scale_en
+                    false,  // skip_positive_check
+                    InputClamping::None,
+                    iterations>(dst_index++, vector_mode_exp);
             }
         }
         PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
@@ -623,7 +634,10 @@ void sdpa_inner_loop_8x4x16(
         uint32_t q_index_offset = 0;
         uint32_t kt_index_offset = 0;
 
-        exp_packthread_tile_init<true, true, scale_fp32>();
+        // Initialize fast approximate exp with no input clamping for 1.3x speedup
+        exp_packthread_tile_init<true, true, scale_fp32, InputClamping::None>();
+        // Configure packer ReLU to clamp negative artifacts from approximate exp
+        PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
         pack_reconfig_data_format(cb_qkt_im);
         reconfig_data_format(cb_kt_in, cb_q_in);
         cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
@@ -869,6 +883,9 @@ void sdpa_inner_loop_8x4x16(
             MATH(DPRINT << "Popping cb_qkt_im: " << Sq_chunk_t * Sk_chunk_t << " tiles" << ENDL());
             cb_pop_front(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
         }
+
+        // Restore packer ReLU config after all exp operations complete
+        PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 
         cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
 
