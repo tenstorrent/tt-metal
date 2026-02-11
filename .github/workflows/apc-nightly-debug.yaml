@@ -57,5 +57,5 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
       run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
-      run-models-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
+      run-t3000-apc-fast-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
