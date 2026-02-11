@@ -43,7 +43,7 @@
 #include "../../unified_kernels/kernel_utils.hpp"
 #include "../../unified_kernels/mcast.hpp"
 #include "../../unified_kernels/matmul.hpp"
-#include "../../unified_kernels/gather.hpp"
+#include "../../unified_kernels/moe_gather.hpp"
 #include "../../unified_kernels/deepseek_moe_gate.hpp"
 #include "../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../unified_kernels/eltwise_mul.hpp"
@@ -96,21 +96,14 @@ void kernel_main() {
             using GateMMCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
             deepseek_b1_ops::Matmul::ReaderArgs gate_mm_args{};
 
-            // Gather (sender)
-            deepseek_b1_ops::Gather::SenderArgs gather_args{
-                get_named_compile_time_arg_val("gather_dest_noc_x"),
-                get_named_compile_time_arg_val("gather_dest_noc_y"),
-                get_named_compile_time_arg_val("gather_data_size_bytes"),
-                get_named_compile_time_arg_val("gather_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("gather_src_cb"),
-                get_named_compile_time_arg_val("gather_src_num_pages"),
-                get_named_compile_time_arg_val("gather_sender_grid_start_x"),
-                get_named_compile_time_arg_val("gather_sender_grid_start_y"),
-                get_named_compile_time_arg_val("gather_sender_grid_end_x"),
-                get_named_compile_time_arg_val("gather_sender_grid_end_y"),
-                get_named_compile_time_arg_val("gather_row_major"),
-                get_named_compile_time_arg_val("gather_receiver_data_addr"),
-                0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
+            // Gather (receiver — MoeGather: receiver on NCRISC)
+            deepseek_b1_ops::MoeGather::ReceiverArgs gather_args{
+                get_named_compile_time_arg_val("gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather_noc1_num_senders"),
+                get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("gather_dst_cb"),
+                get_named_compile_time_arg_val("gather_dst_num_pages"),
             };
 
             // Gate (reader — no-op)
@@ -171,21 +164,14 @@ void kernel_main() {
             // Eltwise Mul (reader — no-op)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
 
-            // down_proj Gather (sender)
-            deepseek_b1_ops::Gather::SenderArgs down_proj_gather_args{
-                get_named_compile_time_arg_val("down_proj_gather_dest_noc_x"),
-                get_named_compile_time_arg_val("down_proj_gather_dest_noc_y"),
-                get_named_compile_time_arg_val("down_proj_gather_data_size_bytes"),
-                get_named_compile_time_arg_val("down_proj_gather_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("down_proj_gather_src_cb"),
-                get_named_compile_time_arg_val("down_proj_gather_src_num_pages"),
-                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_x"),
-                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_y"),
-                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_x"),
-                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_y"),
-                get_named_compile_time_arg_val("down_proj_gather_row_major"),
-                get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
-                get_named_compile_time_arg_val("down_proj_gather_sender_idx"),
+            // down_proj Gather (receiver — MoeGather: receiver on NCRISC)
+            deepseek_b1_ops::MoeGather::ReceiverArgs down_proj_gather_args{
+                get_named_compile_time_arg_val("down_proj_gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("down_proj_gather_noc1_num_senders"),
+                get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("down_proj_gather_dst_cb"),
+                get_named_compile_time_arg_val("down_proj_gather_dst_num_pages"),
             };
 
             // down_proj Mcast (receiver)
@@ -223,38 +209,24 @@ void kernel_main() {
             using GUMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::ReaderCTArgs;
             deepseek_b1_ops::KNSlicedMatmul::ReaderArgs gu_matmul_args{};
 
-            // Gate Gather (A) sender
-            deepseek_b1_ops::Gather::SenderArgs ag_args{
-                get_named_compile_time_arg_val("shared_ag_dest_noc_x"),
-                get_named_compile_time_arg_val("shared_ag_dest_noc_y"),
-                get_named_compile_time_arg_val("shared_ag_data_size_bytes"),
-                get_named_compile_time_arg_val("shared_ag_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_ag_src_cb"),
-                get_named_compile_time_arg_val("shared_ag_src_num_pages"),
-                0,
-                0,
-                0,
-                0,  // sender_grid (unused with UsePerCoreSenderIdx)
-                0,  // row_major (unused)
-                get_named_compile_time_arg_val("shared_ag_receiver_data_addr"),
-                get_named_compile_time_arg_val("shared_ag_sender_idx"),
+            // Gate Gather (A) receiver (MoeGather: receiver on NCRISC)
+            deepseek_b1_ops::MoeGather::ReceiverArgs ag_args{
+                get_named_compile_time_arg_val("shared_ag_noc0_num_senders"),
+                0,  // noc1_num_senders
+                get_named_compile_time_arg_val("shared_ag_noc0_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_ag_noc1_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_ag_dst_cb"),
+                get_named_compile_time_arg_val("shared_ag_dst_num_pages"),
             };
 
-            // Up Gather (B) sender
-            deepseek_b1_ops::Gather::SenderArgs bg_args{
-                get_named_compile_time_arg_val("shared_bg_dest_noc_x"),
-                get_named_compile_time_arg_val("shared_bg_dest_noc_y"),
-                get_named_compile_time_arg_val("shared_bg_data_size_bytes"),
-                get_named_compile_time_arg_val("shared_bg_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_bg_src_cb"),
-                get_named_compile_time_arg_val("shared_bg_src_num_pages"),
-                0,
-                0,
-                0,
-                0,
-                0,
-                get_named_compile_time_arg_val("shared_bg_receiver_data_addr"),
-                get_named_compile_time_arg_val("shared_bg_sender_idx"),
+            // Up Gather (B) receiver (MoeGather: receiver on NCRISC)
+            deepseek_b1_ops::MoeGather::ReceiverArgs bg_args{
+                get_named_compile_time_arg_val("shared_bg_noc0_num_senders"),
+                0,  // noc1_num_senders
+                get_named_compile_time_arg_val("shared_bg_noc0_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_bg_noc1_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_bg_dst_cb"),
+                get_named_compile_time_arg_val("shared_bg_dst_num_pages"),
             };
 
             // Gated Reduce (reader — no-op for NCRISC)
@@ -277,21 +249,14 @@ void kernel_main() {
             using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::ReaderCTArgs;
             deepseek_b1_ops::ResidualAdd::ReaderArgs residual_add_args{};
 
-            // Output Gather — sender (112 matmul cores → sender core)
-            deepseek_b1_ops::Gather::SenderArgs og_args{
-                get_named_compile_time_arg_val("shared_og_dest_noc_x"),
-                get_named_compile_time_arg_val("shared_og_dest_noc_y"),
-                get_named_compile_time_arg_val("shared_og_data_size_bytes"),
-                get_named_compile_time_arg_val("shared_og_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_og_src_cb"),
-                get_named_compile_time_arg_val("shared_og_src_num_pages"),
-                0,  // sender_grid_start_x (unused with UsePerCoreSenderIdx)
-                0,  // sender_grid_start_y
-                0,  // sender_grid_end_x
-                0,  // sender_grid_end_y
-                0,  // row_major (unused)
-                get_named_compile_time_arg_val("shared_og_receiver_data_addr"),
-                get_named_compile_time_arg_val("shared_residual_add_core_idx"),  // reuse matmul core index
+            // Output Gather — receiver (MoeGather: receiver on NCRISC)
+            deepseek_b1_ops::MoeGather::ReceiverArgs og_args{
+                get_named_compile_time_arg_val("shared_og_noc0_num_senders"),
+                get_named_compile_time_arg_val("shared_og_noc1_num_senders"),
+                get_named_compile_time_arg_val("shared_og_noc0_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_og_noc1_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_og_dst_cb"),
+                get_named_compile_time_arg_val("shared_og_dst_num_pages"),
             };
 
             // Output Mcast — receiver (DRAM cores receive into add_cb_in1)
@@ -376,14 +341,21 @@ void kernel_main() {
             using GateMMCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
             deepseek_b1_ops::Matmul::WriterArgs gate_mm_args{};
 
-            // Gather (receiver)
-            deepseek_b1_ops::Gather::ReceiverArgs gather_args{
-                get_named_compile_time_arg_val("gather_noc0_num_senders"),
-                get_named_compile_time_arg_val("gather_noc1_num_senders"),
-                get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("gather_dst_cb"),
-                get_named_compile_time_arg_val("gather_dst_num_pages"),
+            // Gather (sender — MoeGather: sender on BRISC)
+            deepseek_b1_ops::MoeGather::SenderArgs gather_args{
+                get_named_compile_time_arg_val("gather_dest_noc_x"),
+                get_named_compile_time_arg_val("gather_dest_noc_y"),
+                get_named_compile_time_arg_val("gather_data_size_bytes"),
+                get_named_compile_time_arg_val("gather_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("gather_src_cb"),
+                get_named_compile_time_arg_val("gather_src_num_pages"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather_row_major"),
+                get_named_compile_time_arg_val("gather_receiver_data_addr"),
+                0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
             };
 
             // Gate (writer)
@@ -434,13 +406,21 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mul_scalar_index_offset")>;
 
             // down_proj Gather (receiver)
-            deepseek_b1_ops::Gather::ReceiverArgs down_proj_gather_args{
-                get_named_compile_time_arg_val("down_proj_gather_noc0_num_senders"),
-                get_named_compile_time_arg_val("down_proj_gather_noc1_num_senders"),
-                get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("down_proj_gather_dst_cb"),
-                get_named_compile_time_arg_val("down_proj_gather_dst_num_pages"),
+            // down_proj Gather (sender — MoeGather: sender on BRISC)
+            deepseek_b1_ops::MoeGather::SenderArgs down_proj_gather_args{
+                get_named_compile_time_arg_val("down_proj_gather_dest_noc_x"),
+                get_named_compile_time_arg_val("down_proj_gather_dest_noc_y"),
+                get_named_compile_time_arg_val("down_proj_gather_data_size_bytes"),
+                get_named_compile_time_arg_val("down_proj_gather_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("down_proj_gather_src_cb"),
+                get_named_compile_time_arg_val("down_proj_gather_src_num_pages"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("down_proj_gather_row_major"),
+                get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_idx"),
             };
 
             // down_proj Mcast (sender)
@@ -470,24 +450,38 @@ void kernel_main() {
             using GUMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::WriterCTArgs;
             deepseek_b1_ops::KNSlicedMatmul::WriterArgs gu_matmul_args{};
 
-            // Gate Gather (A) receiver
-            deepseek_b1_ops::Gather::ReceiverArgs ag_args{
-                get_named_compile_time_arg_val("shared_ag_noc0_num_senders"),
-                0,  // noc1_num_senders
-                get_named_compile_time_arg_val("shared_ag_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_ag_noc1_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_ag_dst_cb"),
-                get_named_compile_time_arg_val("shared_ag_dst_num_pages"),
+            // Gate Gather (A) sender (MoeGather: sender on BRISC)
+            deepseek_b1_ops::MoeGather::SenderArgs ag_args{
+                get_named_compile_time_arg_val("shared_ag_dest_noc_x"),
+                get_named_compile_time_arg_val("shared_ag_dest_noc_y"),
+                get_named_compile_time_arg_val("shared_ag_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_ag_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_ag_src_cb"),
+                get_named_compile_time_arg_val("shared_ag_src_num_pages"),
+                0,
+                0,
+                0,
+                0,  // sender_grid (unused with UsePerCoreSenderIdx)
+                0,  // row_major (unused)
+                get_named_compile_time_arg_val("shared_ag_receiver_data_addr"),
+                get_named_compile_time_arg_val("shared_ag_sender_idx"),
             };
 
-            // Up Gather (B) receiver
-            deepseek_b1_ops::Gather::ReceiverArgs bg_args{
-                get_named_compile_time_arg_val("shared_bg_noc0_num_senders"),
-                0,  // noc1_num_senders
-                get_named_compile_time_arg_val("shared_bg_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_bg_noc1_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_bg_dst_cb"),
-                get_named_compile_time_arg_val("shared_bg_dst_num_pages"),
+            // Up Gather (B) sender (MoeGather: sender on BRISC)
+            deepseek_b1_ops::MoeGather::SenderArgs bg_args{
+                get_named_compile_time_arg_val("shared_bg_dest_noc_x"),
+                get_named_compile_time_arg_val("shared_bg_dest_noc_y"),
+                get_named_compile_time_arg_val("shared_bg_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_bg_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_bg_src_cb"),
+                get_named_compile_time_arg_val("shared_bg_src_num_pages"),
+                0,
+                0,
+                0,
+                0,
+                0,
+                get_named_compile_time_arg_val("shared_bg_receiver_data_addr"),
+                get_named_compile_time_arg_val("shared_bg_sender_idx"),
             };
 
             // Gated Reduce (writer — no-op for BRISC)
@@ -518,14 +512,21 @@ void kernel_main() {
             using ResidualAddCTArgs = deepseek_b1_ops::ResidualAdd::WriterCTArgs;
             deepseek_b1_ops::ResidualAdd::WriterArgs residual_add_args{};
 
-            // Output Gather — receiver (sender core collects from 112 matmul cores)
-            deepseek_b1_ops::Gather::ReceiverArgs og_args{
-                get_named_compile_time_arg_val("shared_og_noc0_num_senders"),
-                get_named_compile_time_arg_val("shared_og_noc1_num_senders"),
-                get_named_compile_time_arg_val("shared_og_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_og_noc1_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_og_dst_cb"),
-                get_named_compile_time_arg_val("shared_og_dst_num_pages"),
+            // Output Gather — sender (MoeGather: sender on BRISC)
+            deepseek_b1_ops::MoeGather::SenderArgs og_args{
+                get_named_compile_time_arg_val("shared_og_dest_noc_x"),
+                get_named_compile_time_arg_val("shared_og_dest_noc_y"),
+                get_named_compile_time_arg_val("shared_og_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_og_receiver_semaphore_id"),
+                get_named_compile_time_arg_val("shared_og_src_cb"),
+                get_named_compile_time_arg_val("shared_og_src_num_pages"),
+                0,  // sender_grid_start_x (unused with UsePerCoreSenderIdx)
+                0,  // sender_grid_start_y
+                0,  // sender_grid_end_x
+                0,  // sender_grid_end_y
+                0,  // row_major (unused)
+                get_named_compile_time_arg_val("shared_og_receiver_data_addr"),
+                get_named_compile_time_arg_val("shared_residual_add_core_idx"),  // reuse matmul core index
             };
 
             // Output Mcast — sender (sender core → 130 cores)
@@ -567,7 +568,7 @@ void kernel_main() {
             };
 
             // Gather (compute — no-op)
-            deepseek_b1_ops::Gather::ComputeArgs gather_args{};
+            deepseek_b1_ops::MoeGather::ComputeArgs gather_args{};
 
             // Gate (compute)
             using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ComputeCTArgs<
@@ -624,7 +625,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mul_fp32_dest_acc_en")>;
 
             // down_proj Gather (compute — no-op)
-            deepseek_b1_ops::Gather::ComputeArgs down_proj_gather_args{};
+            deepseek_b1_ops::MoeGather::ComputeArgs down_proj_gather_args{};
 
             // down_proj Mcast (compute — no-op)
             deepseek_b1_ops::Mcast::ComputeArgs down_proj_mcast_args{};
@@ -668,8 +669,8 @@ void kernel_main() {
             };
 
             // Gather (compute — no-op for TRISC)
-            deepseek_b1_ops::Gather::ComputeArgs ag_args{};
-            deepseek_b1_ops::Gather::ComputeArgs bg_args{};
+            deepseek_b1_ops::MoeGather::ComputeArgs ag_args{};
+            deepseek_b1_ops::MoeGather::ComputeArgs bg_args{};
 
             // Gated Reduce (compute)
             using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<
@@ -708,7 +709,7 @@ void kernel_main() {
             };
 
             // Output Gather (compute — no-op)
-            deepseek_b1_ops::Gather::ComputeArgs og_args{};
+            deepseek_b1_ops::MoeGather::ComputeArgs og_args{};
 
             // Output Mcast (compute — no-op)
             using OutputMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
@@ -746,15 +747,12 @@ void kernel_main() {
     // 3. Gather: Collect matmul outputs from compute cores to sender core
     {
         DeviceZoneScopedN("GATHER");
-        deepseek_b1_ops::Gather::Op<Core::Routed::is_gate_mm_core, Core::is_sender_core, true> gather;
+        deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_mm_core, Core::is_sender_core, true> gather;
         gather(moe.routed.gather_args);
     }
 
     // 3a. Shared Expert: Gate/Up KN-sliced matmul on 128 compute cores
-    //     Overlaps with Gate Compute (#4) — 128 cores do matmul while sender does TopK
-    //     pop_act=false (gate_proj cores still need input for DRAM streaming matmul)
     {
-        DeviceZoneScopedN("SHARED_GATE_UP_MATMUL");
         deepseek_b1_ops::KNSlicedMatmul::Op<Moe::Shared::GUMatmulCTArgs, Core::Shared::is_compute_core, false, false>
             shared_gu_matmul;
         shared_gu_matmul(moe.shared.gu_matmul_args);
@@ -787,11 +785,10 @@ void kernel_main() {
     }
 
     // 5c. Shared Expert: Gate Gather (A) — 64 gate cores send to sender core
-    //     Placed after mcasts so sender BRISC doesn't block routed expert
-    //     pop_src=true: frees KNSlicedMatmul output after sending
+    //     Uses MoeGather (sender=BRISC) to avoid NOC contention with DRAM matmul (NCRISC)
     {
         DeviceZoneScopedN("SHARED_GATE_GATHER");
-        deepseek_b1_ops::Gather::Op<
+        deepseek_b1_ops::MoeGather::Op<
             Core::Shared::is_gate_compute_core,
             Core::Shared::is_gated_reduce_core,
             true,  // pop_src
@@ -803,7 +800,7 @@ void kernel_main() {
     // 5d. Shared Expert: Up Gather (B) — 64 up cores send to sender core
     {
         DeviceZoneScopedN("SHARED_UP_GATHER");
-        deepseek_b1_ops::Gather::Op<
+        deepseek_b1_ops::MoeGather::Op<
             Core::Shared::is_up_compute_core,
             Core::Shared::is_gated_reduce_core,
             true,  // pop_src
@@ -851,7 +848,8 @@ void kernel_main() {
     // 9. down_proj Gather: Gather fused output from gate_proj cores to sender core
     {
         DeviceZoneScopedN("DOWN_PROJ_GATHER");
-        deepseek_b1_ops::Gather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true> down_proj_gather;
+        deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
+            down_proj_gather;
         down_proj_gather(moe.routed.down_proj_gather_args);
     }
 
@@ -915,7 +913,7 @@ void kernel_main() {
     // 11e. Shared: Output Gather — 112 matmul cores → sender core
     {
         DeviceZoneScopedN("SHARED_OUTPUT_GATHER");
-        deepseek_b1_ops::Gather::Op<
+        deepseek_b1_ops::MoeGather::Op<
             Core::Shared::is_mcast_receiver_core,  // IsSenderCore: 112 matmul cores
             Core::is_sender_core,                  // IsReceiverCore: sender core
             /*pop_src=*/true,
