@@ -242,6 +242,8 @@ public:
     // Throws if the tensor is not on device.
     const DeviceTensor& device_tensor() const&;
     const DeviceTensor& device_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+    // Transfers ownership of the underlying DeviceTensor out.
+    DeviceTensor device_tensor() &&;
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
