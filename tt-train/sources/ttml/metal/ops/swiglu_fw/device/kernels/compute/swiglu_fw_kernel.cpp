@@ -199,25 +199,39 @@ inline void compute_M_for_r() {
 }
 
 // ============================================================================
-// Phase C: Accumulate Y += M @ W2 for one c_block using L1 accumulation.
-// Accumulates across k_blocks directly into cb_y (no partial CB).
+// Phase C: Accumulate Y += M @ W2 for one c_block using matmul_block + L1 acc.
+// W2 CB is now row-major: [k0_c0..k0_c3, k1_c0..k1_c3, ...]
+// matmul_block(rt_dim=1, ct_dim=block_size) processes all output columns at once.
 // ============================================================================
 inline void mul_MW2_accumulate_Y_l1(
     const uint32_t k_block_start, const uint32_t k_block_size, const uint32_t c_block_size, const bool first_k_block) {
     tile_regs_acquire();
 
-    // Wait for W2 batch
+    // Wait for W2 batch (row-major: block_size rows × block_size cols)
     constexpr uint32_t tiles_per_batch = block_size * block_size;
     cb_wait_front(cb_w2_idx, tiles_per_batch);
 
-    mm_init_short(cb_m_idx, cb_w2_idx, false);
+    // Use matmul_block: rt_dim=1 (single row M), ct_dim=block_size (all c output cols)
+    mm_block_init_short(
+        cb_m_idx,
+        cb_w2_idx,
+        /*transpose=*/false,
+        /*ct_dim=*/block_size,
+        /*rt_dim=*/1,
+        /*kt_dim=*/k_block_size);
 
-    // Compute Y[c] += sum_k M[k] * W2[k, c]
-    for (uint32_t c = 0; c < c_block_size; ++c) {
-        const uint32_t cb_col_offset = c * block_size;
-        for (uint32_t k = 0; k < k_block_size; ++k) {
-            matmul_tiles(cb_m_idx, cb_w2_idx, k_block_start + k, cb_col_offset + k, c);
-        }
+    // For each inner dim step k: M[k] × W2[k, c=0..block_size-1]
+    for (uint32_t k = 0; k < k_block_size; ++k) {
+        matmul_block(
+            cb_m_idx,
+            cb_w2_idx,
+            /*in0_index=*/k_block_start + k,
+            /*in1_index=*/k * block_size,  // Row k in W2 CB (row-major)
+            /*dst_index=*/0,
+            /*transpose=*/false,
+            /*ct_dim=*/block_size,
+            /*rt_dim=*/1,
+            /*kt_dim=*/k_block_size);
     }
 
     cb_pop_front(cb_w2_idx, tiles_per_batch);

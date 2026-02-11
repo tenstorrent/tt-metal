@@ -123,16 +123,18 @@ void kernel_main() {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
-                const uint32_t w2_first_col_start = k_block_start * Wt + c_block_start;
-                mcast_sender_read_batched_cols_and_send_loopback(
+                // W2 in row-major CB layout: [k0_c0..k0_c3, k1_c0..k1_c3, ...]
+                // This enables matmul_block in the compute kernel
+                const uint32_t w2_first_row_start = k_block_start * Wt + c_block_start;
+                mcast_sender_read_batched_rows_and_send_loopback(
                     cb_w2_idx,
                     w2_address_generator,
-                    w2_first_col_start,
-                    block_size,
-                    block_size,
-                    k_block_size,
-                    c_block_size,
-                    Wt,
+                    w2_first_row_start,
+                    block_size,    // tiles_per_row (c tiles)
+                    block_size,    // num_rows (k tiles)
+                    c_block_size,  // valid_tiles_per_row
+                    k_block_size,  // valid_num_rows
+                    Wt,            // row_stride (width of W2 matrix)
                     tile_bytes,
                     mcast_sender_sem_ptr,
                     mcast_receiver_sem_ptr,
