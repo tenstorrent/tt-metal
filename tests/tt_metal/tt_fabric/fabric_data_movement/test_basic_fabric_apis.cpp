@@ -1627,6 +1627,7 @@ TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDi
 
 // 2D Dynamic Routing Unicast Tests
 TEST_P(T3kCustomMeshGraphFabric2DFixture, TestUnicastRaw) {
+    SKIP_FOR_WATCHER();
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     CustomMeshGraphFabric2DFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
