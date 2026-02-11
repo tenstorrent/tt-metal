@@ -31,11 +31,9 @@ class CreateQHeads:
         - Offset = (8*512) * elem_size + 2*qrope_col*64*elem_size
         - Signals semaphore once
 
-    NOC optimization:
-      - For each sender, we determine whether NOC0 or NOC1 has fewer hops to the target core
-      - NOC0 senders use NCRISC (RISCV_1)
-      - NOC1 senders use BRISC (RISCV_0)
-      - Receiver wait runs on the RISC not used by the sender on that core
+    RISC assignment (matching pre_sdpa gather pattern):
+      - All senders use NCRISC (RISCV_1)
+      - All receivers use BRISC (RISCV_0)
     """
 
     # Mapping from sender row index to target receiver core
@@ -130,16 +128,15 @@ class CreateQHeads:
         return output.reshape(1, -1)
 
     @staticmethod
-    def op(qnope_tensor, qrope_tensor, interm_tensor, output_tensor, noc=None):
+    def op(qnope_tensor, qrope_tensor, interm_tensor, output_tensor):
         """
         Execute gather heads operation using generic_op.
 
         Args:
             qnope_tensor: Qnope output tensor after matmul3 (sharded across 8x8 cores, [1, 512] per core)
-            qrope_tensor: Qrope output tensor (sharded across 4x8 cores, [2, 64] per core)
-            output_tensor: Pre-allocated output tensor (sharded on 4x2 cores)
-            noc: NOC to use for gather heads (ttnn.NOC.NOC_0 or ttnn.NOC.NOC_1). If None,
-                 automatically optimizes NOC routing based on hop distance for each sender core.
+            qrope_tensor: Qrope output tensor after RoPE (sharded across 4x8 cores, [2, 64] per core)
+            interm_tensor: Intermediate tensor for row-major data (sharded across 4x2 receiver cores)
+            output_tensor: Output tensor (sharded across 4x2 receiver cores, [8, 576] per core)
 
         Returns:
             Output tensor with input data gathered from all 12x8 cores to 4x2 cores
@@ -226,49 +223,11 @@ class CreateQHeads:
             target_noc_core = device.worker_core_from_logical_core(target_logical_core)
             target_noc_coords[row] = (target_noc_core.x, target_noc_core.y)
 
-        # Classify cores into NOC0 vs NOC1 based on hop distance to their target
-        # Each sender sends to exactly one target, so a core is either NOC0 or NOC1, not both
-        noc0_sender_cores = []
-        noc1_sender_cores = []
-
-        # Track per-receiver counts for each NOC (each receiver corresponds to one sender row)
-        noc0_senders_per_receiver = {row: 0 for row in range(sender_grid_height)}
-        noc1_senders_per_receiver = {row: 0 for row in range(sender_grid_height)}
-
-        if noc is not None:
-            # User specified NOC, use it for all cores
-            if noc == ttnn.NOC.NOC_0:
-                noc0_sender_cores = sender_cores_list
-                for core in sender_cores_list:
-                    noc0_senders_per_receiver[core.y - sender_grid_start_y] += 1
-            else:
-                noc1_sender_cores = sender_cores_list
-                for core in sender_cores_list:
-                    noc1_senders_per_receiver[core.y - sender_grid_start_y] += 1
-        else:
-            # Auto NOC routing: Choose the NOC with better overall hop distance
-            total_noc0_hops = 0
-            total_noc1_hops = 0
-            for core in sender_cores_list:
-                row_idx = core.y - sender_grid_start_y
-                if row_idx in sender_row_to_target_core:
-                    target_core = sender_row_to_target_core[row_idx]
-                    total_noc0_hops += device.get_worker_noc_hop_distance(core, target_core, ttnn.NOC.NOC_0)
-                    total_noc1_hops += device.get_worker_noc_hop_distance(core, target_core, ttnn.NOC.NOC_1)
-
-            # Use the NOC with lower total hop count
-            if total_noc0_hops <= total_noc1_hops:
-                noc0_sender_cores = sender_cores_list
-                for core in sender_cores_list:
-                    noc0_senders_per_receiver[core.y - sender_grid_start_y] += 1
-            else:
-                noc1_sender_cores = sender_cores_list
-                for core in sender_cores_list:
-                    noc1_senders_per_receiver[core.y - sender_grid_start_y] += 1
-
-        # Create CoreRangeSets for NOC0 and NOC1 sender cores (mutually exclusive)
-        noc0_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc0_sender_cores])
-        noc1_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc1_sender_cores])
+        # All senders use NCRISC (matching pre_sdpa gather pattern: NCRISC sender, BRISC receiver)
+        # Count senders per receiver row for semaphore initialization
+        senders_per_receiver = {row: 0 for row in range(sender_grid_height)}
+        for core in sender_cores_list:
+            senders_per_receiver[core.y - sender_grid_start_y] += 1
 
         # All cores for semaphore allocation
         all_cores = sender_core_grid.merge(receiver_core_grid)
@@ -331,28 +290,11 @@ class CreateQHeads:
         # Common sender compile-time args (shared by NOC0 and NOC1 senders)
         # Uses 3 separate semaphores for race-free synchronization
         # ========================================================================
-        # Dummy receiver args (needed for constexpr evaluation even in non-receiver code paths)
-        dummy_receiver_args = [
-            ("nope_phase1_semaphore_id", nope_phase1_semaphore_id),
-            ("nope_phase2_semaphore_id", nope_phase2_semaphore_id),
-            ("rope_semaphore_id", rope_semaphore_id),
-            ("receiver_in_cb", receiver_in_cb),
-            ("out_cb", out_cb),
-            ("dst_num_pages", dst_num_pages),
-            ("nope_tiles", nope_tiles),
-            ("rope_tiles", rope_tiles),
-            ("receiver_grid_start_x", receiver_grid_start_x),
-            ("receiver_grid_start_y", receiver_grid_start_y),
-            ("receiver_cols", receiver_cols),
-        ]
-
-        def create_sender_named_compile_time_args(is_noc0):
+        def create_sender_named_compile_time_args():
             args = [
-                # Sender role flags
+                # Sender role flags (all senders use NCRISC, matching pre_sdpa pattern)
                 ("is_sender_core", 1),
                 ("is_receiver_core", 0),
-                ("is_noc0_sender", 1 if is_noc0 else 0),
-                ("is_noc1_sender", 0 if is_noc0 else 1),
                 # Sender grid info for offset computation
                 ("sender_grid_start_x", sender_grid_start_x),
                 ("sender_grid_start_y", sender_grid_start_y),
@@ -380,119 +322,33 @@ class CreateQHeads:
                 else:
                     # Fill missing rows with dummy coordinates (0,0)
                     args.append((f"target_noc_coords_row{row}", 0))
-            # Add dummy receiver args for constexpr evaluation
-            args.extend(dummy_receiver_args)
             return args
 
-        # Classify receiver cores by their sender type
-        # Since receiver grid (4x2 at y=1-2) is within sender grid (12x8),
-        # ALL receiver cores are also sender cores - no "pure receivers"
-        receiver_cores_list = ttnn.corerange_to_cores(receiver_core_grid, row_wise=True)
-        noc0_sender_receiver_cores = [c for c in receiver_cores_list if noc0_core_range_set.contains(c)]
-        noc1_sender_receiver_cores = [c for c in receiver_cores_list if noc1_core_range_set.contains(c)]
-
-        # Sender-only cores (not receivers) - these need no-op on the other RISC
-        noc0_sender_only_cores = [c for c in noc0_sender_cores if not receiver_core_grid.contains(c)]
-        noc1_sender_only_cores = [c for c in noc1_sender_cores if not receiver_core_grid.contains(c)]
+        # ========================================================================
+        # Sender kernel (NCRISC) - all senders use NCRISC (matching pre_sdpa pattern)
+        # ========================================================================
+        sender_kernel = ttnn.KernelDescriptor(
+            kernel_source=kernel_path,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=sender_core_grid,
+            named_compile_time_args=create_sender_named_compile_time_args(),
+            common_runtime_args=[receiver_data_addr],
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC
+                noc=ttnn.NOC.NOC_0,
+            ),
+        )
+        kernels.append(sender_kernel)
 
         # ========================================================================
-        # NOC0 sender kernel (NCRISC) - all NOC0 senders
+        # Receiver kernel (BRISC) - all receivers use BRISC (matching pre_sdpa pattern)
         # ========================================================================
-        if not noc0_core_range_set.empty():
-            noc0_sender_kernel = ttnn.KernelDescriptor(
-                kernel_source=kernel_path,
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=noc0_core_range_set,
-                named_compile_time_args=create_sender_named_compile_time_args(is_noc0=True),
-                common_runtime_args=[receiver_data_addr],
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC
-                    noc=ttnn.NOC.NOC_0,
-                ),
-            )
-            kernels.append(noc0_sender_kernel)
-
-            # BRISC no-op for NOC0 sender-only cores (not receivers)
-            # NOC0 sender+receiver cores will have receiver logic on BRISC instead
-            if noc0_sender_only_cores:
-                noc0_sender_only_core_range_set = ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(c, c) for c in noc0_sender_only_cores]
-                )
-                noc0_sender_brisc_noop_args = [
-                    ("is_sender_core", 1),
-                    ("is_receiver_core", 0),
-                    ("is_noc0_sender", 1),
-                    ("is_noc1_sender", 0),
-                ] + dummy_receiver_args
-                noc0_sender_brisc_kernel = ttnn.KernelDescriptor(
-                    kernel_source=kernel_path,
-                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                    core_ranges=noc0_sender_only_core_range_set,
-                    named_compile_time_args=noc0_sender_brisc_noop_args,
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0,  # BRISC
-                        noc=ttnn.NOC.NOC_1,
-                    ),
-                )
-                kernels.append(noc0_sender_brisc_kernel)
-
-        # ========================================================================
-        # NOC1 sender kernel (BRISC) - all NOC1 senders
-        # ========================================================================
-        if not noc1_core_range_set.empty():
-            noc1_sender_kernel = ttnn.KernelDescriptor(
-                kernel_source=kernel_path,
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=noc1_core_range_set,
-                named_compile_time_args=create_sender_named_compile_time_args(is_noc0=False),
-                common_runtime_args=[receiver_data_addr],
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_0,  # BRISC
-                    noc=ttnn.NOC.NOC_1,
-                ),
-            )
-            kernels.append(noc1_sender_kernel)
-
-            # NCRISC no-op for NOC1 sender-only cores (not receivers)
-            # NOC1 sender+receiver cores will have receiver logic on NCRISC instead
-            if noc1_sender_only_cores:
-                noc1_sender_only_core_range_set = ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(c, c) for c in noc1_sender_only_cores]
-                )
-                noc1_sender_ncrisc_noop_args = [
-                    ("is_sender_core", 1),
-                    ("is_receiver_core", 0),
-                    ("is_noc0_sender", 0),
-                    ("is_noc1_sender", 1),
-                ] + dummy_receiver_args
-                noc1_sender_ncrisc_kernel = ttnn.KernelDescriptor(
-                    kernel_source=kernel_path,
-                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                    core_ranges=noc1_sender_only_core_range_set,
-                    named_compile_time_args=noc1_sender_ncrisc_noop_args,
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC
-                        noc=ttnn.NOC.NOC_0,
-                    ),
-                )
-                kernels.append(noc1_sender_ncrisc_kernel)
-
-        # ========================================================================
-        # Receiver kernels (runs on 4x2 receiver cores)
-        # All receiver cores are also sender cores (receiver grid is within sender grid)
-        # ========================================================================
-        # Receiver logic placement:
-        # 1. Receiver cores that are NOC0 senders: sender on NCRISC, receiver on BRISC
-        # 2. Receiver cores that are NOC1 senders: sender on BRISC, receiver on NCRISC
-
-        def create_receiver_named_compile_time_args(is_noc0_sender):
-            """Create receiver compile-time args with sender type flags."""
+        def create_receiver_named_compile_time_args():
+            """Create receiver compile-time args (all receivers use BRISC)."""
             args = [
-                # All receiver cores are also sender cores
+                # All receiver cores are also sender cores (receiver grid is within sender grid)
                 ("is_sender_core", 1),
                 ("is_receiver_core", 1),
-                ("is_noc0_sender", 1 if is_noc0_sender else 0),
-                ("is_noc1_sender", 0 if is_noc0_sender else 1),
                 # Semaphores (3 separate for race-free synchronization)
                 ("nope_phase1_semaphore_id", nope_phase1_semaphore_id),
                 ("nope_phase2_semaphore_id", nope_phase2_semaphore_id),
@@ -512,39 +368,19 @@ class CreateQHeads:
             ]
             return args
 
-        # NOC0 sender + receiver cores: sender on NCRISC, receiver on BRISC
-        if noc0_sender_receiver_cores:
-            noc0_sender_receiver_core_range_set = ttnn.CoreRangeSet(
-                [ttnn.CoreRange(c, c) for c in noc0_sender_receiver_cores]
-            )
-            noc0_sender_receiver_kernel = ttnn.KernelDescriptor(
+        # All receivers use BRISC (matching pre_sdpa pattern)
+        if not receiver_core_grid.empty():
+            receiver_kernel = ttnn.KernelDescriptor(
                 kernel_source=kernel_path,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=noc0_sender_receiver_core_range_set,
-                named_compile_time_args=create_receiver_named_compile_time_args(is_noc0_sender=True),
+                core_ranges=receiver_core_grid,
+                named_compile_time_args=create_receiver_named_compile_time_args(),
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0,  # BRISC
                     noc=ttnn.NOC.NOC_1,  # Use different NOC than sender
                 ),
             )
-            kernels.append(noc0_sender_receiver_kernel)
-
-        # NOC1 sender + receiver cores: sender on BRISC, receiver on NCRISC
-        if noc1_sender_receiver_cores:
-            noc1_sender_receiver_core_range_set = ttnn.CoreRangeSet(
-                [ttnn.CoreRange(c, c) for c in noc1_sender_receiver_cores]
-            )
-            noc1_sender_receiver_kernel = ttnn.KernelDescriptor(
-                kernel_source=kernel_path,
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=noc1_sender_receiver_core_range_set,
-                named_compile_time_args=create_receiver_named_compile_time_args(is_noc0_sender=False),
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC
-                    noc=ttnn.NOC.NOC_0,  # Use different NOC than sender
-                ),
-            )
-            kernels.append(noc1_sender_receiver_kernel)
+            kernels.append(receiver_kernel)
 
         # ========================================================================
         # Compute kernels (TRISC) - tilization on receiver cores

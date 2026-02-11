@@ -422,7 +422,6 @@ class PreSDPA:
         COMBINED_HEAD_SIZE = 576  # 512 (QNOPE) + 64 (QROPE) elements per combined head
         QNOPE_DATA_SIZE = 512  # Elements per QNOPE head
         QROPE_HEAD_DIM = 64  # Elements per QROPE head
-        HEADS_PER_SDPA_INPUT_CORE = 8  # 8 heads per SDPA Input core
         QNOPE_COLS = 8  # Number of QNOPE sender columns
         QROPE_COLS = 4  # Number of QROPE sender columns
 
@@ -754,19 +753,19 @@ class PreSDPA:
         nope_tiles = 8  # [8, 256] / [8, 32] = 8 tiles per NOPE phase
         rope_tiles = 2  # [8, 64] / [8, 32] = 2 tiles for ROPE phase
 
-        # BRISC sender compile-time args (QNOPE/QROPE -> SDPA Input)
+        # NCRISC sender compile-time args (QNOPE/QROPE -> SDPA Input) - matching gather pattern: NCRISC sender, BRISC receiver
         # 3-phase synchronization: senders write to intermediate CB, TRISC tilizes to output
         # Pack NOC coordinates for each row's target SDPA Input core (x in lower 16 bits, y in upper 16 bits)
-        create_q_heads_brisc_named_compile_time_args = [
+        create_q_heads_ncrisc_named_compile_time_args = [
             # Packed coordinates (x | (y << 16)) for each source row's target
-            ("cqh_target_noc_coords_row0", sdpa_input_noc_coords[0][0] | (sdpa_input_noc_coords[0][1] << 16)),
-            ("cqh_target_noc_coords_row1", sdpa_input_noc_coords[1][0] | (sdpa_input_noc_coords[1][1] << 16)),
-            ("cqh_target_noc_coords_row2", sdpa_input_noc_coords[2][0] | (sdpa_input_noc_coords[2][1] << 16)),
-            ("cqh_target_noc_coords_row3", sdpa_input_noc_coords[3][0] | (sdpa_input_noc_coords[3][1] << 16)),
-            ("cqh_target_noc_coords_row4", sdpa_input_noc_coords[4][0] | (sdpa_input_noc_coords[4][1] << 16)),
-            ("cqh_target_noc_coords_row5", sdpa_input_noc_coords[5][0] | (sdpa_input_noc_coords[5][1] << 16)),
-            ("cqh_target_noc_coords_row6", sdpa_input_noc_coords[6][0] | (sdpa_input_noc_coords[6][1] << 16)),
-            ("cqh_target_noc_coords_row7", sdpa_input_noc_coords[7][0] | (sdpa_input_noc_coords[7][1] << 16)),
+            ("cqh_target_noc_coords_row0", (sdpa_input_noc_coords[0][1] << 16 | sdpa_input_noc_coords[0][0])),
+            ("cqh_target_noc_coords_row1", (sdpa_input_noc_coords[1][1] << 16 | sdpa_input_noc_coords[1][0])),
+            ("cqh_target_noc_coords_row2", (sdpa_input_noc_coords[2][1] << 16 | sdpa_input_noc_coords[2][0])),
+            ("cqh_target_noc_coords_row3", (sdpa_input_noc_coords[3][1] << 16 | sdpa_input_noc_coords[3][0])),
+            ("cqh_target_noc_coords_row4", (sdpa_input_noc_coords[4][1] << 16 | sdpa_input_noc_coords[4][0])),
+            ("cqh_target_noc_coords_row5", (sdpa_input_noc_coords[5][1] << 16 | sdpa_input_noc_coords[5][0])),
+            ("cqh_target_noc_coords_row6", (sdpa_input_noc_coords[6][1] << 16 | sdpa_input_noc_coords[6][0])),
+            ("cqh_target_noc_coords_row7", (sdpa_input_noc_coords[7][1] << 16 | sdpa_input_noc_coords[7][0])),
             ("cqh_head_stride_bytes", head_stride_bytes),
             ("cqh_qnope_data_size_bytes", qnope_data_size_bytes),
             ("cqh_qrope_head_size_bytes", qrope_head_size_bytes),
@@ -782,10 +781,10 @@ class PreSDPA:
             ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB for row-major data
         ]
 
-        # NCRISC receiver compile-time args (SDPA Input cores)
+        # BRISC receiver compile-time args (SDPA Input cores) - matching gather pattern: NCRISC sender, BRISC receiver
         # 3-phase receiver: waits for each phase's semaphore, then marks pages in intermediate CB
-        # Prefixed with "cqh_" to avoid name collisions with other NCRISC args
-        create_q_heads_ncrisc_named_compile_time_args = [
+        # Prefixed with "cqh_" to avoid name collisions with other BRISC args
+        create_q_heads_brisc_named_compile_time_args = [
             ("cqh_nope_phase1_semaphore_id", nope_phase1_semaphore_id),
             ("cqh_nope_phase2_semaphore_id", nope_phase2_semaphore_id),
             ("cqh_rope_semaphore_id", rope_semaphore_id),

@@ -169,11 +169,10 @@ def test_create_q_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
     )
 
     logger.info(f"Created tensors: qnope={ttnn_qnope.shape}, qrope={ttnn_qrope.shape}, output={ttnn_output.shape}")
-    logger.info(f"NOC mode: {noc if noc else 'Auto'}")
 
     # Run create Q heads operation
     logger.info("Running create Q heads operation...")
-    ttnn_result = CreateQHeads.op(ttnn_qnope, ttnn_qrope, ttnn_interm, ttnn_output, noc)
+    ttnn_result = CreateQHeads.op(ttnn_qnope, ttnn_qrope, ttnn_interm, ttnn_output)
 
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_result)

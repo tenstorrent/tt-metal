@@ -14,7 +14,7 @@
 // - BRISC: CCL Broadcast Writer + RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores),
 // Gather receiver (on
 //          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores),
-//          CreateQHeads receiver (on sdpa input cores)
+//          CreateQHeads receiver (on sdpa input cores) - matching gather pattern: NCRISC sender, BRISC receiver
 // - TRISC: RMSNorm compute (on input core), Matmul compute (on matmul cores), RMSNorm2 compute (on input core),
 //          Matmul2 compute (on matmul2 cores), Matmul3 compute (on qnope cores), RoPE compute (on qrope cores)
 //
@@ -149,6 +149,38 @@ void kernel_main() {
 
     // Qrope reader args (NCRISC is no-op)
     deepseek_b1_ops::Rope::ReaderArgs qrope_args{};
+
+    // NCRISC: Sender args for QNOPE/QROPE cores (matching gather pattern: NCRISC sender, BRISC receiver)
+    // Senders write to intermediate CB (receiver_in_cb), not directly to output
+    // 3-phase synchronization: nope_phase1, nope_phase2, rope semaphores
+    // All args prefixed with "cqh_" to avoid name collisions with other ops
+    constexpr uint32_t cqh_receiver_in_cb = get_named_compile_time_arg_val("cqh_receiver_in_cb");
+    deepseek_b1_ops::CreateQHeads::SenderArgs create_q_heads_args{
+        0,  // sender_grid_start_x (logical 0)
+        0,  // sender_grid_start_y (logical 0)
+        get_named_compile_time_arg_val("cqh_qnope_data_size_bytes"),
+        get_named_compile_time_arg_val("cqh_qrope_head_size_bytes"),
+        get_named_compile_time_arg_val("cqh_head_stride_bytes"),
+        get_named_compile_time_arg_val("cqh_qnope_cols"),
+        get_named_compile_time_arg_val("cqh_qnope_src_cb"),
+        get_named_compile_time_arg_val("cqh_qrope_src_cb"),
+        Core::is_qnope_core ? get_named_compile_time_arg_val("cqh_qnope_src_num_pages")
+                            : get_named_compile_time_arg_val("cqh_qrope_src_num_pages"),
+        get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_rope_semaphore_id"),
+        {
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row0"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row1"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row2"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row3"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row4"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row5"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row6"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row7"),
+        },
+        get_write_ptr(cqh_receiver_in_cb),  // Write to intermediate CB for tilization
+    };
 
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
     using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
@@ -288,6 +320,19 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
+    // BRISC: Receiver args for SDPA input cores (matching gather pattern: NCRISC sender, BRISC receiver)
+    deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_args{
+        get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_rope_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_num_nope_senders"),
+        get_named_compile_time_arg_val("cqh_num_rope_senders"),
+        get_named_compile_time_arg_val("cqh_receiver_in_cb"),
+        get_named_compile_time_arg_val("cqh_out_cb"),
+        get_named_compile_time_arg_val("cqh_nope_tiles"),
+        get_named_compile_time_arg_val("cqh_rope_tiles"),
+    };
+
     // Matmul2 writer args (BRISC is no-op)
     deepseek_b1_ops::Matmul::WriterArgs matmul2_args{};
 
@@ -319,38 +364,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast2_src_num_pages"),
         get_read_ptr(mcast2_src_cb),  // Read from rmsnorm2_output_cb
         get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
-    };
-
-    // BRISC: Sender args for QNOPE/QROPE cores
-    // Senders write to intermediate CB (receiver_in_cb), not directly to output
-    // 3-phase synchronization: nope_phase1, nope_phase2, rope semaphores
-    // All args prefixed with "cqh_" to avoid name collisions with other ops
-    constexpr uint32_t cqh_receiver_in_cb = get_named_compile_time_arg_val("cqh_receiver_in_cb");
-    deepseek_b1_ops::CreateQHeads::SenderArgs create_q_heads_args{
-        0,  // sender_grid_start_x (logical 0)
-        0,  // sender_grid_start_y (logical 0)
-        get_named_compile_time_arg_val("cqh_qnope_data_size_bytes"),
-        get_named_compile_time_arg_val("cqh_qrope_head_size_bytes"),
-        get_named_compile_time_arg_val("cqh_head_stride_bytes"),
-        get_named_compile_time_arg_val("cqh_qnope_cols"),
-        get_named_compile_time_arg_val("cqh_qnope_src_cb"),
-        get_named_compile_time_arg_val("cqh_qrope_src_cb"),
-        Core::is_qnope_core ? get_named_compile_time_arg_val("cqh_qnope_src_num_pages")
-                            : get_named_compile_time_arg_val("cqh_qrope_src_num_pages"),
-        get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_id"),
-        get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_id"),
-        get_named_compile_time_arg_val("cqh_rope_semaphore_id"),
-        {
-            get_named_compile_time_arg_val("cqh_target_noc_coords_row0"),
-            get_named_compile_time_arg_val("cqh_target_noc_coords_row1"),
-            get_named_compile_time_arg_val("cqh_target_noc_coords_row2"),
-            get_named_compile_time_arg_val("cqh_target_noc_coords_row3"),
-            get_named_compile_time_arg_val("cqh_target_noc_coords_row4"),
-            get_named_compile_time_arg_val("cqh_target_noc_coords_row5"),
-            get_named_compile_time_arg_val("cqh_target_noc_coords_row6"),
-            get_named_compile_time_arg_val("cqh_target_noc_coords_row7"),
-        },
-        get_write_ptr(cqh_receiver_in_cb),  // Write to intermediate CB for tilization
     };
 
     // Matmul writer args (BRISC is no-op)
@@ -611,19 +624,6 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);  // trans_mat is 1 tile (32x32)
     }
 
-    // NCRISC: Receiver args for SDPA input cores
-    deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_args{
-        get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_id"),
-        get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_id"),
-        get_named_compile_time_arg_val("cqh_rope_semaphore_id"),
-        get_named_compile_time_arg_val("cqh_num_nope_senders"),
-        get_named_compile_time_arg_val("cqh_num_rope_senders"),
-        get_named_compile_time_arg_val("cqh_receiver_in_cb"),
-        get_named_compile_time_arg_val("cqh_out_cb"),
-        get_named_compile_time_arg_val("cqh_nope_tiles"),
-        get_named_compile_time_arg_val("cqh_rope_tiles"),
-    };
-
     if constexpr (Core::is_dkv_matmul_core) {
         // Matmul weights (in1)
         constexpr uint32_t dkv_matmul_in1 = get_named_compile_time_arg_val("dkv_matmul_in1");
@@ -812,6 +812,7 @@ void kernel_main() {
         // Phase 2: QNOPE second 256 elements → [8, 256] row-major → 8 tiles
         // Phase 3: QROPE 64 elements per head → [8, 64] row-major → 2 tiles
         // Senders write to intermediate CB, TRISC tilizes to output CB
+        // NCRISC sends from qnope/qrope cores, BRISC receives on sdpa input cores, TRISC no-op
         // ========================================================================
         {
             DeviceZoneScopedN("CREATE_Q_HEADS");

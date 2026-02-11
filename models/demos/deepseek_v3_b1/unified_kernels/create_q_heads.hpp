@@ -183,15 +183,19 @@ struct CreateQHeads {
                 // First half: tight row-major packing
                 uint32_t dst_offset_0 = my_col * half_qnope_data_size_bytes;
                 uint64_t dst_data_noc_addr_0 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_0);
-                noc_async_write(src_addr, dst_data_noc_addr_0, half_qnope_data_size_bytes);
-                noc_async_write_barrier();
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
+                    src_addr, dst_data_noc_addr_0, half_qnope_data_size_bytes);
+                noc_async_writes_flushed();
+                noc_async_atomic_barrier();
                 noc_semaphore_inc(phase1_semaphore_noc_addr, 1);
 
                 // Second half: continues after first block
                 uint32_t dst_offset_1 = (args.qnope_cols * half_qnope_data_size_bytes) + dst_offset_0;
                 uint64_t dst_data_noc_addr_1 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_1);
-                noc_async_write(src_addr + half_qnope_data_size_bytes, dst_data_noc_addr_1, half_qnope_data_size_bytes);
-                noc_async_write_barrier();
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
+                    src_addr + half_qnope_data_size_bytes, dst_data_noc_addr_1, half_qnope_data_size_bytes);
+                noc_async_writes_flushed();
+                noc_async_atomic_barrier();
                 noc_semaphore_inc(phase2_semaphore_noc_addr, 1);
             } else {
                 // QROPE core: Write 2 heads × 64 elements = 128 elements
@@ -203,8 +207,10 @@ struct CreateQHeads {
                 uint32_t dst_offset =
                     (args.qnope_cols * args.qnope_data_size_bytes) + (2 * qrope_col * args.qrope_head_size_bytes);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset);
-                noc_async_write(src_addr, dst_data_noc_addr, args.qrope_head_size_bytes * 2);
-                noc_async_write_barrier();
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
+                    src_addr, dst_data_noc_addr, args.qrope_head_size_bytes * 2);
+                noc_async_writes_flushed();
+                noc_async_atomic_barrier();
                 noc_semaphore_inc(rope_semaphore_noc_addr, 1);
             }
 
