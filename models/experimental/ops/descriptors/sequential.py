@@ -9,12 +9,16 @@ Fuses multiple operations to run sequentially on the SAME cores within a
 single program.  All readers/writers run for every phase.  Data flows through
 DRAM between phases (Writer_N -> DRAM -> Reader_{N+1}).
 
-No CB remapping — each phase uses its native CB indices (0-31).
-CB descriptors are merged as max(total_size) per index across phases.
+CB Remapping: each phase's CB indices are remapped to sequential
+non-overlapping indices in the fused kernel.  For example, if phase 0
+uses CB{0, 4, 19} and phase 1 uses CB{0, 1, 18}, the fused kernel
+remaps these to CB{0, 1, 2, 3, 4, 5}.  If the total CBs across all
+phases exceed 32, an error is raised.  Because each phase has dedicated
+CB indices, no CB reset or TRISC0 resync is needed between phases.
 
 Two-level barrier synchronization between phases:
   - Local barrier (per core): L1 flags allocated via GlobalSemaphore.
-    Compute/writer signal done, reader waits then resets CBs.
+    Compute/writer signal done, reader waits before starting next phase.
   - Global barrier (across cores): Reader uses noc_semaphore_inc/wait
     on GlobalSemaphore L1 words, then sets global_release which also
     serves as the phase release signal for compute/writer.
@@ -493,63 +497,93 @@ def _transform_phase_source(source: str, phase_idx: int, ct_arg_offset: int = 0)
 
 
 # =============================================================================
-# CB Descriptor Merging
+# CB Remapping
 # =============================================================================
 
 NUM_CIRCULAR_BUFFERS = 32
 
 
-def _merge_cb_descriptors(phases: List[PhaseInfo]) -> list:
-    """Merge CB descriptors from all phases.
+def _compute_cb_remapping(phases: List[PhaseInfo]) -> List[Dict[int, int]]:
+    """Compute per-phase CB remapping to sequential non-overlapping indices.
 
-    For each CB index used by any phase, keeps the descriptor with the
-    largest total_size so the CB can accommodate any phase's data.
+    Each phase's CB indices (from CBDescriptors) are remapped to a
+    contiguous range starting after the previous phase's last CB.
+    For example:
+      - Phase 0 uses CB{0, 4, 19} → remapped to {0→0, 4→1, 19→2}
+      - Phase 1 uses CB{0, 1, 18} → remapped to {0→3, 1→4, 18→5}
+
+    Raises ValueError if the total number of CBs exceeds 32.
+
+    Returns:
+        List of per-phase remapping dicts: [{original → remapped}, ...]
     """
-    cb_by_index: Dict[int, Any] = {}  # cb_index -> (largest_total_size, cb_desc)
+    next_free = 0
+    per_phase_remapping: List[Dict[int, int]] = []
 
     for phase in phases:
-        desc = phase.op_descriptor.descriptor
-        for cb_desc in desc.cbs:
-            for fmt_desc in cb_desc.format_descriptors:
-                cb_idx = fmt_desc.buffer_index
-                if cb_idx not in cb_by_index or cb_desc.total_size > cb_by_index[cb_idx][0]:
-                    cb_by_index[cb_idx] = (cb_desc.total_size, cb_desc)
+        remapping: Dict[int, int] = {}
+        for cb_idx in sorted(phase.cb_info.keys()):
+            remapping[cb_idx] = next_free
+            next_free += 1
+        per_phase_remapping.append(remapping)
 
-    return [cb_desc for _, (_, cb_desc) in sorted(cb_by_index.items())]
+    if next_free > NUM_CIRCULAR_BUFFERS:
+        details = []
+        for i, phase in enumerate(phases):
+            details.append(f"  Phase {i}: {len(phase.cb_info)} CBs {sorted(phase.cb_info.keys())}")
+        raise ValueError(
+            f"CB overflow: fused chain requires {next_free} CBs but only "
+            f"{NUM_CIRCULAR_BUFFERS} are available.\n" + "\n".join(details)
+        )
+
+    return per_phase_remapping
 
 
-# =============================================================================
-# Fused Kernel Source Generation
-# =============================================================================
+def _remap_cb_descriptors(
+    phases: List[PhaseInfo],
+    remappings: List[Dict[int, int]],
+) -> list:
+    """Create remapped CB descriptors for all phases.
 
+    Each phase's CBDescriptors get new ``buffer_index`` values from the
+    remapping.  Since each phase has unique remapped indices there are
+    no conflicts — every CBDescriptor is included.
 
-def _get_all_cb_descriptor_indices(phases: List[PhaseInfo]) -> Set[int]:
-    """Get the union of all CB indices that have CBDescriptors across all phases."""
-    indices: Set[int] = set()
-    for phase in phases:
+    Note: we mutate ``buffer_index`` on the *existing* ``CBFormatDescriptor``
+    objects rather than constructing new ones because the ``data_format``
+    property uses ``tt::DataFormat`` which cannot be round-tripped through
+    the Python bindings.
+    """
+    merged_cbs = []
+
+    for phase, remapping in zip(phases, remappings):
         for cb_desc in phase.op_descriptor.descriptor.cbs:
+            # Remap buffer_index in-place on each format descriptor
             for fmt_desc in cb_desc.format_descriptors:
-                indices.add(fmt_desc.buffer_index)
-    return indices
+                old_idx = fmt_desc.buffer_index
+                fmt_desc.buffer_index = remapping.get(old_idx, old_idx)
+
+            # Re-use the original CBDescriptor (now with remapped indices)
+            merged_cbs.append(cb_desc)
+
+    return merged_cbs
 
 
 def _generate_fused_reader_source(
     phase_kernels: List[Dict[str, Any]],
     phases: List[PhaseInfo],
     ct_arg_offsets: Dict[int, int],
-    sweep_cb_indices: List[int],
     barrier_config: Optional[BarrierConfig] = None,
 ) -> Optional[str]:
     """Generate fused reader kernel source with two-level barrier sync.
 
     Between phases, the reader (dataflow RISC) acts as the barrier coordinator:
       1. Wait for local compute + writer to signal done (L1 flag spin)
-      2. Reset residual tiles from ALL CBs on BRISC
-      3. Global barrier across cores (sets global_release which also serves
+      2. Global barrier across cores (sets global_release which also serves
          as the phase release signal for compute/writer)
 
-    The BRISC reset updates stream register tiles_acked but NOT TRISC0's
-    local copy.  Compute must resync after being released (see compute source).
+    No CB reset is needed because each phase uses dedicated remapped CB
+    indices that don't conflict with other phases.
     """
     reader_sources = []
 
@@ -603,23 +637,6 @@ def _generate_fused_reader_source(
         lines.append('constexpr uint32_t __mcast_start_y = get_named_compile_time_arg_val("mcast_start_y");')
         lines.append('constexpr uint32_t __mcast_end_x = get_named_compile_time_arg_val("mcast_end_x");')
         lines.append('constexpr uint32_t __mcast_end_y = get_named_compile_time_arg_val("mcast_end_y");')
-        lines.append("")
-
-        # BRISC-side CB reset: pop residual tiles between phases.
-        # All CBs are reset (generic — any CB id can be input or output).
-        # Safe because all RISCs have finished (local barrier complete).
-        lines.append("// BRISC-side CB reset: pop residual tiles between phases.")
-        lines.append("FORCE_INLINE void __cb_reset_to_empty() {")
-        for cb_idx in sweep_cb_indices:
-            lines.append(f"    {{")
-            lines.append(
-                f"        uint16_t remaining = (uint16_t)(*get_cb_tiles_received_ptr({cb_idx})) - (uint16_t)(*get_cb_tiles_acked_ptr({cb_idx}));"
-            )
-            lines.append(f"        if (remaining > 0) {{")
-            lines.append(f"            cb_pop_front({cb_idx}, remaining);")
-            lines.append(f"        }}")
-            lines.append(f"    }}")
-        lines.append("}")
         lines.append("")
 
         # Global barrier helper (also serves as phase release for compute/writer)
@@ -705,9 +722,6 @@ def _generate_fused_reader_source(
             lines.append(f"    // Wait for local compute + writer to finish Phase {phase_idx - 1}")
             lines.append(f"    noc_semaphore_wait_min(__compute_done, {phase_idx});")
             lines.append(f"    noc_semaphore_wait_min(__writer_done, {phase_idx});")
-            lines.append("")
-            lines.append("    // Reset residual tiles from ALL CBs")
-            lines.append("    __cb_reset_to_empty();")
             lines.append("")
             lines.append("    // Global barrier (sets global_release, releasing compute/writer)")
             lines.append(f"    __global_barrier({phase_idx - 1}, __global_arrive, __global_release);")
@@ -824,7 +838,6 @@ def _generate_fused_compute_source(
     phase_kernels: List[Dict[str, Any]],
     phases: List[PhaseInfo],
     ct_arg_offsets: Optional[Dict[int, int]] = None,
-    sweep_cb_indices: Optional[List[int]] = None,
     barrier_config: Optional[BarrierConfig] = None,
 ) -> Optional[str]:
     """Generate fused compute kernel with L1 flag barrier sync.
@@ -832,11 +845,9 @@ def _generate_fused_compute_source(
     Between phases, compute:
       1. Signals done by writing phase+1 to compute_done L1 flag
       2. Spins on global_release L1 flag (plain volatile read, no NOC APIs)
-      3. Resyncs TRISC0 local CB state with stream registers
 
-    Step 3 is critical: BRISC reset (in reader) updates the hardware stream
-    register tiles_acked but NOT TRISC0's local copy.  Without resync,
-    compute sees stale tiles_acked and reads garbage.
+    No TRISC0 CB state resync is needed because each phase uses dedicated
+    remapped CB indices that don't conflict with other phases.
     """
     if ct_arg_offsets is None:
         ct_arg_offsets = {}
@@ -884,38 +895,6 @@ def _generate_fused_compute_source(
         lines.append('constexpr uint32_t __barrier_rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
         lines.append("")
 
-    # Generate compute-side CB state resync function.
-    # After BRISC sweep, TRISC0's local tiles_acked and fifo_rd_ptr are stale.
-    # This function reads the stream register tiles_acked (updated by BRISC)
-    # and directly updates the local CB interface to match.
-    # Guarded by TRISC_UNPACK because cb_interface only exists on TRISC0.
-    if sweep_cb_indices and is_multi_phase:
-        lines.append("// Resync TRISC0 local CB state with stream registers after BRISC sweep.")
-        lines.append("FORCE_INLINE void __resync_cb_state_after_sweep() {")
-        lines.append("#ifdef TRISC_UNPACK")
-        for cb_idx in sweep_cb_indices:
-            lines.append(f"    {{")
-            lines.append(f"        volatile tt_l1_ptr uint32_t* acked_ptr = get_cb_tiles_acked_ptr({cb_idx});")
-            lines.append(f"        uint16_t stream_acked = (uint16_t)reg_read((uint32_t)acked_ptr);")
-            lines.append(f"        uint16_t local_acked = get_local_cb_interface({cb_idx}).tiles_acked;")
-            lines.append(f"        uint16_t swept = stream_acked - local_acked;")
-            lines.append(f"        if (swept > 0) {{")
-            lines.append(f"            get_local_cb_interface({cb_idx}).tiles_acked = stream_acked;")
-            lines.append(f"            uint32_t advance = swept * get_local_cb_interface({cb_idx}).fifo_page_size;")
-            lines.append(f"            get_local_cb_interface({cb_idx}).fifo_rd_ptr += advance;")
-            lines.append(
-                f"            if (get_local_cb_interface({cb_idx}).fifo_rd_ptr >= get_local_cb_interface({cb_idx}).fifo_limit) {{"
-            )
-            lines.append(
-                f"                get_local_cb_interface({cb_idx}).fifo_rd_ptr -= get_local_cb_interface({cb_idx}).fifo_size;"
-            )
-            lines.append(f"            }}")
-            lines.append(f"        }}")
-            lines.append(f"    }}")
-        lines.append("#endif")
-        lines.append("}")
-        lines.append("")
-
     # Generate phase functions
     for phase_idx, resolved_source in compute_sources:
         body = _extract_kernel_body_for_fusion(resolved_source)
@@ -954,10 +933,6 @@ def _generate_fused_compute_source(
             lines.append(f"    // Wait for global release (Phase {phase_idx})")
             lines.append(f"    while (*__global_release < {phase_idx}) {{ }}")
             lines.append("")
-            if sweep_cb_indices:
-                lines.append("    // Resync TRISC0 local CB state (tiles_acked, fifo_rd_ptr)")
-                lines.append("    __resync_cb_state_after_sweep();")
-                lines.append("")
         lines.append(f"    phase{phase_idx}_compute();")
         first = False
     lines.append("}")
@@ -1107,10 +1082,12 @@ def _merge_named_compile_time_args(
     rt_arg_offsets: Optional[Dict[int, int]] = None,
     barrier_rt_offset: Optional[int] = None,
     barrier_config: Optional[BarrierConfig] = None,
+    cb_remappings: Optional[List[Dict[int, int]]] = None,
 ) -> List[Tuple[str, int]]:
     """Merge named compile-time args from all phases with phase prefixes.
 
     Phase 0 keeps original names. Phase N>0 gets "phaseN_" prefix.
+    CB indices in ``cb_*`` named args are remapped via ``cb_remappings``.
     Runtime arg offsets and barrier config are added as named args.
     """
     merged = []
@@ -1120,7 +1097,13 @@ def _merge_named_compile_time_args(
         if kernel is None:
             continue
 
+        remapping = cb_remappings[i] if cb_remappings else {}
+
         for name, value in kernel.named_compile_time_args:
+            # Apply CB remapping for cb_* named args
+            if name.startswith("cb_") and isinstance(value, int) and value in remapping:
+                value = remapping[value]
+
             if i == 0:
                 merged.append((name, value))
             else:
@@ -1351,7 +1334,9 @@ class SequentialChainBuilder:
     """Builds a fused ProgramDescriptor from a sequence of OpDescriptors.
 
     All readers/writers run for every phase.  Data flows through DRAM between
-    phases.  No CB remapping — each phase uses native CB indices (0-31).
+    phases.  Each phase's CB indices are remapped to unique sequential IDs
+    across all phases (e.g. phase 0 uses CBs 0-4, phase 1 uses CBs 5-11).
+    If the total number of unique CBs exceeds 32, a ``ValueError`` is raised.
 
     Uses two-level barrier synchronization:
       - Local: L1 flags (via GlobalSemaphore) for per-core RISC coordination
@@ -1420,8 +1405,11 @@ class SequentialChainBuilder:
                 kernels_by_type[kernel_type] = kernel_desc
             phase_kernels.append(kernels_by_type)
 
-        # Merge CB descriptors (max size per index across phases)
-        merged_cbs = _merge_cb_descriptors(self.phases)
+        # Compute CB remapping: assign unique sequential CB IDs across phases
+        cb_remappings = _compute_cb_remapping(self.phases)
+
+        # Create remapped CB descriptors
+        merged_cbs = _remap_cb_descriptors(self.phases, cb_remappings)
 
         core_ranges = self.phases[0].op_descriptor.descriptor.kernels[0].core_ranges
 
@@ -1438,16 +1426,11 @@ class SequentialChainBuilder:
         writer_ct_args, writer_ct_offsets = _merge_compile_time_args(phase_kernels, "writer")
         compute_ct_args, compute_ct_offsets = _merge_compile_time_args(phase_kernels, "compute")
 
-        # Compute sweep CB indices: ALL CBs with descriptors across phases (generic).
-        valid_cb_indices = _get_all_cb_descriptor_indices(self.phases)
-        sweep_cb_indices = sorted(valid_cb_indices)
-
         # Generate fused kernel sources
         fused_reader_source = _generate_fused_reader_source(
             phase_kernels,
             self.phases,
             reader_ct_offsets,
-            sweep_cb_indices,
             self._barrier_config,
         )
         fused_writer_source = _generate_fused_writer_source(
@@ -1460,19 +1443,8 @@ class SequentialChainBuilder:
             phase_kernels,
             self.phases,
             compute_ct_offsets,
-            sweep_cb_indices,
             self._barrier_config,
         )
-
-        # DEBUG: dump generated sources to /tmp for inspection
-        for name, src in [
-            ("reader", fused_reader_source),
-            ("writer", fused_writer_source),
-            ("compute", fused_compute_source),
-        ]:
-            if src:
-                with open(f"/tmp/fused_{name}_debug.cpp", "w") as f:
-                    f.write(src)
 
         # Concatenate runtime args and append barrier addresses
         reader_rt_args = _concatenate_runtime_args(phase_kernels, "reader")
@@ -1523,6 +1495,7 @@ class SequentialChainBuilder:
                 reader_rt_offsets,
                 barrier_rt_offset=reader_barrier_offset,
                 barrier_config=self._barrier_config,
+                cb_remappings=cb_remappings,
             )
             reader_desc.defines = _merge_defines(phase_kernels, "reader")
             reader_desc.runtime_args = reader_rt_args
@@ -1542,6 +1515,7 @@ class SequentialChainBuilder:
                 "writer",
                 writer_rt_offsets,
                 barrier_rt_offset=writer_barrier_offset,
+                cb_remappings=cb_remappings,
             )
             writer_desc.defines = _merge_defines(phase_kernels, "writer")
             writer_desc.runtime_args = writer_rt_args
@@ -1565,6 +1539,7 @@ class SequentialChainBuilder:
                 "compute",
                 compute_rt_offsets,
                 barrier_rt_offset=compute_barrier_offset,
+                cb_remappings=cb_remappings,
             )
             compute_desc.defines = _merge_defines(phase_kernels, "compute")
             compute_desc.runtime_args = compute_rt_args
