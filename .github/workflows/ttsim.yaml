@@ -68,6 +68,7 @@ jobs:
       TT_METAL_SIMULATOR_HOME: /work/sim
       TT_METAL_SIMULATOR: /work/sim/libttsim.so
       TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_SEED: 0
     steps:
 
       - name: Checkout actions
@@ -222,6 +223,7 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         PYTHONHASHSEED: 0
+        TT_METAL_SEED: 0
     defaults:
       run:
         shell: bash
@@ -306,6 +308,7 @@ jobs:
       TT_METAL_SIMULATOR_HOME: /work/sim
       TT_METAL_SIMULATOR: /work/sim/libttsim.so
       TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_SEED: 0
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
@@ -394,6 +397,7 @@ jobs:
       TT_METAL_SIMULATOR: /work/sim/libttsim.so
       TT_METAL_SLOW_DISPATCH_MODE: 1
       TT_METAL_MOCK_CLUSTER_DESC_PATH: ${{ matrix.cluster_desc }}
+      TT_METAL_SEED: 0
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
