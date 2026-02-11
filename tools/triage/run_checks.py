@@ -301,6 +301,9 @@ class RunChecks:
                                 f"Triage broke device {device.id} with: {e}. This device will be skipped from now on."
                             )
                         continue
+                    except Exception as e:
+                        log_warning(f"Skipping device {device.id}: {str(e)}")
+                        continue
                     # Use the common result collection helper
                     self._collect_results(
                         result,
@@ -355,14 +358,9 @@ class RunChecks:
         check: Callable[[OnChipCoordinate, CoreType], object],
         block_filter: list[str] | str | None = None,
         core_filter: list[str] | str | None = None,
-        skip_broken_cores: bool = False,
         print_broken_cores: bool = True,
     ) -> list[PerCoreCheckResult] | None:
-        """Run a check function on each RISC core in each block location, collecting results.
-
-        When skip_broken_cores is False, RiscHaltError cores are not added to the skip list,
-        allowing other scripts to re-check them.
-        """
+        """Run a check function on each RISC core in each block location, collecting results."""
 
         # Filtering cores to check
         cores_to_check = (
@@ -385,15 +383,6 @@ class RunChecks:
                 # Skipping cores we do not want to check
                 if risc_name not in cores_to_check:
                     continue
-
-                # Skipping broken cores (optional, can be disabled per script)
-                # If script writer wants to disable this, they should handle RiscHaltError inside script.
-                if skip_broken_cores:
-                    with self._skip_lock:
-                        if location._device in self._broken_cores.keys():
-                            key = BrokenCore(location, risc_name)
-                            if key in self._broken_cores[location._device]:
-                                continue
                 try:
                     check_result = check(location, risc_name)
                 except RiscHaltError as e:
@@ -406,6 +395,9 @@ class RunChecks:
                         log_warning(
                             f"Triage broke {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}. This core will be skipped from now on."
                         )
+                    continue
+                except Exception as e:
+                    print(f"Skipping {risc_name} at {location.to_user_str()} at device {location.device_id}: {str(e)}")
                     continue
 
                 # Use the common result collection helper
