@@ -52,17 +52,17 @@ flowchart TD
     end
 
     subgraph Tools [build-docker-tools.yaml]
-        BT[Build Tools]
-        BT -->|outputs| TT[tool-tags JSON]
+        Tags[📋 tags]
+        Build[🔧 build]
+        Tags -->|missing?| Build
+        Tags -->|outputs| TT[tool-tags JSON]
     end
 
     subgraph DockerArtifact [build-docker-artifact.yaml]
-        DA22[Ubuntu 22.04]
-        DA24[Ubuntu 24.04]
-        RT[resolve-tools]
-        PV[build-python-venvs]
-        BU[build-ubuntu-images]
-        BM[build-manylinux-image]
+        ImgTags[📋 image-tags]
+        Venvs[🐍 venvs]
+        Ubuntu[🐳 ubuntu]
+        ML[🐳 manylinux]
     end
 
     subgraph CompositeAction [setup-tool-buildargs action]
@@ -70,17 +70,18 @@ flowchart TD
     end
 
     MG --> AD
-    AD --> BT
-    BT -->|tool-tags| DA22
-    BT -->|tool-tags| DA24
-    DA22 --> RT
-    DA24 --> RT
-    RT --> BU
-    RT --> BM
-    PV --> BU
-    BU -.->|uses| CA
-    BM -.->|uses| CA
+    AD --> Tools
+    Tools -->|tool-tags| ImgTags
+    Tools -->|tool-tags| Ubuntu
+    Tools -->|tool-tags| ML
+    ImgTags --> Ubuntu
+    ImgTags --> ML
+    Venvs --> Ubuntu
+    Ubuntu -.->|uses| CA
+    ML -.->|uses| CA
 ```
+
+**Job naming convention:** Short job IDs (e.g., `tags`, `ubuntu`) with descriptive `name:` fields for the GitHub UI (e.g., "📋 Compute image tags").
 
 ### Tool Tags JSON Bundle
 
@@ -131,14 +132,15 @@ The `.github/actions/setup-tool-buildargs` action extracts individual tool tags 
 **Usage:**
 ```yaml
 - uses: ./.github/actions/setup-tool-buildargs
-  id: tools
+  id: tool-args
   with:
-    tool-tags: ${{ needs.resolve-tools.outputs.tool-tags }}
+    # Resolve from input (if provided) or from tools job output
+    tool-tags: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
     include: ccache,mold,sfpi,openmpi  # Optional: filter to specific tools
 
 - uses: docker/build-push-action@v6
   with:
-    build-args: ${{ steps.tools.outputs.build-args }}
+    build-args: ${{ steps.tool-args.outputs.build-args }}
 ```
 
 **Outputs:**

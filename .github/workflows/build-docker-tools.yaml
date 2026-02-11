@@ -12,15 +12,17 @@ on:
       # Use with .github/actions/setup-tool-buildargs to extract individual tags
       tool-tags:
         description: "JSON object containing all tool image tags"
-        value: ${{ jobs.check-tool-images.outputs.tool-tags }}
+        value: ${{ jobs.tags.outputs.tool-tags }}
 
 jobs:
-  check-tool-images:
+  # Compute content-addressed tags and check which images already exist
+  tags:
+    name: "📋 Compute tool tags"
     runs-on: ubuntu-latest
     outputs:
       # JSON bundle of all tool tags for easy passing between workflows
       tool-tags: ${{ steps.tags.outputs.tool-tags }}
-      # Existence flags used by build-tool-images job
+      # Existence flags used by build job
       ccache-exists: ${{ steps.check.outputs.ccache-exists }}
       mold-exists: ${{ steps.check.outputs.mold-exists }}
       doxygen-exists: ${{ steps.check.outputs.doxygen-exists }}
@@ -31,7 +33,7 @@ jobs:
       sfpi-exists: ${{ steps.check.outputs.sfpi-exists }}
       openmpi-exists: ${{ steps.check.outputs.openmpi-exists }}
       any-missing: ${{ steps.check.outputs.any-missing }}
-      # Individual tags (internal use by build-tool-images job)
+      # Individual tags (internal use by build job)
       ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
       mold-tag: ${{ steps.tags.outputs.mold-tag }}
       doxygen-tag: ${{ steps.tags.outputs.doxygen-tag }}
@@ -132,10 +134,11 @@ jobs:
 
           echo "any-missing=${any_missing}" >> $GITHUB_OUTPUT
 
-  build-tool-images:
-    name: "Build tool images"
-    needs: check-tool-images
-    if: needs.check-tool-images.outputs.any-missing == 'true'
+  # Build any tool images that don't exist yet
+  build:
+    name: "🔧 Build missing tools"
+    needs: tags
+    if: needs.tags.outputs.any-missing == 'true'
     timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
@@ -152,109 +155,109 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ccache image
-        if: needs.check-tool-images.outputs.ccache-exists != 'true'
+        if: needs.tags.outputs.ccache-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.tools
           target: ccache
           push: true
-          tags: ${{ needs.check-tool-images.outputs.ccache-tag }}
+          tags: ${{ needs.tags.outputs.ccache-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push mold image
-        if: needs.check-tool-images.outputs.mold-exists != 'true'
+        if: needs.tags.outputs.mold-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.tools
           target: mold
           push: true
-          tags: ${{ needs.check-tool-images.outputs.mold-tag }}
+          tags: ${{ needs.tags.outputs.mold-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push doxygen image
-        if: needs.check-tool-images.outputs.doxygen-exists != 'true'
+        if: needs.tags.outputs.doxygen-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.tools
           target: doxygen
           push: true
-          tags: ${{ needs.check-tool-images.outputs.doxygen-tag }}
+          tags: ${{ needs.tags.outputs.doxygen-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push ClangBuildAnalyzer image
-        if: needs.check-tool-images.outputs.cba-exists != 'true'
+        if: needs.tags.outputs.cba-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.tools
           target: cba
           push: true
-          tags: ${{ needs.check-tool-images.outputs.cba-tag }}
+          tags: ${{ needs.tags.outputs.cba-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push GDB image
-        if: needs.check-tool-images.outputs.gdb-exists != 'true'
+        if: needs.tags.outputs.gdb-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.tools
           target: gdb
           push: true
-          tags: ${{ needs.check-tool-images.outputs.gdb-tag }}
+          tags: ${{ needs.tags.outputs.gdb-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push cmake image
-        if: needs.check-tool-images.outputs.cmake-exists != 'true'
+        if: needs.tags.outputs.cmake-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.tools
           target: cmake
           push: true
-          tags: ${{ needs.check-tool-images.outputs.cmake-tag }}
+          tags: ${{ needs.tags.outputs.cmake-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push yq image
-        if: needs.check-tool-images.outputs.yq-exists != 'true'
+        if: needs.tags.outputs.yq-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.tools
           target: yq
           push: true
-          tags: ${{ needs.check-tool-images.outputs.yq-tag }}
+          tags: ${{ needs.tags.outputs.yq-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push sfpi image
-        if: needs.check-tool-images.outputs.sfpi-exists != 'true'
+        if: needs.tags.outputs.sfpi-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.tools
           target: sfpi
           push: true
-          tags: ${{ needs.check-tool-images.outputs.sfpi-tag }}
+          tags: ${{ needs.tags.outputs.sfpi-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push openmpi image
-        if: needs.check-tool-images.outputs.openmpi-exists != 'true'
+        if: needs.tags.outputs.openmpi-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.tools
           target: openmpi
           push: true
-          tags: ${{ needs.check-tool-images.outputs.openmpi-tag }}
+          tags: ${{ needs.tags.outputs.openmpi-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
