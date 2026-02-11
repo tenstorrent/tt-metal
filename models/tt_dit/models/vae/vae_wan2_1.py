@@ -130,14 +130,23 @@ class WanAttentionBlock:
 
         returns: (B, T, H, W, C) fractured on H and W
         """
+        print("ATTN_INPUT")
         assert len(x_BTHWC.shape) == 5
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
+
+        _dev = x_BTHWC.device()
+        _sync = lambda label: (ttnn.synchronize_device(_dev), print(f"[attn] {label}", flush=True))
 
         # Attention layers (matmul, SDPA) can OOM in L1 with float32.
         # Cast to bfloat16 for attention, then restore original dtype.
         input_dtype = x_BTHWC.dtype
         if input_dtype != ttnn.bfloat16:
+            # TODO: ttnn.typecast hangs on ROW_MAJOR tensors — must convert to TILE first.
+            # File a bug to add a proper assert/error in ttnn.typecast for non-TILE inputs.
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
             x_BTHWC = ttnn.typecast(x_BTHWC, ttnn.bfloat16)
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        _sync("typecast_in")
 
         residual_BTHWC = x_BTHWC
 
@@ -156,6 +165,7 @@ class WanAttentionBlock:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.height_parallel.mesh_axis,
             )
+            _sync("all_gather_h")
         if self.parallel_config.width_parallel.factor > 1:
             x_BTHWC = ttnn.experimental.all_gather_async(
                 x_BTHWC,
@@ -170,6 +180,7 @@ class WanAttentionBlock:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.width_parallel.mesh_axis,
             )
+            _sync("all_gather_w")
 
         if logical_h % self.parallel_config.height_parallel.factor != 0:
             """
@@ -180,11 +191,15 @@ class WanAttentionBlock:
         B, T, H, W, C = x_BTHWC.shape
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
+        _sync("to_tile")
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        _sync("norm")
         x_TND = self.to_qkv(x_TNC, compute_kernel_config=self.mm_compute_kernel_config)
+        _sync("to_qkv")
         q_THNC, k_THNC, v_THNC = ttnn.transformer.split_query_key_value_and_split_heads(
             x_TND, num_heads=1, transpose_key=False
         )
+        _sync("split_heads")
         out_THNC = ttnn.transformer.scaled_dot_product_attention(
             q_THNC,
             k_THNC,
@@ -193,9 +208,13 @@ class WanAttentionBlock:
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
+        _sync("sdpa")
         out_TNC = ttnn.transformer.concatenate_heads(out_THNC)
+        _sync("concat_heads")
         out_TND = self.proj(out_TNC, compute_kernel_config=self.mm_compute_kernel_config)
+        _sync("proj")
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
+        _sync("to_rm")
 
         if logical_h % self.parallel_config.height_parallel.factor != 0:
             """
@@ -204,6 +223,7 @@ class WanAttentionBlock:
             # NOTE: Workaround. I'd prefer to pad after reshaping H out of HW, but
             # ttnn.pad only works on <=4 dims. Do padding while tensor has 3 dims.
             out_TND = ttnn.pad(out_TND, [(0, 0), (0, W * (padded_h - logical_h)), (0, 0)], value=0.0)
+            _sync("pad")
 
         # H after optionally padding
         H = out_TND.shape[1] // W
@@ -215,16 +235,24 @@ class WanAttentionBlock:
             out_BTHWC = ttnn.mesh_partition(
                 out_BTHWC, dim=2, cluster_axis=self.parallel_config.height_parallel.mesh_axis
             )
+            _sync("scatter_h")
         if self.parallel_config.width_parallel.factor > 1:
             out_BTHWC = ttnn.mesh_partition(
                 out_BTHWC, dim=3, cluster_axis=self.parallel_config.width_parallel.mesh_axis
             )
+            _sync("scatter_w")
 
         result_BTHWC = out_BTHWC + residual_BTHWC
+        _sync("residual_add")
 
         if input_dtype != ttnn.bfloat16:
+            # TODO: ttnn.typecast hangs on ROW_MAJOR tensors — must convert to TILE first.
+            result_BTHWC = ttnn.to_layout(result_BTHWC, ttnn.TILE_LAYOUT)
             result_BTHWC = ttnn.typecast(result_BTHWC, input_dtype)
+            result_BTHWC = ttnn.to_layout(result_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            _sync("typecast_out")
 
+        print("ATTN_OUTPUT")
         return result_BTHWC
 
 
@@ -340,18 +368,23 @@ class WanCausalConv3d:
 
         returns: (B, T, H, W, C) fractured on H and W
         """
+        # ttnn.synchronize_device(x_BTHWC.device()) # FIXME.
+
         # NOTE: T padding is handled explicitly and depends on the cache
         t_front_padding = self.external_padding[0]
         if cache_x_BTHWC is not None and t_front_padding > 0:
             # concat on T
             x_BTHWC = ttnn.concat([cache_x_BTHWC, x_BTHWC], dim=1)
             t_front_padding -= cache_x_BTHWC.shape[1]
+            # ttnn.synchronize_device(x_BTHWC.device()) # FIXME.
+
         if t_front_padding > 0:
             # Padding only works on the lowest 3 dims. reshape input.
             B, T, H, W, C = x_BTHWC.shape
             x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
             x_BTHWC = ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C))
+            # ttnn.synchronize_device(x_BTHWC.device()) # FIXME.
 
         if logical_h % self.parallel_config.height_parallel.factor != 0:
             """
@@ -359,10 +392,13 @@ class WanCausalConv3d:
             """
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
+            # ttnn.synchronize_device(x_BTHWC.device()) # FIXME.
 
         # Height halo
         if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
+            print(" PAD H")
             ttnn.synchronize_device(x_BTHWC.device())
+            print(" NEIGHBOR PAD_H")
             x_BTHWC = ttnn.experimental.neighbor_pad_async(
                 x_BTHWC,
                 dim=2,
@@ -380,13 +416,16 @@ class WanCausalConv3d:
                 num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
                 topology=self.ccl_manager.topology,
             )
+            print(" NEIGHBOR PAD_H DONE")
             ttnn.synchronize_device(x_BTHWC.device())
 
         # Width halo
         if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
+            print(" PAD W")
             # TODO: Fix validation in neighbor_pad_async to allow halo on dim3
             x_THWC = ttnn.squeeze(x_BTHWC, dim=0)
             ttnn.synchronize_device(x_THWC.device())
+            print(" NEIGHBOR PAD_W")
             x_THWC = ttnn.experimental.neighbor_pad_async(
                 x_THWC,
                 dim=2,
@@ -403,9 +442,11 @@ class WanCausalConv3d:
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
+            print(" NEIGHBOR PAD_W DONE")
             ttnn.synchronize_device(x_THWC.device())
             x_BTHWC = ttnn.unsqueeze(x_THWC, dim=0)
 
+        print(" EXPERIMENTAL CONV START")
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.conv_weight,
@@ -419,6 +460,7 @@ class WanCausalConv3d:
             dtype=self.conv_dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
+        print(" EXPERIMENTAL CONV END")
 
         if logical_h % self.parallel_config.height_parallel.factor != 0:
             """
@@ -549,17 +591,35 @@ class WanResidualBlock:
 
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
         # self._dump_resblock(x_BTHWC, "r0_input", logical_h)
+        print(f"[resblock] ENTRY shape={list(x_BTHWC.shape)} dtype={x_BTHWC.dtype}", flush=True)
+        ttnn.synchronize_device(x_BTHWC.device())
+        print("[resblock] sync at entry OK (prior ops done)", flush=True)
         x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+        ttnn.synchronize_device(x_BTHWC.device())
+        print(f"[resblock] sync after to_tile OK", flush=True)
+        print("[resblock] sync after to_tile", flush=True)
+        print("RESIDUAL_START")
         h_tile_BTHWC = (
             self.conv_shortcut(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
             if self.conv_shortcut is not None
             else x_tile_BTHWC
         )
+        print("NORM1")
+        ttnn.synchronize_device(x_BTHWC.device())
+        print("[resblock] sync after conv_shortcut", flush=True)
         x_norm_tile_BTHWC = self.norm1(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        print("SILU1")
+        ttnn.synchronize_device(x_BTHWC.device())
+        print("[resblock] sync after norm1", flush=True)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
+        ttnn.synchronize_device(x_BTHWC.device())
+        print("[resblock] sync after silu1", flush=True)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.synchronize_device(x_BTHWC.device())
+        print("[resblock] sync after to_rm1", flush=True)
 
         # Cached conv
+        print("CONV1")
         if feat_cache is not None:
             # Prepare to cache the current activation for future use
             idx = feat_idx[0]
@@ -569,7 +629,10 @@ class WanResidualBlock:
                 # Current activation is too short, so append the cached activation as well
                 cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
 
+            print(" CACHE VERSION START")
+            print("  INPUT:", x_BTHWC.shape, " LOGICAL:", logical_h)
             x_conv_BTHWC = self.conv1(x_BTHWC, logical_h, feat_cache[idx])
+            print(" CACHE VERSION END")
             # NOTE: Should deallocate feat_cache[idx] after it's reassigned
             feat_cache[idx] = cache_x_BTHWC
             feat_idx[0] += 1
@@ -577,12 +640,22 @@ class WanResidualBlock:
             x_conv_BTHWC = self.conv1(x_BTHWC, logical_h)
         # self._dump_resblock(x_conv_BTHWC, "r3_after_conv1", logical_h)
 
+        _dev = x_conv_BTHWC.device()
+        _sync2 = lambda label: (ttnn.synchronize_device(_dev), print(f"[resblock2] {label}", flush=True))
+
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
+        _sync2("to_tile_after_conv1")
+        print("NORM2")
         x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        _sync2("norm2")
+        print("SILU2")
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
+        _sync2("silu2")
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        _sync2("to_rm_after_silu2")
 
         # Cached conv
+        print("CONV2")
         if feat_cache is not None:
             # Prepare to cache the current activation for future use
             idx = feat_idx[0]
@@ -593,19 +666,26 @@ class WanResidualBlock:
                 cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
 
             x_conv_BTHWC = self.conv2(x_BTHWC, logical_h, feat_cache[idx])
+            _sync2("conv2_done")
             # NOTE: Should deallocate feat_cache[idx] after it's reassigned
             feat_cache[idx] = cache_x_BTHWC
             feat_idx[0] += 1
         else:
             x_conv_BTHWC = self.conv2(x_BTHWC, logical_h)
+            _sync2("conv2_done")
         # self._dump_resblock(x_conv_BTHWC, "r6_after_conv2", logical_h)
 
         # Add residual
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
+        _sync2("to_tile_before_add")
+        print("RESIDUAL_ADD")
         # self._dump_resblock(ttnn.to_layout(h_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT), "r7_shortcut", logical_h)
         x_tile_BTHWC = ttnn.add(h_tile_BTHWC, x_tile_BTHWC)
+        _sync2("add")
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        _sync2("to_rm_final")
         # self._dump_resblock(x_BTHWC, "r8_after_add", logical_h)
+        print("RESIDUAL DONE")
         return x_BTHWC
 
 
@@ -693,6 +773,8 @@ class WanMidBlock:
         # self.dump_tensor(x_BTHWC, "0_input", logical_h)
         x_res_BTHWC = self.resnets[0](x_BTHWC, logical_h, feat_cache, feat_idx)
         print(f"RESNET1")
+        ttnn.synchronize_device(x_res_BTHWC.device())
+        print("[midblock] sync after resnets[0] OK", flush=True)
         # self.dump_tensor(x_res_BTHWC, "1_after_resnet0", logical_h)
         x_BTHWC = x_res_BTHWC
         for i in range(len(self.attentions)):
@@ -1191,27 +1273,42 @@ class WanDecoder3d:
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0], first_chunk=False):
         # NOTE: first_chunk is not used. It would be needed for WanResidualUpBlock.
         ## conv1
+        print("DECODER3D_IN")
         if feat_cache is not None:
             idx = feat_idx[0]
             t_start = x_BTHWC.shape[1] - CACHE_T
             cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
+            print(f"[decoder3d] cache slice done, shape={list(cache_x_BTHWC.shape)}", flush=True)
+            ttnn.synchronize_device(x_BTHWC.device())
+            print("[decoder3d] sync after cache slice OK", flush=True)
             if cache_x_BTHWC.shape[1] < 2 and feat_cache[idx] is not None:
                 # Current activation is too short, so append the cached activation as well
                 cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
+                print(f"[decoder3d] cache concat done, shape={list(cache_x_BTHWC.shape)}", flush=True)
+                ttnn.synchronize_device(x_BTHWC.device())
+                print("[decoder3d] sync after cache concat OK", flush=True)
+            print(f"[decoder3d] calling conv_in", flush=True)
             x_BTHWC = self.conv_in(x_BTHWC, logical_h, feat_cache[idx])
+            print(f"[decoder3d] conv_in returned, shape={list(x_BTHWC.shape)}", flush=True)
+            ttnn.synchronize_device(x_BTHWC.device())
+            print("[decoder3d] sync after conv_in OK", flush=True)
             feat_cache[idx] = cache_x_BTHWC
             feat_idx[0] += 1
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
         ## middle
+        print("DECODER3D_MID START")
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+        print("DECODER3D_MID DONE")
         # DEBUG
         # return x_BTHWC
 
         ## upsamples
+        print("DECODER3D_UP START")
         for up_block in self.up_blocks:
             x_BTHWC, logical_h = up_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+        print("DECODER3D_UP END")
 
         ## head
         x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
@@ -1231,6 +1328,7 @@ class WanDecoder3d:
             feat_idx[0] += 1
         else:
             x_BTHWC = self.conv_out(x_BTHWC, logical_h)
+        print("DECODER3D_DONE")
         return x_BTHWC, logical_h
 
 
