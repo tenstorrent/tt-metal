@@ -16,6 +16,10 @@ from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekG
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
@@ -110,6 +114,12 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Enable trace for decode forward pass",
+    )
+    p.add_argument(
+        "--enable-mem-profile",
+        action="store_true",
+        default=False,
+        help="Enable TTNN memory profiling dumps during setup",
     )
     p.add_argument(
         "--repeat-batches",
@@ -239,6 +249,7 @@ def run_demo(
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = False,
+    enable_mem_profile: bool = False,
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
@@ -269,8 +280,7 @@ def run_demo(
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
-
-    fabric_config = ttnn.FabricConfig.FABRIC_1D
+    fabric_config = optimal_topology
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
@@ -338,6 +348,7 @@ def run_demo(
                 ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
+                enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
             )
@@ -436,6 +447,7 @@ def main() -> None:
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
+        enable_mem_profile=args.enable_mem_profile,
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
     )
