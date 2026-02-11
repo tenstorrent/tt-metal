@@ -58,6 +58,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 def test_decoder_inference(
     max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, generation_length
 ):
+    mode = Mode.DECODE
     dtype = ttnn.bfloat8_b
 
     model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
@@ -175,8 +176,7 @@ def test_decoder_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            # ttnn.DRAM_MEMORY_CONFIG,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            model_args.get_residual_mem_config(mode),
         )
 
         # Get cos/sin matrices for the current position of each user
@@ -188,7 +188,7 @@ def test_decoder_inference(
             current_pos_tensor,
             rot_mats_global=rot_mats,
             rot_mats_local=rot_mats_local,
-            mode=Mode.DECODE,
+            mode=mode,
             page_table=page_table_tt,
         )
         tt_out = ttnn.to_torch(
