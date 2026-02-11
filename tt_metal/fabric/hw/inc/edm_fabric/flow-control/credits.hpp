@@ -415,6 +415,7 @@ private:
     static_assert(TOTAL_BITS <= 64, "Total packed bits exceeds 64-bit capacity");
 
 public:
+    static constexpr uint32_t CREDIT_WIDTH = CREDIT_WIDTH_BITS;
     // Select storage type based on total bits
     using storage_type = std::conditional_t<(TOTAL_BITS <= 32), uint32_t, uint64_t>;
 
@@ -1117,6 +1118,8 @@ private:
     // Channel assignment: reg0 gets 2 channels, reg1 gets the rest
     static constexpr uint8_t CHANNELS_IN_REG0 = MAX_PACKETS_RECEIVED_CREDITS_PER_OVERLAY_REGISTER;
     static constexpr uint8_t CHANNELS_IN_REG1 = NUM_CHANNELS - CHANNELS_IN_REG0;
+    static constexpr storage_type reg0_mask = (static_cast<storage_type>(1) << (CHANNELS_IN_REG0 * CREDIT_WIDTH)) - 1;
+    static constexpr uint32_t reg1_shift = CHANNELS_IN_REG0 * CREDIT_WIDTH;
 
     // Helper to read a specific register by index
     template <size_t idx>
@@ -1145,7 +1148,6 @@ public:
         // Remap to linear layout: ch0 at 0, ch1 at 8, ch2 at 16, ch3 at 24, ch4 at 32
         // reg0 already has ch0 and ch1 in the right place (bits 0-15)
         // reg1 has ch2, ch3, ch4 at bits 0-23, need to shift to bits 16-39
-        constexpr uint32_t reg1_shift = CHANNELS_IN_REG0 * CREDIT_WIDTH;
         // Use storage_type to handle both 32-bit and 64-bit cases
         return static_cast<storage_type>(reg0_val) | (static_cast<storage_type>(reg1_val) << reg1_shift);
     }
@@ -1156,11 +1158,9 @@ public:
      */
     FORCE_INLINE static void atomic_increment(storage_type packed_delta) {
         // Extract channels 0-1 for reg0 (bits 0-15 of packed_delta)
-        constexpr storage_type reg0_mask = (static_cast<storage_type>(1) << (CHANNELS_IN_REG0 * CREDIT_WIDTH)) - 1;
         uint32_t reg0_delta = static_cast<uint32_t>(packed_delta & reg0_mask);
 
         // Extract channels 2-N for reg1 (remaining bits, shifted down)
-        constexpr uint32_t reg1_shift = CHANNELS_IN_REG0 * CREDIT_WIDTH;
         uint32_t reg1_delta = static_cast<uint32_t>(packed_delta >> reg1_shift);
 
         // Write to both registers
@@ -1174,10 +1174,8 @@ public:
      */
     FORCE_INLINE static void decrement_packed(storage_type packed_value) {
         // Split the positive value into register portions
-        constexpr storage_type reg0_mask = (static_cast<storage_type>(1) << (CHANNELS_IN_REG0 * CREDIT_WIDTH)) - 1;
         uint32_t reg0_part = static_cast<uint32_t>(packed_value & reg0_mask);
 
-        constexpr uint32_t reg1_shift = CHANNELS_IN_REG0 * CREDIT_WIDTH;
         uint32_t reg1_part = static_cast<uint32_t>(packed_value >> reg1_shift);
 
         // DPRINT << "MULTI_OVERLAY_DECR: packed=" << HEX() << packed_value
