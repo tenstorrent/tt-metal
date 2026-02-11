@@ -759,13 +759,9 @@ def _generate_fused_riscv0_source(
         lines.append('constexpr uint32_t __mcast_end_y = get_named_compile_time_arg_val("mcast_end_y");')
         lines.append("")
 
-        # BRISC-side CB reset: pop residual tiles between phases.
-        # All CBs are reset (generic — any CB id can be input or output).
-        # Safe because all RISCs have finished (local barrier complete).
-        lines.append("// BRISC-side CB reset: pop residual tiles between phases.")
-        lines.append("// Pop one tile at a time to handle circular buffer wrapping correctly.")
-        lines.append("// Some CBs (e.g. gamma) are never popped by compute, so remaining may exceed")
-        lines.append("// the CB capacity. Popping all at once would advance fifo_rd_ptr past fifo_limit.")
+        # BRISC-side CB reset: equalize stream registers + reset pointers to CB start.
+        # Pop one at a time for acked, then directly reset pointers.
+        lines.append("// BRISC-side CB reset: equalize stream registers + reset pointers to CB start.")
         lines.append("FORCE_INLINE void __cb_reset_to_empty() {")
         for cb_idx in sweep_cb_indices:
             lines.append(f"    {{")
@@ -775,6 +771,11 @@ def _generate_fused_riscv0_source(
             lines.append(f"        for (uint16_t i = 0; i < remaining; i++) {{")
             lines.append(f"            cb_pop_front({cb_idx}, 1);")
             lines.append(f"        }}")
+            lines.append(f"        // Reset BRISC local pointers to CB start")
+            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
+            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
             lines.append(f"    }}")
         lines.append("}")
         lines.append("")
@@ -890,6 +891,7 @@ def _generate_fused_riscv1_source(
     role_key: Any,
     phases: List[PhaseInfo],
     ct_arg_offsets: Dict[int, int],
+    sweep_cb_indices: List[int],
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     barrier_config: Optional[BarrierConfig] = None,
 ) -> Optional[str]:
@@ -898,6 +900,7 @@ def _generate_fused_riscv1_source(
     Between phases, the writer:
       1. Signals done by writing phase+1 to writer_done L1 flag
       2. Spins on global_release L1 flag (plain volatile read, no NOC APIs)
+      3. Resyncs NCRISC local CB pointers to CB start
     """
     writer_sources = []
 
@@ -943,6 +946,20 @@ def _generate_fused_riscv1_source(
         lines.append('constexpr uint32_t __barrier_rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
         lines.append("")
 
+    # Generate NCRISC CB state resync function (resets local pointers to CB start).
+    if sweep_cb_indices and is_multi_phase:
+        lines.append("// Resync NCRISC local CB pointers to CB start between phases.")
+        lines.append("FORCE_INLINE void __resync_ncrisc_cb_state() {")
+        for cb_idx in sweep_cb_indices:
+            lines.append(f"    {{")
+            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
+            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
+            lines.append(f"    }}")
+        lines.append("}")
+        lines.append("")
+
     # Generate phase functions
     for phase_idx, resolved_source in writer_sources:
         body = _extract_kernel_body_for_fusion(resolved_source)
@@ -986,6 +1003,11 @@ def _generate_fused_riscv1_source(
             lines.append(f"    // Wait for global release (Phase {phase_idx + 1})")
             lines.append(f"    while (*__global_release < {phase_idx + 1}) {{ }}")
             lines.append("")
+            # Resync NCRISC local CB pointers to CB start
+            if sweep_cb_indices:
+                lines.append("    // Resync NCRISC CB pointers to start")
+                lines.append("    __resync_ncrisc_cb_state();")
+                lines.append("")
             # Rebind CB addresses after barrier wait
             rebind_lines = _generate_rebind_code(rebind_info.get(next_phase_idx, []), next_phase_idx, for_compute=False)
             if rebind_lines:
@@ -1065,32 +1087,37 @@ def _generate_fused_compute_source(
         lines.append("")
 
     # Generate compute-side CB state resync function.
-    # After BRISC sweep, TRISC0's local tiles_acked and fifo_rd_ptr are stale.
-    # This function reads the stream register tiles_acked (updated by BRISC)
-    # and directly updates the local CB interface to match.
-    # Guarded by TRISC_UNPACK because cb_interface only exists on TRISC0.
+    # After BRISC's __cb_reset_to_empty(), stream registers are equalized and
+    # BRISC pointers are at CB start. TRISC0 and TRISC2 need to sync their
+    # local state and reset pointers to CB start as well.
     if sweep_cb_indices and is_multi_phase:
-        lines.append("// Resync TRISC0 local CB state with stream registers after BRISC sweep.")
+        lines.append("// Resync compute-side local CB state after BRISC reset.")
+        lines.append("// TRISC0: sync tiles_acked + reset fifo_rd_ptr to CB start.")
+        lines.append("// TRISC2: sync tiles_received + reset fifo_wr_ptr to CB start.")
         lines.append("FORCE_INLINE void __resync_cb_state_after_sweep() {")
         lines.append("#ifdef TRISC_UNPACK")
         for cb_idx in sweep_cb_indices:
             lines.append(f"    {{")
-            lines.append(f"        volatile tt_l1_ptr uint32_t* acked_ptr = get_cb_tiles_acked_ptr({cb_idx});")
-            lines.append(f"        uint16_t stream_acked = (uint16_t)reg_read((uint32_t)acked_ptr);")
-            lines.append(f"        uint16_t local_acked = get_local_cb_interface({cb_idx}).tiles_acked;")
-            lines.append(f"        uint16_t swept = stream_acked - local_acked;")
-            lines.append(f"        if (swept > 0) {{")
-            lines.append(f"            get_local_cb_interface({cb_idx}).tiles_acked = stream_acked;")
-            lines.append(f"            uint32_t advance = swept * get_local_cb_interface({cb_idx}).fifo_page_size;")
-            lines.append(f"            get_local_cb_interface({cb_idx}).fifo_rd_ptr += advance;")
             lines.append(
-                f"            while (get_local_cb_interface({cb_idx}).fifo_rd_ptr >= get_local_cb_interface({cb_idx}).fifo_limit) {{"
+                f"        uint16_t stream_acked = (uint16_t)reg_read((uint32_t)get_cb_tiles_acked_ptr({cb_idx}));"
             )
+            lines.append(f"        get_local_cb_interface({cb_idx}).tiles_acked = stream_acked;")
+            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
+            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = fifo_start;")
+            lines.append(f"    }}")
+        lines.append("#endif")
+        lines.append("#ifdef TRISC_PACK")
+        for cb_idx in sweep_cb_indices:
+            lines.append(f"    {{")
             lines.append(
-                f"                get_local_cb_interface({cb_idx}).fifo_rd_ptr -= get_local_cb_interface({cb_idx}).fifo_size;"
+                f"        uint16_t stream_received = (uint16_t)reg_read((uint32_t)get_cb_tiles_received_ptr({cb_idx}));"
             )
-            lines.append(f"            }}")
-            lines.append(f"        }}")
+            lines.append(f"        get_local_cb_interface({cb_idx}).tiles_received = stream_received;")
+            lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
+            lines.append(f"                            - get_local_cb_interface({cb_idx}).fifo_size;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = fifo_start;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_tile_ptr = 0;")
             lines.append(f"    }}")
         lines.append("#endif")
         lines.append("}")
@@ -1562,7 +1589,31 @@ def _create_barrier_config(device: Any, core_ranges: Any) -> BarrierConfig:
         config.mcast_end_x = max(c.x for c in phys_coords)
         config.mcast_end_y = max(c.y for c in phys_coords)
 
+        # Validate rectangular grid for safe NOC multicast
+        if config.num_cores > 1:
+            _validate_rectangular_grid(phys_coords, config)
+
     return config
+
+
+def _validate_rectangular_grid(phys_coords: List[Any], config: BarrierConfig) -> None:
+    """Validate that physical cores form a rectangle for safe NOC multicast.
+
+    NOC multicast sends to ALL cores in the bounding box. If the actual core
+    set is non-rectangular (e.g., L-shaped), the multicast would write to
+    unintended cores, corrupting their L1 memory.
+    """
+    phys_set = set((c.x, c.y) for c in phys_coords)
+    bbox_w = config.mcast_end_x - config.mcast_start_x + 1
+    bbox_h = config.mcast_end_y - config.mcast_start_y + 1
+    bbox_area = bbox_w * bbox_h
+    if len(phys_set) != bbox_area:
+        raise ValueError(
+            f"Fused kernel global barrier requires rectangular core grid for "
+            f"safe NOC multicast. Got {len(phys_set)} physical cores in "
+            f"bounding box {bbox_w}x{bbox_h} ({bbox_area} cores). "
+            f"Physical coords: {sorted(phys_set)}"
+        )
 
 
 def _create_role_barrier_config(
@@ -1592,6 +1643,10 @@ def _create_role_barrier_config(
         cfg.mcast_start_y = min(c.y for c in phys_coords)
         cfg.mcast_end_x = max(c.x for c in phys_coords)
         cfg.mcast_end_y = max(c.y for c in phys_coords)
+
+        # Validate rectangular grid for safe NOC multicast
+        if cfg.num_cores > 1:
+            _validate_rectangular_grid(phys_coords, cfg)
 
     return cfg
 
@@ -1793,6 +1848,7 @@ class SequentialChainBuilder:
                     role_key,
                     self.phases,
                     ct_offsets,
+                    sweep_cb_indices,
                     rebind_info,
                     bc,
                 )
