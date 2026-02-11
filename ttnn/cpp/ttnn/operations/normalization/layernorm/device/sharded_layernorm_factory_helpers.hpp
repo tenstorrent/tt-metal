@@ -44,8 +44,8 @@ std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::D
 // Struct to hold grid parameters computed from tensor shard spec
 struct GridParams {
     ShardSpec shard_spec;
-    CoreCoord grid_size{};
-    std::optional<CoreCoord> grid_offset{};
+    CoreCoord grid_size;
+    std::optional<CoreCoord> grid_offset;
     bool mcast_1d = false;
     bool row_wise = false;
     uint32_t num_blocks = 0;
@@ -71,12 +71,12 @@ struct WorkerDistribution {
 
 // Struct to hold computed core ranges for kernels
 struct CoreRanges {
-    CoreCoord start_core{};
-    CoreRangeSet all_cores{};
+    CoreCoord start_core;
+    CoreRangeSet all_cores;
     CoreRange sender_cores{{0, 0}, {0, 0}};
-    CoreRangeSet all_to_all_cores{};
-    CoreRangeSet all_to_all_workers_except_sender{};
-    CoreRangeSet not_all_to_all_workers{};
+    CoreRangeSet all_to_all_cores;
+    CoreRangeSet all_to_all_workers_except_sender;
+    CoreRangeSet not_all_to_all_workers;
     uint32_t num_cores_x_mcast = 0;
     uint32_t num_cores_y_mcast = 0;
 
