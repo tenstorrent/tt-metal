@@ -24,20 +24,19 @@ inline void llk_wait_tiles(const std::int32_t cb_id, const std::uint32_t num_til
  */
 template <std::uint8_t UNPACK_SEL = 0x3>
 inline void llk_pop_tiles(const std::int32_t cb_id, const std::int32_t num_tiles) {
-    // Wait until all 3 unpackers are reading from L1
+    // Wait until selected unpackers are reading from L1
     TT_POP_TILES(UNPACK_SEL, num_tiles, cb_id);
 
-    get_local_cb_interface(cb_id).tiles_acked += num_tiles;
+    // Update the CB buffer information
     const std::uint32_t num_words = num_tiles * get_local_cb_interface(cb_id).fifo_page_size;
+
+    get_local_cb_interface(cb_id).tiles_acked += num_tiles;
     get_local_cb_interface(cb_id).fifo_rd_ptr += num_words;
-
-    // Update read tile index, wrapping at fifo_num_pages
     get_local_cb_interface(cb_id).fifo_rd_tile_idx += num_tiles;
-    if (get_local_cb_interface(cb_id).fifo_rd_tile_idx >= get_local_cb_interface(cb_id).fifo_num_pages) {
-        get_local_cb_interface(cb_id).fifo_rd_tile_idx -= get_local_cb_interface(cb_id).fifo_num_pages;
-    }
 
+    // Reset fifo_rd_tile_idx when fifo_rd_ptr reaches limit (back to beginning of CB)
     if (get_local_cb_interface(cb_id).fifo_rd_ptr >= get_local_cb_interface(cb_id).fifo_limit) {
         get_local_cb_interface(cb_id).fifo_rd_ptr -= get_local_cb_interface(cb_id).fifo_size;
+        get_local_cb_interface(cb_id).fifo_rd_tile_idx = 0;
     }
 }

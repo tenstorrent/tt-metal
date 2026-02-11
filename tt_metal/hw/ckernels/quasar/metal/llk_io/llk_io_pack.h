@@ -33,15 +33,12 @@ inline void llk_push_tiles(const std::int32_t cb_id, const std::int32_t num_tile
 
     get_local_cb_interface(cb_id).tiles_received += num_tiles;
     get_local_cb_interface(cb_id).fifo_wr_ptr += num_words;
+    get_local_cb_interface(cb_id).fifo_wr_tile_idx += num_tiles;
     get_local_cb_interface(cb_id).fifo_wr_tile_ptr = 0;
 
-    // Update write tile index, wrapping at fifo_num_pages
-    get_local_cb_interface(cb_id).fifo_wr_tile_idx += num_tiles;
-    if (get_local_cb_interface(cb_id).fifo_wr_tile_idx >= get_local_cb_interface(cb_id).fifo_num_pages) {
-        get_local_cb_interface(cb_id).fifo_wr_tile_idx -= get_local_cb_interface(cb_id).fifo_num_pages;
-    }
-
+    // Reset fifo_wr_tile_idx when fifo_wr_ptr reaches limit (back to beginning of CB)
     if (get_local_cb_interface(cb_id).fifo_wr_ptr >= get_local_cb_interface(cb_id).fifo_limit) {
         get_local_cb_interface(cb_id).fifo_wr_ptr -= get_local_cb_interface(cb_id).fifo_size;
+        get_local_cb_interface(cb_id).fifo_wr_tile_idx = 0;
     }
 }
