@@ -150,10 +150,9 @@ void kernel_main() {
     // Qrope reader args (NCRISC is no-op)
     deepseek_b1_ops::Rope::ReaderArgs qrope_args{};
 
-    // NCRISC: Sender args for QNOPE/QROPE cores (matching gather pattern: NCRISC sender, BRISC receiver)
-    // Senders write to intermediate CB (receiver_in_cb), not directly to output
+    // NCRISC: Sender args for QNOPE/QROPE cores
+    // Senders write to intermediate CB, then compute tilizes to output CB
     // 3-phase synchronization: nope_phase1, nope_phase2, rope semaphores
-    // All args prefixed with "cqh_" to avoid name collisions with other ops
     constexpr uint32_t cqh_receiver_in_cb = get_named_compile_time_arg_val("cqh_receiver_in_cb");
     deepseek_b1_ops::CreateQHeads::SenderArgs create_q_heads_args{
         0,  // sender_grid_start_x (logical 0)
