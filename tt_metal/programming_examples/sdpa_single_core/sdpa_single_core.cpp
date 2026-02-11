@@ -57,7 +57,12 @@ void sdpa_single_core(
     const uint32_t Sk_chunk_t,
     const uint32_t Sv_chunk_t,
     const uint32_t head_dim_t,
+    const uint32_t subblock_h,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    TT_FATAL(subblock_h == 1 || subblock_h == 2, "subblock_h must be 1 or 2. Got {}.", subblock_h);
+    TT_FATAL(
+        Sq_chunk_t % subblock_h == 0, "Sq_chunk_t ({}) must be divisible by subblock_h ({}).", Sq_chunk_t, subblock_h);
+
     // Set up mesh command queue, workload, device range, and program. This is a single-core example using core {0,0}.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -186,7 +191,7 @@ void sdpa_single_core(
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/dataflow/reader.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
+            .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args,
             .defines = defines});
@@ -208,13 +213,13 @@ void sdpa_single_core(
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/dataflow/writer.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
+            .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_0_default,
             .compile_args = writer_compile_time_args,
             .defines = defines});
 
     std::vector<uint32_t> compute_compile_time_args = {
-        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_iter, scale_union.u};
+        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_iter, scale_union.u, subblock_h};
     tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/compute/sdpa.cpp",
@@ -257,6 +262,7 @@ int main() {
         constexpr uint32_t Sk_chunk_t = 16;
         constexpr uint32_t Sv_chunk_t = 16;
         constexpr uint32_t head_dim_t = 128 / TILE_WIDTH;
+        constexpr uint32_t subblock_h = 1;
 
         // // input vectors with various ranges of values
         // std::mt19937 rng(std::random_device{}());
@@ -288,7 +294,7 @@ int main() {
         //std::vector<bfloat16> result_vec(M * N, 0);
 
         //sdpa_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, mesh_device);
-        sdpa_single_core(Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, mesh_device);
+        sdpa_single_core(Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, subblock_h, mesh_device);
 
         // // Reverse the tilization to get the result in the row-major format that the CPU expects
         // result_vec = untilize_nfaces(result_vec, M, N);
