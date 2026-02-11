@@ -119,12 +119,12 @@ inline void calculate_unary_max_min_int32(uint value) {
         //
         // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
         //
-        // t | Load | Simple                  | MAD | Round | Store |
-        // - | ---- | ----------------------- | --- | ----- | ----- |
-        // 0 | [a]  |                         |     |       |       |
-        // 1 | nop  | swap_minmax([a], not_v) |     |       |       |
-        // 0 | ...  |                         |     |       |       |
-        // 1 | ...  |                         |     |       | [a]   |
+        // t | Load | Simple              | MAD | Round | Store |
+        // - | ---- | ------------------- | --- | ----- | ----- |
+        // 0 | [a]  |                     |     |       |       |
+        // 1 | nop  | swap_minmax([a], v) |     |       |       |
+        // 0 | ...  |                     |     |       |       |
+        // 1 | ...  |                     |     |       | [a]   |
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
