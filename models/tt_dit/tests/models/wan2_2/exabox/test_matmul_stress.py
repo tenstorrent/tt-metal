@@ -10,14 +10,13 @@ from .....utils.tensor import bf16_tensor
 
 
 @pytest.mark.parametrize(
-    "device_params",
+    "mesh_device, device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+        pytest.param((4, 32), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, id="4x32"),
+        pytest.param((4, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="4x8"),
     ],
-    indirect=True,
-    ids=["fabric_1d_ring"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("mesh_device", [(4, 32)], indirect=True)
 def test_matmul_stress(
     mesh_device,
 ):
