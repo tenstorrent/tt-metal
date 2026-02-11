@@ -61,7 +61,7 @@ struct RouterStaticSizedChannelWriterAdapter {
     RouterStaticSizedChannelWriterAdapter() = default;
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
-    __attribute__((noinline)) void init(
+    __attribute__((noinline, optimize("Os"))) void init(
         bool connected_to_persistent_fabric,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
@@ -199,7 +199,7 @@ public:
     // SEND_CREDIT_ADDR: True when the EDM sender is IDLE_ETH (mux) as it doesn't have credits on L1 static address
     //                   or some legacy code which skips connection info copy on Tensix L1 static address
     template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
-    void open() {
+    __attribute__((noinline, optimize("Os"))) void open() {
         this->open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>();
         this->open_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
@@ -238,7 +238,7 @@ private:
     uint8_t sync_noc_cmd_buf;
 
     template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
-    void open_start() {
+    __attribute__((optimize("Os"))) void open_start() {
         connection::open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>(
             this->edm_worker_location_info_addr,
             reinterpret_cast<size_t>(this->edm_buffer_local_free_slots_update_ptr),
@@ -248,7 +248,7 @@ private:
     }
 
     template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
-    void open_finish() {
+    __attribute__((optimize("Os"))) void open_finish() {
         connection::open_finish<posted, WORKER_HANDSHAKE_NOC>(
             this->edm_connection_handshake_l1_addr, this->worker_teardown_addr, this->edm_noc_x, this->edm_noc_y);
         this->buffer_slot_index = BufferIndex(0);

@@ -55,7 +55,7 @@ struct handshake_info_t {
     uint32_t scratch[4];         // Bytes 16-31: TODO: Can be removed if we use a stream register for handshaking.
 };
 
-FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
+__attribute__((optimize("Os"))) volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     uint32_t handshake_register_address, uint16_t my_mesh_id, uint8_t my_device_id) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
@@ -70,7 +70,7 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     return handshake_info;
 }
 
-FORCE_INLINE void sender_side_handshake(
+__attribute__((optimize("Os"))) void sender_side_handshake(
     uint32_t handshake_register_address,
     uint16_t my_mesh_id,
     uint8_t my_device_id,
@@ -92,7 +92,7 @@ FORCE_INLINE void sender_side_handshake(
     }
 }
 
-FORCE_INLINE void receiver_side_handshake(
+__attribute__((optimize("Os"))) void receiver_side_handshake(
     uint32_t handshake_register_address,
     uint16_t my_mesh_id,
     uint8_t my_device_id,

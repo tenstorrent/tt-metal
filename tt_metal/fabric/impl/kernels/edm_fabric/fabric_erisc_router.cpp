@@ -954,7 +954,7 @@ FORCE_INLINE void forward_to_local_destination(
 
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, size_t DOWNSTREAM_EDM_SIZE, typename DownstreamSenderT, typename LocalRelayInterfaceT>
-#if !defined(FABRIC_2D_VC1_ACTIVE) || defined(ARCH_BLACKHOLE)
+#if !defined(FABRIC_2D_VC1_ACTIVE)
 FORCE_INLINE
 #endif
     __attribute__((optimize("jump-tables"))) void
@@ -1672,7 +1672,7 @@ template <
     typename ReceiverPointersT,
     typename ReceiverChannelT,
     typename LocalTelemetryT>
-#if !defined(FABRIC_2D_VC1_ACTIVE) || defined(ARCH_BLACKHOLE)
+#if !defined(FABRIC_2D_VC1_ACTIVE)
 FORCE_INLINE
 #endif
     bool
@@ -1833,7 +1833,7 @@ template <
     typename ReceiverPointersT,
     size_t NUM_SENDER_CHANNELS,
     typename LocalTelemetryT>
-#if !defined(FABRIC_2D_VC1_ACTIVE) || defined(ARCH_BLACKHOLE)
+#if !defined(FABRIC_2D_VC1_ACTIVE)
 FORCE_INLINE
 #endif
     bool
@@ -2716,7 +2716,7 @@ typename std::enable_if<(I >= NUM_SENDER_CHANNELS), void>::type init_sender_chan
 template <size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
 void
 #ifdef FABRIC_2D
-    __attribute__((noinline))
+    __attribute__((noinline, optimize("Os")))
 #endif
     init_local_sender_channel_worker_interfaces(
         std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
@@ -2756,7 +2756,7 @@ void
 
 // copy the sender_channel_free_slots_stream_ids (in L1) to local memory for performance.
 template <size_t NUM_SENDER_CHANNELS>
-void populate_local_sender_channel_free_slots_stream_id_ordered_map(
+__attribute__((optimize("Os"))) void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
@@ -2785,7 +2785,7 @@ void wait_for_other_local_erisc() {
     }
 }
 
-FORCE_INLINE void teardown(
+__attribute__((noinline, optimize("Os"))) void teardown(
     volatile tt_l1_ptr tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status_ptr,
     WriteTransactionIdTracker<
@@ -2852,7 +2852,7 @@ FORCE_INLINE void teardown(
     }
 }
 
-void initialize_state_for_txq1_active_mode() {
+__attribute__((noinline, optimize("Os"))) void initialize_state_for_txq1_active_mode() {
     eth_enable_packet_mode(receiver_txq_id);
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
@@ -2860,7 +2860,7 @@ void initialize_state_for_txq1_active_mode() {
     }
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
 }
-void initialize_state_for_txq1_active_mode_sender_side() {
+__attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode_sender_side() {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[i] = 0;
         reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[i] = 0;
@@ -2869,7 +2869,7 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 
 // Initialize fabric telemetry structure in L1
 // This must be called early in kernel_main to ensure telemetry is properly initialized
-void initialize_fabric_telemetry() {
+__attribute__((noinline, optimize("Os"))) void initialize_fabric_telemetry() {
     // Get pointer to telemetry structure in L1
     volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
         reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);

@@ -71,7 +71,12 @@ FORCE_INLINE void check_worker_connections(
 
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
 template <bool RISC_CPU_DATA_CACHE_ENABLED>
-inline void wait_for_notification(uint32_t address, uint32_t value) {
+#ifdef COMPILE_FOR_ERISC
+__attribute__((noinline,optimize("Os")))
+#else
+inline
+#endif
+void wait_for_notification(uint32_t address, uint32_t value) {
     volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;
     while (*poll_addr != value) {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
@@ -81,7 +86,7 @@ inline void wait_for_notification(uint32_t address, uint32_t value) {
 }
 
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
-inline void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
+__attribute__((optimize("Os"))) void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
     // send semaphore increment to master router on this device.
     // semaphore notifies all other routers that this router has completed
     // startup handshake with its ethernet peer.
@@ -101,7 +106,7 @@ inline void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
 // exclude_eth_chan is normally used for master ethernet channel to avoid sending notification to itself
 // but still can send to itself if the eth core has multiple risc cores (like Blackhole)
-inline void notify_subordinate_routers(
+__attribute__((optimize("Os"))) void notify_subordinate_routers(
     uint32_t router_eth_chans_mask, uint32_t exclude_eth_chan, uint32_t address, uint32_t notification) {
     uint32_t remaining_cores = router_eth_chans_mask;
     constexpr uint32_t num_routers = sizeof(eth_chan_to_noc_xy[0]) / sizeof(eth_chan_to_noc_xy[0][0]);
