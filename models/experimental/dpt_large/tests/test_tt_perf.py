@@ -4,6 +4,8 @@
 
 import os
 import time
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,7 +18,6 @@ from PIL import Image
 from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.dpt_large.tt.config import DPTLargeConfig
 from models.experimental.dpt_large.tt.pipeline import DPTTTPipeline
-from models.perf.perf_utils import prep_perf_report
 
 
 def _make_dummy_image(path, size=384):
@@ -81,13 +82,16 @@ def test_tt_pipeline_perf_smoke(tmp_path):
     if min_fps > 0:
         assert fps >= min_fps, f"DPT-Large throughput below target: {fps:.3f} FPS < {min_fps:.3f} FPS"
 
-    # Perf report hook aligned with tt-metal perf utilities.
-    prep_perf_report(
-        model_name="dpt_large_full_pipeline",
-        batch_size=1,
-        inference_and_compile_time=first_run_s,
-        inference_time=avg_s,
-        expected_compile_time=compile_s,
-        expected_inference_time=avg_s,
-        comments="tt_384_smoke",
-    )
+    # Persist a lightweight perf report artifact for manual/CI inspection.
+    report = {
+        "model_name": "dpt_large_full_pipeline",
+        "batch_size": 1,
+        "image_size": 384,
+        "first_run_s": first_run_s,
+        "avg_inference_s": avg_s,
+        "compile_s": compile_s,
+        "fps": fps,
+    }
+    out_path = Path("generated/dpt_large_tt_perf_smoke.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report, indent=2))
