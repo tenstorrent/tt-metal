@@ -50,7 +50,6 @@ void tilize_in(
         out_cb_id,
         init_uninit_mode,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::TilizeSpeedMode::Fast,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(
         in_block_w, in_num_subblocks);
 }  // tilize_in()

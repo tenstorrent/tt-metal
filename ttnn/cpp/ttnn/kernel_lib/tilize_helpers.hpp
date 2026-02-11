@@ -7,6 +7,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/cb_api.h"
 #include "internal/circular_buffer_interface.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 /**
  * @file tilize_helpers.hpp
@@ -15,7 +16,7 @@
  * This library provides a unified tilize function with:
  * - Compile-time type safety via template parameters for CB IDs
  * - Descriptive enum-based configuration instead of boolean flags
- * - Explicit control over tilize speed mode (Standard vs Fast)
+ * - Automatic fast tilize detection at compile time
  * - Clean API for non-tile-aligned circular buffer configurations
  *
  * Key Features:
@@ -36,19 +37,10 @@
  *   // Simple standard tilize
  *   compute_kernel_lib::tilize<cb_in, cb_out>(32, num_blocks);
  *
- *   // Fast tilize with explicit mode
- *   using namespace compute_kernel_lib::tilize_config;
- *   compute_kernel_lib::tilize<
- *       cb_in, cb_out,
- *       InitUninitMode::InitAndUninit,
- *       WaitMode::WaitBlock,
- *       TilizeSpeedMode::Fast>(64, num_blocks);
- *
  *   // With unpack and pack data type reconfiguration
  *   compute_kernel_lib::tilize<new_cb, cb_out,
  *       InitUninitMode::InitAndUninit,
  *       WaitMode::WaitBlock,
- *       TilizeSpeedMode::Standard,
  *       ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(16, num_blocks);
  *
  *   // Non-tile-aligned: per-iteration pages
@@ -111,19 +103,6 @@ enum class WaitMode : uint8_t {
     WaitBlock,    // Default - wait per block/iteration
     WaitUpfront,  // Wait for all blocks upfront before processing
     NoWait        // Caller manages synchronization (skip cb_wait_front)
-};
-
-/**
- * @brief Controls tilize speed mode (explicit selection, NOT auto-detected)
- *
- * Standard - use standard tilize functions (tilize_init, tilize_block, tilize_uninit)
- * Fast - use fast_tilize functions (requires 32x32 tiles + half-sync mode)
- *
- * NOTE: Fast mode requires specific hardware configuration. Use with care.
- */
-enum class TilizeSpeedMode : uint8_t {
-    Standard,  // Use standard tilize functions (default)
-    Fast       // Use fast_tilize functions (explicit opt-in)
 };
 
 /**
@@ -209,7 +188,7 @@ public:
  * @brief Unified tilize function handling ALL patterns with type-safe API
  *
  * This single function handles:
- * - Standard and fast tilize modes (explicit selection via TilizeSpeedMode)
+ * - Automatic fast tilize mode (compile-time detection)
  * - Data type reconfiguration (via reconfig_from_cb template parameter)
  * - Variable row alignment (via NonTileAlignedCBWaitConfig::total_batched)
  * - Asymmetric input/output counts (via NonTileAlignedCBWaitConfig::per_iteration)
@@ -229,7 +208,6 @@ public:
  * @tparam output_cb Output circular buffer ID (compile-time for type safety)
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Controls input synchronization strategy (default: Wait)
- * @tparam speed_mode Explicit tilize speed mode selection (default: Standard)
  * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  *
  * @param block_width_tiles Block width in tiles (FIRST runtime argument for consistency)
@@ -241,20 +219,11 @@ public:
  *   tilize<cb_in, cb_out>(32, 10);
  *
  * @example
- *   // Fast tilize (explicit mode selection)
- *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<cb_in, cb_out,
- *          InitUninitMode::InitAndUninit,
- *          WaitMode::WaitBlock,
- *          TilizeSpeedMode::Fast>(64, 5);
- *
- * @example
  *   // Unpack and pack data type reconfiguration
  *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          TilizeSpeedMode::Standard,
  *          ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(16, 5);
  *
  * @example
@@ -263,7 +232,6 @@ public:
  *   tilize<new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          TilizeSpeedMode::Standard,
  *          ReconfigureRegisterDatatypeMode::UnpackReconfigure>(16, 5);
  *
  * @example
@@ -272,7 +240,6 @@ public:
  *   tilize<new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          TilizeSpeedMode::Standard,
  *          ReconfigureRegisterDatatypeMode::PackReconfigure>(16, 5);
  *
  * @example
@@ -319,7 +286,6 @@ template <
     uint32_t output_cb,
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
-    tilize_config::TilizeSpeedMode speed_mode = tilize_config::TilizeSpeedMode::Standard,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
 ALWI void tilize(
