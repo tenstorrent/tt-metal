@@ -760,16 +760,18 @@ def _generate_fused_riscv0_source(
         lines.append("")
 
         # BRISC-side CB reset: equalize stream registers + reset pointers to CB start.
-        # Pop one at a time for acked, then directly reset pointers.
+        # Uses direct tt_reg_ptr stream register increment (no cb_pop_front dependency).
+        # The stream controller requires per-tile increments — bulk acked += N hangs.
         lines.append("// BRISC-side CB reset: equalize stream registers + reset pointers to CB start.")
         lines.append("FORCE_INLINE void __cb_reset_to_empty() {")
         for cb_idx in sweep_cb_indices:
             lines.append(f"    {{")
-            lines.append(
-                f"        uint16_t remaining = (uint16_t)(*get_cb_tiles_received_ptr({cb_idx})) - (uint16_t)(*get_cb_tiles_acked_ptr({cb_idx}));"
-            )
+            lines.append(f"        uint16_t remaining = (uint16_t)(*get_cb_tiles_received_ptr({cb_idx}))")
+            lines.append(f"                          - (uint16_t)(*get_cb_tiles_acked_ptr({cb_idx}));")
+            lines.append(f"        volatile tt_reg_ptr uint32_t* acked_ptr = (volatile tt_reg_ptr uint32_t*)")
+            lines.append(f"            ((uint32_t)(uintptr_t)get_cb_tiles_acked_ptr({cb_idx}));")
             lines.append(f"        for (uint16_t i = 0; i < remaining; i++) {{")
-            lines.append(f"            cb_pop_front({cb_idx}, 1);")
+            lines.append(f"            acked_ptr[0] += 1;")
             lines.append(f"        }}")
             lines.append(f"        // Reset BRISC local pointers to CB start")
             lines.append(f"        uint32_t fifo_start = get_local_cb_interface({cb_idx}).fifo_limit")
