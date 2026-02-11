@@ -59,6 +59,11 @@ parameters = {
             [1, 20480, 50, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None, True],
             [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None, True],
             [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None, True],
+            # model tests
+            [1, 64, 608, 784, 3, 3, 2, 2, 1, 1, 1, 1, False, 0, None, None, True],  # SMP Unet failure from #35223
+            [6, 64, 464, 800, 3, 3, 2, 2, 1, 1, 1, 1, False, 0, None, None, True],  # DETR3D failure from #35115
+            [1, 256, 2048, 32, 1, 32, 1, 1, 0, 0, 1, 1, False, 0, None, None, True],  # DETR3D failure from #22920
+            [1, 256, 2048, 64, 1, 64, 1, 1, 0, 0, 1, 1, False, 0, None, None, True],  # DETR3D failure from #22920
         ],
     },
     "height_shard_tests": {
