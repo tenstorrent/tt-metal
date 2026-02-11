@@ -1,0 +1,123 @@
+# Composite action to extract tool image tags from JSON bundle and format as Docker build-args
+# This eliminates the need to manually pass 9+ individual tool tags between workflows.
+#
+# Usage:
+#   - uses: ./.github/actions/setup-tool-buildargs
+#     id: tools
+#     with:
+#       tool-tags: ${{ inputs.tool-tags }}
+#
+#   - uses: docker/build-push-action@v6
+#     with:
+#       build-args: ${{ steps.tools.outputs.build-args }}
+
+name: "Setup Tool Build Args"
+description: "Extract tool image tags from JSON bundle and format as Docker build-args"
+
+inputs:
+  tool-tags:
+    description: "JSON object containing tool image tags (from build-docker-tools.yaml)"
+    required: true
+  include:
+    description: |
+      Comma-separated list of tools to include. If empty, includes all tools.
+      Valid values: ccache, mold, doxygen, cba, gdb, cmake, yq, sfpi, openmpi
+    required: false
+    default: ""
+
+outputs:
+  build-args:
+    description: "Multi-line build-args string for docker/build-push-action"
+    value: ${{ steps.extract.outputs.build-args }}
+  # Individual tags for cases where direct access is needed
+  ccache-tag:
+    description: "Docker tag for ccache tool image"
+    value: ${{ steps.extract.outputs.ccache-tag }}
+  mold-tag:
+    description: "Docker tag for mold tool image"
+    value: ${{ steps.extract.outputs.mold-tag }}
+  doxygen-tag:
+    description: "Docker tag for doxygen tool image"
+    value: ${{ steps.extract.outputs.doxygen-tag }}
+  cba-tag:
+    description: "Docker tag for ClangBuildAnalyzer tool image"
+    value: ${{ steps.extract.outputs.cba-tag }}
+  gdb-tag:
+    description: "Docker tag for GDB tool image"
+    value: ${{ steps.extract.outputs.gdb-tag }}
+  cmake-tag:
+    description: "Docker tag for cmake tool image"
+    value: ${{ steps.extract.outputs.cmake-tag }}
+  yq-tag:
+    description: "Docker tag for yq tool image"
+    value: ${{ steps.extract.outputs.yq-tag }}
+  sfpi-tag:
+    description: "Docker tag for SFPI tool image"
+    value: ${{ steps.extract.outputs.sfpi-tag }}
+  openmpi-tag:
+    description: "Docker tag for OpenMPI tool image"
+    value: ${{ steps.extract.outputs.openmpi-tag }}
+
+runs:
+  using: composite
+  steps:
+    - id: extract
+      shell: bash
+      env:
+        TOOL_TAGS: ${{ inputs.tool-tags }}
+        INCLUDE_FILTER: ${{ inputs.include }}
+      run: |
+        # Parse JSON and extract individual tags
+        CCACHE_TAG=$(echo "$TOOL_TAGS" | jq -r '.["ccache-tag"] // empty')
+        MOLD_TAG=$(echo "$TOOL_TAGS" | jq -r '.["mold-tag"] // empty')
+        DOXYGEN_TAG=$(echo "$TOOL_TAGS" | jq -r '.["doxygen-tag"] // empty')
+        CBA_TAG=$(echo "$TOOL_TAGS" | jq -r '.["cba-tag"] // empty')
+        GDB_TAG=$(echo "$TOOL_TAGS" | jq -r '.["gdb-tag"] // empty')
+        CMAKE_TAG=$(echo "$TOOL_TAGS" | jq -r '.["cmake-tag"] // empty')
+        YQ_TAG=$(echo "$TOOL_TAGS" | jq -r '.["yq-tag"] // empty')
+        SFPI_TAG=$(echo "$TOOL_TAGS" | jq -r '.["sfpi-tag"] // empty')
+        OPENMPI_TAG=$(echo "$TOOL_TAGS" | jq -r '.["openmpi-tag"] // empty')
+
+        # Output individual tags for direct access
+        echo "ccache-tag=${CCACHE_TAG}" >> $GITHUB_OUTPUT
+        echo "mold-tag=${MOLD_TAG}" >> $GITHUB_OUTPUT
+        echo "doxygen-tag=${DOXYGEN_TAG}" >> $GITHUB_OUTPUT
+        echo "cba-tag=${CBA_TAG}" >> $GITHUB_OUTPUT
+        echo "gdb-tag=${GDB_TAG}" >> $GITHUB_OUTPUT
+        echo "cmake-tag=${CMAKE_TAG}" >> $GITHUB_OUTPUT
+        echo "yq-tag=${YQ_TAG}" >> $GITHUB_OUTPUT
+        echo "sfpi-tag=${SFPI_TAG}" >> $GITHUB_OUTPUT
+        echo "openmpi-tag=${OPENMPI_TAG}" >> $GITHUB_OUTPUT
+
+        # Build the build-args string based on include filter
+        # If no filter specified, include all tools
+        if [ -z "$INCLUDE_FILTER" ]; then
+          INCLUDE_FILTER="ccache,mold,doxygen,cba,gdb,cmake,yq,sfpi,openmpi"
+        fi
+
+        BUILD_ARGS=""
+        add_arg() {
+          local name="$1"
+          local value="$2"
+          local key="$3"
+          if [[ ",$INCLUDE_FILTER," == *",$key,"* ]] && [ -n "$value" ]; then
+            BUILD_ARGS="${BUILD_ARGS}${name}=${value}"$'\n'
+          fi
+        }
+
+        add_arg "TOOL_CCACHE_IMAGE" "$CCACHE_TAG" "ccache"
+        add_arg "TOOL_MOLD_IMAGE" "$MOLD_TAG" "mold"
+        add_arg "TOOL_DOXYGEN_IMAGE" "$DOXYGEN_TAG" "doxygen"
+        add_arg "TOOL_CBA_IMAGE" "$CBA_TAG" "cba"
+        add_arg "TOOL_GDB_IMAGE" "$GDB_TAG" "gdb"
+        add_arg "TOOL_CMAKE_IMAGE" "$CMAKE_TAG" "cmake"
+        add_arg "TOOL_YQ_IMAGE" "$YQ_TAG" "yq"
+        add_arg "TOOL_SFPI_IMAGE" "$SFPI_TAG" "sfpi"
+        add_arg "TOOL_OPENMPI_IMAGE" "$OPENMPI_TAG" "openmpi"
+
+        # Output build-args using heredoc for multi-line
+        {
+          echo "build-args<<EOF"
+          echo -n "$BUILD_ARGS"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT

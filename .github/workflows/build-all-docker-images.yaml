@@ -57,22 +57,32 @@ permissions:
   packages: write
 
 jobs:
+  # Tool images (ccache, mold, doxygen, etc.) are platform-agnostic; build once and share
+  build-tools:
+    name: "🔧 Build tool images"
+    uses: ./.github/workflows/build-docker-tools.yaml
+    secrets: inherit
+
   # Ubuntu 22.04: full build via single source of truth; this run also builds manylinux (once for all platforms)
   build-2204:
     name: "🐳 Ubuntu 22.04"
+    needs: [build-tools]
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       platform: "Ubuntu 22.04"
       architecture: "amd64"
       build-manylinux: true
+      tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
     secrets: inherit
 
   # Ubuntu 24.04: full build via single source of truth (runs in parallel with build-2204); skip manylinux (handled by build-2204)
   build-2404:
     name: "🐳 Ubuntu 24.04"
+    needs: [build-tools]
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       platform: "Ubuntu 24.04"
       architecture: "amd64"
       build-manylinux: false
+      tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
     secrets: inherit

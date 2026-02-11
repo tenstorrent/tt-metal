@@ -51,6 +51,15 @@ on:
           calls this workflow for both platforms (22.04 and 24.04) in parallel—only the
           22.04 run should build manylinux to avoid duplicate work. Standalone callers
           should leave true.
+      tool-tags:
+        required: false
+        type: string
+        default: ""
+        description: |
+          JSON object containing all tool image tags (from build-docker-tools.yaml).
+          When provided, skips building tool images and uses these tags instead.
+          Use with .github/actions/setup-tool-buildargs to extract individual tags.
+          Example: ${{ needs.build-tools.outputs.tool-tags }}
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -70,34 +79,11 @@ on:
       manylinux-tag:
         description: "Docker tag for the manylinux Docker image for building TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.manylinux-tag }}
-      # Tool image tags (for consumers that need them)
-      tool-ccache-tag:
-        description: "Docker tag for the ccache tool image"
-        value: ${{ jobs.build-tools.outputs.ccache-tag }}
-      tool-mold-tag:
-        description: "Docker tag for the mold tool image"
-        value: ${{ jobs.build-tools.outputs.mold-tag }}
-      tool-doxygen-tag:
-        description: "Docker tag for the doxygen tool image"
-        value: ${{ jobs.build-tools.outputs.doxygen-tag }}
-      tool-cba-tag:
-        description: "Docker tag for the ClangBuildAnalyzer tool image"
-        value: ${{ jobs.build-tools.outputs.cba-tag }}
-      tool-gdb-tag:
-        description: "Docker tag for the GDB tool image"
-        value: ${{ jobs.build-tools.outputs.gdb-tag }}
-      tool-cmake-tag:
-        description: "Docker tag for the cmake tool image"
-        value: ${{ jobs.build-tools.outputs.cmake-tag }}
-      tool-yq-tag:
-        description: "Docker tag for the yq tool image"
-        value: ${{ jobs.build-tools.outputs.yq-tag }}
-      tool-sfpi-tag:
-        description: "Docker tag for the SFPI tool image"
-        value: ${{ jobs.build-tools.outputs.sfpi-tag }}
-      tool-openmpi-tag:
-        description: "Docker tag for the OpenMPI (ULFM) tool image"
-        value: ${{ jobs.build-tools.outputs.openmpi-tag }}
+      # Tool image tags as JSON bundle
+      # Use with .github/actions/setup-tool-buildargs to extract individual tags
+      tool-tags:
+        description: "JSON object containing all tool image tags"
+        value: ${{ inputs.tool-tags || jobs.build-tools.outputs.tool-tags }}
       # Python venv image tags
       python-ci-build-venv-tag:
         description: "Docker tag for the Python CI Build venv image"
@@ -134,10 +120,32 @@ on:
 jobs:
   # =============================================================================
   # TOOL IMAGES: Check and build third-party tool images (reusable workflow)
+  # When tool-tags input is provided, caller has pre-built tools; skip building.
   # =============================================================================
   build-tools:
+    if: inputs.tool-tags == ''
     uses: ./.github/workflows/build-docker-tools.yaml
     secrets: inherit
+
+  # Resolve tool tags from either input (external) or build-tools job
+  resolve-tools:
+    runs-on: ubuntu-latest
+    needs: build-tools
+    if: always() && !failure() && !cancelled()
+    outputs:
+      tool-tags: ${{ steps.resolve.outputs.tool-tags }}
+    steps:
+      - name: Resolve tool tags source
+        id: resolve
+        run: |
+          # Use input tool-tags if provided, otherwise use build-tools output
+          if [ -n '${{ inputs.tool-tags }}' ]; then
+            echo "Using external tool-tags from input"
+            echo 'tool-tags=${{ inputs.tool-tags }}' >> $GITHUB_OUTPUT
+          else
+            echo "Using tool-tags from build-tools job"
+            echo 'tool-tags=${{ needs.build-tools.outputs.tool-tags }}' >> $GITHUB_OUTPUT
+          fi
 
   # =============================================================================
   # PYTHON VENV IMAGES: Check and build pre-built Python virtual environments
@@ -265,11 +273,12 @@ jobs:
   # Build Ubuntu images
   build-ubuntu-images:
     name: "🐳️ Build Ubuntu images"
-    needs: [check-docker-images, build-tools, build-python-venvs]
+    needs: [check-docker-images, resolve-tools, build-python-venvs]
     # Run if distro is ubuntu AND (main images missing OR basic images missing)
     # Use always() to run even when tool/venv build jobs inside build-tools/build-python-venvs are skipped (all exist)
     if: |
       always() && !failure() && !cancelled() &&
+      needs.resolve-tools.result == 'success' &&
       needs.check-docker-images.outputs.distro == 'ubuntu' &&
       (needs.check-docker-images.outputs.dev-exists != 'true' ||
        needs.check-docker-images.outputs.basic-dev-exists != 'true' ||
@@ -287,32 +296,31 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup tool build args
+        id: tools
+        uses: ./.github/actions/setup-tool-buildargs
+        with:
+          tool-tags: ${{ needs.resolve-tools.outputs.tool-tags }}
       - name: Setup build args
         id: buildargs
         run: |
+          # Main images need all tools + python venvs
           {
             echo "main<<EOF"
             echo "UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}"
-            echo "TOOL_CCACHE_IMAGE=${{ needs.build-tools.outputs.ccache-tag }}"
-            echo "TOOL_MOLD_IMAGE=${{ needs.build-tools.outputs.mold-tag }}"
-            echo "TOOL_DOXYGEN_IMAGE=${{ needs.build-tools.outputs.doxygen-tag }}"
-            echo "TOOL_CBA_IMAGE=${{ needs.build-tools.outputs.cba-tag }}"
-            echo "TOOL_GDB_IMAGE=${{ needs.build-tools.outputs.gdb-tag }}"
-            echo "TOOL_CMAKE_IMAGE=${{ needs.build-tools.outputs.cmake-tag }}"
-            echo "TOOL_YQ_IMAGE=${{ needs.build-tools.outputs.yq-tag }}"
-            echo "TOOL_SFPI_IMAGE=${{ needs.build-tools.outputs.sfpi-tag }}"
-            echo "TOOL_OPENMPI_IMAGE=${{ needs.build-tools.outputs.openmpi-tag }}"
+            echo "${{ steps.tools.outputs.build-args }}"
             echo "PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.build-python-venvs.outputs.ci-build-venv-tag }}"
             echo "PYTHON_CI_TEST_VENV_IMAGE=${{ needs.build-python-venvs.outputs.ci-test-venv-tag }}"
             echo "EOF"
           } >> $GITHUB_OUTPUT
+          # Basic-dev needs only a subset of tools
           {
             echo "basic-dev<<EOF"
             echo "UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}"
-            echo "TOOL_CMAKE_IMAGE=${{ needs.build-tools.outputs.cmake-tag }}"
-            echo "TOOL_SFPI_IMAGE=${{ needs.build-tools.outputs.sfpi-tag }}"
-            echo "TOOL_OPENMPI_IMAGE=${{ needs.build-tools.outputs.openmpi-tag }}"
-            echo "TOOL_CCACHE_IMAGE=${{ needs.build-tools.outputs.ccache-tag }}"
+            echo "TOOL_CMAKE_IMAGE=${{ steps.tools.outputs.cmake-tag }}"
+            echo "TOOL_SFPI_IMAGE=${{ steps.tools.outputs.sfpi-tag }}"
+            echo "TOOL_OPENMPI_IMAGE=${{ steps.tools.outputs.openmpi-tag }}"
+            echo "TOOL_CCACHE_IMAGE=${{ steps.tools.outputs.ccache-tag }}"
             echo "EOF"
           } >> $GITHUB_OUTPUT
       - name: Build and push CI Build image
@@ -384,12 +392,13 @@ jobs:
   # Build ManyLinux image (runs in parallel with Ubuntu)
   build-manylinux-image:
     name: "🐳️ Build ManyLinux image"
-    needs: [check-docker-images, build-tools]
+    needs: [check-docker-images, resolve-tools]
     # Run if manylinux needs build AND tool images are ready AND this run is responsible for manylinux
     # Use always() to run even when build-tool-images job inside build-tools is skipped (all exist)
     # When build-manylinux input is false (e.g. second platform in build-all-docker-images), skip so manylinux is built only once
     if: |
       always() && !failure() && !cancelled() &&
+      needs.resolve-tools.result == 'success' &&
       needs.check-docker-images.outputs.manylinux-exists != 'true' &&
       inputs.build-manylinux != false
     timeout-minutes: 90
@@ -405,15 +414,18 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup tool build args
+        id: tools
+        uses: ./.github/actions/setup-tool-buildargs
+        with:
+          tool-tags: ${{ needs.resolve-tools.outputs.tool-tags }}
+          include: ccache,mold,sfpi,openmpi
       - name: Setup build args
         id: buildargs
         run: |
           {
             echo "manylinux<<EOF"
-            echo "TOOL_CCACHE_IMAGE=${{ needs.build-tools.outputs.ccache-tag }}"
-            echo "TOOL_MOLD_IMAGE=${{ needs.build-tools.outputs.mold-tag }}"
-            echo "TOOL_SFPI_IMAGE=${{ needs.build-tools.outputs.sfpi-tag }}"
-            echo "TOOL_OPENMPI_IMAGE=${{ needs.build-tools.outputs.openmpi-tag }}"
+            echo "${{ steps.tools.outputs.build-args }}"
             echo "EOF"
           } >> $GITHUB_OUTPUT
       - name: Build and push ManyLinux image
