@@ -881,12 +881,12 @@ public:
             is_galaxy && (topology_ == Topology::Ring || topology_ == Topology::Torus);
 
         for (const auto& src_node : device_ids) {
+            const auto src_coord = get_device_coord(src_node);
             for (const auto& direction : directions) {
                 std::optional<FabricNodeId> neighbor_opt;
 
                 if (use_coordinate_neighbors) {
                     // Coordinate-based neighbor lookup with boundary wrapping
-                    const auto src_coord = get_device_coord(src_node);
                     const auto neighbor_coord = src_coord.get_neighbor(
                         mesh_shape_,
                         get_step_for_direction(direction),
