@@ -47,10 +47,13 @@ def enable_tracing_for_test(request):
         "test_operation_parameter_tracing" in request.node.name
         or "test_default_no_tensor_values" in request.node.name
         or "test_from_torch_to_device_tracing" in request.node.name
+        or "test_mesh_device" in request.node.name
+        or "test_memory_config" in request.node.name
+        or "test_tensor_topology" in request.node.name
     ):
         ttnn.operation_tracer._ENABLE_TRACE = True
         # For test_operation_parameter_tracing, enable tensor value serialization (to test with values)
-        # For test_default_no_tensor_values, use default (False - no values) to test default behavior
+        # For other tests, use default (False - no values) to test metadata only
         if "test_operation_parameter_tracing" in request.node.name:
             ttnn.operation_tracer.enable_tensor_value_serialization(True)
         else:
@@ -409,5 +412,344 @@ def test_from_torch_to_device_tracing(tmp_path, device):
     # Restore
     ttnn.operation_tracer._OPERATION_COUNTER = original_counter
     ttnn.operation_tracer._ENABLE_TRACE = original_trace_flag
+    if original_report_path is not None:
+        ttnn.CONFIG.root_report_path = original_report_path
+
+
+def test_mesh_device_serialization(tmp_path, device):
+    """Test that MeshDevice information is correctly serialized in traces."""
+    # Check if device is a MeshDevice
+    is_mesh_device = type(device).__name__ == "MeshDevice" or hasattr(device, "get_device_ids")
+
+    if not is_mesh_device:
+        pytest.skip("This test requires a MeshDevice")
+
+    # Override the log directory in CONFIG to use tmp_path
+    original_report_path = None
+    if hasattr(ttnn.CONFIG, "root_report_path"):
+        original_report_path = ttnn.CONFIG.root_report_path
+        ttnn.CONFIG.root_report_path = str(tmp_path)
+
+    trace_dir = tmp_path / "operation_parameters"
+
+    # Create a tensor on the mesh device and perform an operation
+    tensor_a = ttnn.rand(shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tensor_b = ttnn.rand(shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.add(tensor_a, tensor_b)
+    ttnn.synchronize_device(device)
+
+    # Verify trace files were created
+    assert trace_dir.exists(), f"Trace directory {trace_dir} was not created"
+    trace_files = sorted(trace_dir.glob("*.json"))
+    assert len(trace_files) > 0, "No trace files were generated"
+
+    # Find an add operation trace file (should have mesh_device info for tensors)
+    add_files = [f for f in trace_files if TRACE_FILE_PATTERN_TTNN_ADD in f.name]
+    assert len(add_files) >= 1, "Expected at least 1 add trace file"
+
+    # Read and verify the trace contains mesh_device information
+    with open(add_files[0], "r") as f:
+        add_data = json.load(f)
+
+    assert add_data["operation_name"] == OPERATION_NAME_TTNN_ADD
+    assert len(add_data["args"]) >= 2, "Expected at least 2 args for add"
+
+    # Check that tensor arguments have mesh_device information
+    for arg_idx, arg in enumerate(add_data["args"][:2]):  # Check first two tensor args
+        tensor_value = arg["value"]
+        assert tensor_value["type"] == "ttnn.Tensor", f"Expected ttnn.Tensor for arg {arg_idx}"
+
+        # Verify mesh_device information is present
+        assert "mesh_device" in tensor_value, f"Missing mesh_device info for arg {arg_idx}"
+        mesh_info = tensor_value["mesh_device"]
+
+        # Check that shape is present (if device has shape property)
+        if hasattr(device, "shape"):
+            assert "shape" in mesh_info, f"Missing mesh_device.shape for arg {arg_idx}"
+            # Shape should be either a list or a string
+            assert isinstance(
+                mesh_info["shape"], (list, str)
+            ), f"mesh_device.shape should be list or str, got {type(mesh_info['shape'])}"
+
+    # Check that device_ids is present (if device has get_device_ids method)
+    if hasattr(device, "get_device_ids"):
+        assert "device_ids" in mesh_info, f"Missing mesh_device.device_ids for arg {arg_idx}"
+        # device_ids should be either a list or None
+        assert mesh_info["device_ids"] is None or isinstance(
+            mesh_info["device_ids"], list
+        ), f"mesh_device.device_ids should be list or None, got {type(mesh_info['device_ids'])}"
+
+    # Restore
+    if original_report_path is not None:
+        ttnn.CONFIG.root_report_path = original_report_path
+
+
+def test_mesh_device_as_argument(tmp_path, device):
+    """Test that MeshDevice objects passed as arguments are correctly serialized."""
+    # Check if device is a MeshDevice
+    is_mesh_device = type(device).__name__ == "MeshDevice" or hasattr(device, "get_device_ids")
+
+    if not is_mesh_device:
+        pytest.skip("This test requires a MeshDevice")
+
+    # Override the log directory in CONFIG to use tmp_path
+    original_report_path = None
+    if hasattr(ttnn.CONFIG, "root_report_path"):
+        original_report_path = ttnn.CONFIG.root_report_path
+        ttnn.CONFIG.root_report_path = str(tmp_path)
+
+    trace_dir = tmp_path / "operation_parameters"
+
+    # Create a tensor and move it to device (device will be an argument)
+    torch_tensor = torch.rand([2, 3], dtype=torch.bfloat16)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn.to_device(ttnn_tensor, device)
+    ttnn.synchronize_device(device)
+
+    # Verify trace files were created
+    assert trace_dir.exists(), f"Trace directory {trace_dir} was not created"
+    trace_files = sorted(trace_dir.glob("*.json"))
+    assert len(trace_files) > 0, "No trace files were generated"
+
+    # Find to_device operation trace file (should have MeshDevice as argument)
+    to_device_files = [f for f in trace_files if TRACE_FILE_PATTERN_TTNN_TO_DEVICE in f.name]
+    assert len(to_device_files) >= 1, "Expected at least 1 to_device trace file"
+
+    # Read and verify the trace contains MeshDevice information
+    with open(to_device_files[0], "r") as f:
+        to_device_data = json.load(f)
+
+    assert to_device_data["operation_name"] == OPERATION_NAME_TTNN_TO_DEVICE
+
+    # Look for the device argument (could be in args or kwargs)
+    device_arg = None
+    # Check args for MeshDevice
+    for arg in to_device_data.get("args", []):
+        if isinstance(arg["value"], dict) and arg["value"].get("type") == "MeshDevice":
+            device_arg = arg["value"]
+            break
+
+    # Check kwargs for MeshDevice if not found in args
+    if device_arg is None:
+        for kwarg in to_device_data.get("kwargs", []):
+            if isinstance(kwarg["value"], dict) and kwarg["value"].get("type") == "MeshDevice":
+                device_arg = kwarg["value"]
+                break
+
+    assert device_arg is not None, "MeshDevice not found in args or kwargs"
+
+    # Verify MeshDevice serialization
+    assert device_arg["type"] == "MeshDevice"
+    assert "repr" in device_arg, "Missing repr for MeshDevice"
+
+    # Check that shape is present (if device has shape property)
+    if hasattr(device, "shape"):
+        assert "shape" in device_arg, "Missing shape for MeshDevice"
+        # Shape should be either a list or a string
+        assert isinstance(
+            device_arg["shape"], (list, str)
+        ), f"MeshDevice.shape should be list or str, got {type(device_arg['shape'])}"
+
+    # Check that device_ids is present (if device has get_device_ids method)
+    if hasattr(device, "get_device_ids"):
+        assert "device_ids" in device_arg, "Missing device_ids for MeshDevice"
+        # device_ids should be either a list or None
+        assert device_arg["device_ids"] is None or isinstance(
+            device_arg["device_ids"], list
+        ), f"MeshDevice.device_ids should be list or None, got {type(device_arg['device_ids'])}"
+
+    # Restore
+    if original_report_path is not None:
+        ttnn.CONFIG.root_report_path = original_report_path
+
+
+def test_memory_config_serialization(tmp_path, device):
+    """Test that memory_config is correctly serialized in tensor traces."""
+    # Override the log directory in CONFIG to use tmp_path
+    original_report_path = None
+    if hasattr(ttnn.CONFIG, "root_report_path"):
+        original_report_path = ttnn.CONFIG.root_report_path
+        ttnn.CONFIG.root_report_path = str(tmp_path)
+
+    trace_dir = tmp_path / "operation_parameters"
+
+    # Create tensors with different memory configurations
+    tensor_dram = ttnn.rand(
+        shape=[2, 3],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tensor_l1 = ttnn.rand(
+        shape=[2, 3],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # Perform operations to trigger tracing
+    ttnn.add(tensor_dram, tensor_l1)
+    ttnn.synchronize_device(device)
+
+    # Verify trace files were created
+    assert trace_dir.exists(), f"Trace directory {trace_dir} was not created"
+    trace_files = sorted(trace_dir.glob("*.json"))
+    assert len(trace_files) > 0, "No trace files were generated"
+
+    # Find an add operation trace file
+    add_files = [f for f in trace_files if TRACE_FILE_PATTERN_TTNN_ADD in f.name]
+    assert len(add_files) >= 1, "Expected at least 1 add trace file"
+
+    # Read and verify the trace contains memory_config information
+    with open(add_files[0], "r") as f:
+        add_data = json.load(f)
+
+    assert add_data["operation_name"] == OPERATION_NAME_TTNN_ADD
+    assert len(add_data["args"]) >= 2, "Expected at least 2 args for add"
+
+    # Check that at least one tensor argument has memory_config
+    found_memory_config = False
+    for arg_idx, arg in enumerate(add_data["args"][:2]):
+        tensor_value = arg["value"]
+        if tensor_value.get("type") == "ttnn.Tensor" and "memory_config" in tensor_value:
+            found_memory_config = True
+            memory_config = tensor_value["memory_config"]
+
+            # memory_config should be either a dict (from serializer) or a string (repr)
+            assert isinstance(
+                memory_config, (dict, str)
+            ), f"memory_config should be dict or str, got {type(memory_config)}"
+
+            # If it's a dict (from memory_config_to_dict serializer), verify structure
+            if isinstance(memory_config, dict):
+                # Should have some expected fields from the serializer
+                # The exact fields depend on the serializer implementation
+                assert len(memory_config) > 0, "memory_config dict should not be empty"
+
+    assert found_memory_config, "No tensor with memory_config found in trace"
+
+    # Restore
+    if original_report_path is not None:
+        ttnn.CONFIG.root_report_path = original_report_path
+
+
+def test_tensor_topology_serialization(tmp_path, device):
+    """Test that tensor topology (placements, distribution_shape) is correctly serialized."""
+    # Check if device supports topology (MeshDevice)
+    is_mesh_device = type(device).__name__ == "MeshDevice" or hasattr(device, "get_device_ids")
+
+    if not is_mesh_device:
+        pytest.skip("This test requires a MeshDevice with topology support")
+
+    # Override the log directory in CONFIG to use tmp_path
+    original_report_path = None
+    if hasattr(ttnn.CONFIG, "root_report_path"):
+        original_report_path = ttnn.CONFIG.root_report_path
+        ttnn.CONFIG.root_report_path = str(tmp_path)
+
+    trace_dir = tmp_path / "operation_parameters"
+
+    # Create a distributed tensor with explicit topology using mesh_mapper
+    # This creates a tensor with defined placements and distribution
+    try:
+        # Create mesh mapper with explicit placements
+        mesh_mapper = ttnn.create_mesh_mapper(
+            device,
+            ttnn.MeshMapperConfig(
+                placements=[
+                    ttnn.PlacementReplicate(),  # Replicate on first mesh axis
+                    ttnn.PlacementShard(3),  # Shard dimension 3 on second mesh axis
+                ],
+            ),
+        )
+
+        # Create a tensor with this topology
+        torch_tensor = torch.rand([1, 1, 32, 128], dtype=torch.bfloat16)
+        tensor_a = ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # Verify the tensor has topology
+        assert hasattr(tensor_a, "tensor_topology"), "Tensor should have tensor_topology"
+
+        # Create another tensor for the operation
+        tensor_b = ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # Perform operation to trigger tracing
+        ttnn.add(tensor_a, tensor_b)
+        ttnn.synchronize_device(device)
+
+    except (AttributeError, TypeError) as e:
+        # If mesh_mapper is not available or doesn't work as expected, skip test
+        pytest.skip(f"Could not create tensor with topology: {e}")
+
+    # Verify trace files were created
+    assert trace_dir.exists(), f"Trace directory {trace_dir} was not created"
+    trace_files = sorted(trace_dir.glob("*.json"))
+    assert len(trace_files) > 0, "No trace files were generated"
+
+    # Find an add operation trace file
+    add_files = [f for f in trace_files if TRACE_FILE_PATTERN_TTNN_ADD in f.name]
+    assert len(add_files) >= 1, "Expected at least 1 add trace file"
+
+    # Read and verify the trace contains topology information
+    with open(add_files[0], "r") as f:
+        add_data = json.load(f)
+
+    assert add_data["operation_name"] == OPERATION_NAME_TTNN_ADD
+    assert len(add_data["args"]) >= 2, "Expected at least 2 args for add"
+
+    # Check that tensors have topology information (placements and distribution_shape)
+    found_placements = False
+    found_distribution_shape = False
+
+    for arg_idx, arg in enumerate(add_data["args"][:2]):
+        tensor_value = arg["value"]
+        assert tensor_value.get("type") == "ttnn.Tensor", f"Expected ttnn.Tensor for arg {arg_idx}"
+
+        if "mesh_device" in tensor_value:
+            mesh_info = tensor_value["mesh_device"]
+
+            # Check for placements - should be present since we explicitly defined them
+            if "placements" in mesh_info:
+                found_placements = True
+                placements = mesh_info["placements"]
+                assert isinstance(placements, list), f"placements should be list, got {type(placements)}"
+                assert len(placements) > 0, "placements list should not be empty"
+
+                # Each placement should be a string like "PlacementReplicate" or "PlacementShard(3)"
+                for placement in placements:
+                    assert isinstance(placement, str), f"placement should be str, got {type(placement)}"
+                    # Verify it contains expected placement types
+                    assert "Placement" in placement, f"placement should contain 'Placement', got {placement}"
+
+            # Check for distribution_shape - should also be present
+            if "distribution_shape" in mesh_info:
+                found_distribution_shape = True
+                dist_shape = mesh_info["distribution_shape"]
+                assert isinstance(dist_shape, list), f"distribution_shape should be list, got {type(dist_shape)}"
+                assert len(dist_shape) > 0, "distribution_shape should not be empty"
+
+                # Should be a list of integers
+                for dim in dist_shape:
+                    assert isinstance(dim, int), f"distribution_shape dim should be int, got {type(dim)}"
+
+    # With explicitly defined topology, we should find both placements and distribution_shape
+    assert found_placements, "Expected to find placements in trace for tensors with explicit topology"
+    assert found_distribution_shape, "Expected to find distribution_shape in trace for tensors with explicit topology"
+
+    # Restore
     if original_report_path is not None:
         ttnn.CONFIG.root_report_path = original_report_path
