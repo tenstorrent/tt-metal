@@ -5,6 +5,7 @@
 #include "concat_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "concat_program_factory.hpp"
+#include "concat_nd_sharded_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -37,9 +38,8 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
 
     if (output_is_sharded) {
         if (const auto& first_nd_shard_spec = input_tensors[0].nd_shard_spec(); first_nd_shard_spec.has_value()) {
-            std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
-            TT_FATAL(!first_nd_shard_spec.has_value(), "expected string");
-            return ConcatS2IProgramFactory{};
+            std::cout << "ConcatNDShardedProgramFactory\n~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+            return ConcatNDShardedProgramFactory{};
         } else
             // Sharded-to-sharded (s2s) cases
             if (input_tensors.size() == 2) {

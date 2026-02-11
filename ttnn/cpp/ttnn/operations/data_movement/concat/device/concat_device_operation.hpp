@@ -12,6 +12,7 @@
 #include "concat_s2s_rm_program_factory.hpp"
 #include "concat_s2s_multi_program_factory.hpp"
 #include "concat_s2i_program_factory.hpp"
+#include "concat_nd_sharded_program_factory.hpp"
 
 #include "ttnn/decorators.hpp"
 
@@ -29,7 +30,8 @@ struct ConcatDeviceOperation {
         ConcatS2STiledProgramFactory,
         ConcatS2SRMProgramFactory,
         ConcatS2SMultiProgramFactory,
-        ConcatS2IProgramFactory>;
+        ConcatS2IProgramFactory,
+        ConcatNDShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

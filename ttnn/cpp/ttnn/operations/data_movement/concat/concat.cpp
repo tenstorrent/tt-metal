@@ -333,9 +333,8 @@ ttnn::Tensor ConcatOperation::invoke(
         untilize_rm_retilize_concat.sequence(unsqueeze_squeeze_1D_concat.sequence(non_aligned_last_dim_concat));
 
     const std::vector<ttnn::Tensor>& itensors(input_tensors);
-    std::cout << "ConcatOperation::invoke: I have got here 6\n";
     auto res = massaged_concat(itensors, dim, groups);
-    std::cout << "ConcatOperation::invoke: I have got here 7\n";
+    std::cout << "ConcatOperation::invoke: leaving - Yau\n";
     return res;
 }
 
