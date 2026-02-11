@@ -523,9 +523,6 @@ class OpTest(BaseModel):
         description="Source of the data for the op test, indicating the data producer.",
     )
     input_hash: Optional[str] = Field(None, description="Hash of the input vector for deduplication and traceability.")
-    config_id: Optional[str] = Field(
-        None, description="Configuration ID from traced model runs for traceability back to source."
-    )
     message: Optional[str] = Field(None, description="Optional informational message about the execution outcome.")
     exception: Optional[str] = Field(None, description="Exception text when a failure occurred, if any.")
     # Performance metrics (optional)
