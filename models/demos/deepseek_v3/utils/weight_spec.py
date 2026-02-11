@@ -60,7 +60,7 @@ def create_weight_config_from_weight_spec(
     module_weight_spec: ModuleWeightSpec,
     path: str,
     cache: TensorCache,
-    device: ttnn.Device | None = None,
+    device: ttnn.Device,
     delimiter: str = ".",
 ):
     """
@@ -68,6 +68,8 @@ def create_weight_config_from_weight_spec(
 
     This will recursively materialize the weight config from the weight spec, querying the cache for each weight spec with the fully qualified path (the key in the original state dict). When device is a MeshDevice, the mesh mapper for each tensor is derived from that weight spec's shard_dims (and remove_dims) via WeightSpec.get_mesh_mapper.
     """
+    if device is None:
+        raise ValueError("device is required for create_weight_config_from_weight_spec()")
     weight_config = {}
     for key, value in module_weight_spec.items():
         if isinstance(value, WeightSpec):
@@ -78,9 +80,9 @@ def create_weight_config_from_weight_spec(
 
             name = path + delimiter + key
             tensor = cache.get_tensor(
-                name,
-                value.dtype,
-                value.layout,
+                name=name,
+                dtype=value.dtype,
+                layout=value.layout,
                 preprocessor=value.preprocessor,
                 postprocessor=value.postprocessor,
                 device=device,

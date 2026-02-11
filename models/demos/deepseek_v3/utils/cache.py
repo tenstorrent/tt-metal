@@ -1,8 +1,24 @@
+"""
+Tensor cache for converted weights with pluggable storage.
+
+TensorCache uses a CacheStorage backend to store and retrieve converted tensors by
+fingerprint (derived from manifest). All backends must implement the CacheStorage protocol:
+
+- has(key), get(key), set(key, tensor, *, manifest)
+- keys() -> list of cache keys
+- get_manifest(key) -> CacheManifest (raises KeyError if key missing)
+
+Manifest is required on set() for every backend; backends that do not persist metadata
+still accept and store it (e.g. InMemoryCacheStorage keeps it in memory). Backends that
+require a device should accept it in their constructor. get() and get_manifest() raise
+KeyError on cache miss. Implementations: InMemoryCacheStorage, OnDiskCacheStorage.
+"""
 import inspect
 import json
 from dataclasses import dataclass
 from hashlib import md5
-from typing import Any, Callable, Optional, Sequence
+from pathlib import Path
+from typing import Any, Callable, Optional, Protocol, Sequence, Union
 
 import torch
 
@@ -10,6 +26,16 @@ import ttnn
 
 # Type for mesh mapper: CppTensorToMesh (create_mesh_mapper / ShardTensor2dMesh) or ReplicateTensorToMeshWrapper
 MeshMapper = ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper
+
+
+def identity_preprocessor(*tensors: torch.Tensor) -> torch.Tensor:
+    if len(tensors) != 1:
+        raise ValueError("Default preprocessor expects exactly one tensor input")
+    return tensors[0]
+
+
+def identity_postprocessor(tensor: ttnn.Tensor) -> ttnn.Tensor:
+    return tensor
 
 
 def compute_func_fingerprint(func: Callable) -> str:
@@ -83,6 +109,10 @@ class CacheManifest:
             "postprocessor": compute_func_fingerprint(self.postprocessor),
         }
 
+    def get_fingerprint(self) -> str:
+        """Compute a stable fingerprint for this manifest."""
+        return compute_fingerprint(self.to_dict())
+
 
 def create_manifest(
     name: str | Sequence[str],
@@ -112,55 +142,200 @@ def compute_fingerprint(manifest: dict[str, Any]) -> str:
     return md5(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
 
 
-def _format_name(name: str | Sequence[str]) -> str:
-    """Format cache entry name for display."""
-    if isinstance(name, str):
-        return name
-    return ", ".join(sorted(name))
+def manifest_from_meta_dict(meta: dict[str, Any]) -> CacheManifest:
+    """Build a CacheManifest from persisted meta dict (e.g. from disk). Callables are placeholders."""
+    name = meta.get("name", "?")
+    if isinstance(name, list):
+        name = tuple(name)
+    dtype_str = meta.get("dtype", "bfloat16")
+    layout_str = meta.get("layout", "ROW_MAJOR_LAYOUT")
+    dtype = getattr(ttnn, dtype_str, ttnn.bfloat16)
+    layout = getattr(ttnn, layout_str, ttnn.ROW_MAJOR_LAYOUT)
+    mem_cfg = None
+    if meta.get("memory_config"):
+        try:
+            mem_cfg = ttnn.MemoryConfig.from_json(json.dumps(meta["memory_config"]))
+        except Exception:
+            pass
+    if mem_cfg is None:
+        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+    hf_config = meta.get("hf_config", {})
+    if isinstance(hf_config, str):
+        hf_config = json.loads(hf_config) if hf_config else {}
+    return CacheManifest(
+        name=name,
+        dtype=dtype,
+        layout=layout,
+        memory_config=mem_cfg,
+        hf_config=hf_config,
+        preprocessor=lambda x: x,
+        postprocessor=lambda x: x,
+        mesh_mapper=None,
+    )
 
 
-def _format_sharding(memory_config: ttnn.MemoryConfig) -> str:
-    """Format sharding info from memory config for display."""
-    parts = [f"is_sharded={memory_config.is_sharded()}"]
-    if memory_config.is_sharded() and memory_config.shard_spec is not None:
-        parts.append(f"shard_spec={memory_config.shard_spec}")
-    parts.append(f"buffer_type={memory_config.buffer_type.__name__}")
-    parts.append(f"memory_layout={memory_config.memory_layout.__name__}")
-    return ", ".join(parts)
+class CacheStorage(Protocol):
+    """
+    Contract for cache storage backends used by TensorCache.
+    All backends must implement has, get, set (with required manifest), keys(), and get_manifest().
+    get() and get_manifest() raise KeyError when the key is missing. Backends that require a
+    device should accept it in their constructor.
+    """
 
+    def has(self, key: str) -> bool:
+        ...
 
-def _format_mesh_mapper(mesh_mapper: MeshMapper | None) -> str:
-    """Format mesh mapper for display."""
-    if mesh_mapper is None:
-        return "none"
-    d = mesh_mapper_to_dict(mesh_mapper)
-    parts = [f"placements={d['placements']}"]
-    if d["mesh_shape_override"] is not None:
-        parts.append(f"mesh_shape_override={d['mesh_shape_override']}")
-    return ", ".join(parts)
+    def get(self, key: str) -> ttnn.Tensor:
+        ...
+
+    def set(
+        self,
+        key: str,
+        tensor: ttnn.Tensor,
+        *,
+        manifest: CacheManifest,
+    ) -> None:
+        ...
+
+    def keys(self) -> list[str]:
+        ...
+
+    def get_manifest(self, key: str) -> CacheManifest:
+        ...
 
 
 class InMemoryCacheStorage:
     """
-    A cache backed by host memory. Does not persist across runs.
-    We could make this more advanced by implementing LRU caching. Injected into TensorCache to facilitate unit testing.
+    Cache backed by host memory. Does not persist across runs.
+    Stores both tensor and manifest per key; satisfies CacheStorage protocol.
     """
 
-    def __init__(self):
-        self.cache = {}
-
-    def set(self, key: str, tensor: ttnn.Tensor):
-        self.cache[key] = tensor
+    def __init__(self) -> None:
+        self._tensors: dict[str, ttnn.Tensor] = {}
+        self._manifests: dict[str, CacheManifest] = {}
 
     def has(self, key: str) -> bool:
-        return key in self.cache
+        return key in self._tensors
 
-    def get(self, key: str) -> ttnn.Tensor:
-        return self.cache[key]
+    def get(
+        self,
+        key: str,
+    ) -> ttnn.Tensor:
+        if key not in self._tensors:
+            raise KeyError(f"Cache miss for key {key}")
+        return self._tensors[key]
+
+    def set(
+        self,
+        key: str,
+        tensor: ttnn.Tensor,
+        *,
+        manifest: CacheManifest,
+    ) -> None:
+        self._tensors[key] = tensor
+        self._manifests[key] = manifest
+
+    def keys(self) -> list[str]:
+        return list(self._tensors.keys())
+
+    def get_manifest(self, key: str) -> CacheManifest:
+        if key not in self._manifests:
+            raise KeyError(f"Cache miss for key {key}")
+        return self._manifests[key]
 
 
-# TODO: Implement as Union[InMemoryCacheStorage, OnDiskCacheStorage, RedisCacheStorage, etc.]
-CacheStorage = InMemoryCacheStorage
+def _manifest_and_tensor_to_meta(manifest: CacheManifest, tensor: ttnn.Tensor) -> dict[str, Any]:
+    """Build a JSON-serializable meta dict from manifest + tensor for disk persistence."""
+    shape = getattr(tensor, "shape", None)
+    shape_list = list(shape) if shape is not None else []
+    return {
+        "name": manifest.name if isinstance(manifest.name, str) else list(manifest.name),
+        "dtype": manifest.dtype.__name__,
+        "layout": manifest.layout.__name__,
+        "memory_config": memory_config_to_dict(manifest.memory_config) if manifest.memory_config else None,
+        "mesh_mapper": mesh_mapper_to_dict(manifest.mesh_mapper) if manifest.mesh_mapper else None,
+        "hf_config": manifest.hf_config,
+        "shape": shape_list,
+    }
+
+
+class OnDiskCacheStorage:
+    """
+    Cache backed by disk. Persists tensors with ttnn.dump_tensor and metadata in JSON.
+    Satisfies CacheStorage: set() requires manifest and writes .meta.json; get_manifest()
+    reconstructs CacheManifest from persisted meta (preprocessor/postprocessor are placeholders).
+    Safe to use at module scope: on get() we load from disk and place on the configured device.
+    """
+
+    TENSOR_SUFFIX = ".tensorbin"
+    META_SUFFIX = ".meta.json"
+
+    def __init__(self, cache_dir: Union[str, Path], *, device: ttnn.Device) -> None:
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        if device is None:
+            raise ValueError("OnDiskCacheStorage requires a non-None device")
+        self.device = device
+
+    def _tensor_path(self, key: str) -> Path:
+        return self.cache_dir / f"{key}{self.TENSOR_SUFFIX}"
+
+    def _meta_path(self, key: str) -> Path:
+        return self.cache_dir / f"{key}{self.META_SUFFIX}"
+
+    def set(
+        self,
+        key: str,
+        tensor: ttnn.Tensor,
+        *,
+        manifest: CacheManifest,
+    ) -> None:
+        path_tensor = self._tensor_path(key)
+        path_meta = self._meta_path(key)
+        ttnn.dump_tensor(path_tensor, tensor)
+        meta = _manifest_and_tensor_to_meta(manifest, tensor)
+        with open(path_meta, "w") as f:
+            json.dump(meta, f, sort_keys=True)
+
+    def has(self, key: str) -> bool:
+        return self._tensor_path(key).is_file()
+
+    def get(
+        self,
+        key: str,
+    ) -> ttnn.Tensor:
+        path_tensor = self._tensor_path(key)
+        if not path_tensor.is_file():
+            raise KeyError(f"Cache miss for key {key}")
+        tensor = ttnn.load_tensor(path_tensor, device=self.device)
+        return tensor
+        """
+        path_meta = self._meta_path(key)
+        if path_meta.is_file() and self.device is not None:
+            with open(path_meta) as f:
+                meta = json.load(f)
+            mem_cfg_dict = meta.get("memory_config")
+            if mem_cfg_dict is not None:
+                try:
+                    mem_cfg = ttnn.MemoryConfig.from_json(json.dumps(mem_cfg_dict))
+                    tensor = tensor.to(device=self.device, mem_config=mem_cfg)
+                except Exception:
+                    pass
+        """
+        return tensor
+
+    def keys(self) -> list[str]:
+        """Return list of cache keys (fingerprints) without loading tensors."""
+        return [p.name[: -len(self.TENSOR_SUFFIX)] for p in self.cache_dir.glob(f"*{self.TENSOR_SUFFIX}")]
+
+    def get_manifest(self, key: str) -> CacheManifest:
+        """Return persisted manifest for this key. Raises KeyError if key or meta is missing."""
+        path_meta = self._meta_path(key)
+        if not path_meta.is_file():
+            raise KeyError(f"Cache miss for key {key}")
+        with open(path_meta) as f:
+            meta = json.load(f)
+        return manifest_from_meta_dict(meta)
 
 
 def default_converter(
@@ -193,47 +368,6 @@ class TensorCache:
         self.hf_config = hf_config
         self.storage = storage
         self.converter = converter
-        # Fingerprint -> manifest for summary (populated when we set an entry)
-        self._entry_manifests: dict[str, CacheManifest] = {}
-
-    def summary(self) -> None:
-        """Print a summary of the TensorCache to the screen."""
-        num_state_keys = len(self.state_dict)
-        cache = getattr(self.storage, "cache", None)
-        if cache is None:
-            num_entries = 0
-            entries = []
-        else:
-            entries = list(cache.items())
-            num_entries = len(entries)
-
-        lines = [
-            "TensorCache summary",
-            "=" * 50,
-            f"State dict keys: {num_state_keys}",
-            f"Cached tensor entries: {num_entries}",
-        ]
-        if entries:
-            lines.append("-" * 50)
-            for fp, tensor in entries:
-                manifest = self._entry_manifests.get(fp)
-                name_str = _format_name(manifest.name) if manifest else "?"
-                shape = getattr(tensor, "shape", None)
-                shape_str = str(tensor.shape) if shape is not None else "?"
-                mem_cfg = getattr(tensor, "memory_config", None)
-                if callable(mem_cfg):
-                    mem_cfg = mem_cfg()
-                sharding_str = _format_sharding(mem_cfg) if mem_cfg is not None else "?"
-                mesh_str = _format_mesh_mapper(manifest.mesh_mapper) if manifest and manifest.mesh_mapper else "none"
-                lines.append(f"  name: {name_str}")
-                lines.append(
-                    f"    shape={shape_str}, dtype={tensor.dtype}, layout={tensor.layout}, "
-                    f"storage={tensor.storage_type()}"
-                )
-                lines.append(f"    sharding: {sharding_str}")
-                lines.append(f"    mesh_mapper: {mesh_str}")
-                lines.append(f"    fingerprint: {fp[:16]}...")
-        print("\n".join(lines))
 
     def cache_entry_exists_for_fingerprint(self, fingerprint: str):
         return self.storage.has(fingerprint)
@@ -241,14 +375,17 @@ class TensorCache:
     def get_tensor(
         self,
         name: str | Sequence[str],
+        *,
+        device: ttnn.Device,
         dtype: ttnn.DataType = ttnn.bfloat16,
         layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
-        preprocessor: Callable[[Sequence[torch.Tensor]], torch.Tensor] = lambda x: x,
-        postprocessor: Callable[[ttnn.Tensor], ttnn.Tensor] = lambda x: x,
+        preprocessor: Callable[..., torch.Tensor] = identity_preprocessor,
+        postprocessor: Callable[[ttnn.Tensor], ttnn.Tensor] = identity_postprocessor,
         memory_config: Optional[ttnn.MemoryConfig] = ttnn.DRAM_MEMORY_CONFIG,
-        device: Optional[ttnn.Device] = None,
         mesh_mapper: MeshMapper | None = None,
     ) -> ttnn.Tensor:
+        if device is None:
+            raise ValueError("device is required for get_tensor()")
         # Host tensors will have memory_config=ttnn.DRAM_MEMORY_CONFIG so we need to guard against non-DRAM memory configs here
         # In the future we should probably make host tensors have memory_config = None since it doesn't make sense to have a memory config for a host tensor
         if memory_config is not ttnn.DRAM_MEMORY_CONFIG and device is None:
@@ -258,7 +395,7 @@ class TensorCache:
         manifest = create_manifest(
             names, dtype, layout, memory_config, self.hf_config, preprocessor, postprocessor, mesh_mapper
         )
-        fingerprint = compute_fingerprint(manifest.to_dict())
+        fingerprint = manifest.get_fingerprint()
 
         if not self.cache_entry_exists_for_fingerprint(fingerprint):
             for n in names:
@@ -272,8 +409,7 @@ class TensorCache:
             preprocess_source_tensor = preprocessor(*source_tensors)
             tensor = self.converter(preprocess_source_tensor, dtype, layout, memory_config, device, mesh_mapper)
             tensor = postprocessor(tensor)
-            self._entry_manifests[fingerprint] = manifest
-            self.storage.set(fingerprint, tensor)
+            self.storage.set(fingerprint, tensor, manifest=manifest)
             return tensor
         else:
             # Validate cached tensor matches requested dtype, layout and memory config

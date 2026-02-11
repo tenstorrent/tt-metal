@@ -9,12 +9,30 @@ import torch
 import ttnn
 from models.demos.deepseek_v3.utils.cache import (
     CacheManifest,
+    CacheStorage,
     InMemoryCacheStorage,
+    OnDiskCacheStorage,
     TensorCache,
     compute_fingerprint,
     compute_func_fingerprint,
     create_manifest,
+    identity_postprocessor,
+    identity_preprocessor,
 )
+
+
+@pytest.fixture(autouse=True)
+def _default_device(device):
+    return device
+
+
+def get_tensor(cache: TensorCache, *args, **kwargs):
+    if "device" not in kwargs:
+        device = ttnn.GetDefaultDevice()
+        if device is None:
+            raise RuntimeError("Default device is not initialized for get_tensor()")
+        kwargs["device"] = device
+    return cache.get_tensor(*args, **kwargs)
 
 
 @pytest.fixture
@@ -67,9 +85,9 @@ def setup_cache_tracker(tensor_cache, monkeypatch):
         call_tracker["has_calls"].append(("has", key, result))
         return result
 
-    def tracked_set(key: str, tensor: ttnn.Tensor):
+    def tracked_set(key: str, tensor: ttnn.Tensor, *, manifest: CacheManifest):
         call_tracker["set_calls"].append(("set", key))
-        return original_set(key, tensor)
+        return original_set(key, tensor, manifest=manifest)
 
     def tracked_get(key: str) -> ttnn.Tensor:
         call_tracker["get_calls"].append(("get", key))
@@ -240,12 +258,27 @@ def test_compute_fingerprint_different_manifests():
     assert fingerprint1 != fingerprint2
 
 
+def _minimal_manifest(name: str = "key1"):
+    """Create a minimal manifest for storage tests."""
+    return create_manifest(
+        name,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+        {},
+        lambda x: x,
+        lambda x: x,
+        mesh_mapper=None,
+    )
+
+
 def test_cache_storage_set_get(cache_storage):
     """Verify that InMemoryCacheStorage.set stores a tensor under a key and get retrieves
     the same object; has() returns True for that key."""
     tensor = ttnn.from_torch(torch.zeros((32, 32), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    manifest = _minimal_manifest("key1")
 
-    cache_storage.set("key1", tensor)
+    cache_storage.set("key1", tensor, manifest=manifest)
     retrieved = cache_storage.get("key1")
 
     assert retrieved is tensor
@@ -258,7 +291,7 @@ def test_cache_storage_has(cache_storage):
     assert not cache_storage.has("nonexistent")
 
     tensor = ttnn.from_torch(torch.zeros((32, 32), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    cache_storage.set("key1", tensor)
+    cache_storage.set("key1", tensor, manifest=_minimal_manifest("key1"))
 
     assert cache_storage.has("key1")
     assert not cache_storage.has("key2")
@@ -270,6 +303,107 @@ def test_cache_storage_get_nonexistent(cache_storage):
         cache_storage.get("nonexistent")
 
 
+def test_inmemory_cache_storage_keys_and_get_manifest(cache_storage):
+    """InMemoryCacheStorage: keys() returns stored keys; get_manifest() returns stored CacheManifest; KeyError on miss."""
+    tensor = ttnn.from_torch(
+        torch.ones((8, 8), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    manifest = create_manifest(
+        "model.layers.0.weight",
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+        {},
+        lambda x: x,
+        lambda x: x,
+        mesh_mapper=None,
+    )
+    cache_storage.set("fp1", tensor, manifest=manifest)
+    assert cache_storage.keys() == ["fp1"]
+    stored = cache_storage.get_manifest("fp1")
+    assert isinstance(stored, CacheManifest)
+    assert stored.name == "model.layers.0.weight"
+    with pytest.raises(KeyError):
+        cache_storage.get_manifest("nonexistent")
+
+
+def test_ondisk_cache_storage_set_has_get(tmp_path, device):
+    """OnDiskCacheStorage: set stores tensor and meta, has() and get() work; loads to configured device."""
+    storage = OnDiskCacheStorage(tmp_path, device=device)
+    tensor = ttnn.from_torch(torch.zeros((32, 32), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    manifest = create_manifest(
+        "weight1",
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+        {"hidden_size": 128},
+        lambda x: x,
+        lambda x: x,
+        mesh_mapper=None,
+    )
+    storage.set("fp1", tensor, manifest=manifest)
+    assert storage.has("fp1")
+    loaded = storage.get("fp1")
+    assert loaded.shape == tensor.shape
+    assert loaded.dtype == tensor.dtype
+    assert loaded.layout == tensor.layout
+    assert not storage.has("nonexistent")
+    with pytest.raises(KeyError):
+        storage.get("nonexistent")
+
+
+def test_ondisk_cache_storage_keys_and_get_manifest(tmp_path, device):
+    """OnDiskCacheStorage: keys() returns stored keys; get_manifest() returns CacheManifest; KeyError on miss."""
+    storage = OnDiskCacheStorage(tmp_path, device=device)
+    tensor = ttnn.from_torch(
+        torch.ones((8, 8), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    manifest = create_manifest(
+        "model.layers.0.weight",
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+        {},
+        lambda x: x,
+        lambda x: x,
+        mesh_mapper=None,
+    )
+    storage.set("fp_entries", tensor, manifest=manifest)
+    keys = storage.keys()
+    assert keys == ["fp_entries"]
+    stored = storage.get_manifest("fp_entries")
+    assert isinstance(stored, CacheManifest)
+    assert stored.name == "model.layers.0.weight"
+    assert stored.dtype == ttnn.bfloat16
+    assert stored.layout == ttnn.ROW_MAJOR_LAYOUT
+    with pytest.raises(KeyError):
+        storage.get_manifest("nonexistent")
+
+
+def test_tensor_cache_accepts_protocol_storage(sample_state_dict, sample_hf_config):
+    """TensorCache works with any storage that implements the CacheStorage protocol (e.g. InMemoryCacheStorage)."""
+    storage: CacheStorage = InMemoryCacheStorage()
+    cache = TensorCache(sample_state_dict, sample_hf_config, storage)
+    tensor = get_tensor(cache, "weight1", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    assert tensor is not None
+    assert storage.has(
+        create_manifest(
+            ["weight1"],
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            ttnn.DRAM_MEMORY_CONFIG,
+            sample_hf_config,
+            identity_preprocessor,
+            identity_postprocessor,
+            None,
+        ).get_fingerprint()
+    )
+    assert len(storage.keys()) == 1
+    manifest = storage.get_manifest(storage.keys()[0])
+    name = manifest.name if isinstance(manifest.name, str) else list(manifest.name)
+    assert "weight1" in name
+
+
 def test_tensor_cache_cache_miss(tensor_cache, monkeypatch):
     """Verify that the first get_tensor call for a given (name, dtype, layout) triggers a
     cache miss: storage.has returns False, set is called once, get is not called; returned
@@ -277,7 +411,8 @@ def test_tensor_cache_cache_miss(tensor_cache, monkeypatch):
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
     # First call should be a cache miss
-    tensor = tensor_cache.get_tensor(
+    tensor = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -297,7 +432,8 @@ def test_tensor_cache_cache_hit(tensor_cache, monkeypatch):
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
     # First call - cache miss
-    tensor1 = tensor_cache.get_tensor(
+    tensor1 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -305,7 +441,8 @@ def test_tensor_cache_cache_hit(tensor_cache, monkeypatch):
     assert_cache_miss(call_tracker)
 
     # Second call - cache hit (should return same tensor)
-    tensor2 = tensor_cache.get_tensor(
+    tensor2 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -321,7 +458,8 @@ def test_tensor_cache_different_dtypes(tensor_cache, monkeypatch):
     vs float32) results in two cache misses and two distinct tensor objects."""
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
-    tensor1 = tensor_cache.get_tensor(
+    tensor1 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -330,7 +468,8 @@ def test_tensor_cache_different_dtypes(tensor_cache, monkeypatch):
     # First call should be cache miss
     assert_cache_miss(call_tracker)
 
-    tensor2 = tensor_cache.get_tensor(
+    tensor2 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
@@ -347,7 +486,8 @@ def test_tensor_cache_different_layouts(tensor_cache, monkeypatch):
     ROW_MAJOR) results in two cache misses and two distinct tensor objects."""
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
-    tensor1 = tensor_cache.get_tensor(
+    tensor1 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -356,7 +496,8 @@ def test_tensor_cache_different_layouts(tensor_cache, monkeypatch):
     # First call should be cache miss
     assert_cache_miss(call_tracker)
 
-    tensor2 = tensor_cache.get_tensor(
+    tensor2 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -379,7 +520,8 @@ def test_tensor_cache_different_preprocessors(tensor_cache, monkeypatch):
     def preprocessor2(x):
         return x * 3
 
-    tensor1 = tensor_cache.get_tensor(
+    tensor1 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -389,7 +531,8 @@ def test_tensor_cache_different_preprocessors(tensor_cache, monkeypatch):
     # First call should be cache miss
     assert_cache_miss(call_tracker)
 
-    tensor2 = tensor_cache.get_tensor(
+    tensor2 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -412,7 +555,8 @@ def test_tensor_cache_different_postprocessors(tensor_cache, monkeypatch):
     def postprocessor2(x):
         return x  # Same function but different object
 
-    tensor1 = tensor_cache.get_tensor(
+    tensor1 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -422,7 +566,8 @@ def test_tensor_cache_different_postprocessors(tensor_cache, monkeypatch):
     # First call should be cache miss
     assert_cache_miss(call_tracker)
 
-    tensor2 = tensor_cache.get_tensor(
+    tensor2 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -438,7 +583,8 @@ def test_tensor_cache_missing_tensor(tensor_cache):
     """Verify that get_tensor raises KeyError with a message including the missing name
     when the requested tensor key is not in the state dict."""
     with pytest.raises(KeyError, match="Tensor 'nonexistent' not found"):
-        tensor_cache.get_tensor(
+        get_tensor(
+            tensor_cache,
             name="nonexistent",
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -451,7 +597,8 @@ def test_tensor_cache_multiple_tensors(tensor_cache, monkeypatch):
     and the same tensor objects."""
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
-    tensor1 = tensor_cache.get_tensor(
+    tensor1 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -460,7 +607,8 @@ def test_tensor_cache_multiple_tensors(tensor_cache, monkeypatch):
     # First call should be cache miss
     assert_cache_miss(call_tracker)
 
-    tensor2 = tensor_cache.get_tensor(
+    tensor2 = get_tensor(
+        tensor_cache,
         name="weight2",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -471,7 +619,8 @@ def test_tensor_cache_multiple_tensors(tensor_cache, monkeypatch):
     assert_cache_miss(call_tracker)
 
     # Both should be cached (cache hits)
-    tensor1_cached = tensor_cache.get_tensor(
+    tensor1_cached = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -481,7 +630,8 @@ def test_tensor_cache_multiple_tensors(tensor_cache, monkeypatch):
     assert tensor1 is tensor1_cached
     assert_cache_hit(call_tracker)
 
-    tensor2_cached = tensor_cache.get_tensor(
+    tensor2_cached = get_tensor(
+        tensor_cache,
         name="weight2",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -499,7 +649,8 @@ def test_tensor_cache_validation_assertions(tensor_cache, monkeypatch):
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
     # Create a cache entry
-    tensor_cache.get_tensor(
+    get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -509,7 +660,8 @@ def test_tensor_cache_validation_assertions(tensor_cache, monkeypatch):
     assert_cache_miss(call_tracker)
 
     # Retrieve from cache - should validate dtype and layout match
-    cached_tensor = tensor_cache.get_tensor(
+    cached_tensor = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -529,7 +681,8 @@ def test_tensor_cache_preprocessor_application(tensor_cache):
     def preprocessor(x):
         return x * 2.0
 
-    tensor = tensor_cache.get_tensor(
+    tensor = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -548,7 +701,8 @@ def test_tensor_cache_postprocessor_application(tensor_cache):
     def postprocessor(x):
         return x  # Identity, but verifies it's called
 
-    tensor = tensor_cache.get_tensor(
+    tensor = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -567,7 +721,8 @@ def test_tensor_cache_default_preprocessor_postprocessor(tensor_cache, monkeypat
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
     # Should work with defaults (lambda x: x)
-    tensor1 = tensor_cache.get_tensor(
+    tensor1 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -580,7 +735,8 @@ def test_tensor_cache_default_preprocessor_postprocessor(tensor_cache, monkeypat
     def identity(x):
         return x
 
-    tensor2 = tensor_cache.get_tensor(
+    tensor2 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -599,7 +755,8 @@ def test_tensor_cache_hf_config_changes_cache(tensor_cache, sample_state_dict, c
     storage (same tensor object when config matches)."""
     # Create cache with config1
     cache1 = TensorCache(sample_state_dict, {"factor": 2}, cache_storage)
-    tensor1 = cache1.get_tensor(
+    tensor1 = get_tensor(
+        cache1,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -607,7 +764,8 @@ def test_tensor_cache_hf_config_changes_cache(tensor_cache, sample_state_dict, c
 
     # Create cache with config2 (different config)
     cache2 = TensorCache(sample_state_dict, {"factor": 3}, cache_storage)
-    tensor2 = cache2.get_tensor(
+    tensor2 = get_tensor(
+        cache2,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -615,7 +773,8 @@ def test_tensor_cache_hf_config_changes_cache(tensor_cache, sample_state_dict, c
 
     # Create cache with config3 (different config)
     cache3 = TensorCache(sample_state_dict, {"factor": 2}, cache_storage)
-    tensor3 = cache3.get_tensor(
+    tensor3 = get_tensor(
+        cache3,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -638,7 +797,8 @@ def test_tensor_cache_multi_source_cache_miss_hit(
     def stack_preprocessor(*tensors):
         return torch.stack(tensors, dim=0)
 
-    tensor1 = cache.get_tensor(
+    tensor1 = get_tensor(
+        cache,
         name=["weight1", "weight2"],
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -649,7 +809,8 @@ def test_tensor_cache_multi_source_cache_miss_hit(
     assert tensor1.layout == ttnn.TILE_LAYOUT
     assert_cache_miss(call_tracker)
 
-    tensor2 = cache.get_tensor(
+    tensor2 = get_tensor(
+        cache,
         name=["weight1", "weight2"],
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -671,7 +832,8 @@ def test_tensor_cache_multi_source_different_names_different_entries(
     def stack_preprocessor(*tensors):
         return torch.stack(tensors, dim=0)
 
-    tensor_1_2 = cache.get_tensor(
+    tensor_1_2 = get_tensor(
+        cache,
         name=["weight1", "weight2"],
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -679,7 +841,8 @@ def test_tensor_cache_multi_source_different_names_different_entries(
     )
     assert_cache_miss(call_tracker)
 
-    tensor_2_3 = cache.get_tensor(
+    tensor_2_3 = get_tensor(
+        cache,
         name=["weight2", "weight3"],
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -703,7 +866,8 @@ def test_tensor_cache_multi_source_different_preprocessor_different_entries(
     def sum_preprocessor(*tensors):
         return sum(tensors)
 
-    tensor_stack = cache.get_tensor(
+    tensor_stack = get_tensor(
+        cache,
         name=["weight1", "weight2"],
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -711,7 +875,8 @@ def test_tensor_cache_multi_source_different_preprocessor_different_entries(
     )
     assert_cache_miss(call_tracker)
 
-    tensor_sum = cache.get_tensor(
+    tensor_sum = get_tensor(
+        cache,
         name=["weight1", "weight2"],
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -729,7 +894,8 @@ def test_tensor_cache_multi_source_missing_tensor(tensor_cache):
         return torch.stack(tensors, dim=0)
 
     with pytest.raises(KeyError, match="Tensor 'nonexistent' not found"):
-        tensor_cache.get_tensor(
+        get_tensor(
+            tensor_cache,
             name=["weight1", "nonexistent"],
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -745,7 +911,8 @@ def test_tensor_cache_memory_config_validation(tensor_cache, monkeypatch, mesh_d
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
     # Create a cache entry
-    cached_tensor = tensor_cache.get_tensor(
+    cached_tensor = get_tensor(
+        tensor_cache,
         name="weight1",
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=mesh_device,
@@ -756,7 +923,8 @@ def test_tensor_cache_memory_config_validation(tensor_cache, monkeypatch, mesh_d
     assert cached_tensor.storage_type() == ttnn.StorageType.DEVICE
 
     # Retrieve from cache - should validate memory config match
-    cached_tensor = tensor_cache.get_tensor(
+    cached_tensor = get_tensor(
+        tensor_cache,
         name="weight1",
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=mesh_device,
@@ -768,7 +936,8 @@ def test_tensor_cache_memory_config_validation(tensor_cache, monkeypatch, mesh_d
     assert cached_tensor.storage_type() == ttnn.StorageType.DEVICE
 
     # Load the same tensor again with a different memory config should be a cache miss
-    cached_tensor = tensor_cache.get_tensor(
+    cached_tensor = get_tensor(
+        tensor_cache,
         name="weight1",
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=mesh_device,
@@ -785,7 +954,8 @@ def test_tensor_cache_mesh_mapper_different_entries(tensor_cache, monkeypatch, m
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
     mapper_a = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -1))
-    tensor_a1 = tensor_cache.get_tensor(
+    tensor_a1 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -797,7 +967,8 @@ def test_tensor_cache_mesh_mapper_different_entries(tensor_cache, monkeypatch, m
     assert tensor_a1 is not None
 
     mapper_a2 = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -1))
-    tensor_a2 = tensor_cache.get_tensor(
+    tensor_a2 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -809,7 +980,8 @@ def test_tensor_cache_mesh_mapper_different_entries(tensor_cache, monkeypatch, m
     assert_cache_hit(call_tracker)
 
     mapper_b = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(-1, 0))
-    tensor_b = tensor_cache.get_tensor(
+    tensor_b = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -827,7 +999,8 @@ def test_tensor_cache_replicate_mesh_mapper_same_entry(tensor_cache, monkeypatch
     call_tracker = setup_cache_tracker(tensor_cache, monkeypatch)
 
     mapper_1 = ttnn.ReplicateTensorToMesh(mesh_device)
-    tensor_1 = tensor_cache.get_tensor(
+    tensor_1 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -839,7 +1012,8 @@ def test_tensor_cache_replicate_mesh_mapper_same_entry(tensor_cache, monkeypatch
     assert tensor_1 is not None
 
     mapper_2 = ttnn.ReplicateTensorToMesh(mesh_device)
-    tensor_2 = tensor_cache.get_tensor(
+    tensor_2 = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -852,7 +1026,8 @@ def test_tensor_cache_replicate_mesh_mapper_same_entry(tensor_cache, monkeypatch
 
     # Different mapper (shard) => different cache entry and different tensor
     shard_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -1))
-    tensor_shard = tensor_cache.get_tensor(
+    tensor_shard = get_tensor(
+        tensor_cache,
         name="weight1",
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
