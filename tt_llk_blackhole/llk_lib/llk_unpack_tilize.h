@@ -45,8 +45,11 @@ inline void _llk_unpack_tilize_init_(
     const std::uint32_t unpack_dst_format = 0,
     const std::uint32_t ct_dim            = 0,
     const std::uint32_t face_r_dim        = FACE_R_DIM,
-    const bool narrow_tile                = false)
+    const bool narrow_tile                = false,
+    const std::uint32_t num_faces         = 4)
 {
+    LLK_ASSERT(face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 2, 4, 8, or 16 for tilize");
+    LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
@@ -73,17 +76,17 @@ inline void _llk_unpack_tilize_init_(
     // TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 <<
     // 16)
 
-    // below is the configuration for 64-row unpack for srca
-    const std::uint32_t Tile_x_dim = 1024;
+    // below is the configuration for unpack for srca
+    const std::uint32_t Tile_x_dim = face_r_dim * num_faces * FACE_C_DIM;
     const std::uint32_t Tile_z_dim = 1;
     cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(Tile_x_dim | (Tile_x_dim << 16));
-    // Force x-dim to 1024
+    // Set x-dim to cover entire tile (face_r_dim * num_faces * FACE_C_DIM)
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0xffff0000>(0 | (Tile_x_dim << 16));
-    // Force z-dim to 1 as X dim is set to cover the entire tile, so no need to iterate over faces.
+    // Set z-dim to 1 as X dim is set to cover the entire tile, so no need to iterate over faces.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (Tile_z_dim << 16));
 
-    // Force x-end for Unpackers to 1024
-    TTI_SETADCXX(p_setadc::UNP0, 1023, 0x0);
+    // Set x-end for Unpackers to (face_r_dim * num_faces * FACE_C_DIM - 1)
+    TT_SETADCXX(p_setadc::UNP0, Tile_x_dim - 1, 0x0);
 
     _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest);
 }
@@ -99,8 +102,6 @@ inline void _llk_unpack_tilize_(
     const bool narrow_tile                          = false)
 {
     LLK_ASSERT(block_ct_dim == 0, "block_ct_dim: this parameter is unused");
-    LLK_ASSERT(face_r_dim == FACE_R_DIM, "face_r_dim: this parameter is unused");
-    LLK_ASSERT(num_faces == 4, "num_faces: this parameter is unused");
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // In case of 32-bit numbers, we have to unpack into dest register
