@@ -49,6 +49,24 @@ namespace compute_kernel_lib {
 // Nested namespace for untilize-specific types to avoid conflicts
 namespace untilize_config {
 
+// Sentinel value for invalid/unset circular buffer ID
+constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
+
+/**
+ * @brief Controls register datatype reconfiguration mode for untilize operations
+ *
+ * NoReconfigure - no register datatype reconfiguration (default)
+ * UnpackReconfigure - reconfigure only unpack registers (srcA)
+ * PackReconfigure - reconfigure only pack registers (output)
+ * UnpackAndPackReconfigure - reconfigure both unpack and pack registers
+ */
+enum class ReconfigureRegisterDatatypeMode : uint8_t {
+    NoReconfigure,            // No reconfiguration (default)
+    UnpackReconfigure,        // Reconfigure unpack registers (srcA/srcB)
+    PackReconfigure,          // Reconfigure pack registers (output)
+    UnpackAndPackReconfigure  // Reconfigure both unpack and pack registers
+};
+
 /**
  * @brief Controls init/uninit behavior for untilize operations
  *
@@ -136,6 +154,7 @@ ALWI void untilize_uninit();
  * @tparam output_cb Output circular buffer ID (row-major data) - must be compile-time constant
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Controls input synchronization strategy (default: Wait)
+ * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  *
  * @param num_blocks Number of rows/blocks to process
  *
@@ -157,6 +176,30 @@ ALWI void untilize_uninit();
  *   untilize<10, cb_in, cb_out,
  *            InitUninitMode::InitAndUninit,
  *            WaitMode::WaitUpfront>(num_rows);
+ *
+ * @example
+ *   // Unpack and pack data type reconfiguration
+ *   using namespace compute_kernel_lib::untilize_config;
+ *   untilize<4, cb_in, cb_out,
+ *            InitUninitMode::InitAndUninit,
+ *            WaitMode::WaitBlock,
+ *            ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(10);
+ *
+ * @example
+ *   // Only unpack reconfiguration
+ *   using namespace compute_kernel_lib::untilize_config;
+ *   untilize<4, cb_in, cb_out,
+ *            InitUninitMode::InitAndUninit,
+ *            WaitMode::WaitBlock,
+ *            ReconfigureRegisterDatatypeMode::UnpackReconfigure>(10);
+ *
+ * @example
+ *   // Only pack reconfiguration
+ *   using namespace compute_kernel_lib::untilize_config;
+ *   untilize<4, cb_in, cb_out,
+ *            InitUninitMode::InitAndUninit,
+ *            WaitMode::WaitBlock,
+ *            ReconfigureRegisterDatatypeMode::PackReconfigure>(10);
  *
  * @example
  *   // Init only (first in sequence)
@@ -181,7 +224,9 @@ template <
     uint32_t input_cb,
     uint32_t output_cb,
     untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
-    untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock>
+    untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
+    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
+        untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib
