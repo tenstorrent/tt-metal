@@ -166,6 +166,32 @@ Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
 
 template struct ExecuteUnaryWithVectorAndFastAndApproximateMode<UnaryOpType::SIGMOID>;
 
+Tensor Sigmoid::invoke(
+    const Tensor& input,
+    const int vector_mode,
+    const SigmoidMode mode,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        input,
+        [&mode, &vector_mode]() -> std::vector<EltwiseUnaryWithParam> {
+            switch (mode) {
+                case SigmoidMode::FAST_APPROXIMATE:
+                    return {UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(vector_mode), 1.0f})};
+                case SigmoidMode::ACCURATE_FAST_EXP:
+                    return {
+                        UnaryWithParam(UnaryOpType::NEG),
+                        UnaryWithParam(UnaryOpType::EXP, 1.0f),
+                        UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
+                        UnaryWithParam(UnaryOpType::RECIP)};
+                case SigmoidMode::ACCURATE: [[fallthrough]];
+                default: return {UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(vector_mode), 0.0f})};
+            }
+        }(),
+        memory_config,
+        optional_output_tensor);
+}
+
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
     const Tensor& input_tensor,
