@@ -66,7 +66,7 @@ auto launch_mux_workers(
         l1_unreserved_base_address);
 
     const auto needed_mux_core_range_set =
-        select_from_corerangeset(mux_core_range_set, 0, num_links * (neighbors.size() - 1));
+        select_from_corerangeset(mux_core_range_set, 0, num_links * neighbors.size() - 1);
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
