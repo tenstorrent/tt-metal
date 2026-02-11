@@ -8,6 +8,7 @@
 #include <optional>
 #include <random>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 #include <tt-metalium/distributed.hpp>
