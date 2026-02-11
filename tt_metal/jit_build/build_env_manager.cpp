@@ -22,7 +22,6 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
-#include "jit_build/jit_build_utils.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
@@ -108,22 +107,31 @@ uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
 
     // Collect all the parameters that affect the build configuration
-    jit_build::utils::FNV1a hasher;
+    std::size_t hash = 0;
 
-    hasher.update(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()));
-    hasher.update(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis()));
+    // Hash the dispatch core configuration
+    std::hash<uint32_t> uint32_hasher;
+    hash ^= uint32_hasher(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()));
+    hash ^= uint32_hasher(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis())) << 1;
 
     // Hash the number of hardware command queues
-    hasher.update(static_cast<uint32_t>(num_hw_cqs));
+    hash ^= uint32_hasher(static_cast<uint32_t>(num_hw_cqs)) << 2;
 
     // Hash the harvesting configuration based on whether coordinate virtualization is enabled
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across
         // devices with different cores harvested.
-        hasher.update(tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id));
+        hash ^= uint32_hasher(tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id)) << 3;
+    } else {
+        // Coordinate Virtualization is enabled. Track only the number of harvested cores, instead of the exact
+        // harvesting configuration (this is not needed).
+        uint32_t harvested_core_count = std::bitset<32>(
+            tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id)
+        ).count();
+        hash ^= uint32_hasher(harvested_core_count) << 4;
     }
 
-    return hasher.digest();
+    return static_cast<uint64_t>(hash);
 }
 
 std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw) {
