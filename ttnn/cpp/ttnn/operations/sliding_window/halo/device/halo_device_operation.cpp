@@ -80,15 +80,15 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
         input_tensor.memory_config(),
         args.output_memory_config);
 
-    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto input_core_range = *(input_tensor.memory_config().shard_spec()->grid.ranges().begin());
-        auto output_core_range = *(args.output_memory_config.shard_spec()->grid.ranges().begin());
-        auto input_core_w = input_core_range.end_coord.y - input_core_range.start_coord.y + 1;
-        auto output_core_w = output_core_range.end_coord.y - output_core_range.start_coord.y + 1;
+    // Validate that input and output core grids match
+    const auto& input_grid = input_tensor.memory_config().shard_spec()->grid;
+    const auto& output_grid = args.output_memory_config.shard_spec()->grid;
 
-        TT_FATAL(
-            input_core_w == output_core_w, "Input core width {} != Output core width {}", input_core_w, output_core_w);
-    }
+    TT_FATAL(
+        input_grid == output_grid,
+        "Halo operation assumes matching input and output core grids. Input grid: {}, Output grid: {}",
+        input_grid.str(),
+        output_grid.str());
 
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], args.config.num_cores_nhw),
