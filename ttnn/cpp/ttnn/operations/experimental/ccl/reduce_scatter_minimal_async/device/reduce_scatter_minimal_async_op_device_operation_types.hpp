@@ -10,7 +10,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"

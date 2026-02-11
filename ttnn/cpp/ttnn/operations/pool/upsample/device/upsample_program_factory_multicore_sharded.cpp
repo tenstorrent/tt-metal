@@ -12,7 +12,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"

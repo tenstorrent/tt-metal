@@ -6,8 +6,6 @@
 #include <vector>
 
 #include <tt_stl/overloaded.hpp>
-#include <tt_stl/reflection.hpp>
-
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

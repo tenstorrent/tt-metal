@@ -9,7 +9,6 @@
 #include <ostream>
 #include <optional>
 #include <tt_stl/strong_type.hpp>
-#include <tt_stl/reflection.hpp>
 
 #include <fmt/format.h>
 

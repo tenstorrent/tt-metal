@@ -10,7 +10,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
-#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 

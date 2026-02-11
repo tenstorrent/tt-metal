@@ -22,7 +22,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
@@ -88,15 +87,9 @@ public:
 
     std::set<ChipId> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
-    umd::ClusterDescriptor* get_cluster_desc() const {
-        TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
-        return this->cluster_desc_;
-    }
+    umd::ClusterDescriptor* get_cluster_desc() const;
 
-    const std::unique_ptr<tt::umd::Cluster>& get_driver() const {
-        TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
-        return driver_;
-    }
+    const std::unique_ptr<tt::umd::Cluster>& get_driver() const;
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in

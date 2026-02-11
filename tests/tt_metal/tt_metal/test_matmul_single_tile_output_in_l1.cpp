@@ -15,7 +15,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 

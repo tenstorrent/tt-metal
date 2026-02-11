@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-#include "ttnn/decorators.hpp"
-
 #include "device/deepseek_b1_reduce_to_one_op.hpp"
 #include "deepseek_b1_reduce_to_one.hpp"
 

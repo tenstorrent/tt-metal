@@ -6,7 +6,6 @@
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>

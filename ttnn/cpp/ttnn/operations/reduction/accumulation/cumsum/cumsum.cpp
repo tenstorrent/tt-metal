@@ -9,8 +9,6 @@
 
 #include "cumsum.hpp"
 
-#include <tt-logger/tt-logger.hpp>
-#include <tt_stl/small_vector.hpp>
 #include <utility>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

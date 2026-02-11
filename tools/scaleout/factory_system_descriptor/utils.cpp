@@ -23,7 +23,6 @@
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/arch.hpp>
-#include <tt_stl/reflection.hpp>
 #include <board/board.hpp>
 #include <cabling_generator/cabling_generator.hpp>
 

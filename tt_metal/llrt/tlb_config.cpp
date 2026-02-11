@@ -11,7 +11,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core_coord.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "common/tt_backend_api_types.hpp"
