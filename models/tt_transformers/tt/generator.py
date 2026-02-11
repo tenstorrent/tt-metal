@@ -82,9 +82,6 @@ def _apply_prefill_sampling_state(
     sampling_module = getattr(model_instance, "sampling", None)
     assert sampling_module is not None, "Sampling module not found in model for sampling on device."
     sampling_module.reset_sampling_params(sampling_params)
-    if sampling_params.seed is not None:
-        sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
-    # sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
     if prompt_tokens is not None:
         sampling_module.reset_prompt_tokens(prompt_tokens)
     sampling_module.reset_output_state()
@@ -359,6 +356,18 @@ class Generator:
         prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
         prefill_results: list[dict] = []
 
+        for model_id in range(self.data_parallel):
+            sampling_enabled = (
+                sampling_on_device_requested
+                and getattr(self.model[model_id], "_supports_on_device_sampling", False)
+                and getattr(self.model[model_id], "sampling", None) is not None
+            )
+            if sampling_enabled:
+                indices = [i for i, val in enumerate(empty_slots) if 32 * model_id <= val < 32 * (model_id + 1)]
+                model_seeds = [sampling_params.seed[i] for i in indices]
+                model_slots = [empty_slots[i] % 32 for i in indices]
+                self.model[model_id].sampling.seed_manager.reset_seed(model_seeds, model_slots)
+
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
@@ -480,6 +489,7 @@ class Generator:
                 tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
                     logits,
                     enable_trace=False,
+                    empty_slots=[user_id % 32],
                 )
                 prefill_results.append(
                     {
@@ -763,6 +773,7 @@ class Generator:
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
             return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+
         return tt_decode_output
 
     def _decode_forward_no_trace_text(

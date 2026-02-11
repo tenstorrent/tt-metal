@@ -230,6 +230,7 @@ class SamplingGenerator:
         *,
         enable_trace: bool = True,
         tt_out_tok: Optional[ttnn.Tensor] = None,
+        empty_slots=range(32),
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
@@ -241,7 +242,7 @@ class SamplingGenerator:
         force_argmax = self.tt_sampling._force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
 
-        self.seed_manager.get_new_values()
+        self.seed_manager.get_new_values(empty_slots=empty_slots)
 
         if not use_internal_trace:
             tt_out = self._run_sampling(
@@ -364,22 +365,17 @@ def format_sampling_params(sampling_params, max_batch_size):
 
 class SeedManager:
     def __init__(self, tt_sampling):
-        self.seeds = [secrets.randbits(64) for _ in range(32)]
-        self.rngs = [random.Random(seed) for seed in self.seeds]
+        self.rngs = [random.Random(seed) for seed in [secrets.randbits(64) for _ in range(32)]]
         self.tt_sampling = tt_sampling
 
     def reset_seed(self, seeds, user_ids):
         for i, user in enumerate(user_ids):
             self.rngs[user].seed(seeds[i])
-            self.seeds[user] = seeds[i]
 
-    def get_new_values(self, empty_slots=range(32), replicate_seeds=False):
+    def get_new_values(self, empty_slots=range(32)):
         # get new seeds for each user in empty_slots otherwise 0
         new_seeds = [rng.randint(0, 1000000) if i in empty_slots else 0 for i, rng in enumerate(self.rngs)]
 
-        if replicate_seeds:
-            assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
-            new_seeds = 32 * [new_seeds[empty_slots[0]]]
         # send new seeds to sampling module
         new_seed_tt = ttnn.from_torch(torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
