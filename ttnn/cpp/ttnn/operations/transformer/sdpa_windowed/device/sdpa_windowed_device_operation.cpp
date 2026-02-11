@@ -18,10 +18,6 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 WindowedScaledDotProductAttentionDeviceOperation::program_factory_t
-WindowedScaledDotProductAttentionDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return WindowedSDPAProgramFactory{};
-}
 
 void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {

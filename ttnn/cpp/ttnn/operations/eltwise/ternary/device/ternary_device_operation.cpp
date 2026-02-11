@@ -196,11 +196,6 @@ static ShardSpec compute_output_shard_spec(
 
 DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
 
-TernaryDeviceOperation::program_factory_t TernaryDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return TernaryProgramFactory{};
-}
-
 tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
         ternary_op_type,
@@ -426,11 +421,8 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         std::holds_alternative<DeviceStorage>(input_a.storage()),
         "Unexpected type {}",
         tt::stl::get_active_type_name_in_variant(input_a.storage()));
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     tt::stl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
-        args, program_factory.index(), input_a.dtype(), input_a.memory_config(), a_shape.volume());
+        args, 0, input_a.dtype(), input_a.memory_config(), a_shape.volume());
 
     if (variant == TernaryVariant::TTT) {
         TT_ASSERT(
@@ -450,7 +442,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
-            program_factory.index(),
+            0,
             input_a.dtype(),
             input_a.memory_config(),
             input_b.value().dtype(),
@@ -471,7 +463,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
-            program_factory.index(),
+            0,
             input_a.dtype(),
             input_a.memory_config(),
             input_b.value().dtype(),
@@ -489,7 +481,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
-            program_factory.index(),
+            0,
             input_a.dtype(),
             input_a.memory_config(),
             input_c.value().dtype(),

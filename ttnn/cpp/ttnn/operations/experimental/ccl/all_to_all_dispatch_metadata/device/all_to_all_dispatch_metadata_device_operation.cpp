@@ -14,14 +14,10 @@
 namespace ttnn::operations::experimental::ccl {
 
 AllToAllDispatchMetadataDeviceOperation::program_factory_t
-AllToAllDispatchMetadataDeviceOperation::select_program_factory(
-    [[maybe_unused]] const operation_attributes_t& operation_attributes,
-    [[maybe_unused]] const tensor_args_t& tensor_args) {
-    return AllToAllDispatchMetadataSparse{};
-}
 
-void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    void
+    AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
     auto scores_tensor = tensor_args.expert_scores_tensor;

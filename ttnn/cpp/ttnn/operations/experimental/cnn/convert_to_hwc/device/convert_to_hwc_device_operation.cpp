@@ -13,9 +13,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-ConvertToHWCDeviceOperation::program_factory_t ConvertToHWCDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return ConvertToHWCProgramFactory{};
 }
 
 void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(

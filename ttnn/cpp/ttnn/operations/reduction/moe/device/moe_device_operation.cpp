@@ -15,9 +15,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-MoeDeviceOperation::program_factory_t MoeDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return MoeProgramFactory{};
 }
 
 void MoeDeviceOperation::validate_on_program_cache_miss(

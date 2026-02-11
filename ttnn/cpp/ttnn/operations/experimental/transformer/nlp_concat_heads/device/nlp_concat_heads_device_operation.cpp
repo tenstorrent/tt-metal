@@ -8,9 +8,6 @@
 
 namespace ttnn::experimental::prim {
 
-NLPConcatHeadsDeviceOperation::program_factory_t NLPConcatHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return NLPConcatHeadsProgramFactory{};
 }
 
 void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(

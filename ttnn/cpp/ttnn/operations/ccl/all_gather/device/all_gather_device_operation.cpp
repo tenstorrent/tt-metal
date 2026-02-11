@@ -12,11 +12,6 @@
 
 namespace ttnn::operations::ccl {
 
-AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return AllGatherProgram{};
-}
-
 void AllGatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
@@ -153,9 +148,6 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -167,7 +159,7 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         operation_attributes.num_buffers_per_channel,
         subdevice_core_range_set,
         tensor_args,
-        program_factory.index());
+        0);
 }
 
 }  // namespace ttnn::operations::ccl

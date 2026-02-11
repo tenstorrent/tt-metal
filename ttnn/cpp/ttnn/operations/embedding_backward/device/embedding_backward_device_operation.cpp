@@ -13,9 +13,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-EmbeddingBackwardDeviceOperation::program_factory_t EmbeddingBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return EmbeddingBackwardProgramFactory{};
 }
 
 void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
