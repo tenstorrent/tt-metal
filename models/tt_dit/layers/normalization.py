@@ -355,8 +355,6 @@ class GroupNorm(Module):
         mesh_axis: int | None = None,
         core_grid: ttnn.CoreGrid | None = None,
     ) -> None:
-        super().__init__()
-
         """
         Args:
             num_channels: Number of channels in the input tensor.
@@ -367,32 +365,38 @@ class GroupNorm(Module):
             core_grid: The core grid to use.
             num_out_blocks: The number of output blocks to use.
         """
+        super().__init__()
+
         self.eps = eps
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.num_devices = tuple(mesh_device.shape)[mesh_axis] if mesh_axis is not None else 1
-        self.num_channels = num_channels // self.num_devices
-        self.num_groups = num_groups // self.num_devices
-        self.core_grid = core_grid or ttnn.CoreGrid(x=8, y=8)  # self.mesh_device.core_grid # Issue on 6U 8x9 grid
-        self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
-            self.mesh_device.core_grid, self.num_channels, self.num_groups
-        )
+        self.core_grid = core_grid or ttnn.CoreGrid(x=8, y=8)  # mesh_device.core_grid # Issue on 6U 8x9 grid
 
-        # Assert group norm parameters
-        assert (
-            self.num_channels % 32 == 0 == self.num_channels % self.num_groups
-        ), f"num_channels must be divisible by 32 and num_groups"
+        assert num_channels % num_groups == 0, "num_channels must be divisible by num_groups"
+        assert num_groups % self.num_devices == 0, "num_groups must be divisible by num_devices"
+
+        num_local_channels = num_channels // self.num_devices
+        num_padded_channels = math.ceil(num_local_channels / 32) * 32
+
+        assert num_padded_channels % num_local_channels == 0, "padded channels must be divisible by channels"
+
+        num_padded_groups = num_groups // self.num_devices * num_padded_channels // num_local_channels
+
+        self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
+            mesh_device.core_grid, num_padded_channels, num_padded_groups
+        )
 
         weight_shape = [
             self.num_devices,
             1,
-            math.ceil(self.num_channels // self.num_virtual_cols / 32) * self.num_virtual_cols,
+            math.ceil(num_padded_channels // self.num_virtual_cols / 32) * self.num_virtual_cols,
             32,
         ]
         block_wt = ttnn.operations.normalization.find_max_tile_span(
-            self.num_channels, self.num_channels // self.num_groups, 32
+            num_padded_channels, num_padded_channels // num_padded_groups, 32
         )
-        mask_shape = [1, self.num_groups, 32, 32 * block_wt]
+        mask_shape = [1, num_padded_groups, 32, 32 * block_wt]
 
         self.weight = Parameter(
             total_shape=weight_shape,
@@ -407,6 +411,10 @@ class GroupNorm(Module):
             device=self.mesh_device,
         )
         self.mask = Parameter(total_shape=mask_shape, device=self.mesh_device)
+
+        self.num_local_channels = num_local_channels
+        self.num_padded_channels = num_padded_channels
+        self.num_padded_groups = num_padded_groups
 
     @classmethod
     def from_torch(
@@ -435,16 +443,20 @@ class GroupNorm(Module):
         if "bias" in state:
             state["bias"] = self._prepare_param(state["bias"])
 
-        input_mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
+        input_mask = ttnn.create_group_norm_input_mask(
+            self.num_padded_channels, self.num_padded_groups, self.num_virtual_cols
+        )
         state["mask"] = ttnn.to_torch(input_mask)
 
     def _prepare_param(self, param: torch.Tensor) -> torch.Tensor:
-        expected_shape = (self.num_channels * self.num_devices,)
+        expected_shape = (self.num_local_channels * self.num_devices,)
         assert param.shape == expected_shape, f"expected shape {expected_shape}, got {param.shape}"
 
+        padding = self.num_padded_channels - self.num_local_channels
+        params = [torch.nn.functional.pad(t, (0, padding)) for t in param.chunk(self.num_devices)]
+
         torch_sharded_lst = [
-            ttnn.create_group_norm_weight_bias_rm(t, self.num_channels, self.num_virtual_cols)
-            for t in param.chunk(self.num_devices)
+            ttnn.create_group_norm_weight_bias_rm(t, self.num_padded_channels, self.num_virtual_cols) for t in params
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
@@ -456,7 +468,7 @@ class GroupNorm(Module):
             weight=self.weight.data,
             bias=self.bias.data,
             input_mask=self.mask.data,
-            num_groups=self.num_groups,
+            num_groups=self.num_padded_groups,
             epsilon=self.eps,
             core_grid=self.core_grid,
             inplace=False,
