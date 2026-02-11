@@ -10,7 +10,9 @@
 #include <vector>
 #include <queue>
 #include <optional>
+#include <filesystem>
 #include <fstream>
+#include <sstream>
 
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -73,8 +75,8 @@ struct SenderReceiverPair {
     std::optional<CoreCoord> sender_tensix = std::nullopt;
     std::optional<CoreCoord> receiver_tensix = std::nullopt;
 
-    std::shared_ptr<tt_metal::distributed::MeshBuffer> sender_buffer = nullptr;
-    std::shared_ptr<tt_metal::distributed::MeshBuffer> receiver_buffer = nullptr;
+    mutable std::shared_ptr<tt_metal::distributed::MeshBuffer> sender_buffer = nullptr;
+    mutable std::shared_ptr<tt_metal::distributed::MeshBuffer> receiver_buffer = nullptr;
 
     bool operator==(const SenderReceiverPair& other) const {
         bool same_s_r = sender.chip == other.sender.chip && sender.x == other.sender.x && sender.y == other.sender.y &&
@@ -124,7 +126,7 @@ private:
     std::map<ChipId, tt_metal::IDevice*> devices_map;
 
 public:
-    ConnectedDevicesHelper(const TestParams& params) {
+    ConnectedDevicesHelper(BenchmarkType benchmark_type) {
         this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         this->num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -144,7 +146,7 @@ public:
             this->devices.push_back(device);
         }
 
-        this->initialize_sender_receiver_pairs(params);
+        this->initialize_sender_receiver_pairs(benchmark_type);
         device_open_ = true;
     }
 
@@ -168,16 +170,39 @@ public:
     size_t num_devices;
     std::set<SenderReceiverPair> unique_links;
 
-private:
-    // NOLINTBEGIN(readability-make-member-function-const)
-    std::pair<std::optional<CoreCoord>, std::shared_ptr<tt_metal::distributed::MeshBuffer>>
-    assign_tensix_and_allocate_buffer(const TestParams& params, const tt_cxy_pair& logical_eth_core) {
-        if (params.benchmark_type != BenchmarkType::EthEthTensixUniDir and
-            params.benchmark_type != BenchmarkType::EthEthTensixBiDir) {
-            return {std::nullopt, nullptr};
+    void allocate_buffers(const TestParams& params) {
+        for (const auto& link : unique_links) {
+            if (!link.sender_tensix.has_value()) {
+                continue;
+            }
+            link.sender_buffer = create_tensix_buffer(
+                find_device_with_id(devices, link.sender.chip),
+                link.sender_tensix.value(),
+                params.packet_size,
+                params.benchmark_type);
+            link.receiver_buffer = create_tensix_buffer(
+                find_device_with_id(devices, link.receiver.chip),
+                link.receiver_tensix.value(),
+                params.packet_size,
+                params.benchmark_type);
         }
-        static std::unordered_map<ChipId, std::unordered_set<CoreCoord>> assigned_tensix_per_chip;
-        auto& assigned_phys_tensix = assigned_tensix_per_chip[logical_eth_core.chip];
+    }
+
+    void clear_buffers() {
+        for (const auto& link : unique_links) {
+            link.sender_buffer = nullptr;
+            link.receiver_buffer = nullptr;
+        }
+    }
+
+private:
+    std::optional<CoreCoord> assign_tensix(BenchmarkType benchmark_type, const tt_cxy_pair& logical_eth_core) {
+        if (benchmark_type != BenchmarkType::EthEthTensixUniDir and
+            benchmark_type != BenchmarkType::EthEthTensixBiDir and
+            benchmark_type != BenchmarkType::TensixEthEthTensixUniDir) {
+            return std::nullopt;
+        }
+        auto& assigned_phys_tensix = assigned_tensix_per_chip_[logical_eth_core.chip];
         const auto& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(logical_eth_core.chip);
 
         auto physical_eth_core =
@@ -205,30 +230,40 @@ private:
         auto logical_tensix = soc_d.translate_coord_to(
             {closest_phys_tensix.value(), CoreType::TENSIX, CoordSystem::NOC0}, CoordSystem::LOGICAL);
 
+        return logical_tensix;
+    }
+
+    static std::shared_ptr<tt_metal::distributed::MeshBuffer> create_tensix_buffer(
+        tt_metal::distributed::MeshDevice* device,
+        CoreCoord logical_tensix,
+        uint32_t packet_size,
+        BenchmarkType benchmark_type) {
+        // TensixEthEthTensixUniDir needs: landing_buffer(msg_size) + sem(4B) + pad(12B) + test_data(msg_size)
+        uint32_t buffer_size = packet_size;
+        if (benchmark_type == BenchmarkType::TensixEthEthTensixUniDir) {
+            buffer_size = 2 * packet_size + 16;
+        }
+
         tt_metal::ShardSpecBuffer shard_spec = tt_metal::ShardSpecBuffer(
             CoreRangeSet(std::set<CoreRange>({CoreRange(logical_tensix)})),
-            {1, params.packet_size},
+            {1, buffer_size},
             tt_metal::ShardOrientation::ROW_MAJOR,
-            {1, params.packet_size},
-            {1, params.packet_size});
+            {1, buffer_size},
+            {1, buffer_size});
 
         tt_metal::distributed::DeviceLocalBufferConfig device_local_config{
-            .page_size = params.packet_size,
+            .page_size = buffer_size,
             .buffer_type = tt_metal::BufferType::L1,
             .sharding_args = tt_metal::BufferShardingArgs(shard_spec, tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = false};
 
         tt_metal::distributed::ReplicatedBufferConfig global_buffer_config{
-            .size = params.packet_size,
+            .size = buffer_size,
         };
-        auto* device = find_device_with_id(this->devices, logical_eth_core.chip);
-        auto buffer = tt_metal::distributed::MeshBuffer::create(global_buffer_config, device_local_config, device);
-
-        return std::make_pair(logical_tensix, std::move(buffer));
+        return tt_metal::distributed::MeshBuffer::create(global_buffer_config, device_local_config, device);
     }
-    // NOLINTEND(readability-make-member-function-const)
 
-    void initialize_sender_receiver_pairs(const TestParams& params) {
+    void initialize_sender_receiver_pairs(BenchmarkType benchmark_type) {
         // chip id -> active eth ch on chip -> (connected chip, remote active eth ch)
         auto all_eth_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
 
@@ -305,20 +340,18 @@ private:
                     tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
                         std::make_tuple(sender_chip_id, logical_active_eth));
                 auto receiver_eth = tt_cxy_pair(std::get<0>(receiver_eth_tuple), std::get<1>(receiver_eth_tuple));
-                const auto& [sender_tensix, sender_buffer] = assign_tensix_and_allocate_buffer(params, sender_eth);
-                const auto& [receiver_tensix, receiver_buffer] =
-                    assign_tensix_and_allocate_buffer(params, receiver_eth);
+                auto sender_tensix = assign_tensix(benchmark_type, sender_eth);
+                auto receiver_tensix = assign_tensix(benchmark_type, receiver_eth);
                 this->unique_links.insert(SenderReceiverPair{
                     .sender = sender_eth,
                     .receiver = receiver_eth,
                     .sender_tensix = sender_tensix,
-                    .receiver_tensix = receiver_tensix,
-                    .sender_buffer = sender_buffer,
-                    .receiver_buffer = receiver_buffer});
+                    .receiver_tensix = receiver_tensix});
             }
         }
     }
 
+    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> assigned_tensix_per_chip_;
     bool device_open_ = false;
 };
 // NOLINTEND(cppcoreguidelines-prefer-member-initializer)
@@ -387,23 +420,163 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
         eth_sender_rt_args[eth_sender_rt_args.size() - 2] = sender_encoding;
         eth_sender_rt_args[eth_sender_rt_args.size() - 1] = receiver_encoding;
 
-        auto sender_kernel = tt_metal::CreateKernel(
-            sender_program,
+        const std::string sender_kernel_path =
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
-            "ethernet_write_worker_latency_ubench_sender.cpp",
-            CoreCoord(link.sender.x, link.sender.y),
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_ct_args});
-        tt_metal::SetRuntimeArgs(
-            sender_program, sender_kernel, CoreCoord(link.sender.x, link.sender.y), eth_sender_rt_args);
+            "ethernet_write_worker_latency_ubench_sender.cpp";
+        const std::string receiver_kernel_path =
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
+            "ethernet_write_worker_latency_ubench_receiver.cpp";
 
-        auto receiver_kernel = tt_metal::CreateKernel(
-            receiver_program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
-            "ethernet_write_worker_latency_ubench_receiver.cpp",
-            CoreCoord(link.receiver.x, link.receiver.y),
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_ct_args});
-        tt_metal::SetRuntimeArgs(
-            receiver_program, receiver_kernel, CoreCoord(link.receiver.x, link.receiver.y), eth_receiver_rt_args);
+        if (params.benchmark_type == BenchmarkType::DualEriscBiDir) {
+            // Dual-ERISC bi-directional: ERISC_0 = sender, ERISC_1 = receiver on each eth core.
+            // Memory layout: [sync_struct(16B)][region_A: N * msg_size][region_B: N * msg_size]
+            // Sender chip: ERISC_0 offset=0 (region A sends), ERISC_1 offset=buf_region_size (region B receives)
+            // Receiver chip: ERISC_0 offset=buf_region_size (region B sends), ERISC_1 offset=0 (region A receives)
+            uint32_t buf_region_size = params.num_buffer_slots * params.packet_size;
+
+            // --- Sender chip: ERISC_0 = forward sender (region A), ERISC_1 = reverse receiver (region B) ---
+            auto sender_fwd_rt_args = eth_sender_rt_args;
+            sender_fwd_rt_args.push_back(0);  // buffer_offset = 0 (region A)
+            auto sender_fwd_kernel = tt_metal::CreateKernel(
+                sender_program,
+                sender_kernel_path,
+                CoreCoord(link.sender.x, link.sender.y),
+                tt_metal::EthernetConfig{
+                    .noc = tt_metal::NOC::NOC_0,
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .compile_args = eth_ct_args});
+            tt_metal::SetRuntimeArgs(
+                sender_program, sender_fwd_kernel, CoreCoord(link.sender.x, link.sender.y), sender_fwd_rt_args);
+
+            auto recv_rev_rt_args = eth_receiver_rt_args;
+            recv_rev_rt_args.push_back(buf_region_size);  // buffer_offset (region B)
+            auto recv_rev_kernel = tt_metal::CreateKernel(
+                sender_program,
+                receiver_kernel_path,
+                CoreCoord(link.sender.x, link.sender.y),
+                tt_metal::EthernetConfig{
+                    .noc = tt_metal::NOC::NOC_1,
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .compile_args = eth_ct_args});
+            tt_metal::SetRuntimeArgs(
+                sender_program, recv_rev_kernel, CoreCoord(link.sender.x, link.sender.y), recv_rev_rt_args);
+
+            // --- Receiver chip: ERISC_0 = reverse sender (region B), ERISC_1 = forward receiver (region A) ---
+            // Reverse sender uses swapped encoding (receiver's perspective as sender)
+            auto sender_rev_rt_args = eth_sender_rt_args;
+            sender_rev_rt_args[sender_rev_rt_args.size() - 2] = receiver_encoding;
+            sender_rev_rt_args[sender_rev_rt_args.size() - 1] = sender_encoding;
+            sender_rev_rt_args.push_back(buf_region_size);  // buffer_offset (region B)
+            auto sender_rev_kernel = tt_metal::CreateKernel(
+                receiver_program,
+                sender_kernel_path,
+                CoreCoord(link.receiver.x, link.receiver.y),
+                tt_metal::EthernetConfig{
+                    .noc = tt_metal::NOC::NOC_0,
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .compile_args = eth_ct_args});
+            tt_metal::SetRuntimeArgs(
+                receiver_program, sender_rev_kernel, CoreCoord(link.receiver.x, link.receiver.y), sender_rev_rt_args);
+
+            auto recv_fwd_rt_args = eth_receiver_rt_args;
+            recv_fwd_rt_args.push_back(0);  // buffer_offset = 0 (region A)
+            auto recv_fwd_kernel = tt_metal::CreateKernel(
+                receiver_program,
+                receiver_kernel_path,
+                CoreCoord(link.receiver.x, link.receiver.y),
+                tt_metal::EthernetConfig{
+                    .noc = tt_metal::NOC::NOC_1,
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .compile_args = eth_ct_args});
+            tt_metal::SetRuntimeArgs(
+                receiver_program, recv_fwd_kernel, CoreCoord(link.receiver.x, link.receiver.y), recv_fwd_rt_args);
+        } else {
+            auto sender_kernel = tt_metal::CreateKernel(
+                sender_program,
+                sender_kernel_path,
+                CoreCoord(link.sender.x, link.sender.y),
+                tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_ct_args});
+            tt_metal::SetRuntimeArgs(
+                sender_program, sender_kernel, CoreCoord(link.sender.x, link.sender.y), eth_sender_rt_args);
+
+            auto receiver_kernel = tt_metal::CreateKernel(
+                receiver_program,
+                receiver_kernel_path,
+                CoreCoord(link.receiver.x, link.receiver.y),
+                tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_ct_args});
+            tt_metal::SetRuntimeArgs(
+                receiver_program, receiver_kernel, CoreCoord(link.receiver.x, link.receiver.y), eth_receiver_rt_args);
+        }
+
+        // Create Tensix DataMovement kernels for TensixEthEthTensixUniDir
+        if (params.benchmark_type == BenchmarkType::TensixEthEthTensixUniDir && link.sender_tensix.has_value()) {
+            uint32_t eth_unreserved_base = tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+            uint32_t eth_slot_addr = eth_unreserved_base + sizeof(eth_buffer_slot_sync_t);
+            uint32_t push_counter_addr = eth_slot_addr + params.packet_size;
+
+            // Sender tensix: virtual coords of sender eth core
+            auto virtual_sender_eth =
+                sender_device->virtual_core_from_logical_core(CoreCoord(link.sender.x, link.sender.y), CoreType::ETH);
+            // Receiver tensix: virtual coords of receiver eth core
+            auto virtual_receiver_eth = receiver_device->virtual_core_from_logical_core(
+                CoreCoord(link.receiver.x, link.receiver.y), CoreType::ETH);
+
+            // Tensix buffer layout: [landing_buffer(msg_size)][tensix_sem(4B)][pad(12B)][test_data(msg_size)]
+            uint32_t sender_tensix_sem_addr = link.sender_buffer->address() + params.packet_size;
+            uint32_t receiver_tensix_sem_addr = link.receiver_buffer->address() + params.packet_size;
+
+            // Sender tensix kernel (initiator): is_initiator = 1
+            auto sender_tensix_kernel = tt_metal::CreateKernel(
+                sender_program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
+                "tensix_eth_datacopy_worker.cpp",
+                link.sender_tensix.value(),
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = {1}});
+            // RT args: eth_noc_x, eth_noc_y, eth_slot_addr, eth_push_counter_addr,
+            //          local_sem_addr, local_data_addr, num_messages, message_size,
+            //          sender_encoding, receiver_encoding
+            tt_metal::SetRuntimeArgs(
+                sender_program,
+                sender_tensix_kernel,
+                link.sender_tensix.value(),
+                {virtual_sender_eth.x,
+                 virtual_sender_eth.y,
+                 eth_slot_addr,
+                 push_counter_addr,
+                 sender_tensix_sem_addr,
+                 link.sender_buffer->address(),
+                 params.num_packets,
+                 params.packet_size,
+                 sender_encoding,
+                 receiver_encoding});
+
+            // Receiver tensix kernel (echo): is_initiator = 0
+            auto receiver_tensix_kernel = tt_metal::CreateKernel(
+                receiver_program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
+                "tensix_eth_datacopy_worker.cpp",
+                link.receiver_tensix.value(),
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = {0}});
+            tt_metal::SetRuntimeArgs(
+                receiver_program,
+                receiver_tensix_kernel,
+                link.receiver_tensix.value(),
+                {virtual_receiver_eth.x,
+                 virtual_receiver_eth.y,
+                 eth_slot_addr,
+                 push_counter_addr,
+                 receiver_tensix_sem_addr,
+                 link.receiver_buffer->address(),
+                 params.num_packets,
+                 params.packet_size});
+        }
     }
 
     // Compile all programs
@@ -643,8 +816,11 @@ void run(
     }
 
     for (const auto& link : device_helper.unique_links) {
-        // Only read profiler results from sender
+        // Read profiler results from sender (and also receiver for DualEriscBiDir since both have sender kernels)
         tt_metal::ReadMeshDeviceProfilerResults(*find_device_with_id(device_helper.devices, link.sender.chip));
+        if (params.benchmark_type == BenchmarkType::DualEriscBiDir) {
+            tt_metal::ReadMeshDeviceProfilerResults(*find_device_with_id(device_helper.devices, link.receiver.chip));
+        }
 
         switch (params.benchmark_type) {
             case BenchmarkType::EthOnlyUniDir:
@@ -669,9 +845,40 @@ void run(
                     validation(device_helper, link, params.packet_size, false, true);
                 }
             } break;
+            case BenchmarkType::TensixEthEthTensixUniDir: {
+                // Validate that sender tensix landing_buffer has the echoed iota pattern
+                TT_FATAL(link.sender_buffer != nullptr, "Expected sender tensix to have allocated buffer");
+                // Read directly from sender tensix L1 (landing_buffer is at offset 0 in the MeshBuffer)
+                auto* device = find_device_with_id(device_helper.devices, link.sender.chip);
+                auto virtual_tensix =
+                    device->virtual_core_from_logical_core(link.sender_tensix.value(), CoreType::WORKER);
+                std::vector<uint8_t> golden_vec(params.packet_size);
+                std::iota(std::begin(golden_vec), std::end(golden_vec), 0);
+                std::vector<uint8_t> result_vec(params.packet_size, 0);
+                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                    result_vec.data(),
+                    params.packet_size,
+                    tt_cxy_pair(link.sender.chip, virtual_tensix),
+                    link.sender_buffer->address());
+                bool pass = golden_vec == result_vec;
+                TT_FATAL(pass, "TensixEthEthTensixUniDir validation failed on sender tensix landing buffer");
+            } break;
+            case BenchmarkType::DualEriscBiDir: {
+                validation(device_helper, link, params.packet_size, true);
+            } break;
             default: break;
         }
     }
+}
+
+std::vector<uint32_t> parse_csv_u32(const char* s) {
+    std::vector<uint32_t> result;
+    std::stringstream ss(s);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        result.push_back(std::stoul(token));
+    }
+    return result;
 }
 
 int main(int /*argc*/, char** argv) {
@@ -684,48 +891,71 @@ int main(int /*argc*/, char** argv) {
         "Unsupported benchmark {} specified, check BenchmarkType enum for supported values",
         benchmark_type);
 
-    std::size_t num_packets = std::stoi(argv[arg_idx++]);
-    std::size_t packet_size = std::stoi(argv[arg_idx++]);
-    std::size_t num_buffer_slots = std::stoi(argv[arg_idx++]);
+    uint32_t num_packets = std::stoi(argv[arg_idx++]);
+    auto packet_sizes = parse_csv_u32(argv[arg_idx++]);
+    auto channel_counts = parse_csv_u32(argv[arg_idx++]);
 
     bool test_latency = std::stoi(argv[arg_idx++]);
     bool disable_trid = std::stoi(argv[arg_idx++]);
     uint32_t num_iterations = std::stoi(argv[arg_idx++]);
 
-    TestParams params{
-        .benchmark_type = benchmark_type_enum.value(),
-        .num_packets = num_packets,
-        .packet_size = packet_size,
-        .num_buffer_slots = num_buffer_slots,
-        .test_latency = test_latency,
-        .disable_trid = disable_trid,
-        .num_iterations = num_iterations};
+    if (benchmark_type_enum.value() == BenchmarkType::DualEriscBiDir) {
+        auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        TT_FATAL(arch == tt::ARCH::BLACKHOLE, "DualEriscBiDir mode requires Blackhole (2 ERISCs per eth core)");
+    }
 
     log_info(tt::LogTest, "Setting up test fixture");
-    ConnectedDevicesHelper device_helper(params);
+    ConnectedDevicesHelper device_helper(benchmark_type_enum.value());
     log_info(tt::LogTest, "Done setting up test fixture");
     if (device_helper.num_devices < 2) {
         log_info(tt::LogTest, "Need at least 2 devices to run this test");
         return 0;
     }
 
-    // Add more configurations here until proper argc parsing added
-    bool success = false;
-    success = true;
+    std::filesystem::path profiler_dir = std::filesystem::path(tt::tt_metal::get_profiler_logs_dir());
+    std::filesystem::path profiler_log = profiler_dir / DEVICE_SIDE_LOG;
+
+    bool success = true;
     log_info(tt::LogTest, "STARTING");
     try {
-        log_info(
-            tt::LogTest,
-            "benchmark type: {}, measurement type: {}, num_packets: {}, packet_size: {} B, num_buffer_slots: {}",
-            enchantum::to_string(benchmark_type_enum.value()),
-            enchantum::to_string(test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth),
-            num_packets,
-            packet_size,
-            num_buffer_slots);
+        for (auto packet_size : packet_sizes) {
+            for (auto num_buffer_slots : channel_counts) {
+                TestParams params{
+                    .benchmark_type = benchmark_type_enum.value(),
+                    .num_packets = num_packets,
+                    .packet_size = packet_size,
+                    .num_buffer_slots = num_buffer_slots,
+                    .test_latency = test_latency,
+                    .disable_trid = disable_trid,
+                    .num_iterations = num_iterations};
 
-        auto programs = build(device_helper, params);
-        run(device_helper, programs, params);
+                log_info(
+                    tt::LogTest,
+                    "benchmark type: {}, measurement type: {}, num_packets: {}, packet_size: {} B, num_buffer_slots: "
+                    "{}",
+                    enchantum::to_string(benchmark_type_enum.value()),
+                    enchantum::to_string(test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth),
+                    num_packets,
+                    packet_size,
+                    num_buffer_slots);
 
+                // Clear profiler CSV before this sub-run (it appends)
+                std::filesystem::remove(profiler_log);
+
+                device_helper.allocate_buffers(params);
+                auto programs = build(device_helper, params);
+                run(device_helper, programs, params);
+
+                // Rename profiler CSV to config-specific name
+                auto config_log =
+                    profiler_dir / fmt::format("profile_log_device_ps{}_ch{}.csv", packet_size, num_buffer_slots);
+                if (std::filesystem::exists(profiler_log)) {
+                    std::filesystem::rename(profiler_log, config_log);
+                }
+
+                device_helper.clear_buffers();
+            }
+        }
     } catch (std::exception& e) {
         log_error(tt::LogTest, "Caught exception: {}", e.what());
         device_helper.TearDown();

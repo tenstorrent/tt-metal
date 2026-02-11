@@ -17,6 +17,8 @@ enum BenchmarkType : uint8_t {
     EthMcastTensix = 5,
     EthToLocalEth = 6,
     EthToLocalEthAndMcastTensix = 7,
+    TensixEthEthTensixUniDir = 8,
+    DualEriscBiDir = 9,
 };
 
 enum MeasurementType : uint8_t { Latency = 0, Bandwidth = 1 };
