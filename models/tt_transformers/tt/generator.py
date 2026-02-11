@@ -153,6 +153,7 @@ class Generator(DecodeWarmupMixin):
             sample_on_device_mode,
             non_greedy_decoding_on_device,
             max_batch_size,
+            mode="prefill",
         )
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
