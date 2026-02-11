@@ -13,66 +13,6 @@
 using namespace tt::tt_metal;
 namespace ttnn::operations::ternary {
 
-static ttnn::Shape compute_broadcasted_output_ternary(
-    const ttnn::Shape& a_shape, const ttnn::Shape& b_shape, const ttnn::Shape& c_shape) {
-    const int rank_a = a_shape.rank();
-    const int rank_b = b_shape.rank();
-    const int rank_c = c_shape.rank();
-    const int largest_rank = std::max({rank_a, rank_b, rank_c});
-
-    SmallVector<uint32_t> output_shape(largest_rank, 1);
-
-    for (int i = -1; i >= -largest_rank; --i) {
-        auto dim_a = (i >= -rank_a) ? a_shape[i] : 1;
-        auto dim_b = (i >= -rank_b) ? b_shape[i] : 1;
-        auto dim_c = (i >= -rank_c) ? c_shape[i] : 1;
-
-        uint32_t max_dim = 1;
-        if (dim_a != 1) {
-            max_dim = std::max(max_dim, dim_a);
-        }
-        if (dim_b != 1) {
-            max_dim = std::max(max_dim, dim_b);
-        }
-        if (dim_c != 1) {
-            max_dim = std::max(max_dim, dim_c);
-        }
-
-        bool compatible = true;
-        if (dim_a != 1 && dim_a != max_dim) {
-            compatible = false;
-        }
-        if (dim_b != 1 && dim_b != max_dim) {
-            compatible = false;
-        }
-        if (dim_c != 1 && dim_c != max_dim) {
-            compatible = false;
-        }
-
-        TT_FATAL(
-            compatible,
-            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}, dim c: {}",
-            i,
-            dim_a,
-            dim_b,
-            dim_c);
-
-        if (i <= -6) {
-            TT_FATAL(
-                dim_a == dim_b && dim_b == dim_c,
-                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, "
-                "dim a: {}, dim b: {}, dim c: {}",
-                i,
-                dim_a,
-                dim_b,
-                dim_c);
-        }
-
-        output_shape[i + largest_rank] = max_dim;
-    }
-    return ttnn::Shape(output_shape);
-}
-
 CoreRangeSet get_worker_grid(
     const Tensor& input_tensor_a,
     const Tensor* input_tensor_b,
@@ -250,31 +190,31 @@ static MemoryConfig resolve_mem_config_actual(
     if (!memory_config.has_value() && !optional_output_tensor.has_value()) {
         // Resolve from inputs: pick the input (A, B, or C) with the largest shard grid
         const Tensor* best_input = nullptr;
-        size_t best_grid_size = 0;
+        uint32_t best_num_cores = 0;
         if (input_a.is_sharded()) {
             best_input = &input_a;
-            best_grid_size = input_a.shard_spec()->grid.size();
+            best_num_cores = input_a.shard_spec()->num_cores();
         }
         if (input_b && input_b->is_sharded()) {
-            const size_t grid_size = input_b->shard_spec()->grid.size();
-            if (grid_size > best_grid_size) {
+            const uint32_t num_cores = input_b->shard_spec()->num_cores();
+            if (num_cores > best_num_cores) {
                 best_input = input_b;
-                best_grid_size = grid_size;
+                best_num_cores = num_cores;
             }
         }
         if (input_c && input_c->is_sharded()) {
-            const size_t grid_size = input_c->shard_spec()->grid.size();
-            if (grid_size > best_grid_size) {
+            const uint32_t num_cores = input_c->shard_spec()->num_cores();
+            if (num_cores > best_num_cores) {
                 best_input = input_c;
-                best_grid_size = grid_size;
+                best_num_cores = num_cores;
             }
         }
         if (best_input != nullptr) {
             mem_config_actual = compute_mem_config_actual(*best_input, output_shape);
             log_debug(
                 tt::LogOp,
-                "TernaryDeviceOperation: Using memory config from input with largest shard grid (size {})",
-                best_grid_size);
+                "TernaryDeviceOperation: Using memory config from input with largest num_cores (num_cores {})",
+                best_num_cores);
         }
     } else if (memory_config.has_value()) {
         mem_config_actual = *memory_config;
