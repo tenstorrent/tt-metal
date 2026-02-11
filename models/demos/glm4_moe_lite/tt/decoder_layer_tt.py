@@ -293,6 +293,11 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     batch = int(x_embed_tok.shape[2])
     if batch <= 0:
         raise ValueError("batch must be > 0")
+
+    if os.environ.get("GLM4_MOE_LITE_LAYER_IDENTITY", "").strip() == "1":
+        # Debug-only: bypass the entire decoder layer (including KV cache update)
+        # to isolate nondeterminism outside the attention/MLP stack.
+        return ttnn.clone(x_embed_tok, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     t_layer0 = time.perf_counter() if profile is not None else 0.0
 
     # Paged ops expect row-major positions.
@@ -416,81 +421,109 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     _profile_add(profile, "norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KVPE for new token -> update cache at cur_pos ----
-    t0 = time.perf_counter() if profile is not None else 0.0
+    skip_kv_update = os.environ.get("GLM4_MOE_LITE_SKIP_KV_UPDATE", "").strip() == "1"
     q_a = None
-    kv = None
-    qkv = None
-    w_q_kv_a = getattr(w, "w_q_kv_a", None)
-    if w_q_kv_a is not None:
-        if tp_enabled:
-            qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
-        else:
-            qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
-
-        # `slice` may return a view that aliases the `qkv` buffer (no refcounting).
-        # Materialize slices before freeing `qkv` to avoid intermittent corruption.
-        q_a_view = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
-        kv_view = ttnn.slice(
-            qkv,
-            [0, 0, 0, int(hparams.q_lora_rank)],
-            [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
-        )
-        q_a = ttnn.clone(q_a_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kv = ttnn.clone(kv_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # NOTE: `q_a_view`/`kv_view` may alias `qkv`; do not deallocate them separately.
-        ttnn.deallocate(qkv, force=False)
+    if not skip_kv_update:
+        t0 = time.perf_counter() if profile is not None else 0.0
+        kv = None
         qkv = None
-    else:
-        if tp_enabled:
-            kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
+        w_q_kv_a = getattr(w, "w_q_kv_a", None)
+        if w_q_kv_a is not None:
+            if tp_enabled:
+                qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
+            else:
+                qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
+
+            # `slice` may return a view that aliases the `qkv` buffer (no refcounting).
+            # Materialize slices before freeing `qkv` to avoid intermittent corruption.
+            q_a_view = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
+            kv_view = ttnn.slice(
+                qkv,
+                [0, 0, 0, int(hparams.q_lora_rank)],
+                [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
+            )
+            q_a = ttnn.clone(q_a_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            kv = ttnn.clone(kv_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # NOTE: `q_a_view`/`kv_view` may alias `qkv`; do not deallocate them separately.
+            ttnn.deallocate(qkv, force=False)
+            qkv = None
         else:
-            kv = _mlp_linear(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
+            if tp_enabled:
+                kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
+            else:
+                kv = _mlp_linear(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
 
-    # `slice` may alias `kv`. Clone slices before freeing `kv`.
-    kv_nope_view = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
-    kv_rope_view = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
-    kv_nope = ttnn.clone(kv_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    kv_rope = ttnn.clone(kv_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # NOTE: `kv_nope_view`/`kv_rope_view` may alias `kv`; do not deallocate them separately.
-    ttnn.deallocate(kv, force=False)
-    kv = None
+        # `slice` may alias `kv`. Clone slices before freeing `kv`.
+        kv_nope_view = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
+        kv_rope_view = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
+        kv_nope = ttnn.clone(kv_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kv_rope = ttnn.clone(kv_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # NOTE: `kv_nope_view`/`kv_rope_view` may alias `kv`; do not deallocate them separately.
+        ttnn.deallocate(kv, force=False)
+        kv = None
 
-    kv_nope = w.kv_a_layernorm(kv_nope, mode="decode")
+        kv_nope = w.kv_a_layernorm(kv_nope, mode="decode")
 
-    # RoPE op requires BF16.
-    if kv_rope.dtype != ttnn.bfloat16:
-        kv_rope = ttnn.typecast(kv_rope, dtype=ttnn.bfloat16)
-    if use_decode_rope:
-        kv_rope = _rope_decode(kv_rope, heads=1)
-    else:
-        kv_rope = ttnn.experimental.rotary_embedding_llama(
-            kv_rope,
-            cos_batch,
-            sin_batch,
-            trans_matrix,
-            is_decode_mode=False,
-        )  # [1,1,B,rope_dim]
+        # RoPE op requires BF16.
+        if kv_rope.dtype != ttnn.bfloat16:
+            kv_rope = ttnn.typecast(kv_rope, dtype=ttnn.bfloat16)
+        if use_decode_rope:
+            kv_rope = _rope_decode(kv_rope, heads=1)
+        else:
+            kv_rope = ttnn.experimental.rotary_embedding_llama(
+                kv_rope,
+                cos_batch,
+                sin_batch,
+                trans_matrix,
+                is_decode_mode=False,
+            )  # [1,1,B,rope_dim]
 
-    kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [1,1,B,kvpe_dim]
-    ttnn.deallocate(kv_nope, force=False)
-    ttnn.deallocate(kv_rope, force=False)
+        kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [1,1,B,kvpe_dim]
+        ttnn.deallocate(kv_nope, force=False)
+        ttnn.deallocate(kv_rope, force=False)
 
-    # Important: paged_update_cache requires the update tensor to be BF16/FP32,
-    # even if the cache itself is BF8.
-    kvpe_new_sharded = _shard_kvpe_update_tensor(device=device, kvpe_new=kvpe_new, batch=batch, kvpe_dim=kvpe_dim)
+        # Important: paged_update_cache requires the update tensor to be BF16/FP32,
+        # even if the cache itself is BF8.
+        kvpe_new_sharded = _shard_kvpe_update_tensor(device=device, kvpe_new=kvpe_new, batch=batch, kvpe_dim=kvpe_dim)
 
-    ttnn.experimental.paged_update_cache(
-        kvpe_cache,
-        kvpe_new_sharded,
-        update_idxs_tensor=tt_positions,
-        page_table=page_table_tt,
-    )
-    ttnn.deallocate(kvpe_new_sharded, force=False)
-    # NOTE: `ttnn.pad` can return a view which may alias the `kvpe_new` buffer.
-    # Keep `kvpe_new` alive until after the update kernel is enqueued to avoid
-    # use-after-free on some runtimes.
-    ttnn.deallocate(kvpe_new, force=False)
-    _profile_add(profile, "kv_cache_update_s", time.perf_counter() - t0 if profile is not None else 0.0)
+        # Multi-device correctness: when operating on a MeshDevice, ensure the
+        # update is applied on all mesh coordinates that hold a replica of the
+        # KV cache. DeepSeek passes `mesh_coords` explicitly; without it we've
+        # observed KV block boundary corruption when the second KV page is first
+        # touched (pos >= block_size).
+        mesh_coords = None
+        if device.__class__.__name__ == "MeshDevice":
+            try:
+                mesh_rows, mesh_cols = int(device.shape[0]), int(device.shape[1])
+                mesh_coords = {ttnn.MeshCoordinate(r, c) for r in range(mesh_rows) for c in range(mesh_cols)}
+            except Exception:
+                mesh_coords = None
+
+        if mesh_coords is None:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                kvpe_new_sharded,
+                update_idxs_tensor=tt_positions,
+                page_table=page_table_tt,
+            )
+        else:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                kvpe_new_sharded,
+                update_idxs_tensor=tt_positions,
+                page_table=page_table_tt,
+                mesh_coords=mesh_coords,
+            )
+        if os.environ.get("GLM4_MOE_LITE_SYNC_AFTER_KV_UPDATE", "").strip() == "1":
+            # Debug-only: enforce a barrier between KV cache update and subsequent
+            # attention reads to rule out cross-queue hazards.
+            ttnn.synchronize_device(device)
+        ttnn.deallocate(kvpe_new_sharded, force=False)
+        # NOTE: `ttnn.pad` can return a view which may alias the `kvpe_new` buffer.
+        # Keep `kvpe_new` alive until after the update kernel is enqueued to avoid
+        # use-after-free on some runtimes.
+        ttnn.deallocate(kvpe_new, force=False)
+        _profile_add(profile, "kv_cache_update_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- Q path ----
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -583,10 +616,17 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         scale = float(int(kvpe_dim) ** -0.5)
     else:
         scale = float(int(hparams.qk_head_dim) ** -0.5)
+    # NOTE: k_chunk_size=128 has been observed to cause nondeterministic /
+    # corrupted greedy decode on some stacks. Default to the smaller chunk
+    # size for correctness and allow opt-in tuning via env var.
+    try:
+        k_chunk_size = int(os.environ.get("GLM4_MOE_LITE_MLA_K_CHUNK_SIZE", "64").strip() or "64")
+    except ValueError:
+        k_chunk_size = 64
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=0,  # not used in decode
-        k_chunk_size=128,
+        k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
     )
     mla_fidelity = _parse_math_fidelity(
@@ -594,7 +634,17 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         default=ttnn.MathFidelity.HiFi4,
     )
     mla_approx = os.environ.get("GLM4_MOE_LITE_MLA_APPROX", "0").strip() != "0"
-    mla_fp32_acc = os.environ.get("GLM4_MOE_LITE_MLA_FP32_ACC", "").strip() == "1"
+    mla_fp32_acc_req = os.environ.get("GLM4_MOE_LITE_MLA_FP32_ACC", "").strip() == "1"
+    # Known issue (bring-up): FP32 dest accumulation in FlashMLA decode has been
+    # observed to corrupt greedy decode exactly when the 2nd KV block is first
+    # touched (pos >= block_size). Keep it disabled unless explicitly overridden.
+    mla_fp32_acc = mla_fp32_acc_req
+    if mla_fp32_acc_req and os.environ.get("GLM4_MOE_LITE_UNSAFE_ALLOW_FP32_MLA", "").strip() != "1":
+        logger.warning(
+            "GLM4_MOE_LITE_MLA_FP32_ACC=1 is currently unsafe for FlashMLA decode (KV block boundary corruption). "
+            "Forcing fp32_dest_acc_en=0. Set GLM4_MOE_LITE_UNSAFE_ALLOW_FP32_MLA=1 to override."
+        )
+        mla_fp32_acc = False
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=mla_fidelity,
         math_approx_mode=mla_approx,
@@ -606,8 +656,63 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # V-cache slicing overhead. Keep an opt-in fallback for older runtimes.
     t0 = time.perf_counter() if profile is not None else 0.0
     use_v_cache_slice = os.environ.get("GLM4_MOE_LITE_MLA_USE_V_CACHE_SLICE", "").strip() == "1"
+    # Kernel contract: when Q is not sharded, FlashMLA decode currently requires
+    # DRAM-interleaved Q. For bring-up, we support an opt-in sharded-Q path that
+    # matches the DeepSeek MLA decode pattern more closely.
     flash_mla_memcfg = ttnn.DRAM_MEMORY_CONFIG
-    if use_v_cache_slice:
+    shard_q = os.environ.get("GLM4_MOE_LITE_MLA_SHARD_Q", "").strip() == "1"
+    if shard_q:
+        grid_size = device.compute_with_storage_grid_size()
+        num_cores = int(grid_size.x) * int(grid_size.y)
+        height = int(batch) * int(hparams.num_attention_heads)
+        width = int(kvpe_dim)
+        kv_lora_rank = int(hparams.kv_lora_rank)
+
+        # Shard along the flattened (B*H) dimension. Use as many cores as there are
+        # head tiles, capped by the available core count.
+        tiles_h = max(1, (height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+        q_num_cores = min(tiles_h, max(1, num_cores))
+        shard_h = (height + q_num_cores - 1) // q_num_cores
+        shard_h = ((shard_h + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+        q_core_grid = ttnn.num_cores_to_corerangeset(q_num_cores, grid_size, row_wise=True)
+        q_mem_config = ttnn.create_sharded_memory_config(
+            shape=(int(shard_h), int(width)),
+            core_grid=q_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        flash_mla_out_memcfg = ttnn.create_sharded_memory_config(
+            shape=(int(shard_h), int(kv_lora_rank)),
+            core_grid=q_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        q_for_decode_view = ttnn.to_memory_config(q_for_decode, q_mem_config)
+        q_for_decode_sharded = ttnn.clone(q_for_decode_view, memory_config=q_mem_config)
+        ttnn.deallocate(q_for_decode, force=False)
+        q_for_decode = q_for_decode_sharded
+        flash_mla_memcfg = flash_mla_out_memcfg
+    if os.environ.get("GLM4_MOE_LITE_DISABLE_FLASH_MLA_DECODE", "").strip() == "1":
+        # Debug-only: bypass the FlashMLA decode kernel to isolate nondeterminism.
+        # This produces incorrect outputs but should be deterministic if the
+        # corruption is coming from the attention kernel.
+        is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        heads_padded = ((int(hparams.num_attention_heads) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        attn_latent = ttnn.from_torch(
+            torch.zeros((1, batch, heads_padded, int(hparams.kv_lora_rank)), dtype=torch.bfloat16, device="cpu"),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            # from_torch does not support sharded output configs; allocate in DRAM.
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+    elif use_v_cache_slice:
         v_cache = ttnn.slice(
             kvpe_cache,
             [0, 0, 0, 0],
@@ -641,16 +746,31 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     ttnn.deallocate(q_for_decode, force=False)
     _profile_add(profile, "flash_mla_decode_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
+    if shard_q and os.environ.get("GLM4_MOE_LITE_DISABLE_FLASH_MLA_DECODE", "").strip() != "1":
+        # Bring-up convenience: reshard FlashMLA output back to DRAM interleaved
+        # before slicing/permuting. This is not the fastest path, but it keeps
+        # the downstream code unchanged while we validate correctness.
+        attn_latent_view = ttnn.to_memory_config(attn_latent, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_latent_dram = ttnn.clone(attn_latent_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn_latent, force=False)
+        attn_latent = attn_latent_dram
+
     # Slice padded heads back to num_heads.
     #
-    # Correctness: `ttnn.slice` may return a view without refcounting. Keep a live
-    # reference to the padded output until the sliced view is fully consumed.
+    # Correctness: `ttnn.slice` may return a view without refcounting. If we
+    # keep both the padded tensor and the sliced view alive and deallocate both,
+    # we can hit use-after-free or double-free issues depending on whether the
+    # slice aliases the source buffer. Materialize the slice before freeing the
+    # padded output.
     attn_latent_padded = attn_latent
-    attn_latent = ttnn.slice(
+    attn_latent_view = ttnn.slice(
         attn_latent_padded,
         [0, 0, 0, 0],
         [1, batch, int(hparams.num_attention_heads), int(hparams.kv_lora_rank)],
     )
+    attn_latent = ttnn.clone(attn_latent_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # NOTE: attn_latent_view may alias attn_latent_padded; do not deallocate it separately.
+    ttnn.deallocate(attn_latent_padded, force=False)
     attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
 
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -659,7 +779,6 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     else:
         v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
     ttnn.deallocate(attn_latent, force=False)
-    ttnn.deallocate(attn_latent_padded, force=False)
 
     v = ttnn.permute(v, (0, 2, 1, 3))  # [1,B,H,v_head_dim]
     v = ttnn.reshape(v, (1, batch, 1, int(hparams.num_attention_heads * hparams.v_head_dim)))
@@ -674,6 +793,12 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     x_attn_out = residual + attn_out
     ttnn.deallocate(attn_out, force=False)
     _profile_add(profile, "attn_out_s", time.perf_counter() - t0 if profile is not None else 0.0)
+
+    if os.environ.get("GLM4_MOE_LITE_DISABLE_MLP", "").strip() == "1":
+        # Debug-only: bypass the post-attention MLP to isolate nondeterminism in
+        # later dense/MoE compute. Returns the attention residual output.
+        _profile_add(profile, "total_s", time.perf_counter() - t_layer0 if profile is not None else 0.0)
+        return x_attn_out
 
     # ---- MLP (dense for layer0; MoE for routed layers) ----
     residual = x_attn_out  # [1,1,B,H]
@@ -1029,7 +1154,14 @@ def run_decoder_layer_prefill_update_cache_tt(
         default=ttnn.MathFidelity.HiFi4,
     )
     mla_approx = os.environ.get("GLM4_MOE_LITE_MLA_APPROX", "0").strip() != "0"
-    mla_fp32_acc = os.environ.get("GLM4_MOE_LITE_MLA_FP32_ACC", "").strip() == "1"
+    mla_fp32_acc_req = os.environ.get("GLM4_MOE_LITE_MLA_FP32_ACC", "").strip() == "1"
+    mla_fp32_acc = mla_fp32_acc_req
+    if mla_fp32_acc_req and os.environ.get("GLM4_MOE_LITE_UNSAFE_ALLOW_FP32_MLA", "").strip() != "1":
+        logger.warning(
+            "GLM4_MOE_LITE_MLA_FP32_ACC=1 is currently unsafe for FlashMLA prefill/bring-up. "
+            "Forcing fp32_dest_acc_en=0. Set GLM4_MOE_LITE_UNSAFE_ALLOW_FP32_MLA=1 to override."
+        )
+        mla_fp32_acc = False
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=mla_fidelity,
         math_approx_mode=mla_approx,
