@@ -5,7 +5,7 @@
 import numpy as np
 import pytest
 
-pytest.importorskip("torch")
+torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 pytest.importorskip("PIL")
 pytest.importorskip("transformers")
@@ -61,7 +61,11 @@ def test_tt_pipeline_pcc_vs_cpu_reference(tmp_path):
         tt_perf_neck=True,
     )
 
+    # For `pretrained=False`, reset seed before each pipeline build so both
+    # paths materialize the same random initialization.
+    torch.manual_seed(0)
     cpu = DPTFallbackPipeline(config=cfg_cpu, pretrained=False, device="cpu")
+    torch.manual_seed(0)
     with DPTTTPipeline(config=cfg_tt, pretrained=False, device="cpu") as tt_pipe:
         depth_cpu = cpu.forward(str(img_path), normalize=True)
         depth_tt = tt_pipe.forward(str(img_path), normalize=True)
