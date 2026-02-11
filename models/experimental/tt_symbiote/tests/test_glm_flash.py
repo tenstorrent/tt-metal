@@ -21,6 +21,7 @@ from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
 import transformers
+from models.experimental.tt_symbiote.core.run_config import TracedRun
 
 assert transformers.__version__.startswith("5."), "This test requires transformers version 5.0.0.dev0"
 
@@ -83,3 +84,4 @@ def test_glm(mesh_device):
     outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True)
     print(f"GLM OUTPUT: {tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:])}")
     DispatchManager.save_stats_to_file("glm_timing_stats.csv")
+    TracedRun.release_all()
