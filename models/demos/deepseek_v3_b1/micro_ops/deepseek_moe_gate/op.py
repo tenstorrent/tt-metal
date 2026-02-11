@@ -5,6 +5,10 @@
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    UnifiedCompileTimeCoreDescriptor,
+    UnifiedKernelDescriptor,
+)
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
@@ -181,63 +185,63 @@ class DeepseekMoeGateSingleCore:
         out_indices_cb_descriptor.format_descriptors[0].tile = output_indices_tile_descriptor
         out_indices_cb_descriptor.format_descriptors[0].page_size = output_indices_tile_size
 
-        # Reader kernel
-        reader_compile_time_args = [
-            input_cb,
-            bias_cb,
-            input_indices_cb,
+        # ========== UNIFIED KERNEL DESCRIPTOR ==========
+        # Core logic is in unified_kernels/deepseek_moe_gate.hpp
+        KERNEL_PATH = "models/demos/deepseek_v3_b1/micro_ops/deepseek_moe_gate/kernels/deepseek_moe_gate_kernel.cpp"
+
+        # Named compile-time args for NCRISC (reader - signals tensor-backed CBs ready)
+        ncrisc_named_compile_time_args = [
+            ("moe_gate_input_cb", input_cb),
+            ("moe_gate_bias_cb", bias_cb),
+            ("moe_gate_input_indices_cb", input_indices_cb),
         ]
 
-        reader_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/deepseek_moe_gate/kernels/deepseek_moe_gate_reader.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=all_cores,
-            compile_time_args=reader_compile_time_args,
-            config=ttnn.ReaderConfigDescriptor(),
-        )
-
-        # Writer kernel
-        writer_compile_time_args = [
-            output_cb,
-            output_indices_cb,
+        # Named compile-time args for BRISC (writer - waits for output CBs)
+        brisc_named_compile_time_args = [
+            ("moe_gate_output_cb", output_cb),
+            ("moe_gate_output_indices_cb", output_indices_cb),
         ]
 
-        writer_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/deepseek_moe_gate/kernels/deepseek_moe_gate_writer.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=all_cores,
-            compile_time_args=writer_compile_time_args,
-            config=ttnn.WriterConfigDescriptor(),
-        )
-
-        # Compute kernel
-        compute_compile_time_args = [
-            input_cb,
-            bias_cb,
-            input_indices_cb,
-            output_cb,
-            output_indices_cb,
-            float_to_uint32(eps),
-            float_to_uint32(scaling_factor),
-            enable_sigmoid,
+        # Named compile-time args for TRISC (compute - gate logic)
+        trisc_named_compile_time_args = [
+            ("moe_gate_input_cb", input_cb),
+            ("moe_gate_bias_cb", bias_cb),
+            ("moe_gate_input_indices_cb", input_indices_cb),
+            ("moe_gate_output_cb", output_cb),
+            ("moe_gate_output_indices_cb", output_indices_cb),
+            ("moe_gate_eps", float_to_uint32(eps)),
+            ("moe_gate_scaling_factor", float_to_uint32(scaling_factor)),
+            ("moe_gate_enable_sigmoid", 1 if enable_sigmoid else 0),
         ]
 
-        compute_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/deepseek_moe_gate/kernels/deepseek_moe_gate_compute.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        # Unified kernel descriptor
+        unified_kernel = UnifiedKernelDescriptor(
+            kernel_source=KERNEL_PATH,
             core_ranges=all_cores,
-            compile_time_args=compute_compile_time_args,
-            config=ttnn.ComputeConfigDescriptor(
+            ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            brisc_named_compile_time_args=brisc_named_compile_time_args,
+            trisc_named_compile_time_args=trisc_named_compile_time_args,
+            trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.HiFi4,  # Makes no difference for this operation
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
                 dst_full_sync_en=False,
             ),
+            unified_compile_time_core_descriptors=[
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="moe_gate_is_active_core",
+                    core_range=all_cores,
+                    value=1,
+                    other_value=0,
+                ),
+            ],
         )
+
+        kernel_descriptors = unified_kernel.get_kernel_descriptors()
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=[reader_kernel_descriptor, writer_kernel_descriptor, compute_kernel_descriptor],
+            kernels=kernel_descriptors.kernels,
             cbs=[
                 in_cb_descriptor,
                 bias_cb_descriptor,

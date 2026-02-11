@@ -183,6 +183,7 @@ public:
     int num_dram_channels() const override;
     uint32_t l1_size_per_core() const override;
     uint32_t dram_size_per_channel() const override;
+    int get_clock_rate_mhz() const override;
 
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
@@ -254,7 +255,6 @@ public:
     void init_command_queue_device() override;
     bool compile_fabric() override;
     void configure_fabric() override;
-    void init_fabric() override;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;

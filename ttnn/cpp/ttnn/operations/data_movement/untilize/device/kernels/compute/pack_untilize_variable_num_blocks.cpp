@@ -4,8 +4,8 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
 #include "common.cpp"
 
 void kernel_main() {

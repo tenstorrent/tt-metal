@@ -180,6 +180,7 @@ jobs:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   models-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit
@@ -208,6 +209,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   ttnn-unit-tests:
     needs: [build-artifact, generate-matrix]
@@ -222,6 +224,7 @@ jobs:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   ops-unit-tests:
     needs: [build-artifact, generate-matrix]
@@ -237,6 +240,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   metalium-smoke-tests:
     needs: [build-artifact, generate-matrix]
@@ -250,6 +254,7 @@ jobs:
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   ttnn-smoke-tests:
     needs: [build-artifact, generate-matrix]
     strategy:
@@ -262,6 +267,7 @@ jobs:
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
@@ -277,6 +283,7 @@ jobs:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   blackhole-20-cores-tests:
     needs: [build-artifact, generate-matrix]
@@ -292,6 +299,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # Multi-card post-commit tests
   blackhole-multi-card-post-commit-tests:
@@ -308,3 +316,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
