@@ -178,7 +178,8 @@ def read_wait_globals(
     """
 
     # Skipping because we cannot read NCRISC private memory on wormhole
-    if risc_name == "ncrisc" and location.device.is_wormhole():
+    # On blackhole there's an issue where we can break the device when reding from NCRISC tt-exalens:#895
+    if risc_name == "ncrisc":
         return None
 
     # If no kernel loaded, nothing to read
