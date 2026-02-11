@@ -116,6 +116,21 @@ Ensures all chips in the cluster are stable. Stress tests the Compute, Memory, a
 ./tools/scaleout/exabox/run_dispatch_tests.sh --hosts <hosts> --image <docker-image>
 ```
 
+Logs are saved to `dispatch_test_logs/` in your current directory.
+
+Analyze results with:
+```bash
+python3 tools/scaleout/exabox/analyze_dispatch_results.py dispatch_test_logs/<log-file>.log
+```
+
+The script parses the test log and provides:
+
+- **Test Results Summary**: MPI processes, total tests run, passed, failed, and skipped counts
+- **Test Details**: Lists of passed, failed, and skipped tests with failure details
+- **Warnings & Critical Errors**: Deduplicated runtime warnings and critical errors with occurrence counts
+- **Recommendations**: Actionable next steps based on test results and detected issues
+- **Final Test Result**: Overall pass/fail status with appropriate exit code
+
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
 ### Fabric Tests
@@ -137,6 +152,20 @@ The mesh shape affects how workloads are distributed across chips. Choose the sc
 ./tools/scaleout/exabox/run_fabric_tests.sh --hosts <hosts> --image <docker-image> --config 4x32
 ./tools/scaleout/exabox/run_fabric_tests.sh --hosts <hosts> --image <docker-image> --config 8x16
 ```
+
+Logs are saved to `fabric_test_logs/` in your current directory.
+
+Analyze results with:
+```bash
+python3 tools/scaleout/exabox/analyze_fabric_results.py fabric_test_logs/<log-file>.log
+```
+
+The script parses the test log and provides:
+
+- **Test Status**: Overall pass/fail status for fabric tests across all hosts
+- **Warnings & Failures**: Critical errors and runtime warnings detected during testing
+- **Recommendations**: Actionable next steps including escalation paths for persistent issues
+- **Final Test Result**: Clear pass/fail indication with appropriate exit code
 
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
@@ -212,8 +241,8 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `run_validation.sh` | Full 50-loop validation |
 | `run_dispatch_tests.sh` | Chip stability stress tests |
 | `run_fabric_tests.sh` | Fabric connectivity tests |
-| `analyze_validation_results.py` | Parse validation logs |
-| `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
+| `analyze_validation_results.py` | Parse validation logs || `analyze_dispatch_results.py` | Parse dispatch test logs |
+| `analyze_fabric_results.py` | Parse fabric test logs || `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
 
 ## Config Files
 
