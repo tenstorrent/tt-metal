@@ -19,6 +19,10 @@ on:
       product:
         required: true
         type: string # tt-metalium or tt-nn
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   metalium-basic:
@@ -56,6 +60,14 @@ jobs:
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
+
+      - name: Set up env vars for watcher
+        if: ${{ inputs.enable-watcher == true }}
+        run: |
+          echo "Enabling TT Metal Watcher"
+          echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
 
       - name: Run a test
         id: test
