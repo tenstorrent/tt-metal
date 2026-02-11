@@ -300,7 +300,6 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
                 actual = scatter_out_root[row_idx, :].float()
                 diff = torch.max(torch.abs(actual - expected)).item()
                 scatter_max_diff = max(scatter_max_diff, diff)
-                logger.info(f"Scatter output match: Core {i}, {j}: expected: {expected[:10]}, actual: {actual[:10]}")
 
         scatter_match = scatter_max_diff < 0.07
         logger.info(f"Scatter output match: {scatter_match}, max_diff: {scatter_max_diff:.4f}")
