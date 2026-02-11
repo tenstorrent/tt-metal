@@ -112,12 +112,9 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
-    // TODO: which device and which cq should this be?
     distributed::MeshCommandQueue& mesh_cq = device_tensor.device()->mesh_command_queue(cq_id_int);
-    // This breaks the no-copy rule for device tensors.
-    // The altnerative would be to add a non-const device tensor accessor.
-    auto target_tensor =
-        DeviceTensor(device_tensor.device_storage(), device_tensor.tensor_spec(), device_tensor.tensor_topology());
+    // Moves the metal device tensor out of the ttnn tensor object.
+    auto target_tensor = std::move(device_tensor).device_tensor();
     tensor_impl::copy_to_device(mesh_cq, host_tensor.host_tensor(), target_tensor);
     device_tensor = Tensor(std::move(target_tensor));
 
