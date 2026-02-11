@@ -7,11 +7,11 @@
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
-#include "llk_math_reduce_custom_api.h"
+#include "experimental/llk_math_reduce_custom_api.h"
 #endif
 
 #ifdef TRISC_UNPACK
-#include "llk_unpack_AB_reduce_custom_api.h"
+#include "experimental/llk_unpack_AB_reduce_custom_api.h"
 #endif
 
 #ifdef TRISC_PACK
