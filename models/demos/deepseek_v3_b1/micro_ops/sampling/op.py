@@ -43,7 +43,6 @@ class SamplingOp:
         scores_tensor,
         indices_tensor,
         output_index_tensor,
-        gather_buffer_tensor,
         k: int,
         p: float,
         final_core_coord=None,
@@ -56,7 +55,6 @@ class SamplingOp:
             scores_tensor: [1, 160 * num_cores] bfloat16, WIDTH_SHARDED with shard shape [1, 160].
             indices_tensor: [1, 160 * num_cores] uint32, WIDTH_SHARDED with shard shape [1, 160].
             output_index_tensor: [1, 1] uint32, sharded on final core.
-            gather_buffer_tensor: [1, 4 * num_cores] uint32, sharded on final core.
             k: sampling k; currently only k=1 supported.
             p: top-p threshold (unused for k=1).
             final_core_coord: target output core coordinate (validated, optional).
@@ -71,21 +69,15 @@ class SamplingOp:
         scores_shard_spec = scores_tensor.memory_config().shard_spec
         indices_shard_spec = indices_tensor.memory_config().shard_spec
         output_shard_spec = output_index_tensor.memory_config().shard_spec
-        gather_shard_spec = gather_buffer_tensor.memory_config().shard_spec
 
         all_cores = scores_shard_spec.grid
         num_cores = all_cores.num_cores()
         assert num_cores >= 1, "Sampling requires at least one active core"
         assert indices_shard_spec.grid == all_cores, "Scores and indices must be sharded on the same core grid"
         assert output_shard_spec.grid.num_cores() == 1, "Output tensor must be sharded on a single final core"
-        assert gather_shard_spec.grid.num_cores() == 1, "Gather buffer must be sharded on a single final core"
-        assert (
-            output_shard_spec.grid == gather_shard_spec.grid
-        ), "Output and gather buffer must share the same final core"
         assert scores_tensor.dtype == ttnn.bfloat16, "Scores tensor must be bfloat16"
         assert indices_tensor.dtype == ttnn.uint32, "Indices tensor must be uint32"
         assert output_index_tensor.dtype == ttnn.uint32, "Output index tensor must be uint32"
-        assert gather_buffer_tensor.dtype == ttnn.uint32, "Gather buffer tensor must be uint32"
         assert tuple(scores_shard_spec.shape) == (
             1,
             160,
@@ -106,14 +98,6 @@ class SamplingOp:
             1,
             1,
         ), f"Expected output shape (1, 1), got {output_index_tensor.shape}"
-        assert tuple(gather_buffer_tensor.shape) == (
-            1,
-            4 * num_cores,
-        ), f"Expected gather buffer shape (1, {4 * num_cores}), got {gather_buffer_tensor.shape}"
-        assert tuple(gather_shard_spec.shape) == (
-            1,
-            4 * num_cores,
-        ), f"Expected gather shard shape (1, {4 * num_cores}), got {gather_shard_spec.shape}"
 
         output_core = output_shard_spec.grid.ranges()[0].start
         if final_core_coord is not None:
@@ -136,6 +120,7 @@ class SamplingOp:
         expected_remote_incs = num_cores - 1 if final_is_sender else num_cores
 
         winner_cb = 2
+        gather_cb = 3
         semaphore_id = 0
         winner_page_bytes = 16
 
@@ -145,6 +130,7 @@ class SamplingOp:
             ("sampling_num_senders", num_cores),
             ("sampling_expected_remote_incs", expected_remote_incs),
             ("sampling_winner_cb", winner_cb),
+            ("sampling_gather_cb", gather_cb),
             ("sampling_receiver_semaphore_id", semaphore_id),
         ]
 
@@ -156,7 +142,6 @@ class SamplingOp:
                 int(scores_tensor.buffer_address()),
                 int(indices_tensor.buffer_address()),
                 int(output_index_tensor.buffer_address()),
-                int(gather_buffer_tensor.buffer_address()),
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).x),
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).y),
             ],
@@ -193,6 +178,16 @@ class SamplingOp:
             core_ranges=all_cores,
             format_descriptors=[winner_cb_format],
         )
+        gather_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=gather_cb,
+            data_format=ttnn.uint32,
+            page_size=winner_page_bytes,
+        )
+        gather_cb_descriptor = ttnn.CBDescriptor(
+            total_size=winner_page_bytes * num_cores,
+            core_ranges=all_cores,
+            format_descriptors=[gather_cb_format],
+        )
 
         receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=semaphore_id,
@@ -202,12 +197,9 @@ class SamplingOp:
 
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
-            cbs=[winner_cb_descriptor],
+            cbs=[winner_cb_descriptor, gather_cb_descriptor],
             semaphores=[receiver_semaphore_descriptor],
         )
 
-        ttnn.generic_op(
-            [scores_tensor, indices_tensor, output_index_tensor, gather_buffer_tensor],
-            program_descriptor,
-        )
+        ttnn.generic_op([scores_tensor, indices_tensor, output_index_tensor], program_descriptor)
         return output_index_tensor

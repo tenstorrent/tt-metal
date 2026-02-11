@@ -28,17 +28,18 @@ void kernel_main() {
     constexpr uint32_t num_senders = get_named_compile_time_arg_val("sampling_num_senders");
     constexpr uint32_t expected_remote_incs = get_named_compile_time_arg_val("sampling_expected_remote_incs");
     constexpr uint32_t winner_cb = get_named_compile_time_arg_val("sampling_winner_cb");
+    constexpr uint32_t gather_cb = get_named_compile_time_arg_val("sampling_gather_cb");
     constexpr uint32_t semaphore_id = get_named_compile_time_arg_val("sampling_receiver_semaphore_id");
 
     const uint32_t scores_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t output_addr = get_common_arg_val<uint32_t>(2);
-    const uint32_t gather_addr = get_common_arg_val<uint32_t>(3);
-    const uint32_t final_noc_x = get_common_arg_val<uint32_t>(4);
-    const uint32_t final_noc_y = get_common_arg_val<uint32_t>(5);
+    const uint32_t final_noc_x = get_common_arg_val<uint32_t>(3);
+    const uint32_t final_noc_y = get_common_arg_val<uint32_t>(4);
 
     const uint32_t sender_idx = get_named_compile_time_arg_val("sampling_sender_idx");
     const uint32_t slot_offset = sender_idx * winner_page_bytes;
+    const uint32_t gather_addr = get_write_ptr(gather_cb);
 
     if constexpr (Core::is_active_core) {
         auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_addr);

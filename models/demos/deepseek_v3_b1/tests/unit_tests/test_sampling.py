@@ -27,7 +27,6 @@ def test_sampling_argmax_single_device_101_cores(device):
     scores_shape = (1, 160 * num_cores)
     input_shard_shape = (1, 160)
     output_shape = (1, 1)
-    gather_shape = (1, 4 * num_cores)
     tile_1x32 = ttnn.Tile([1, 32])
 
     logger.info("Testing sampling argmax: single-device/101-cores, 160 values per core")
@@ -56,17 +55,6 @@ def test_sampling_argmax_single_device_101_cores(device):
         ttnn.BufferType.L1,
         output_shard_spec,
     )
-    gather_shard_spec = ttnn.ShardSpec(
-        final_core_grid,
-        gather_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    gather_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        gather_shard_spec,
-    )
-
     ttnn_scores = ttnn.from_torch(
         torch_scores,
         dtype=ttnn.bfloat16,
@@ -91,19 +79,11 @@ def test_sampling_argmax_single_device_101_cores(device):
         device=device,
         memory_config=output_mem_config,
     )
-    ttnn_gather_buffer = ttnn.from_torch(
-        torch.zeros(gather_shape, dtype=torch.uint32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=gather_mem_config,
-    )
 
     ttnn_result = SamplingOp.op(
         scores_tensor=ttnn_scores,
         indices_tensor=ttnn_indices,
         output_index_tensor=ttnn_output_index,
-        gather_buffer_tensor=ttnn_gather_buffer,
         k=1,
         p=1.0,
         final_core_coord=final_core,
