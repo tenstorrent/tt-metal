@@ -41,10 +41,14 @@ def prepare_expert_weights(
         Transformed weights tensor [K, 1, B*S, H] in TILE layout, ready for
         element-wise multiplication with expert outputs
     """
-    topk_expert_weights = ttnn.reshape(topk_expert_weights, (-1, 1, 1, num_experts_per_tok))
+    # Prepare routing weights for broadcasting:
+    # topk_expert_weights is [1, 1, tokens_per_device, K] (tokens on dim -2)
+    # We want [K, 1, tokens_per_device, 1] so it can broadcast across hidden_size.
+    # to_layout creates new tensor - safe to deallocate original
     topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-    topk_weights_rm = ttnn.repeat(topk_weights_rm, ttnn.Shape((1, 1, hidden_size, 1)))
-    topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 0, 2))
+    ttnn.deallocate(topk_expert_weights)
+    # permute to [K, 1, tokens_per_device, 1]
+    topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0))
     topk_weights_reshaped = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
     ttnn.deallocate(topk_weights_rm)
     return topk_weights_reshaped
@@ -300,12 +304,18 @@ def decode_forward(
     # Reshape hidden states: put all tokens on dim -2
     hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens_per_device, config.hidden_size))
 
-    # typecast creates new tensors
+    # typecast creates new tensors - safe to deallocate originals
+    topk_expert_indices_orig = topk_expert_indices
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint32)
-    topk_expert_indices = ttnn.reshape(topk_expert_indices, (-1, 1, 1, config.num_experts_per_tok))
-    topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
+    ttnn.deallocate(topk_expert_indices_orig)
 
-    topk_expert_weights = ttnn.reshape(topk_expert_weights, (-1, 1, 1, config.num_experts_per_tok))
+    # Reshape indices: put all tokens on dim -2
+    topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, config.num_experts_per_tok))
+    topk_expert_indices_u32 = topk_expert_indices
+    topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
+    ttnn.deallocate(topk_expert_indices_u32)
+
+    topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens_per_device, config.num_experts_per_tok))
 
     num_dispatch_devices = (
         mesh_device.shape[dispatch_config.cluster_axis]
