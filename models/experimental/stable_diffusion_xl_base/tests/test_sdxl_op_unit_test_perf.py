@@ -5,6 +5,7 @@
 import pytest
 import ttnn
 
+from models.common.utility_functions import is_watcher_enabled
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 MARGIN = 0.015
@@ -13,6 +14,9 @@ USE_PERF_TEST_MODE = True
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_dram_group_norm_welford_reciprocal_vae(device):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test with watcher enabled due to code size being bloated")
+
     from tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM import test_group_norm_DRAM
 
     test_group_norm_DRAM(device, 1, 256, 256, 256, 32, 4, 8, 8, "welford_reciprocal", perf_test_mode=USE_PERF_TEST_MODE)
