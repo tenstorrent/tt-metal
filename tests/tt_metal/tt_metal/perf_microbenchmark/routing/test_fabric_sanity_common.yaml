@@ -139,6 +139,7 @@ Tests:
       - type: all_to_all
 
   - name: "FlowControlAllToAllLinear"
+    skip: [watcher]
     sync: true
     enable_flow_control: true
     fabric_setup:
