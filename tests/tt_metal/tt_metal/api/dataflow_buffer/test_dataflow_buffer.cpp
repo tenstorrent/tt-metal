@@ -131,7 +131,7 @@ void run_single_dfb_program(
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
             logical_core,
             experimental::quasar::QuasarDataMovementConfig{
-                .num_processors_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
+                .num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
     } else {
         producer_kernel = CreateKernel(
             program,
@@ -156,7 +156,7 @@ void run_single_dfb_program(
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
             logical_core,
             experimental::quasar::QuasarDataMovementConfig{
-                .num_processors_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
+                .num_threads_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
     } else {
         consumer_kernel = CreateKernel(
             program,
@@ -217,7 +217,7 @@ void run_in_dfb_out_dfb_program(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         logical_core,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_processors_per_cluster = dm2tensix_config.num_producers, .compile_args = producer_cta});
+            .num_threads_per_cluster = dm2tensix_config.num_producers, .compile_args = producer_cta});
 
     uint32_t num_entries_per_unpacker = dm2tensix_config.num_entries / dm2tensix_config.num_consumers;
     uint32_t num_entries_per_packer = tensix2dm_config.num_entries / tensix2dm_config.num_producers;
@@ -238,7 +238,7 @@ void run_in_dfb_out_dfb_program(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
         logical_core,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_processors_per_cluster = tensix2dm_config.num_consumers, .compile_args = consumer_cta});
+            .num_threads_per_cluster = tensix2dm_config.num_consumers, .compile_args = consumer_cta});
 
     auto input_dfb_id = experimental::dfb::CreateDataflowBuffer(program, logical_core, dm2tensix_config);
     auto output_dfb_id = experimental::dfb::CreateDataflowBuffer(program, logical_core, tensix2dm_config);
