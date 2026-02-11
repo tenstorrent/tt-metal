@@ -239,10 +239,11 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         // ensure correct memory config
         // TODO: - to clarify: by overwriting const object (to sort out - where args.output_mem_config could be
         // established correctly?)
+        // TODO: as a guess some constness need to be reworked
         if (args.output_mem_config == ttnn::DRAM_MEMORY_CONFIG ||   // default if it came empty
             !args.output_mem_config.nd_shard_spec().has_value()) {  // output for nd sharding should be the same
             std::cout << "ensure correct memory config\n";
-            const_cast<MemoryConfig&>(args.output_mem_config) = output_mem_config;
+            const_cast<decltype(args.output_mem_config)&>(args.output_mem_config) = output_mem_config;
         }
         return TensorSpec(
             shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), output_mem_config));
