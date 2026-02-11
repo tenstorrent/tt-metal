@@ -20,6 +20,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
+#include "utils/memory_utils.hpp"
 
 using ttml::autograd::TensorPtr;
 
@@ -29,6 +30,8 @@ using DataLoader = ttml::datasets::DataLoader<
     ttml::datasets::InMemoryFloatVecDataset,
     std::function<BatchType(std::vector<DatasetSample>&& samples)>,
     BatchType>;
+
+using Model = std::shared_ptr<ttml::modules::ModuleBase>;
 
 namespace {
 bool parse_mesh_shape(const std::string& mesh_shape_str, uint32_t& rows, uint32_t& cols) {
@@ -45,6 +48,26 @@ bool parse_mesh_shape(const std::string& mesh_shape_str, uint32_t& rows, uint32_
     }
 
     return rows > 0 && cols > 0;
+}
+
+uint64_t get_number_of_parameters(Model& model, bool tp) {
+    auto contains = [](const std::string& str, const std::string& substr) {
+        return str.find(substr) != std::string::npos;
+    };
+    auto parameters = model->parameters();
+    uint64_t num_params = 0;
+    for (const auto& [name, tensor_ptr] : parameters) {
+        auto tensor = tensor_ptr->get_value();
+        auto params_in_tensor = tensor.logical_volume();
+        if (tp && (contains(name, "fc") || contains(name, "linear") || contains(name, "mlp/w"))) {
+            auto tp_size = ttml::autograd::ctx().get_parallelism_context().get_tp_size();
+            num_params += params_in_tensor * tp_size;
+        } else {
+            num_params += params_in_tensor;
+        }
+    }
+
+    return num_params;
 }
 }  // namespace
 
@@ -93,6 +116,10 @@ int main(int argc, char** argv) {
     // decided automatically: data parallel will always be the first one if
     // present, the second will be cp (if present, if dp is disabled --- cp will be the first one), then pp,
     // tp and ep.
+
+    // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
+    // of model that doesn't fit in the memory of the device.
+    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
 
     ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     ttml::autograd::ctx().open_device(logical_mesh_shape);
@@ -211,6 +238,8 @@ int main(int argc, char** argv) {
     }
     fmt::print("Batch size: {}, DP groups: {}, TP size: {}\n", batch_size, dp_size, tp_size);
 
+    ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
+
     // Configure optimizer
     float learning_rate = 0.1F * num_targets * (batch_size / 128.F); /* Denys's lr*/
     if (!use_row_parallel) {
@@ -219,9 +248,19 @@ int main(int argc, char** argv) {
         learning_rate /= tp_size;
     }
 
+    fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, /*enable_tp=*/true));
+
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
 
+    ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
+
+    bool is_everything_compiled = false;
+    auto memory_snapshot = [&is_everything_compiled](const std::string& name) {
+        if (!is_everything_compiled) {
+            ttml::utils::MemoryUsageTracker::snapshot(name);
+        }
+    };
 
     auto get_loss_value = [](const TensorPtr& loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
@@ -242,6 +281,7 @@ int main(int argc, char** argv) {
 
             // Forward pass
             auto output = (*model)(data);
+            memory_snapshot("FORWARD_PASS");
             auto loss = ttml::ops::mse_loss(output, targets);
 
             // Log loss
@@ -253,9 +293,18 @@ int main(int argc, char** argv) {
             // Synchronize gradients across DP groups (average gradients for data parallelism)
             ttml::core::distributed::synchronize_gradients(model->parameters());
 
+            memory_snapshot("BACKWARD_PASS");
+
             // Optimizer step
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
+            if (!is_everything_compiled) {
+                ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
+                is_everything_compiled = true;
+                ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
+                ttml::utils::MemoryUsageTracker::print_memory_usage();
+                ttml::utils::MemoryUsageTracker::clear();
+            }
         }
     }
 }

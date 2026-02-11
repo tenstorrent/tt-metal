@@ -16,6 +16,7 @@
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
+#include "utils/memory_utils.hpp"
 
 using ttml::autograd::TensorPtr;
 
@@ -43,6 +44,10 @@ int main() {
 
     auto training_dataset = ttml::datasets::make_regression(training_params);
 
+    // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
+    // of model that doesn't fit in the memory of the device.
+    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
+
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
@@ -69,9 +74,21 @@ int main() {
 
     auto model = ttml::models::linear_regression::create(num_features, num_targets);
 
+    // fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
+    ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
+
     float learning_rate = 0.1F * num_targets * (batch_size / 128.F);
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
+
+    ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
+
+    bool is_everything_compiled = false;
+    auto memory_snapshot = [&is_everything_compiled](const std::string& name) {
+        if (!is_everything_compiled) {
+            ttml::utils::MemoryUsageTracker::snapshot(name);
+        }
+    };
 
     int training_step = 0;
     const int num_epochs = 10;
@@ -79,12 +96,22 @@ int main() {
         for (const auto& [data, targets] : train_dataloader) {
             optimizer.zero_grad();
             auto output = (*model)(data);
+            memory_snapshot("FORWARD_PASS");
             auto loss = ttml::ops::mse_loss(output, targets);
             auto loss_float = ttml::core::to_vector(loss->get_value())[0];
             fmt::print("Step: {} Loss: {}\n", training_step++, loss_float);
             loss->backward();
+            memory_snapshot("BACKWARD_PASS");
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
+
+            if (!is_everything_compiled) {
+                ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
+                is_everything_compiled = true;
+                ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
+                ttml::utils::MemoryUsageTracker::print_memory_usage();
+                ttml::utils::MemoryUsageTracker::clear();
+            }
         }
     }
 }

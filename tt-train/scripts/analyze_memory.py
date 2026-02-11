@@ -10,6 +10,9 @@ import argparse
 import re
 import sys
 from typing import Dict, List, Optional, Tuple
+import csv
+import datetime
+from pathlib import Path
 
 try:
     import matplotlib.pyplot as plt
@@ -523,6 +526,14 @@ def main():
         )
         if breakdown:
             visualization_data.append((name, breakdown))
+
+    log_filename = Path(args.logs).stem
+    with open(f"{log_filename}.csv", "w", newline="") as csvfile:
+        fieldnames = breakdown.keys()
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows([breakdown])
+        print(f"\nWritten {log_filename}.csv")
 
     print(f"\n{'='*80}")
     print("Analysis complete")
