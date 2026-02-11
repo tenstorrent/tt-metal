@@ -72,7 +72,7 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
+              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 single-step with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -261,7 +261,7 @@ jobs:
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
-              "name": "[BH-DB][v1] Llama-3.1-8B-Instruct",
+              "name": "[BH-DB][v1] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 5,
