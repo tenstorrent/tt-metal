@@ -542,14 +542,6 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
     TT_THROW("Unreachable");
 }
 
-Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
-    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "to_host: tensor is not on device.");
-
-    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
-    distributed::MeshCommandQueue& mesh_cq = tensor.device()->mesh_command_queue(cq_id_int);
-    return Tensor(to_host(mesh_cq, tensor.device_tensor(), blocking));
-}
-
 HostTensor to_host(distributed::MeshCommandQueue& queue, const DeviceTensor& tensor, bool blocking) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.get_storage();
@@ -642,17 +634,6 @@ DeviceTensor to_device_mesh_buffer(
     return DeviceTensor(write_to_mesh_buffer(queue, host_storage.buffer(), mesh_buffer), tensor_spec, tensor_topology);
 }
 
-Tensor to_device(
-    const Tensor& tensor,
-    distributed::MeshDevice* mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
-    TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
-    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
-    distributed::MeshCommandQueue& mesh_cq = mesh_device->mesh_command_queue(cq_id_int);
-    return Tensor(to_device(mesh_cq, tensor.host_tensor(), memory_config));
-}
-
 DeviceTensor to_device(
     distributed::MeshCommandQueue& queue,
     const HostTensor& tensor,
@@ -721,19 +702,6 @@ void copy_to_host(
 }
 
 void copy_to_host(
-    const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
-    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Source tensor is not on device.");
-    TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Destination tensor is not on host.");
-
-    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
-    distributed::MeshCommandQueue& mesh_cq = device_tensor.device()->mesh_command_queue(cq_id_int);
-
-    HostTensor target_tensor = host_tensor.host_tensor();
-    copy_to_host(mesh_cq, device_tensor.device_tensor(), target_tensor, blocking);
-    host_tensor = Tensor(std::move(target_tensor));
-}
-
-void copy_to_host(
     distributed::MeshCommandQueue& queue,
     const Tensor& device_tensor,
     std::byte* dst,
@@ -746,21 +714,6 @@ void copy_to_host(
             .host_data(dst)
             .region(region)};
     queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer(), blocking);
-}
-
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
-    TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Source tensor is not on host.");
-    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor is not on device.");
-
-    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
-    // TODO: which device and which cq should this be?
-    distributed::MeshCommandQueue& mesh_cq = device_tensor.device()->mesh_command_queue(cq_id_int);
-    // This breaks the no-copy rule for device tensors.
-    // The altnerative would be to add a non-const device tensor accessor.
-    auto target_tensor =
-        DeviceTensor(device_tensor.device_storage(), device_tensor.tensor_spec(), device_tensor.tensor_topology());
-    copy_to_device(mesh_cq, host_tensor.host_tensor(), target_tensor);
-    device_tensor = Tensor(std::move(target_tensor));
 }
 
 void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, DeviceTensor& device_tensor) {
