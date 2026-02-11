@@ -22,7 +22,7 @@
 using namespace tt::tt_fabric::linear::experimental;
 #endif
 
-#ifdef USE_MUX
+#ifdef IS_IN0
 void compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
@@ -79,7 +79,7 @@ void compute_actual_k_block(
         k_right_start_tile = (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block +
                              k_tiles_per_block / 2;
     }
-#ifdef USE_MUX
+#ifdef IS_IN0
     if (device_iter > 0 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         if (is_injector_core) {

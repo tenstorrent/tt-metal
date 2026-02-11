@@ -16,10 +16,13 @@ struct AllGatherMinimalMatmulAsyncProgramFactory {
         uint32_t num_cores;
         std::vector<CoreCoord> cores;
         tt::tt_metal::KernelHandle in0_sender_kernels_id;
-        tt::tt_metal::KernelHandle in0_receiver_kernels_id;
+        tt::tt_metal::KernelHandle in0_receiver_fabric_kernels_id;
+        tt::tt_metal::KernelHandle in0_receiver_no_fabric_kernels_id;
         tt::tt_metal::KernelHandle in1_sender_kernels_id;
         tt::tt_metal::KernelHandle in1_receiver_kernels_id;
         bool transpose_core_grid;
+        uint32_t in1_size;
+        ;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
