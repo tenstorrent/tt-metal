@@ -544,21 +544,18 @@ void kernel_main() {
         constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
         unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
     }
-    if constexpr (Core::is_matmul_core) {
-        // Matmul weights
-        constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
+    if constexpr (Core::is_matmul2_core) {
+        // Merged weights CB (contains both matmul and matmul2 weights in one buffer)
+        // matmul_in1 and matmul2_in1 both point to the same merged CB.
+        // One push covers the entire merged shard: buffer1 tiles + buffer2 tiles.
+        constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
         constexpr uint32_t matmul_k_num_tiles = get_named_compile_time_arg_val("matmul_k_num_tiles");
         constexpr uint32_t matmul_out_w_per_core = get_named_compile_time_arg_val("matmul_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul_in1, matmul_k_num_tiles * matmul_out_w_per_core);
-    }
-    if constexpr (Core::is_matmul2_core) {
-        // Matmul2 CB indices and parameters from named compile-time args
-        constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
         constexpr uint32_t matmul2_k_num_tiles = get_named_compile_time_arg_val("matmul2_k_num_tiles");
         constexpr uint32_t matmul2_out_w_per_core = get_named_compile_time_arg_val("matmul2_out_w_per_core");
-
-        // Matmul2 weights (on all cores in main grid, 4 tiles per core)
-        unified_kernels::setup_sharded_buffer(matmul2_in1, matmul2_k_num_tiles * matmul2_out_w_per_core);
+        constexpr uint32_t merged_total_tiles =
+            (matmul_k_num_tiles * matmul_out_w_per_core) + (matmul2_k_num_tiles * matmul2_out_w_per_core);
+        unified_kernels::setup_sharded_buffer(matmul2_in1, merged_total_tiles);
     }
     if constexpr (Core::is_qnope_core) {
         // Matmul3 CB indices and parameters from named compile-time args

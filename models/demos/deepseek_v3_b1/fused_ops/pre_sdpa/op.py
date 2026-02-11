@@ -159,6 +159,7 @@ class PreSDPA:
         matmul_weights_tensor,
         rmsnorm2_gamma_tensor,
         matmul2_weights_tensor,
+        merged_weights_tensor,
         matmul3_weights_tensor,
         sin_tensor,
         cos_tensor,
@@ -222,6 +223,7 @@ class PreSDPA:
         matmul_weights_tensors_per_device = ttnn.get_device_tensors(matmul_weights_tensor)
         rmsnorm2_gamma_tensors_per_device = ttnn.get_device_tensors(rmsnorm2_gamma_tensor)
         matmul2_weights_tensors_per_device = ttnn.get_device_tensors(matmul2_weights_tensor)
+        merged_weights_tensors_per_device = ttnn.get_device_tensors(merged_weights_tensor)
         matmul3_weights_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor)
         sin_tensors_per_device = ttnn.get_device_tensors(sin_tensor)
         cos_tensors_per_device = ttnn.get_device_tensors(cos_tensor)
@@ -512,6 +514,7 @@ class PreSDPA:
         krope_output_cb = 27  # Output CB for KV Cache Branch RoPE
         krope_cos_cb = 28  # Cos CB for RoPE
         krope_sin_cb = 29  # Sin CB for RoPE
+        merged_weights_cb = 31  # Merged matmul + matmul2 weights CB
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -584,7 +587,7 @@ class PreSDPA:
         # Matmul compile-time args (different per RISC, only pass what's used)
         # NCRISC: in1, num_tiles
         matmul_ncrisc_named_compile_time_args = [
-            ("matmul_in1", matmul_weights_cb),
+            ("matmul_in1", merged_weights_cb),
             ("matmul_k_num_tiles", matmul_num_tiles_k),
             ("matmul_out_w_per_core", matmul1_out_w),
         ]
@@ -595,7 +598,7 @@ class PreSDPA:
         # TRISC: in0, in1, out, num_tiles, out_w_per_core
         matmul_trisc_named_compile_time_args = [
             ("matmul_in0", matmul_input_cb),
-            ("matmul_in1", matmul_weights_cb),
+            ("matmul_in1", merged_weights_cb),
             ("matmul_out", matmul_output_cb),
             ("matmul_k_num_tiles", matmul_num_tiles_k),
             ("matmul_out_w_per_core", matmul1_out_w),
@@ -605,7 +608,7 @@ class PreSDPA:
         # NCRISC: in1, num_tiles, rmsnorm2_output_cb (for copy to matmul2_input)
         matmul2_ncrisc_named_compile_time_args = [
             ("matmul2_in0", matmul2_input_cb),
-            ("matmul2_in1", matmul2_weights_cb),
+            ("matmul2_in1", merged_weights_cb),
             ("matmul2_out", matmul2_output_cb),
             ("matmul2_k_num_tiles", matmul2_num_tiles_k),
             ("matmul2_out_w_per_core", matmul2_out_w),
@@ -619,7 +622,7 @@ class PreSDPA:
         # TRISC: in0, in1, out, num_tiles, out_w_per_core
         matmul2_trisc_named_compile_time_args = [
             ("matmul2_in0", matmul2_input_cb),
-            ("matmul2_in1", matmul2_weights_cb),
+            ("matmul2_in1", merged_weights_cb),
             ("matmul2_out", matmul2_output_cb),
             ("matmul2_k_num_tiles", matmul2_num_tiles_k),
             ("matmul2_out_w_per_core", matmul2_out_w),
@@ -1007,6 +1010,7 @@ class PreSDPA:
                 matmul_weights_tensor_device = matmul_weights_tensors_per_device[device_idx]
                 rmsnorm2_gamma_tensor_device = rmsnorm2_gamma_tensors_per_device[device_idx]
                 matmul2_weights_tensor_device = matmul2_weights_tensors_per_device[device_idx]
+                merged_weights_tensor_device = merged_weights_tensors_per_device[device_idx]
                 matmul3_weights_tensor_device = matmul3_weights_tensors_per_device[device_idx]
                 cos_tensor_device = cos_tensors_per_device[device_idx]
                 sin_tensor_device = sin_tensors_per_device[device_idx]
@@ -1232,6 +1236,11 @@ class PreSDPA:
                 # CB: Matmul2 weights (created from sharded tensor, 4 tiles per core)
                 matmul2_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul2_weights_cb, matmul2_weights_tensor_device
+                )
+
+                # CB 31: Merged matmul + matmul2 weights (created from sharded tensor on 12x8 grid)
+                merged_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    merged_weights_cb, merged_weights_tensor_device
                 )
 
                 # CB 11: Matmul2 output buffer (dynamically allocated)
@@ -1705,6 +1714,7 @@ class PreSDPA:
                     krope_output_cb_descriptor,  # CB 27: KV Cache Branch RoPE output
                     krope_cos_cb_descriptor,  # CB 28: Cos (sharded tensor)
                     krope_sin_cb_descriptor,  # CB 29: Sin (sharded tensor)
+                    merged_weights_cb_descriptor,  # CB 31: Merged matmul + matmul2 weights
                 ]
                 if not skip_ccl:
                     cbs_list.append(bcast_pkt_cb_descriptor)
@@ -1753,6 +1763,7 @@ class PreSDPA:
                 krope_sin_tensor,
                 dkv_matmul_weights_tensor,
                 dkv_rmsnorm_gamma_tensor,
+                merged_weights_tensor,
                 output_tensor,
             ],
             mesh_program_descriptor,
