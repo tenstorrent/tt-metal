@@ -69,7 +69,7 @@ constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_ar
 constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 31);
 constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 32);
 
-// Special marker after stream IDs
+// Special marker after physical stream IDs
 constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 33;
 constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
 static_assert(
@@ -77,11 +77,61 @@ static_assert(
     "Stream IDs end marker not found. This implies some arguments were misaligned between host and device. Double "
     "check the CT args.");
 
-// Maximum channel counts (from builder_config::num_max_sender_channels and builder_config::num_max_receiver_channels)
-constexpr size_t MAX_NUM_SENDER_CHANNELS_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+// Maximum channel counts come FIRST after marker (so device knows array sizes before reading semantic streams)
+constexpr size_t MAX_NUM_SENDER_CHANNELS_IDX = STREAM_IDS_END_MARKER_IDX + 1;  // Index 34
 constexpr size_t MAX_NUM_SENDER_CHANNELS = get_compile_time_arg_val(MAX_NUM_SENDER_CHANNELS_IDX);
-constexpr size_t MAX_NUM_RECEIVER_CHANNELS_IDX = MAX_NUM_SENDER_CHANNELS_IDX + 1;
+constexpr size_t MAX_NUM_RECEIVER_CHANNELS_IDX = MAX_NUM_SENDER_CHANNELS_IDX + 1;  // Index 35
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(MAX_NUM_RECEIVER_CHANNELS_IDX);
+
+// Now semantic stream IDs start AFTER the max channel counts
+// Total semantic streams: 2 (arrival notify) + MAX_NUM_SENDER_CHANNELS (completions) + MAX_NUM_SENDER_CHANNELS (acks)
+constexpr size_t SEMANTIC_STREAM_IDS_ACTUAL_START_IDX = MAX_NUM_RECEIVER_CHANNELS_IDX + 1;  // Index 36
+constexpr size_t NUM_SEMANTIC_STREAM_IDS = 2 + 2 * MAX_NUM_SENDER_CHANNELS;
+
+// ============================================================================
+// Semantic Stream IDs - Assigned by HOST based on configuration
+// ============================================================================
+// These streams are computed by the builder based on enable_first_level_ack
+// and passed as additional CT args after the marker and max channel counts.
+
+// Packet arrival notification streams (per receiver channel / VC)
+// Builder assigns based on: enable_ack ? to_sender_packets_completed : to_receiver_packets_sent
+constexpr uint32_t receiver_ch0_pkt_arrival_notify_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 0);
+constexpr uint32_t receiver_ch1_pkt_arrival_notify_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 1);
+
+// Completion credit streams (per sender channel) - builder assigns to_sender_packets_completed
+constexpr uint32_t sender_ch0_completion_credit_id = get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2);
+constexpr uint32_t sender_ch1_completion_credit_id = get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 3);
+constexpr uint32_t sender_ch2_completion_credit_id = get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 4);
+constexpr uint32_t sender_ch3_completion_credit_id = get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 5);
+constexpr uint32_t sender_ch4_completion_credit_id = get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 6);
+constexpr uint32_t sender_ch5_completion_credit_id = get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 7);
+constexpr uint32_t sender_ch6_completion_credit_id = get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 8);
+constexpr uint32_t sender_ch7_completion_credit_id = get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 9);
+constexpr uint32_t sender_ch8_completion_credit_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 10);  // For Z-router
+
+// First-level ACK streams (per sender channel) - builder assigns to_sender_packets_acked
+constexpr uint32_t sender_ch0_first_level_ack_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2 + MAX_NUM_SENDER_CHANNELS + 0);
+constexpr uint32_t sender_ch1_first_level_ack_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2 + MAX_NUM_SENDER_CHANNELS + 1);
+constexpr uint32_t sender_ch2_first_level_ack_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2 + MAX_NUM_SENDER_CHANNELS + 2);
+constexpr uint32_t sender_ch3_first_level_ack_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2 + MAX_NUM_SENDER_CHANNELS + 3);
+constexpr uint32_t sender_ch4_first_level_ack_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2 + MAX_NUM_SENDER_CHANNELS + 4);
+constexpr uint32_t sender_ch5_first_level_ack_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2 + MAX_NUM_SENDER_CHANNELS + 5);
+constexpr uint32_t sender_ch6_first_level_ack_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2 + MAX_NUM_SENDER_CHANNELS + 6);
+constexpr uint32_t sender_ch7_first_level_ack_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2 + MAX_NUM_SENDER_CHANNELS + 7);
+constexpr uint32_t sender_ch8_first_level_ack_id =
+    get_compile_time_arg_val(SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + 2 + MAX_NUM_SENDER_CHANNELS + 8);  // For Z-router
 // VC0 and VC1 channel counts depend on router type:
 // Z_ROUTER: 5 VC0 + 4 VC1 = 9 total
 // MESH: 4 VC0 + 4 VC1 = 8 total (with some unused)
@@ -90,25 +140,27 @@ constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = (MAX_NUM_SENDER_CHANNELS >= 9) ? 
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = MAX_NUM_SENDER_CHANNELS - MAX_NUM_SENDER_CHANNELS_VC0;  // Remainder
 constexpr size_t VC1_SENDER_CHANNEL_START = MAX_NUM_SENDER_CHANNELS_VC0;
 
-// Downstream tensix connections argument (after stream IDs, marker, and max channel counts)
-constexpr size_t NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX = MAX_NUM_RECEIVER_CHANNELS_IDX + 1;
+// Downstream tensix connections argument (after marker, max channel counts, and ALL semantic streams)
+constexpr size_t NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX =
+    SEMANTIC_STREAM_IDS_ACTUAL_START_IDX + NUM_SEMANTIC_STREAM_IDS;  // Index 36 + (2 + 2*MAX_NUM_SENDER_CHANNELS)
 constexpr uint32_t num_ds_or_local_tensix_connections =
     get_compile_time_arg_val(NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX);
 
-// Main configuration arguments (after stream IDs, marker, max channel counts, and downstream tensix connections)
-constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX + 1;
+// Main configuration arguments (after stream IDs, marker, semantic streams, max channel counts, and downstream tensix
+// connections)
+constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX + 1;  // Index 55
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
-constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
+constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;  // Index 56
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
-constexpr size_t NUM_FORWARDING_PATHS_CT_ARG_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_IDX + 1;
+constexpr size_t NUM_FORWARDING_PATHS_CT_ARG_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_IDX + 1;  // Index 57
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = get_compile_time_arg_val(NUM_FORWARDING_PATHS_CT_ARG_IDX);
-constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX = NUM_FORWARDING_PATHS_CT_ARG_IDX + 1;
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX = NUM_FORWARDING_PATHS_CT_ARG_IDX + 1;  // Index 58
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = get_compile_time_arg_val(NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX);
-constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1_CT_ARG_IDX = NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX + 1;
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1_CT_ARG_IDX = NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX + 1;  // Index 59
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1 = get_compile_time_arg_val(NUM_DOWNSTREAM_SENDERS_VC1_CT_ARG_IDX);
-constexpr size_t wait_for_host_signal_IDX = NUM_DOWNSTREAM_SENDERS_VC1_CT_ARG_IDX + 1;
+constexpr size_t wait_for_host_signal_IDX = NUM_DOWNSTREAM_SENDERS_VC1_CT_ARG_IDX + 1;  // Index 60
 constexpr bool wait_for_host_signal = get_compile_time_arg_val(wait_for_host_signal_IDX);
-constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;
+constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;  // Index 61
 
 static_assert(
     NUM_RECEIVER_CHANNELS <= NUM_SENDER_CHANNELS,
@@ -119,19 +171,15 @@ static_assert(
 static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
-static_assert(
-    wait_for_host_signal_IDX == 42,
-    "wait_for_host_signal_IDX must be 41 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
-    "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
-    "num_downstream_senders_vc1, wait_for_host_signal)");
+// Note: wait_for_host_signal_IDX varies based on MAX_NUM_SENDER_CHANNELS:
+// Formula: 33 (stream IDs) + 1 (marker) + 2 (max channel counts) + (2 + 2*MAX_NUM_SENDER_CHANNELS) (semantic streams) +
+// 1 (tensix) + 5 (config args)
+//        = 44 + 2*MAX_NUM_SENDER_CHANNELS
+// Example values: MAX=8 (2D mesh) → idx=60, MAX=9 (Z-router) → idx=62
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
-static_assert(
-    MAIN_CT_ARGS_START_IDX == 43,
-    "MAIN_CT_ARGS_START_IDX must be 42 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
-    "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
-    "num_downstream_senders_vc1, wait_for_host_signal)");
+// MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1 (varies with MAX_NUM_SENDER_CHANNELS)
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -584,6 +632,65 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_5_pkts_completed_id,
             to_sender_6_pkts_completed_id,
             to_sender_7_pkts_completed_id});
+
+// ============================================================================
+// Semantic Stream ID Arrays - Mode-Independent Names
+// ============================================================================
+// These arrays provide semantic names for stream IDs that are assigned by the
+// HOST/builder based on configuration. The builder computes these values based
+// on enable_first_level_ack and passes them as compile-time arguments.
+
+/**
+ * Stream IDs for packet arrival notifications (sender → receiver).
+ * Senders write here to notify receiver channels about new packets.
+ * Builder assigns based on enable_first_level_ack per VC:
+ *   - enable_first_level_ack=true: to_sender_packets_completed_streams (packed mode)
+ *   - enable_first_level_ack=false: to_receiver_packets_sent_streams (unpacked mode)
+ */
+constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_packet_arrival_notify_streams = {
+    receiver_ch0_pkt_arrival_notify_id, receiver_ch1_pkt_arrival_notify_id};
+
+/**
+ * Stream IDs for completion credits (receiver → senders).
+ * Receiver writes here to signal freed buffer space back to senders.
+ * Builder always assigns: to_sender_packets_completed_streams[sender_ch]
+ */
+constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_completion_credit_streams = [] {
+    std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> result = {};
+    result[0] = sender_ch0_completion_credit_id;
+    result[1] = sender_ch1_completion_credit_id;
+    result[2] = sender_ch2_completion_credit_id;
+    result[3] = sender_ch3_completion_credit_id;
+    result[4] = sender_ch4_completion_credit_id;
+    result[5] = sender_ch5_completion_credit_id;
+    result[6] = sender_ch6_completion_credit_id;
+    result[7] = sender_ch7_completion_credit_id;
+    if constexpr (MAX_NUM_SENDER_CHANNELS > 8) {
+        result[8] = sender_ch8_completion_credit_id;
+    }
+    return result;
+}();
+
+/**
+ * Stream IDs for first-level acknowledgments (receiver → senders).
+ * Receiver writes here to acknowledge packet receipt (when first-level ACK enabled).
+ * Builder always assigns: to_sender_packets_acked_streams[sender_ch]
+ */
+constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_first_level_ack_streams = [] {
+    std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> result = {};
+    result[0] = sender_ch0_first_level_ack_id;
+    result[1] = sender_ch1_first_level_ack_id;
+    result[2] = sender_ch2_first_level_ack_id;
+    result[3] = sender_ch3_first_level_ack_id;
+    result[4] = sender_ch4_first_level_ack_id;
+    result[5] = sender_ch5_first_level_ack_id;
+    result[6] = sender_ch6_first_level_ack_id;
+    result[7] = sender_ch7_first_level_ack_id;
+    if constexpr (MAX_NUM_SENDER_CHANNELS > 8) {
+        result[8] = sender_ch8_first_level_ack_id;
+    }
+    return result;
+}();
 
 // Miscellaneous configuration
 

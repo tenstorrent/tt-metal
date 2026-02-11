@@ -173,6 +173,7 @@ void forward_data(
         }
     }
     if (send_packet) {
+        WATCHER_RING_BUFFER_PUSH(0x55550000);
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
@@ -184,6 +185,8 @@ void forward_data(
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
+
+        WATCHER_RING_BUFFER_PUSH(0x55551000);
 
         // not handling/processing acks for now, re-evaluate if needed
         increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
@@ -204,6 +207,7 @@ void forward_data(
 }
 
 void kernel_main() {
+    WATCHER_RING_BUFFER_PUSH(0x0);
     size_t rt_args_idx = 0;
 
     std::array<uint8_t, num_upstream_routers> upstream_noc_x;
@@ -275,6 +279,7 @@ void kernel_main() {
     size_t worker_connection_handshake_address = connection_handshake_base_addrs[WORKER_CHANNEL_TYPE_IDX];
     size_t worker_flow_control_address = flow_control_base_addrs[WORKER_CHANNEL_TYPE_IDX];
 
+    WATCHER_RING_BUFFER_PUSH(0x1);
     for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_WORKER>(
             &worker_channels[i],
@@ -289,6 +294,7 @@ void kernel_main() {
             StreamId{worker_stream_ids[i]},
             worker_is_persistent[i] == 1);
     }
+    WATCHER_RING_BUFFER_PUSH(0x2);
 
     // ========== Setup router channels (ROUTER_CHANNEL) ==========
     size_t router_channel_base_address = channel_buffer_base_addrs[ROUTER_CHANNEL_TYPE_IDX];
@@ -310,6 +316,7 @@ void kernel_main() {
             StreamId{router_stream_ids[i]},
             router_is_persistent[i] == 1);
     }
+    WATCHER_RING_BUFFER_PUSH(0x3);
 
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
@@ -330,6 +337,7 @@ void kernel_main() {
             fabric_router_status_address,
             local_fabric_router_status_address);
     }
+    WATCHER_RING_BUFFER_PUSH(0x4);
 
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
@@ -346,6 +354,7 @@ void kernel_main() {
             wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interfaces[i]);
         }
     }
+    WATCHER_RING_BUFFER_PUSH(0x5);
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 

@@ -1793,6 +1793,7 @@ FORCE_INLINE
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
     if (can_send) {
+        WATCHER_RING_BUFFER_PUSH(0x55550000);
         did_something = true;
         progress = true;
 
@@ -1839,6 +1840,7 @@ FORCE_INLINE
                 sender_channel_from_receiver_credits
                     .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
             if (completions_since_last_check) {
+                WATCHER_RING_BUFFER_PUSH(0x55551000);
                 outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
                 // WATCHER_RING_BUFFER_PUSH(0xAA000000 |
                 // sender_channel_from_receiver_credits.to_sender_packets_completed_stream);
@@ -1930,13 +1932,10 @@ FORCE_INLINE
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
         constexpr size_t PACKED_STREAM_ID_IDX = 0;
+        // Use semantic stream name - HOST/builder assigns based on enable_first_level_ack
         return run_sender_channel_step_impl<
             sender_channel_index,
-            enable_first_level_ack
-                ?
-                //     // for first level ack, the src_id is actually interpreted as the receiver channel index
-                to_sender_packets_completed_streams[VC_RECEIVER_CHANNEL]
-                : to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
+            receiver_channel_packet_arrival_notify_streams[VC_RECEIVER_CHANNEL],
             sender_ch_live_check_skip[sender_channel_index],
             enable_first_level_ack>(
             local_sender_channels.template get<sender_channel_index>(),
@@ -2208,9 +2207,8 @@ FORCE_INLINE bool run_receiver_channel_step(
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
-        constexpr size_t to_receiver_pkts_sent_id = enable_first_level_ack
-                                                        ? to_sender_packets_completed_streams[receiver_channel]
-                                                        : to_receiver_packets_sent_streams[receiver_channel];
+        // Use semantic stream name - HOST/builder assigns based on enable_first_level_ack
+        constexpr size_t to_receiver_pkts_sent_id = receiver_channel_packet_arrival_notify_streams[receiver_channel];
         return run_receiver_channel_step_impl<
             receiver_channel,
             to_receiver_pkts_sent_id,

@@ -979,11 +979,55 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const auto& stream_ids = StreamRegAssignments::get_all_stream_ids();
     constexpr bool enable_risc_cpu_data_cache = false;
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
+
+    // Add marker AFTER physical stream IDs (index 33)
     ct_args.push_back(0xFFEE0001);
 
-    // Maximum channel counts from builder_config
-    ct_args.push_back(builder_config::num_max_sender_channels);
-    ct_args.push_back(builder_config::num_max_receiver_channels);
+    // Maximum channel counts from builder_config - MUST come first so device knows array sizes
+    ct_args.push_back(builder_config::num_max_sender_channels);    // Index 34
+    ct_args.push_back(builder_config::num_max_receiver_channels);  // Index 35
+
+    // ============================================================================
+    // Add Semantic Stream IDs - HOST assigns based on configuration
+    // ============================================================================
+    // AFTER marker and max channel counts, add semantic stream IDs that abstract
+    // away mode-dependent assignment. The device kernel uses these semantic names
+    // without needing to know about enable_first_level_ack logic.
+
+    // Packet arrival notification streams (per receiver channel / VC)
+    // Assignment logic: Choose stream based on enable_first_level_ack per VC
+    std::vector<uint32_t> semantic_stream_ids;
+
+    // VC0 packet arrival notification
+    bool enable_ack_vc0 = this->enable_first_level_ack;
+    uint32_t vc0_arrival_stream =
+        enable_ack_vc0 ? stream_ids[6]   // to_sender_0_pkts_completed_id (packed mode reuses completion stream)
+                       : stream_ids[0];  // to_receiver_0_pkts_sent_id (unpacked mode uses dedicated stream)
+    semantic_stream_ids.push_back(vc0_arrival_stream);
+
+    // VC1 packet arrival notification (VC1 never uses first-level ack)
+    bool enable_ack_vc1 = false;
+    uint32_t vc1_arrival_stream = enable_ack_vc1
+                                      ? stream_ids[10]  // to_sender_4_pkts_completed_id (VC1 starts at sender ch 4)
+                                      : stream_ids[1];  // to_receiver_1_pkts_sent_id
+    semantic_stream_ids.push_back(vc1_arrival_stream);
+
+    // Completion credit streams (per sender channel) - always use completion streams
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        semantic_stream_ids.push_back(stream_ids[6 + i]);  // to_sender_N_pkts_completed_id
+    }
+
+    // First-level ACK streams (per sender channel) - always use ack streams
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        if (i < 4) {
+            semantic_stream_ids.push_back(stream_ids[2 + i]);  // to_sender_N_pkts_acked_id
+        } else {
+            semantic_stream_ids.push_back(0);  // VC1 doesn't use first-level acks
+        }
+    }
+
+    // Add semantic streams to CT args AFTER marker and max counts
+    ct_args.insert(ct_args.end(), semantic_stream_ids.begin(), semantic_stream_ids.end());
 
     // add the downstream tensix connection arg here, num_downstream_tensix_connections
     ct_args.push_back(this->num_downstream_tensix_connections);
