@@ -113,6 +113,12 @@ jobs:
           mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
+      - name: Clean up stale test state
+        run: |
+          # Remove temporary files and build artifacts that might cause issues
+          rm -rf /tmp/tt_metal_* /tmp/ttsim_* /tmp/cmake-* 2>/dev/null || true
+          echo "[info] Cleaned up stale state before examples"
+
       - name: Build and Run Metal Examples
         timeout-minutes: 3
         run: |
@@ -142,6 +148,9 @@ jobs:
                 echo "Running ${exe_basename}"
                 "$exe"
               done
+              # Clean up build directory to avoid accumulation
+              cd /work
+              rm -rf "$build_dir"
               echo "::endgroup::"
             else
               echo "Warning: Example directory not found: $example_path"
@@ -276,10 +285,21 @@ jobs:
           echo "[info] Skip args count: $(echo $SKIP_ARGS | wc -w)"
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
 
+      - name: Clean up stale test state
+        run: |
+          # Remove temporary files and cached state that might cause test isolation issues
+          rm -rf /tmp/pytest-of-* /tmp/tt_metal_* /tmp/ttsim_* /tmp/.X* /tmp/tmp* 2>/dev/null || true
+          # Clear any stale Python cache
+          find /work -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+          find /work -type f -name '*.pyc' -delete 2>/dev/null || true
+          echo "[info] Cleaned up stale test state"
+
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
         run: |
-          # Run pytest with parallel execution and skip list
-          ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}
+          # Run pytest with reduced parallelism and better isolation to avoid race conditions
+          # --dist=loadfile keeps tests from same file together for better isolation
+          # -n 2 reduces parallelism to minimize resource contention
+          ${{ matrix.test-group.cmd }} -n 2 --dist=loadfile ${{ steps.skip-list.outputs.skip_args }}
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
@@ -343,6 +363,12 @@ jobs:
           mkdir -p $TT_METAL_SIMULATOR_HOME
           mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+
+      - name: Clean up stale test state
+        run: |
+          # Remove temporary files that might cause test isolation issues
+          rm -rf /tmp/tt_metal_* /tmp/ttsim_* 2>/dev/null || true
+          echo "[info] Cleaned up stale state before C++ tests"
 
       - name: C++ tests
         timeout-minutes: 5
@@ -432,6 +458,12 @@ jobs:
           mkdir -p $TT_METAL_SIMULATOR_HOME
           mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+
+      - name: Clean up stale test state
+        run: |
+          # Remove temporary files that might cause test isolation issues
+          rm -rf /tmp/tt_metal_* /tmp/ttsim_* 2>/dev/null || true
+          echo "[info] Cleaned up stale state before galaxy C++ tests"
 
       - name: C++ tests
         timeout-minutes: 5
