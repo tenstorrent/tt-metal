@@ -89,9 +89,7 @@ def broken_core_serializer(broken_cores: set[BrokenCore] | None | str) -> str:
 @dataclass
 class DeviceHealthSummary:
     device: Device = triage_field("Device")
-    broken_cores: dict[Device, set[BrokenCore]] | None | str = triage_field(
-        "Broken Cores", serializer=broken_core_serializer
-    )
+    broken_cores: set[BrokenCore] | str = triage_field("Broken Cores", serializer=broken_core_serializer)
 
 
 def collect_device_health_summary(run_checks: RunChecks) -> list[DeviceHealthSummary] | None:
