@@ -349,6 +349,85 @@ void packet_sizes_test(
     }
 }
 
+/// @brief Builds a diagonal CoreRangeSet: one core per row, column = row % num_cols
+CoreRangeSet make_diagonal_cores(uint32_t num_rows, uint32_t num_cols) {
+    std::vector<CoreRange> ranges;
+    for (uint32_t y = 0; y < num_rows; y++) {
+        uint32_t x = y % num_cols;
+        ranges.push_back(CoreRange(CoreCoord(x, y), CoreCoord(x, y)));
+    }
+    return CoreRangeSet(std::move(ranges));
+}
+
+void directed_ideal_test_diagonal(
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t test_case_id,
+    uint32_t num_rows,
+    uint32_t num_cols,
+    bool read,
+    bool write) {
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    uint32_t page_size_bytes = 256 * flit_size_bytes;
+    uint32_t num_pages = 16;
+    uint32_t num_of_transactions = 16;
+
+    CoreRangeSet core_range_set = make_diagonal_cores(num_rows, num_cols);
+
+    unit_tests::dm::multi_interleaved::MultiInterleavedConfig test_config = {
+        .test_id = test_case_id,
+        .num_of_transactions = num_of_transactions,
+        .num_pages = num_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+        .cores = core_range_set,
+        .read_kernel = read,
+        .write_kernel = write};
+
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
+}
+
+void packet_sizes_test_diagonal(
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t test_case_id,
+    uint32_t num_rows,
+    uint32_t num_cols,
+    bool read,
+    bool write) {
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
+
+    CoreRangeSet core_range_set = make_diagonal_cores(num_rows, num_cols);
+
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
+            num_of_transactions = pages / 16;
+            num_pages = 16;
+        } else {
+            num_pages = pages;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            unit_tests::dm::multi_interleaved::MultiInterleavedConfig test_config = {
+                .test_id = test_case_id,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .read_kernel = read,
+                .write_kernel = write};
+
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
 }  // namespace unit_tests::dm::multi_interleaved
 
 /* ========== Full grid directed ideal ========== */
@@ -521,6 +600,56 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedWriteSizes
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
+}
+
+/* ========== 1 READER PER ROW (DRAM READ BW MEASUREMENT) ========== */
+
+TEST_F(GenericMeshDeviceFixture, TensixDramReadPerRowDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    uint32_t test_case_id = 128;
+    CoreCoord mst_start_coord = {0, 0};
+    // 1 core per row: column 0, all rows
+    CoreCoord mst_grid_size = {1, device->compute_with_storage_grid_size().y};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, false);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDramReadPerRowSizes) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    uint32_t test_case_id = 129;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {1, device->compute_with_storage_grid_size().y};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, false);
+}
+
+/* ========== DIAGONAL 1 READER PER ROW (DRAM READ BW MEASUREMENT) ========== */
+
+TEST_F(GenericMeshDeviceFixture, TensixDramReadDiagonalDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    uint32_t test_case_id = 130;
+    uint32_t num_rows = device->compute_with_storage_grid_size().y;
+    uint32_t num_cols = device->compute_with_storage_grid_size().x;
+    // 1 core per row, column wraps diagonally: (0,0), (1,1), (2,2), ..., (col%num_cols, row)
+    unit_tests::dm::multi_interleaved::directed_ideal_test_diagonal(
+        mesh_device, test_case_id, num_rows, num_cols, true, false);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDramReadDiagonalSizes) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    uint32_t test_case_id = 131;
+    uint32_t num_rows = device->compute_with_storage_grid_size().y;
+    uint32_t num_cols = device->compute_with_storage_grid_size().x;
+    unit_tests::dm::multi_interleaved::packet_sizes_test_diagonal(
+        mesh_device, test_case_id, num_rows, num_cols, true, false);
 }
 
 }  // namespace tt::tt_metal

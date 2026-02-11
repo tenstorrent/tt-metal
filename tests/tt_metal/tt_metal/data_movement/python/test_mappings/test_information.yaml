@@ -344,6 +344,10 @@ tests:
     name: "Multi Interleaved Directed Ideal"
     bandwidth_mode: "combined"
 
+  130:
+    name: "Digaonal Interleaved Directed Ideal"
+    bandwidth_mode: "combined"
+
   111:
     name: "Multi Interleaved Sizes"
     bandwidth_mode: "combined"
