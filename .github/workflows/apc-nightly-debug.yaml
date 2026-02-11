@@ -4,6 +4,8 @@ on:
   schedule:
     # Runs nightly at 12:00 AM UTC
     - cron: "0 0 * * *"
+    # Runs nightly at 1:00 AM UTC with watcher enabled (Ubuntu 22.04 only)
+    - cron: "0 1 * * *"
 
   workflow_dispatch:
     inputs:
@@ -11,6 +13,10 @@ on:
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
+      enable-watcher:
+        default: false
+        type: boolean
+        description: "Enable watcher (Ubuntu 22.04 only)"
 
 permissions:
   actions: read
@@ -23,7 +29,8 @@ permissions:
 
 jobs:
   nightly-debug:
-    name: apc nightly debug run (${{ matrix.platform }})
+    name: apc nightly debug run (${{ matrix.platform }}${{ (github.event.schedule == '0 1 * * *' || inputs.enable-watcher) && matrix.platform == 'Ubuntu 22.04' && ' with watcher' || '' }})
+    if: ${{ github.event.schedule != '0 1 * * *' || github.event_name == 'workflow_dispatch' }}
     strategy:
       matrix:
         platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
@@ -35,12 +42,16 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
 
   nightly-debug-watcher:
-    name: apc nightly debug run (Ubuntu 22.04 with watcher)
+    name: apc nightly debug run (${{ matrix.platform }} with watcher)
+    if: ${{ github.event.schedule == '0 1 * * *' || (github.event_name == 'workflow_dispatch' && inputs.enable-watcher) }}
+    strategy:
+      matrix:
+        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
-      platform: "Ubuntu 22.04"
+      platform: ${{ matrix.platform }}
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: true
       run-profiler-regression: false
