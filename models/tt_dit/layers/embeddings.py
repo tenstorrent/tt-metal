@@ -3,48 +3,113 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from functools import partial
 
 import torch
 
 import ttnn
 
-from ..utils.tensor import bf16_tensor
-from .linear import Linear
+from ..parallel.manager import CCLManager
+from ..utils.tensor import bf16_tensor, float32_tensor, unflatten
+from .linear import ColParallelLinear, Linear
 from .module import Module, Parameter
+
+# TODO: Fuse with linear instead
+ACT2CLS = {
+    "swish": ttnn.swish,
+    "silu": ttnn.silu,
+    "mish": ttnn.mish,
+    "gelu": ttnn.gelu,
+    "gelu_tanh": partial(ttnn.gelu, fast_and_approximate_mode=True),
+    "relu": ttnn.relu,
+}
+
+
+# positional Encoding.
+class Timesteps(Module):
+    def __init__(
+        self,
+        num_channels: int,
+        cos_first: bool = True,
+        max_period: int = 10000,
+        downscale_freq_shift: float = 0,
+        scale: int = 1,
+        mesh_device=None,
+        use_fp32: bool = True,
+    ):
+        super().__init__()
+        self.num_channels = num_channels
+        self.cos_first = cos_first
+        self.downscale_freq_shift = downscale_freq_shift
+        self.scale = scale
+        self.max_period = max_period
+        self.mesh_device = mesh_device
+        self.use_fp32 = (
+            use_fp32  # BF16 not accurate.Ref PCC ~95% with RMSE ~30% vs FP32: PCC = 99.9999 %, RMSE/σ₁ = 0.2 %
+        )
+        self.time_proj_factor = self._create_time_proj_factor()
+
+    def _create_time_proj_factor(self) -> ttnn.Tensor:
+        assert self.num_channels % 2 == 0
+        half_dim = self.num_channels // 2
+
+        exponent = -math.log(self.max_period) * torch.arange(start=0, end=half_dim, dtype=torch.float32)
+        exponent = exponent / (half_dim - self.downscale_freq_shift)
+        factor = torch.exp(exponent)
+
+        return (
+            ttnn.unsqueeze_to_4D(float32_tensor(factor, device=self.mesh_device))
+            if self.use_fp32
+            else ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
+        )
+
+    def forward(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
+        # Time projection (sinusoidal embedding)
+        assert (timestep.dtype == ttnn.float32) == self.use_fp32, "Input timestep must be float32 if use_fp32 is True"
+        emb = self.scale * timestep * self.time_proj_factor
+        c = ttnn.cos(emb)
+        s = ttnn.sin(emb)
+        cat_args = [c, s] if self.cos_first else [s, c]
+        timesteps_proj = ttnn.concat(cat_args, dim=-1)
+        return (
+            ttnn.typecast(timesteps_proj, dtype=ttnn.bfloat16)
+            if timesteps_proj.dtype == ttnn.float32
+            else timesteps_proj
+        )
 
 
 # Helper classes for SD35Transformer2DModel
 class TimestepEmbedding(Module):
-    def __init__(self, in_channels, time_embed_dim, mesh_device=None):
+    def __init__(self, in_channels, time_embed_dim, mesh_device=None, act_fn="silu"):
         super().__init__()
 
         self.in_channels = in_channels
         self.time_embed_dim = time_embed_dim
         self.mesh_device = mesh_device
-
+        self.act_fn = ACT2CLS[act_fn]  # TODO: Fuse with linear instead
         self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device)
         self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_1(x)
-        x = ttnn.silu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = self.act_fn(x)  # TODO: Fuse with linear instead
         return self.linear_2(x)
 
 
-class PixartAlphaTextProjection(Module):
-    def __init__(self, in_features, hidden_size, mesh_device=None):
+class PixArtAlphaTextProjection(Module):
+    def __init__(self, in_features, hidden_size, mesh_device=None, act_fn="silu"):
         super().__init__()
 
         self.in_features = in_features
         self.hidden_size = hidden_size
         self.mesh_device = mesh_device
-
+        self.act_fn = ACT2CLS[act_fn]  # TODO: Fuse with linear instead
         self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device)
         self.linear_2 = Linear(hidden_size, hidden_size, bias=True, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_1(x)
-        x = ttnn.silu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = self.act_fn(x)
         return self.linear_2(x)
 
 
@@ -58,7 +123,7 @@ class SD35CombinedTimestepTextProjEmbeddings(Module):
 
         self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
         self.text_embedder = (
-            PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
+            PixArtAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
             if pooled_projection_dim > 0
             else None
         )
@@ -116,7 +181,7 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         self.guidance_embedder = (
             TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device) if with_guidance else None
         )
-        self.text_embedder = PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
+        self.text_embedder = PixArtAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
 
         self.time_proj_factor = self._create_time_proj_factor(256)
 
@@ -463,6 +528,79 @@ class WanPatchEmbed(Module):
         )
 
         return latent_1BND
+
+
+class WanTimeTextImageEmbedding(Module):
+    def __init__(
+        self,
+        dim: int,
+        time_freq_dim: int,
+        time_proj_dim: int,
+        text_embed_dim: int,
+        image_embed_dim: int | None = None,
+        pos_embed_seq_len: int | None = None,
+        mesh_device: ttnn.MeshDevice | None = None,
+        tp_mesh_axis: int | None = None,
+        ccl_manager: CCLManager | None = None,
+    ):
+        super().__init__()
+        assert image_embed_dim is None, "WanTimeTextImageEmbedding does not support image embedding"
+        self.mesh_device = mesh_device
+        self.tp_mesh_axis = tp_mesh_axis
+        self.timesteps_proj = Timesteps(num_channels=time_freq_dim, mesh_device=self.mesh_device)
+        self.time_embedder = TimestepEmbedding(
+            in_channels=time_freq_dim, time_embed_dim=dim, mesh_device=self.mesh_device
+        )
+        self.pre_time_proj_activation = ttnn.silu
+        self.time_proj = ColParallelLinear(
+            dim, time_proj_dim, bias=True, mesh_device=self.mesh_device, mesh_axis=tp_mesh_axis, ccl_manager=ccl_manager
+        )  # Output is fractured according to the older behaviour when sharding from torch. See _prepare_torch_state(...)
+        self.text_embedder = PixArtAlphaTextProjection(
+            text_embed_dim, dim, act_fn="gelu_tanh", mesh_device=self.mesh_device
+        )
+
+    def forward_timestep(self, timestep: ttnn.Tensor, timestep_seq_len: int | None = None) -> ttnn.Tensor:
+        timestep = self.timesteps_proj(timestep)
+        if timestep_seq_len is not None:
+            timestep = unflatten(timestep, 0, (-1, timestep_seq_len))
+
+        temb = self.time_embedder(timestep)
+        timestep_proj = self.time_proj(self.pre_time_proj_activation(temb))  # TODO: Fuse with linear instead
+        return temb, timestep_proj
+
+    def forward_text(self, encoder_hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        return self.text_embedder(encoder_hidden_states)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # prep timestep proj weight for chunking.
+        time_proj_weight = state.pop("time_proj.weight", None)
+        time_proj_bias = state.pop("time_proj.bias", None)
+
+        # view as expected output shape
+        time_proj_weight = time_proj_weight.unflatten(0, (6, -1))
+        time_proj_bias = time_proj_bias.unflatten(0, (6, -1))
+
+        # chunk first dimension by number of devices
+        time_proj_weight_chunks = torch.chunk(time_proj_weight, self.mesh_device.shape[self.tp_mesh_axis], dim=1)
+        time_proj_bias_chunks = torch.chunk(time_proj_bias, self.mesh_device.shape[self.tp_mesh_axis], dim=1)
+
+        # reshape first dimension to ensure weights per device to ensure weights, data and expected output shape are aligned..
+        time_proj_weight_chunks = [chunk.reshape(-1, time_proj_weight.shape[-1]) for chunk in time_proj_weight_chunks]
+        time_proj_bias_chunks = [chunk.reshape(-1) for chunk in time_proj_bias_chunks]
+
+        # concatenate back to enable sharding to be applied in preparaton for the chunking.
+        state["time_proj.weight"] = torch.cat(time_proj_weight_chunks, 0)
+        state["time_proj.bias"] = torch.cat(time_proj_bias_chunks, 0)
+
+    def forward(
+        self,
+        timestep: ttnn.Tensor,
+        encoder_hidden_states: ttnn.Tensor,
+        timestep_seq_len: int | None = None,
+    ):
+        temb, timestep_proj = self.forward_timestep(timestep, timestep_seq_len)
+        encoder_hidden_states = self.forward_text(encoder_hidden_states)
+        return temb, timestep_proj, encoder_hidden_states
 
 
 class Embedding(Module):

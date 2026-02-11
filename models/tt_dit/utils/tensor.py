@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import ttnn
@@ -15,8 +16,13 @@ if TYPE_CHECKING:
     import torch
 
 
-def bf16_tensor(
-    x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
+def typed_tensor(
+    x: torch.Tensor,
+    dtype: ttnn.DataType,
+    device: ttnn.Device | None = None,
+    mesh_axis=None,
+    shard_dim=None,
+    layout=ttnn.TILE_LAYOUT,
 ) -> ttnn.Tensor:
     """
     Replicates or shards a tensor based on the mesh_axis and shard_dim
@@ -31,11 +37,23 @@ def bf16_tensor(
     return ttnn.from_torch(
         x,
         layout=layout,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=device,
         mesh_mapper=mesh_mapper,
     )
+
+
+def bf16_tensor(
+    x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
+) -> ttnn.Tensor:
+    return typed_tensor(x, ttnn.bfloat16, device, mesh_axis, shard_dim, layout)
+
+
+def float32_tensor(
+    x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
+) -> ttnn.Tensor:
+    return typed_tensor(x, ttnn.float32, device, mesh_axis, shard_dim, layout)
 
 
 def bf16_tensor_host(
@@ -216,3 +234,17 @@ def upsample(
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
     return x
+
+
+# Quick helper. Untested
+def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
+    assert (
+        x.shape[dim] % math.abs(math.prod(sizes)) == 0
+    ), f"The total number of elements in the new shape {sizes} must be equal or a factor of the number of elements (when using infered dimensions) in the original shape {x.shape[dim]}"
+    new_shape = []
+    for i, dim_len in enumerate(list(x.shape)):
+        if i == dim:
+            new_shape += sizes
+        else:
+            new_shape.append(dim_len)
+    return ttnn.reshape(x, new_shape)

@@ -262,6 +262,7 @@ class T5DenseGatedActDense(Module):
         rename_substate(state, "wi_1", "wi1")
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # TODO: Consider fusing the wi0 and wi1 calls with a single linear layer.
         gelu = self.wi0(x)
         linear = self.wi1(x)
         x = gelu * linear
@@ -447,6 +448,7 @@ def _relative_position_bucket(relative_position: torch.Tensor, num_buckets: int,
     return relative_buckets
 
 
+# TODO: Replace with Embedding layer from embeddings.py
 class TokenEmbeddings(Module):
     def __init__(self, config: T5Config, mesh_device: ttnn.Device):
         super().__init__()
