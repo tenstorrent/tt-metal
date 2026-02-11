@@ -80,6 +80,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             None,
             True,
             id="profile_decode",
+            marks=pytest.mark.timeout(1800),
         ),
     ],
 )

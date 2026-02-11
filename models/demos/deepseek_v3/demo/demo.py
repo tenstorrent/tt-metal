@@ -415,6 +415,8 @@ def run_demo(
             gen.cleanup_all()
         except Exception as e:
             logger.warning(f"Failed to cleanup generator: {e}")
+        # Synchronize device before closing to flush pending ops (e.g. profiler data)
+        ttnn.synchronize_device(mesh_device)
         # Clean up mesh device(s)
         for submesh in mesh_device.get_submeshes():
             ttnn.close_mesh_device(submesh)
