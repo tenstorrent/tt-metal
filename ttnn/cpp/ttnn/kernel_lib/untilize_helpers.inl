@@ -118,7 +118,8 @@ template <
     uint32_t input_cb,
     uint32_t output_cb,
     untilize_config::InitUninitMode init_uninit_mode,
-    untilize_config::WaitMode wait_mode>
+    untilize_config::WaitMode wait_mode,
+    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
 ALWI void untilize(uint32_t num_blocks) {
 
     // Compile-time validation
@@ -131,8 +132,31 @@ ALWI void untilize(uint32_t num_blocks) {
     static_assert(output_cb < 32,
         "Invalid output_cb: must be less than 32");
 
+    // Runtime parameter validation
+    ASSERT(num_blocks > 0);
+
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool is_integer = is_integer_format<input_cb>();
+
+    // Determine if we're doing data type reconfiguration
+    constexpr bool use_unpack_reconfig =
+        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure) ||
+        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
+
+    constexpr bool use_pack_reconfig =
+        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
+        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
+
+    // Reconfigure register datatypes if requested
+    if constexpr (use_unpack_reconfig) {
+        // Reconfigure srcA for unpack
+        reconfig_data_format_srca(input_cb);
+    }
+
+    if constexpr (use_pack_reconfig) {
+        // Reconfigure output for pack
+        pack_reconfig_data_format(output_cb);
+    }
 
     // Determine which dispatch path to use
     // WaitUpfront or non-integer wide widths always use standard path
