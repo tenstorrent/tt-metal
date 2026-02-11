@@ -17,6 +17,7 @@
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "internal/tt-1xx/blackhole/eth_fw_api.h"
 
 namespace tt::tt_fabric::system_health_tests {
 
@@ -268,6 +269,15 @@ TEST(Cluster, ReportSystemHealth) {
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
     auto uncorr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
+    // Calculate train_speed address from eth_status_t in boot_results_t (Blackhole only)
+    // MEM_SYSENG_ETH_STATUS = MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_status)
+    // train_speed is the 4th field in eth_status_t at offset 12 bytes (3 * sizeof(uint32_t))
+    // Note: Wormhole has different boot_results_t structure without eth_status_t
+    uint32_t train_speed_addr = 0;
+    if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+        uint32_t eth_status_addr = MEM_SYSENG_ETH_STATUS;
+        train_speed_addr = eth_status_addr + 3 * sizeof(uint32_t);
+    }
     if (unique_chip_ids.empty()) {
         // Temporary patch to workaround unique chip ids not being set for non-6U systems
         for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
@@ -302,7 +312,12 @@ TEST(Cluster, ReportSystemHealth) {
             std::stringstream eth_ss;
             uint32_t crc_error_val = 0;
             uint32_t corr_val_lo = 0, corr_val_hi = 0, uncorr_val_lo = 0, uncorr_val_hi = 0;
+            uint32_t train_speed = 0;
             cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
+            // Read train_speed only for Blackhole (Wormhole has different boot_results_t structure)
+            if (cluster.arch() == tt::ARCH::BLACKHOLE && train_speed_addr != 0) {
+                cluster.read_core(&train_speed, sizeof(uint32_t), virtual_eth_core, train_speed_addr);
+            }
             // TODO: remove WORMHOLE checks once register access available for all platform
             if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
                 cluster.read_core(&crc_error_val, sizeof(uint32_t), virtual_eth_core, crc_addr);
@@ -335,6 +350,10 @@ TEST(Cluster, ReportSystemHealth) {
                 }
                 eth_ss << " core " << connected_eth_core.str();
                 eth_ss << "\n\tRetrain count: " << read_vec[0];
+                // Show train_speed only for Blackhole
+                if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+                    eth_ss << " Train speed: " << std::dec << train_speed;
+                }
                 if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
                     eth_ss << " CRC Errors: 0x" << std::hex << crc_error_val;
                     eth_ss << " Corrected Codewords: 0x" << std::hex << cw_pair_to_full(corr_val_hi, corr_val_lo)
