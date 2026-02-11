@@ -147,6 +147,7 @@ jobs:
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: ${{ matrix.test-group.name }} tests
+        if: ${{ !inputs.enable-watcher }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
@@ -160,7 +161,7 @@ jobs:
           cat $DEVICE_PERF_REPORT_FILENAME
 
       - name: Merge and check test reports
-        if: ${{ github.event.pull_request.head.repo.fork == false }}
+        if: ${{ !inputs.enable-watcher && github.event.pull_request.head.repo.fork == false }}
         timeout-minutes: 5
         env:
           TRACY_NO_INVARIANT_CHECK: 1
