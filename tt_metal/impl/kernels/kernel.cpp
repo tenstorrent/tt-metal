@@ -588,7 +588,7 @@ void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
     if (this->config_.en_implied_math_format) {
-        TT_ASSERT(
+        TT_FATAL(
             MetalContext::instance().hal().get_supports_en_implied_math_format(),
             "en_implied_math_format is not supported on  Wormhole and Blackhole");
     }
