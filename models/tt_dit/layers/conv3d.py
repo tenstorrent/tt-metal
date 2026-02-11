@@ -2,14 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
 
 import ttnn
 
-from ..parallel.config import vae_neighbor_pad
+from ..parallel.config import MochiVAEParallelConfig, vae_neighbor_pad
+from ..parallel.manager import CCLManager
+from .module import Module, Parameter
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def get_conv3d_config(in_channels, grid_size):
@@ -43,69 +50,25 @@ def get_conv3d_config(in_channels, grid_size):
     )
 
 
-def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=16):
-    """Prepare weights and bias for TTNN."""
-    C_in = weight.shape[1]
-    w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    ALIGN_PAD = ALIGNMENT - C_in % ALIGNMENT
-    if C_in % ALIGNMENT != 0:
-        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
-
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
-
-    C_in_block = conv_config.C_in_block
-    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
-    num_C_in_blocks = C_in_aligned // C_in_block
-    assert num_C_in_blocks * C_in_block == C_in_aligned
-
-    # Kernel expects num_C_in_blocks to be the first dimension to stride over it
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
-
-    tt_weight = ttnn.from_torch(
-        w,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=mesh_device,
-        mesh_mapper=None,
-        pad_value=0,
-    )
-
-    if bias is not None:
-        tt_bias = ttnn.from_torch(
-            bias.reshape(1, -1),
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=mesh_device,
-            mesh_mapper=None,
-            pad_value=0,
-        )
-    else:
-        tt_bias = None
-    return tt_weight, tt_bias
-
-
-class ContextParallelConv3d:
+class ContextParallelConv3d(Module):
     def __init__(
         self,
-        mesh_device: ttnn.MeshDevice,
-        in_channels: int = None,
-        out_channels: int = None,
-        kernel_size: Tuple[int, int, int] = None,
-        stride: Tuple[int, int, int] = (1, 1, 1),
+        in_channels: int,
+        out_channels: int,
+        *,
+        kernel_size: Sequence[int],
+        stride: Sequence[int] = (1, 1, 1),
+        bias: bool = True,
         causal: bool = True,
-        input_shape=None,
         context_parallel: bool = True,
         groups: int = 1,
-        parallel_config=None,
-        ccl_manager=None,
-        torch_ref=None,
-        **kwargs,
-    ):
+        padding_mode: str,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: MochiVAEParallelConfig,
+        ccl_manager: CCLManager,
+    ) -> None:
+        super().__init__()
+
         self.halos_chunk_map = {
             768: 30,  # 16
             512: 30,  # 64
@@ -115,22 +78,22 @@ class ContextParallelConv3d:
 
         assert causal
         assert context_parallel
+        assert padding_mode in ["zeros", "replicate"]
+        assert groups == 1
+
         self.mesh_device = mesh_device
         self.grid_size = mesh_device.compute_with_storage_grid_size()
-        self.in_channels = in_channels or torch_ref.in_channels
-        self.out_channels = out_channels or torch_ref.out_channels
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.causal = causal
         self.context_parallel = context_parallel
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
         # Conv3d parameters
-        self.kernel_size = kernel_size or torch_ref.kernel_size
-        self.stride = stride or torch_ref.stride
-        self.has_bias = kwargs["bias"]
-        self.padding_mode = kwargs["padding_mode"]
-        assert self.padding_mode in ["zeros", "replicate"]
-        assert groups == 1
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding_mode = padding_mode
         self.groups = groups
 
         # Calculate padding
@@ -144,8 +107,9 @@ class ContextParallelConv3d:
             width_pad = (self.kernel_size[2] - 1) // 2
         self.padding = (0, height_pad, width_pad)
 
-        self.weight = None
-        self.bias = None
+        d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0)
+        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0) if bias else None
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -154,35 +118,39 @@ class ContextParallelConv3d:
             packer_l1_acc=False,
         )
 
-        if torch_ref is not None:
-            self.load_state_dict(torch_ref.state_dict())
-        else:
-            # TODO initialize torch_weight and bias
-            logger.warning("Torch ref not provided")
-
-        logger.warning("Setting up conv3d config")
-        conv_config = get_conv3d_config(
+        self.conv_config = get_conv3d_config(
             self.in_channels,
             self.grid_size,
         )
-        self.conv_config = conv_config
-        self.weight, self.bias = prepare_conv3d_weights(
-            self.mesh_device, self.torch_weight, self.torch_bias, conv_config
-        )
 
-    @classmethod
-    def from_torch(cls, torch_ref, mesh_device, parallel_config, ccl_manager):
-        layer = cls(
-            mesh_device=mesh_device,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
-            torch_ref=torch_ref,
-        )
-        return layer
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        alignment = 16
 
-    def load_state_dict(self, state_dict):
-        self.torch_weight = state_dict["weight"]
-        self.torch_bias = state_dict.get("bias", None)
+        weight = state.get("weight")
+        if weight is not None:
+            c_in = weight.shape[1]
+            weight = weight.permute(2, 3, 4, 1, 0)  # kd, hk, kw, c, out_chan
+            align_pad = alignment - c_in % alignment
+            if c_in % alignment != 0:
+                weight = torch.nn.functional.pad(weight, (0, 0, 0, align_pad))
+
+            # Reshape weights so that num_c_in_blocks is the first dimension
+            kd, hk, kw, c_in_aligned, out_channels = weight.shape
+
+            c_in_block = self.conv_config.C_in_block
+            c_in_block = c_in_aligned if c_in_block == 0 else c_in_block
+            num_c_in_blocks = c_in_aligned // c_in_block
+            assert num_c_in_blocks * c_in_block == c_in_aligned
+
+            # Kernel expects num_c_in_blocks to be the first dimension to stride over it
+            weight = weight.reshape(kd, hk, kw, num_c_in_blocks, c_in_block, out_channels)
+            weight = weight.permute(3, 0, 1, 2, 4, 5)
+            weight = weight.reshape(-1, out_channels)
+
+            state["weight"] = weight
+
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape(1, -1)
 
     def _causal_pad_input(self, x_NTHWC, pad_front, pad_back=0):
         """
@@ -205,7 +173,7 @@ class ContextParallelConv3d:
             assert T_pad == T + pad_front + pad_back
         return x_pad_NTHWC
 
-    def __call__(self, x_NTHWC):
+    def forward(self, x_NTHWC: ttnn.Tensor) -> ttnn.Tensor:
         # Compute temporal padding amounts
         context_size = self.kernel_size[0] - 1
         if self.causal:
@@ -236,8 +204,8 @@ class ContextParallelConv3d:
 
         out_NTHWC = ttnn.experimental.conv3d(
             input_tensor=x_pad_NTHWC,
-            weight_tensor=self.weight,
-            bias_tensor=self.bias,
+            weight_tensor=self.weight.data,
+            bias_tensor=self.bias.data if self.bias is not None else None,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
