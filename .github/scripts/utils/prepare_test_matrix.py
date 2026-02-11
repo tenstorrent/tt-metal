@@ -101,7 +101,9 @@ def build_test_matrix(tests, enabled_skus, sku_config):
         sku_config: Dictionary mapping SKU names to their configuration
 
     Returns:
-        Filtered list of flat test dictionaries with sku, timeout, and runs_on added
+        Filtered list of flat test dictionaries. Each entry has all keys from the
+        test (e.g. name, cmd, model, owner_id, team) with skus removed and sku,
+        timeout, and runs_on set for the selected SKU.
     """
     if not enabled_skus:
         print("::error::No SKUs enabled. At least one SKU must be specified.")
@@ -134,16 +136,15 @@ def build_test_matrix(tests, enabled_skus, sku_config):
                 print(f"::warning::SKU '{sku_name}' for test '{test_name}' not found in SKU config, skipping")
                 continue
 
-            # Build a flat matrix entry
-            entry = {
-                "name": test_name,
-                "cmd": test.get("cmd", ""),
-                "sku": sku_name,
-                "timeout": sku_test_config.get("timeout", 0),
-                "owner_id": test.get("owner_id", ""),
-                "team": test.get("team", ""),
-                "runs_on": sku_config[sku_name].get("runs_on", []),
-            }
+            # Start from test copy so all keys (model, arch, etc.) are preserved
+            entry = test.copy()
+            entry.pop("skus", None)
+            entry["sku"] = sku_name
+            entry["timeout"] = sku_test_config.get("timeout", 0)
+            entry["runs_on"] = sku_config[sku_name].get("runs_on", [])
+            for key, value in sku_test_config.items():
+                if key != "timeout" and value is not None:
+                    entry[key] = value
             filtered_tests.append(entry)
 
     if not filtered_tests:
