@@ -64,6 +64,9 @@ class DPTReassembleLayerTT(nn.Module):
         # TT conv caches
         self._tt_proj = None
         self._tt_resize_conv = None
+        self._tt_resize_weight = None
+        self._tt_resize_bias = None
+        self._tt_resize_conv_config = None
 
     def _tt_project(self, x):
         import tt_lib.fallback_ops as fallback_ops  # type: ignore
@@ -87,20 +90,68 @@ class DPTReassembleLayerTT(nn.Module):
         import tt_lib.fallback_ops as fallback_ops  # type: ignore
         import ttnn  # type: ignore
 
-        # Preserve HF behavior for upsampling by using the learned ConvTranspose2d
-        # weights on host, then materializing the result back on TT device.
+        # Preserve HF behavior for upsampling by using learned ConvTranspose2d
+        # weights on TT when available.
         if self.factor > 1:
-            x_host = x.cpu()
-            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-            x_torch = x_host.to_torch().to(dtype=self.resize.weight.dtype)
-            y_torch = self.resize(x_torch)
-            return ttnn.from_torch(
-                y_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.tt_device,
-            )
+            try:
+                n, c, h, w = tuple(x.shape)
+                if self._tt_resize_weight is None:
+                    self._tt_resize_weight = ttnn.from_torch(
+                        self.resize.weight.detach(),
+                        dtype=ttnn.bfloat16,
+                    )
+                    self._tt_resize_bias = ttnn.from_torch(
+                        self.resize.bias.detach().view(1, 1, 1, -1),
+                        dtype=ttnn.bfloat16,
+                    )
+                    self._tt_resize_conv_config = ttnn.Conv2dConfig(
+                        weights_dtype=ttnn.bfloat16,
+                        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+
+                x_nhwc = ttnn.permute(x, (0, 2, 3, 1))
+                conv_out = ttnn.conv_transpose2d(
+                    input_tensor=x_nhwc,
+                    weight_tensor=self._tt_resize_weight,
+                    bias_tensor=self._tt_resize_bias,
+                    in_channels=self.resize.in_channels,
+                    out_channels=self.resize.out_channels,
+                    device=self.tt_device,
+                    kernel_size=self.resize.kernel_size,
+                    stride=self.resize.stride,
+                    padding=self.resize.padding,
+                    output_padding=self.resize.output_padding,
+                    dilation=self.resize.dilation,
+                    batch_size=n,
+                    input_height=h,
+                    input_width=w,
+                    conv_config=self._tt_resize_conv_config,
+                    groups=self.resize.groups,
+                    mirror_kernel=True,
+                    return_output_dim=True,
+                    return_weights_and_bias=True,
+                    dtype=ttnn.bfloat16,
+                )
+                if isinstance(conv_out, (list, tuple)):
+                    y_tt = conv_out[0]
+                    if len(conv_out) >= 3 and isinstance(conv_out[2], (list, tuple)) and len(conv_out[2]) == 2:
+                        self._tt_resize_weight, self._tt_resize_bias = conv_out[2]
+                else:
+                    y_tt = conv_out
+                return ttnn.permute(y_tt, (0, 3, 1, 2))
+            except Exception:
+                # Fallback for runtimes missing conv_transpose2d support.
+                x_host = x.cpu()
+                if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
+                    x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
+                x_torch = x_host.to_torch().to(dtype=self.resize.weight.dtype)
+                y_torch = self.resize(x_torch)
+                return ttnn.from_torch(
+                    y_torch,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.tt_device,
+                )
 
         if isinstance(self.resize, nn.Identity):
             return x
@@ -278,7 +329,7 @@ class DPTReassembly(nn.Module):
 
         # Map selected backbone outputs to stage indices 0..len(neck_hidden_sizes)-1.
         max_idx = max(0, self.config.num_hidden_layers - 1)
-        safe_layers = [min(i, max_idx) for i in self.config.output_layers]
+        safe_layers = [min(max(int(i), 0), max_idx) for i in self.config.output_layers]
         for stage_idx, layer_idx in enumerate(safe_layers):
             fmap = feats.features[layer_idx + 1]  # stored with +1 offset
 
