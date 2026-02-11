@@ -734,18 +734,31 @@ jobs:
         run: |
           pip install psycopg2-binary
 
-      - name: Generate JSON from database
+      - name: Generate JSON from database (V1 - legacy)
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
-          # Use the centralized reconstruction script
-          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
+          # Reconstruct from ttnn_ops schema (V1 format for backward compatibility)
+          python tests/sweep_framework/load_ttnn_ops_data.py reconstruct \
+            model_tracer/traced_operations/ttnn_operations_master_reconstructed.json \
+            ttnn_ops
 
-      - name: Upload master JSON artifact
+      - name: Generate JSON from database (V2 - new format)
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        run: |
+          # Reconstruct from ttnn_ops_v2 schema (V2 format with per-tensor placement)
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct \
+            model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json \
+            ttnn_ops_v2
+
+      - name: Upload master JSON artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ttnn-operations-master-json
-          path: model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
+          path: |
+            model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
+            model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json
           retention-days: 1
 
   ttnn-generate-sweeps:
