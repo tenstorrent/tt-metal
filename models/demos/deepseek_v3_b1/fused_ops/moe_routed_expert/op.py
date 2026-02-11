@@ -1212,12 +1212,10 @@ class MoeRoutedExpert:
 
             # Calculate reduce tensor properties
             reduce_sample = reduce_intermediate_r1_per_device[0]
-            reduce_dtype = reduce_sample.dtype
             reduce_element_size = 2  # bfloat16
 
             reduce_shard_spec = reduce_sample.memory_config().shard_spec
             reduce_shard_shape = reduce_shard_spec.shape
-            reduce_shard_width = reduce_shard_shape[1]
 
             # Compute tiles use 32x32 format
             reduce_compute_tile_h = 32
@@ -1818,7 +1816,6 @@ class MoeRoutedExpert:
                         dest_coord = reduce_root_coord  # No actual send
 
                     # Get fabric node IDs
-                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
                     dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
 
                     # Get per-device tensors for this device
@@ -1826,7 +1823,6 @@ class MoeRoutedExpert:
                     r2_tensor = reduce_params["intermediate_r2_per_device"][chip_id]
                     r3_tensor = reduce_params["intermediate_r3_per_device"][chip_id]
                     out_tensor = reduce_params["output_per_device"][chip_id]
-                    local_tensor = reduce_params["final_output_per_device"][chip_id]
 
                     # Create CB descriptors for reduce operation
                     reduce_all_cores_set = ttnn.CoreRangeSet(
