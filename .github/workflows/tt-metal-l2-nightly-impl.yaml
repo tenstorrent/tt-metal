@@ -564,70 +564,6 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
-  ttnn-bos-tests:
-    if: ${{ inputs.run_ttnn-bos-tests }}
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        TT_METAL_HOME: /work
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4, 3"
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ttnn nightly bos ${{ matrix.test_type }} tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
-    strategy:
-      matrix:
-        test_type: [conv, pool, group_norm]
-        include:
-          - test_type: conv
-            test_path: tests/ttnn/nightly/unit_tests/operations/conv
-            test_filter: "panoptic or _oft"
-            owner: U052J2QDDKQ # Pavle Josipovic
-          - test_type: pool
-            test_path: tests/ttnn/nightly/unit_tests/operations/pool
-            test_filter: "panoptic or _oft"
-            owner: U052J2QDDKQ # Pavle Josipovic
-          - test_type: group_norm
-            test_path: tests/ttnn/unit_tests/operations/fused
-            test_filter: "_oft"
-            owner: U06Q7ESTFEV # Borys Bradel
-    steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ttnn nightly bos ${{ matrix.test_type }} tests
-        timeout-minutes: ${{ inputs.timeout }}
-        run: pytest ${{ matrix.test_path }} -v -m "not disable_fast_runtime_mode" -k "${{ matrix.test_filter }}" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.owner }}
-
   ttnn-eltwise-tests:
     if: ${{ inputs.run_eltwise_tests }}
     container:
@@ -834,6 +770,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          hang-detection-timeout: 10.0
       - name: ttnn nightly data_movement tests
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}

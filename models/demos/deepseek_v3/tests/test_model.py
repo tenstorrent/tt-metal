@@ -72,7 +72,7 @@ def generate_reference_io(
     torch_input = torch.randint(0, hf_config.vocab_size - 1, (batch_size, seq_len), dtype=torch.long)
     position_ids = None
     if mode == "prefill":
-        position_ids_or_seq_lens = torch.tensor([seq_len])
+        position_ids_or_seq_lens = torch.full((batch_size,), seq_len, dtype=torch.long)
     else:
         if decode_position_id is None:
             position_ids = position_ids_or_seq_lens = torch.randint(
@@ -87,12 +87,57 @@ def generate_reference_io(
                 )
             position_ids = position_ids_or_seq_lens = torch.ones(batch_size, dtype=torch.long) * decode_position_id
 
-    logger.info(
-        f"Running reference model with torch_input shape: {torch_input.shape} and position_ids shape: {position_ids_or_seq_lens.shape}"
-    )
-    reference_output, input_cache, output_cache = run_reference_with_attention(
-        reference_model, torch_input, position_ids_or_seq_lens, None, hf_config, mode, False
-    )
+    def extract_output_and_cache(model_output):
+        if isinstance(model_output, tuple):
+            # HF outputs can be tuples with cache at different indices.
+            cache_idx = 2 if len(model_output) == 3 else 1
+            return model_output[0], model_output[cache_idx]
+        if hasattr(model_output, "logits"):
+            return model_output.logits, model_output.past_key_values
+        if hasattr(model_output, "last_hidden_state"):
+            return model_output.last_hidden_state, model_output.past_key_values
+        raise AttributeError(f"Model output has neither 'last_hidden_state' nor 'logits': {type(model_output)}")
+
+    if mode == "decode" and torch.any(position_ids_or_seq_lens != 0).item():
+        # this is the non-zero position_ids case and we are prefilling the cache for the decode step
+        # this reference cache is used by TT model also for the non-zero position_ids case
+        logger.info("Running reference prefill for decode cache for non-zero position_ids case")
+        prefill_len = int(position_ids_or_seq_lens.max().item())
+        assert torch.all(
+            position_ids_or_seq_lens <= prefill_len
+        ).item(), "position_ids must not exceed prefill_len used to build the attention mask"
+        prefill_input = torch.randint(0, hf_config.vocab_size - 1, (batch_size, prefill_len), dtype=torch.long)
+        prefill_seq_lens = torch.full((batch_size,), prefill_len, dtype=torch.long)
+
+        _, _, prefill_cache = run_reference_with_attention(
+            reference_model, prefill_input, prefill_seq_lens, None, hf_config, "prefill", False
+        )
+
+        torch_input = torch.randint(0, hf_config.vocab_size - 1, (batch_size, 1), dtype=torch.long)
+        position_ids = position_ids_or_seq_lens
+        position_ids_2d = position_ids.unsqueeze(1)
+        mask = torch.full((batch_size, 1, 1, prefill_len + 1), float("-inf"), dtype=torch.bfloat16)
+        # Vectorized construction of the attention mask using broadcasting.
+        seq_positions = torch.arange(prefill_len + 1, device=position_ids.device)
+        valid_positions = seq_positions.unsqueeze(0) < position_ids.unsqueeze(1)
+        mask = mask.masked_fill(valid_positions.reshape(batch_size, 1, 1, prefill_len + 1), 0.0)
+        mask[:, :, :, -1] = 0.0
+
+        with torch.no_grad():
+            model_output_raw = reference_model(
+                torch_input,
+                attention_mask=mask,
+                position_ids=position_ids_2d,
+                output_attentions=False,
+                use_cache=True,
+                past_key_values=prefill_cache,
+            )
+        reference_output, output_cache = extract_output_and_cache(model_output_raw)
+        input_cache = prefill_cache
+    else:
+        reference_output, input_cache, output_cache = run_reference_with_attention(
+            reference_model, torch_input, position_ids_or_seq_lens, None, hf_config, mode, False
+        )
     logger.info(f"Reference model output shape: {reference_output.shape}")
     input_cache = torch_cache_from_transformers(input_cache)
     output_cache = torch_cache_from_transformers(output_cache)
@@ -205,8 +250,7 @@ def run_test_forward_pass_dpmodel(
 # see documentation for expand_test_cases_with_position_ids_ranges for more details
 BASE_TEST_CASES = [
     # mode, seq_len, batch_size_per_row, decode_position_ids
-    # ("decode", 1, USERS_PER_ROW, None), # TODO: test gives low PCC for random position_ids and non-zero position_ids cases. Need to investigate why.
-    ("decode", 1, USERS_PER_ROW, 0),
+    ("decode", 1, USERS_PER_ROW, None),
 ] + [
     ("prefill", seq_len, 1, None)
     if seq_len == 128
@@ -256,8 +300,8 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    # Set less layers and shorter max length for the sake of testing
-    hf_config_short.num_hidden_layers = 8
+    # Set fewer number oflayers to speed test and avoid OOM
+    hf_config_short.num_hidden_layers = 5
 
     # Only use decode_position_ids for decode mode
     if mode != "decode":

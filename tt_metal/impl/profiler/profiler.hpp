@@ -342,6 +342,14 @@ public:
 
     void setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_dram_banks);
 
+    // Clear internal state when device is re-initialized. This prevents stale data from previous
+    // device sessions from being used.
+    void clearStateForDeviceReinit();
+
+    // Reset active DRAM buffer indices to 0 for all cores. This should be called when
+    // clearing device-side profiler control buffers to keep host and device state in sync.
+    void resetActiveDramBufferIndices();
+
     // Read control buffer for each core, check if the host buffer for any risc is full. If it's full,
     // swap the active DRAM buffer to unblock the risc and then read out the buffer
     void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);

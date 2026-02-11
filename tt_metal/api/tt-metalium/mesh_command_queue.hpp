@@ -95,8 +95,20 @@ public:
         std::optional<BufferRegion> region = std::nullopt) = 0;
     virtual void enqueue_write_mesh_buffer(
         const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) = 0;
+    // If PinnedMemory is attached to a HostBuffer used within the enqueue_write, the contents of the memory must not be
+    // modified until the enqueue_write has completed on the device. This may be checked by any of
+    // * calling lock() on the PinnedMemory
+    // * setting the blocking parameter to true
+    // * calling finish() on the MeshCommandQueue
+    // * calling enqueue_record_event_to_host() and then waiting for the event to complete on the host.
     virtual void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
+    // If PinnedMemory is set on a ShardDataTransfer, the contents of the memory must not be modified until the
+    // enqueue_write has completed on the device. This may be checked by any of
+    // * calling lock() on the PinnedMemory
+    // * setting the blocking parameter to true
+    // * calling finish() on the MeshCommandQueue
+    // * calling enqueue_record_event_to_host() and then waiting for the event to complete on the host.
     virtual void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,

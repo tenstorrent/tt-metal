@@ -221,6 +221,14 @@ void MetalContext::initialize(
         std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
     noc_debug_state_ = std::make_unique<NOCDebugState>();
 
+    if (rtoptions_.get_experimental_noc_debug_dump_enabled()) {
+        TT_FATAL(
+            !rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint),
+            "Both DPRINT and NOC debug dump cannot be enabled at the same time.");
+        TT_FATAL(
+            !rtoptions_.get_watcher_enabled(), "Both Watcher and NOC debug dump cannot be enabled at the same time.");
+    }
+
     if (rtoptions_.get_profiler_enabled()) {
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
@@ -290,7 +298,7 @@ void MetalContext::initialize(
 
         // Wait for all async tasks to complete
         for (auto& fut : futures) {
-            fut.wait();
+            fut.get();
         }
     }
 
@@ -493,6 +501,7 @@ void MetalContext::reinitialize_for_real_hardware() {
 
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
+    control_plane_.reset();
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
@@ -832,6 +841,16 @@ void MetalContext::set_fabric_config(
     this->fabric_udm_mode_ = fabric_udm_mode;
     this->fabric_manager_ = fabric_manager;
     this->fabric_router_config_ = router_config;
+
+    // Reinitialize control plane with updated fabric settings
+    if (control_plane_ != nullptr) {
+        log_info(
+            tt::LogMetal,
+            "Fabric config changed from {} to {}, reinitializing control plane",
+            this->get_control_plane().get_fabric_config(),
+            this->fabric_config_);
+        this->initialize_control_plane_impl();
+    }
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -842,11 +861,7 @@ void MetalContext::initialize_fabric_config() {
     this->cluster_->configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
-    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
-        control_plane.initialize_fabric_context(this->fabric_config_, this->fabric_router_config_);
-    }
-    control_plane.configure_routing_tables_for_fabric_ethernet_channels(
-        this->fabric_config_, this->fabric_reliability_mode_);
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
@@ -885,9 +900,31 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-            mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
+            *this->cluster_,
+            this->rtoptions_,
+            *hal_,
+            *distributed_context_,
+            mesh_graph_desc_path.string(),
+            logical_mesh_chip_id_to_physical_chip_id_mapping_,
+            this->fabric_config_,
+            this->fabric_reliability_mode_,
+            this->fabric_tensix_config_,
+            this->fabric_udm_mode_,
+            this->fabric_router_config_,
+            this->fabric_manager_);
     } else {
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+            *this->cluster_,
+            this->rtoptions_,
+            *hal_,
+            *distributed_context_,
+            mesh_graph_desc_path.string(),
+            this->fabric_config_,
+            this->fabric_reliability_mode_,
+            this->fabric_tensix_config_,
+            this->fabric_udm_mode_,
+            this->fabric_router_config_,
+            this->fabric_manager_);
     }
 }
 
@@ -903,7 +940,17 @@ void MetalContext::construct_control_plane() {
             "physical mapping.");
     }
     log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
-    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>();
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+        *this->cluster_,
+        this->rtoptions_,
+        *hal_,
+        *distributed_context_,
+        this->fabric_config_,
+        this->fabric_reliability_mode_,
+        this->fabric_tensix_config_,
+        this->fabric_udm_mode_,
+        this->fabric_router_config_,
+        this->fabric_manager_);
 }
 
 void MetalContext::initialize_control_plane() {
@@ -931,7 +978,7 @@ void MetalContext::initialize_control_plane_impl() {
         this->construct_control_plane();
     } else {
         auto cluster_type = cluster_->get_cluster_type();
-        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
+        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_->is_ubb_galaxy());
         std::filesystem::path mesh_graph_desc_path =
             tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
                 cluster_type, rtoptions_.get_root_dir(), fabric_type);

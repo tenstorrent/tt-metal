@@ -46,10 +46,22 @@ struct AddcmulOperation {
         const std::optional<Tensor>& output = std::nullopt);
 };
 
+// Addcdiv Operation
+struct AddcdivOperation {
+    static Tensor invoke(
+        const Tensor& input_a,
+        const Tensor& input_b,
+        const Tensor& input_c,
+        float value = 1.0f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt);
+};
+
 }  // namespace operations::ternary
 
 // Register the operations
 constexpr auto where = ttnn::register_operation<"ttnn::where", operations::ternary::WhereOperation>();
 constexpr auto addcmul = ttnn::register_operation<"ttnn::addcmul", operations::ternary::AddcmulOperation>();
+constexpr auto addcdiv = ttnn::register_operation<"ttnn::addcdiv", operations::ternary::AddcdivOperation>();
 
 }  // namespace ttnn

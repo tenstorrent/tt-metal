@@ -11,13 +11,18 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 from models.tt_transformers.tt.rope import RotarySetup
 
 
 @torch.no_grad()
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    ([False]),
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -44,7 +49,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1,),
+    (1, 32),
 )
 @pytest.mark.parametrize(
     "max_seq_len",
@@ -56,11 +61,31 @@ from models.tt_transformers.tt.rope import RotarySetup
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
-    max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, generation_length
+    max_seq_len,
+    batch_size,
+    paged_attention,
+    page_params,
+    mesh_device,
+    reset_seeds,
+    ensure_gc,
+    generation_length,
+    use_prefetcher,
 ):
     dtype = ttnn.bfloat8_b
+    mode = Mode.DECODE
+    num_tensors = 5 if use_prefetcher else 0
+    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    if use_prefetcher:
+        prefetcher.init(mode=mode)
+
+    model_args = ModelArgs(
+        mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        cache_hf=True,
+        prefetcher=prefetcher,
+    )
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -85,6 +110,7 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
         model_args.use_qk_fused,
+        prefetcher=prefetcher,
     )
 
     if model_args.rope_theta_local is not None:
@@ -141,7 +167,10 @@ def test_decoder_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher,
     )
+    if use_prefetcher:
+        tt_model.prefetcher.prefetch()
 
     seqlen = 1
 
@@ -162,6 +191,9 @@ def test_decoder_inference(
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
 
+        if prefetcher is not None:
+            prefetcher.run()
+
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (
             torch.rand(
@@ -173,28 +205,30 @@ def test_decoder_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            # ttnn.DRAM_MEMORY_CONFIG,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            model_args.get_residual_mem_config(mode, prefetcher),
         )
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
         rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
+
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
             rot_mats_local=rot_mats_local,
-            mode="decode",
+            mode=mode,
             page_table=page_table_tt,
         )
+
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
 
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
+
         # In this test all users have the same position
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0) if freqs_cis is not None else None
 
