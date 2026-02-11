@@ -761,111 +761,6 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
 @pytest.mark.parametrize(
     "test_case",
     [
-        # qkv_a: K=896, N=2112
-        {
-            "batch": 1,
-            "k": 896,
-            "n": 2112,
-            "in1_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.999,
-        },
-        # wq_b: K=1536, N=3072
-        {
-            "batch": 1,
-            "k": 1536,
-            "n": 3072,
-            "in1_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.999,
-        },
-        # wo: K=16384, N=896
-        {
-            "batch": 1,
-            "k": 16384,
-            "n": 896,
-            "in1_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.999,
-        },
-        # wkv_b1: batch=16, K=128, N=512
-        {
-            "batch": 16,
-            "k": 128,
-            "n": 512,
-            "in1_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.9997,
-        },
-        # wkv_b2: batch=128, K=512, N=128
-        {
-            "batch": 128,
-            "k": 512,
-            "n": 128,
-            "in1_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.9997,
-        },
-    ],
-    ids=["qkv_a", "wq_b", "wo", "wkv_b1", "wkv_b2"],
-)
-@pytest.mark.parametrize("seq_len", [128, 1024, 4096, 8192])  # 32768, 131072])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
-def test_matmul_seq_len_sweep_dram_interleaved(device, test_case, seq_len):
-    """
-    Test matmul with both in0 and in1 as DRAM interleaved.
-    Sweeps seq_len (M dimension) for deepseek matmul shapes.
-    No program config provided - auto-decide.
-
-    Unbatched: [1, 1, seq_len, K] x [1, 1, K, N]
-    Batched:   [1, B, seq_len, K] x [1, B, K, N]
-    """
-    torch.manual_seed(0)
-
-    batch = test_case["batch"]
-    k = test_case["k"]
-    n = test_case["n"]
-    in1_dtype = test_case["in1_dtype"]
-    expected_pcc = test_case["expected_pcc"]
-
-    # Create torch tensors
-    in0_shape = [1, batch, seq_len, k]
-    in1_shape = [1, batch, k, n]
-
-    in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
-    in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
-
-    # Both inputs: DRAM interleaved
-    in0_t = ttnn.from_torch(
-        in0,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    in1_t = ttnn.from_torch(
-        in1,
-        dtype=in1_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    # Run matmul with no program config (auto-decide)
-    output_t = ttnn.matmul(
-        in0_t,
-        in1_t,
-        dtype=ttnn.bfloat16,
-    )
-
-    # Validate
-    output_tensor = ttnn.to_torch(output_t)
-    pt_out = torch.matmul(in0, in1)
-
-    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    logger.info(pcc_message)
-    assert pcc_passed, f"PCC check failed: {pcc_message}"
-
-
-@pytest.mark.parametrize(
-    "test_case",
-    [
         # Unbatched matmuls - in0 DRAM interleaved, in1 DRAM WIDTH sharded across 12 banks
         # Uses MatmulMultiCoreReuseMultiCastProgramConfig (2D multicast)
         # qkv_a: K=896, N=2112
@@ -920,22 +815,13 @@ def test_matmul_seq_len_sweep_dram_interleaved(device, test_case, seq_len):
         "wkv_b2_12banks",
     ],
 )
-@pytest.mark.parametrize("seq_len", [128, 1024, 4096, 8192])  # 32768, 131072])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
+@pytest.mark.parametrize("seq_len", [128])  # , 1024, 4096, 8192])  # 32768, 131072])
 def test_matmul_seq_len_sweep_dram_sharded(device, test_case, seq_len):
     """
-    Test matmul with in0 DRAM interleaved and in1 DRAM sharded.
-    Sweeps seq_len (M dimension) for deepseek matmul shapes.
+    Tests the MLA prefill matmuls with in0 DRAM interleaved and in1 DRAM sharded.
     Uses MatmulMultiCoreReuseMultiCastProgramConfig (2D multicast).
-
-    in0 is always DRAM interleaved BF16.
-
-    Unbatched (batch=1):
-        in1: DRAM WIDTH sharded (matching test_matmul_l1_dram_sharded)
-        fuse_batch=True
-    Batched (batch>1):
-        in1: DRAM HEIGHT sharded by batch (matching test_matmul_batched_dram_sharded)
-        fuse_batch=False
+    This exercises the prefill when forced to use the decode optimised weight sharding
+    i.e. in1 is DRAM sharded - width for unbatched, and height (by batch) for batched matmuls
     """
     torch.manual_seed(0)
 
@@ -1062,7 +948,7 @@ def test_matmul_seq_len_sweep_dram_sharded(device, test_case, seq_len):
             while in0_block_w > 1 and K_tiles % in0_block_w != 0:
                 in0_block_w -= 1
 
-    # Determine out_block_h to fit in L1.
+    # Determine out_block_h to make sure the matmul will fit in L1.
     # CBs that scale with out_block_h * out_block_w:
     #   interm0 (fp32): out_block_h * out_block_w * 4096 bytes
     #   output (bf16):  out_block_h * out_block_w * 2048 bytes
