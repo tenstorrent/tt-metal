@@ -119,7 +119,8 @@ void kernel_main() {
 
 #ifdef USE_MUX
     // Backward Mux
-    bool mux_connection_valid_backward = get_arg_val<uint32_t>(argidx++) == 1;
+    bool mux_connection_valid_backward =
+        ((get_arg_val<uint32_t>(argidx++) == 1) && (in0_core_order_index == in0_core_order_size - 2));
     const bool is_termination_master_backward = get_arg_val<uint32_t>(argidx++);
     const uint8_t fabric_mux_x_backward = get_arg_val<uint32_t>(argidx++);
     const uint8_t fabric_mux_y_backward = get_arg_val<uint32_t>(argidx++);
@@ -140,7 +141,8 @@ void kernel_main() {
     uint32_t termination_master_noc_y_backward = get_arg_val<uint32_t>(argidx++);
 
     // Forward Mux
-    bool mux_connection_valid_forward = get_arg_val<uint32_t>(argidx++) == 1;
+    bool mux_connection_valid_forward =
+        ((get_arg_val<uint32_t>(argidx++) == 1) && (in0_core_order_index == in0_core_order_size - 1));
     const bool is_termination_master_forward = get_arg_val<uint32_t>(argidx++);
     const uint8_t fabric_mux_x_forward = get_arg_val<uint32_t>(argidx++);
     const uint8_t fabric_mux_y_forward = get_arg_val<uint32_t>(argidx++);
@@ -274,7 +276,6 @@ void kernel_main() {
 
     const uint64_t in0_receiver_semaphore_noc_addr =
         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
-#ifdef USE_MUX
     // all gather
     volatile tt_l1_ptr uint32_t* out_ready_sem_backward_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_backward);
@@ -291,6 +292,7 @@ void kernel_main() {
     uint64_t out_ready_sem_injector_noc_addr_forward_in_pkt =
         safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_forward, 0);
 
+#ifdef USE_MUX
     // pre-populate packet headers
     auto pkt_scatter_hdr_backward = PacketHeaderPool::allocate_header();
     auto pkt_unicast_hdr_backward = PacketHeaderPool::allocate_header();
@@ -413,7 +415,6 @@ void kernel_main() {
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
 
                 uint32_t k_block = 0;
-#ifdef USE_MUX
                 uint32_t device_iter = (k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter)) /
                                        (K_num_blocks / num_devices);  // which device this k_block is coming from
                 uint32_t k_block_left_tile = 0;
@@ -435,7 +436,6 @@ void kernel_main() {
                     1,
                     k_block_left_tile,
                     k_block_right_tile);
-#endif
                 if (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
@@ -617,10 +617,10 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
     }
+#endif
 
     noc_async_write_barrier();
 
     noc_semaphore_set(out_ready_sem_backward_addr_ptr, 0);
     noc_semaphore_set(out_ready_sem_forward_addr_ptr, 0);
-#endif
 }

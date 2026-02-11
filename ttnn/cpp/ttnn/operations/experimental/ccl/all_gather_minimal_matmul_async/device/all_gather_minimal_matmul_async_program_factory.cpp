@@ -324,9 +324,16 @@ all_gather_minimal_matmul_async_factory_helper(
     auto core_endx_0 = CoreCoord{grid_size.x - 1, 0};
     auto core_0_endy = CoreCoord{0, grid_size.y - 1};
     auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
+    auto core_endx_2_endy = CoreCoord{grid_size.x - 3, grid_size.y - 1};
+    auto core_endx_endy_2 = CoreCoord{grid_size.x - 1, grid_size.y - 3};
+    auto core_0_endy_1 = CoreCoord{0, grid_size.y - 2};
+    auto core_endx_1_0 = CoreCoord{grid_size.x - 2, 0};
 
     auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
-    auto in0_receiver_cores = CoreRange(transpose_core_grid ? core_0_1 : core_1_0, core_endx_endy);
+    auto in0_receiver_cores_no_fabric =
+        transpose_core_grid ? CoreRange(core_0_1, core_endx_endy_2) : CoreRange(core_1_0, core_endx_2_endy);
+    auto in0_receiver_cores_fabric =
+        transpose_core_grid ? CoreRange(core_0_endy_1, core_endx_endy) : CoreRange(core_endx_1_0, core_endx_endy);
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
@@ -392,7 +399,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t l1_unreserved_base_address =
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    auto num_full_size_channels = num_workers_per_link * (transpose_core_grid ? grid_size.y : grid_size.x);
+    auto num_full_size_channels = num_workers_per_link;
     auto num_header_only_channels = 0;
     size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
@@ -442,13 +449,17 @@ all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
 
     std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> in0_defines;
     std::map<std::string, std::string> in0_injector_defines;
+    std::map<std::string, std::string> in0_fabric_defines;
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
-    in0_injector_defines = defines;
-    in0_injector_defines["USE_MUX"] = "1";
-    in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
+    in0_defines = defines;
+    in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
+    in0_defines["IS_IN0"] = "1";
+    in0_fabric_defines = in0_defines;
+    in0_fabric_defines["USE_MUX"] = "1";
 
     uint32_t in0_addr = ag_output_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
@@ -490,15 +501,6 @@ all_gather_minimal_matmul_async_factory_helper(
         num_targets_backward,
         static_cast<uint32_t>(topology),
     };
-    fabric_mux_connection_ct_args(
-        transpose_core_grid ? num_workers_per_link * grid_size.y : num_workers_per_link * grid_size.x,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mux_kernel_config,
-        in0_sender_compile_time_args);
-    in0_sender_compile_time_args.insert(
-        in0_sender_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
-    in0_sender_compile_time_args.insert(
-        in0_sender_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
     append_accessors(in0_sender_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
     auto in0_sender_kernels_id = CreateKernel(
         program,
@@ -508,9 +510,47 @@ all_gather_minimal_matmul_async_factory_helper(
             .processor = in0_risc,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = in0_injector_defines});
+            .defines = in0_defines});
 
-    std::vector<uint32_t> in0_receiver_compile_time_args = {
+    std::vector<uint32_t> in0_receiver_no_fabric_compile_time_args = {
+        M_tiles,
+        padded_M_tiles,
+        K_tiles,
+        padded_K_tiles,
+        N_tiles,
+        padded_N_tiles,
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles,
+        M_blocks_per_core,
+        N_blocks_per_core,
+        in0_tile_size,
+        out_tile_size,
+        in2_tile_size,
+        in0_is_output_writer,
+        false,  // is_injector_core
+        ring_size,
+        ring_index,
+        in3_tile_size,
+        num_tiles_to_write_per_packet,
+        num_targets_forward,
+        num_targets_backward,
+        static_cast<uint32_t>(topology),
+    };
+    append_accessors(
+        in0_receiver_no_fabric_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
+
+    auto in0_receiver_no_fabric_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
+        in0_receiver_cores_no_fabric,
+        tt::tt_metal::DataMovementConfig{
+            .processor = in0_risc,
+            .noc = in0_noc,
+            .compile_args = in0_receiver_no_fabric_compile_time_args,
+            .defines = in0_defines});
+
+    std::vector<uint32_t> in0_receiver_fabric_compile_time_args = {
         M_tiles,
         padded_M_tiles,
         K_tiles,
@@ -536,26 +576,26 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
     };
     fabric_mux_connection_ct_args(
-        transpose_core_grid ? num_workers_per_link * grid_size.y : num_workers_per_link * grid_size.x,
+        num_workers_per_link,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
-        in0_receiver_compile_time_args);
-    in0_receiver_compile_time_args.insert(
-        in0_receiver_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
-    in0_receiver_compile_time_args.insert(
-        in0_receiver_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+        in0_receiver_fabric_compile_time_args);
+    in0_receiver_fabric_compile_time_args.insert(
+        in0_receiver_fabric_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
+    in0_receiver_fabric_compile_time_args.insert(
+        in0_receiver_fabric_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
     append_accessors(
-        in0_receiver_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
+        in0_receiver_fabric_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
 
-    auto in0_receiver_kernels_id = CreateKernel(
+    auto in0_receiver_fabric_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
-        in0_receiver_cores,
+        in0_receiver_cores_fabric,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc,
             .noc = in0_noc,
-            .compile_args = in0_receiver_compile_time_args,
-            .defines = in0_injector_defines});
+            .compile_args = in0_receiver_fabric_compile_time_args,
+            .defines = in0_fabric_defines});
 
     std::vector<uint32_t> in1_sender_compile_time_args = {
         M_tiles,
@@ -783,58 +823,70 @@ all_gather_minimal_matmul_async_factory_helper(
             semaphore.at(1).address(),
             in0_core_order_index,
             in0_core_order.size()};
-        uint32_t worker_idx = in0_idx % num_workers_per_link;
-        auto first_in0_core = in0_core_order.front();
-        auto termination_master_logical_core = transpose_core_grid ? CoreCoord(in0_idx - worker_idx, first_in0_core.y)
-                                                                   : CoreCoord(first_in0_core.x, in0_idx - worker_idx);
-        CoreCoord termination_master_virtual_core =
-            device->worker_core_from_logical_core(termination_master_logical_core);
+        if (in0_core_order_index > (in0_core_order.size() - 3)) {
+            uint32_t worker_idx = in0_idx % num_workers_per_link;
+            auto last_in0_core = in0_core_order.back();
+            auto termination_master_logical_core_backward = transpose_core_grid
+                                                                ? CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
+                                                                : CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
+            CoreCoord termination_master_virtual_core_backward =
+                device->worker_core_from_logical_core(termination_master_logical_core_backward);
 
-        // in0 backward sender
-        uint32_t mux_core_index_backward =
-            ((in0_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
-        if (mux_core_index_backward >= full_grid_size.x) {
-            mux_core_index_backward = mux_core_index_backward - full_grid_size.x;
-        }
-        auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
-        CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
-        fabric_mux_connection_rt_args(
-            mux_connection_valid(0),
-            (in0_core_order_index == 0) && !(in0_idx % num_workers_per_link),
-            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-            mux_virtual_core_backward,
-            (in0_core_order_index * num_workers_per_link) + worker_idx,
-            core,
-            mux_kernel_config,
-            program,
-            termination_master_virtual_core,
-            in0_args);
+            // in0 backward sender
+            uint32_t mux_core_index_backward =
+                ((in0_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
+            if (mux_core_index_backward >= full_grid_size.x) {
+                mux_core_index_backward = mux_core_index_backward - full_grid_size.x;
+            }
+            auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
+            CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
+            fabric_mux_connection_rt_args(
+                mux_connection_valid(0),
+                (in0_core_order_index == (in0_core_order.size() - 2)) && !(in0_idx % num_workers_per_link),
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                mux_virtual_core_backward,
+                worker_idx,
+                core,
+                mux_kernel_config,
+                program,
+                termination_master_virtual_core_backward,
+                in0_args);
 
-        // in0 forward sender
-        uint32_t mux_core_index_forward =
-            ((in0_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
-        if (mux_core_index_forward >= full_grid_size.x) {
-            mux_core_index_forward = mux_core_index_forward - full_grid_size.x;
+            auto termination_master_logical_core_forward = transpose_core_grid
+                                                               ? CoreCoord(in0_idx - worker_idx, last_in0_core.y)
+                                                               : CoreCoord(last_in0_core.x, in0_idx - worker_idx);
+            CoreCoord termination_master_virtual_core_forward =
+                device->worker_core_from_logical_core(termination_master_logical_core_forward);
+
+            // in0 forward sender
+            uint32_t mux_core_index_forward =
+                ((in0_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
+            if (mux_core_index_forward >= full_grid_size.x) {
+                mux_core_index_forward = mux_core_index_forward - full_grid_size.x;
+            }
+            auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
+            CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
+            fabric_mux_connection_rt_args(
+                mux_connection_valid(1),
+                (in0_core_order_index == (in0_core_order.size() - 1)) && !(in0_idx % num_workers_per_link),
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                mux_virtual_core_forward,
+                worker_idx,
+                core,
+                mux_kernel_config,
+                program,
+                termination_master_virtual_core_forward,
+                in0_args);
         }
-        auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
-        CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
-        fabric_mux_connection_rt_args(
-            mux_connection_valid(1),
-            (in0_core_order_index == 0) && !(in0_idx % num_workers_per_link),
-            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-            mux_virtual_core_forward,
-            (in0_core_order_index * num_workers_per_link) + worker_idx,
-            core,
-            mux_kernel_config,
-            program,
-            termination_master_virtual_core,
-            in0_args);
         if (in0_core_order_index == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
+        } else if (in0_core_order_index > (in0_core_order.size() - 3)) {
+            // in0 receiver fabric
+            SetRuntimeArgs(program, in0_receiver_fabric_kernels_id, core, in0_args);
         } else {
-            // in0 receiver
-            SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
+            // in0 receiver no fabric
+            SetRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, core, in0_args);
         }
 
         std::vector<uint32_t> in1_args = {
@@ -876,10 +928,12 @@ all_gather_minimal_matmul_async_factory_helper(
         num_cores,
         cores,
         in0_sender_kernels_id,
-        in0_receiver_kernels_id,
+        in0_receiver_fabric_kernels_id,
+        in0_receiver_no_fabric_kernels_id,
         in1_sender_kernels_id,
         in1_receiver_kernels_id,
-        transpose_core_grid};
+        transpose_core_grid,
+        transpose_core_grid ? grid_size.y : grid_size.x};
 }
 
 }  // namespace detail
@@ -919,9 +973,13 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
         auto in3_addr = tensor_args.input_tensor.buffer()->address();
         auto& in0_sender_runtime_args = GetRuntimeArgs(program, shared_variables.in0_sender_kernels_id);
-        auto& in0_receiver_runtime_args = GetRuntimeArgs(program, shared_variables.in0_receiver_kernels_id);
+        auto& in0_receiver_no_fabric_runtime_args =
+            GetRuntimeArgs(program, shared_variables.in0_receiver_no_fabric_kernels_id);
+        auto& in0_receiver_fabric_runtime_args =
+            GetRuntimeArgs(program, shared_variables.in0_receiver_fabric_kernels_id);
         auto& in1_sender_runtime_args = GetRuntimeArgs(program, shared_variables.in1_sender_kernels_id);
         auto& in1_receiver_runtime_args = GetRuntimeArgs(program, shared_variables.in1_receiver_kernels_id);
+        auto in1_size = shared_variables.in1_size;
 
         for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
             CoreCoord core = shared_variables.cores.at(i);
@@ -935,8 +993,16 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
                 in0_sender_args[3] = in3_addr;
                 in0_sender_args[21] = out_ready_semaphore_backward.address();
                 in0_sender_args[22] = out_ready_semaphore_forward.address();
+            } else if (in1_idx > (in1_size - 3)) {
+                auto& in0_receiver_args = in0_receiver_fabric_runtime_args[core.x][core.y];
+                in0_receiver_args[0] = in0_addr;
+                in0_receiver_args[1] = output_addr;
+                in0_receiver_args[2] = in2_addr;
+                in0_receiver_args[3] = in3_addr;
+                in0_receiver_args[21] = out_ready_semaphore_backward.address();
+                in0_receiver_args[22] = out_ready_semaphore_forward.address();
             } else {
-                auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
+                auto& in0_receiver_args = in0_receiver_no_fabric_runtime_args[core.x][core.y];
                 in0_receiver_args[0] = in0_addr;
                 in0_receiver_args[1] = output_addr;
                 in0_receiver_args[2] = in2_addr;
