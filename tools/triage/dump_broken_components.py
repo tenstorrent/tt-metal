@@ -11,7 +11,8 @@ Options:
     --user-view      Draws broken cores instead of listing them. Broken cores are marked with an 'x' others are marked with a '-'.
 
 Description:
-    Probes devices by reading L1 address 0 and probes cores by attempting to halt them.
+    This script checks what devices and cores are broken before starting triage.
+    It does that by probing devices by reading L1 address 0 and probes cores by attempting to halt them.
     Devices that time out are marked broken. Cores that fail to halt are marked broken.
 
 Owner:
@@ -93,18 +94,19 @@ class DeviceHealthSummary:
     )
 
 
-def collect_device_health_summary(run_checks: RunChecks) -> DeviceHealthSummary:
+def collect_device_health_summary(run_checks: RunChecks) -> list[DeviceHealthSummary] | None:
     broken_devices = run_checks.get_broken_devices()
+    device_health_summaries: list[DeviceHealthSummary] = []
     for device in run_checks.devices:
         if device in broken_devices:
-            return DeviceHealthSummary(device=device, broken_cores=f"[error]Device is broken so it is skipped.[/]")
+            device_health_summaries.append(
+                DeviceHealthSummary(device=device, broken_cores=f"[error]Device is broken so it is skipped.[/]")
+            )
         else:
             broken_cores = run_checks.get_broken_cores()
-            return (
-                DeviceHealthSummary(device=device, broken_cores=broken_cores[device])
-                if device in broken_cores
-                else None
-            )
+            if device in broken_cores:
+                device_health_summaries.append(DeviceHealthSummary(device=device, broken_cores=broken_cores[device]))
+    return device_health_summaries if len(device_health_summaries) > 0 else None
 
 
 def run(args, context: Context):

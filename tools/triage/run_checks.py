@@ -371,6 +371,12 @@ class RunChecks:
                     check_result = check(location, risc_name)
                 except RiscHaltError as e:
                     with self._skip_lock:
+                        if (
+                            location._device in self._broken_cores.keys()
+                            and BrokenCore(location, risc_name) in self._broken_cores[location._device]
+                        ):
+                            # If the core is already broken we do not need to add it again
+                            continue
                         if location._device in self._broken_cores.keys():
                             self._broken_cores[location._device].add(BrokenCore(location, risc_name))
                         else:
