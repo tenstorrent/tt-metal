@@ -305,10 +305,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Postcondition: in1_cb has rows produced
     sub_bcast_cols_init_short(in0_cb, in1_cb);
 
-    // The exponential function uses clamp_negative=false for better performance. This version
+    // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
-    exp_tile_init<true /* approx */, true /* fast+approx */, scale_fp32, false /* clamp_negative */>();
+    exp_tile_init<true /* approx */, true /* fast+approx */, scale_fp32, InputClamping::None>();
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
     cb_wait_front(in0_cb, rows * cols);
@@ -337,7 +337,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                     true /* fast+approx */,
                     false /* scale_en */,
                     false /* skip +ve check */,
-                    false /* clamp_negative */,
+                    InputClamping::None,
                     iterations>(j, vector_mode_exp);
             }
             tile_regs_commit();
