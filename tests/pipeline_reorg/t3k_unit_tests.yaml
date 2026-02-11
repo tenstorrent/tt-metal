@@ -51,7 +51,10 @@
   model-name: falcon7b
 
 - name: t3k_falcon40b_tests
-  cmd: ls -lart /mnt/MLPerf/tt_dnn-models/tt/Falcon/tiiuae/falcon-40b-instruct/ && mkdir -p generated/test_reports && run_t3000_falcon40b_tests
+  cmd: |
+    ls -lart /mnt/MLPerf/tt_dnn-models/tt/Falcon/tiiuae/falcon-40b-instruct/
+    mkdir -p generated/test_reports
+    run_t3000_falcon40b_tests
   skus:
     wh_llmbox:
       timeout: 10
