@@ -49,7 +49,9 @@
   model-type: Motif
 
 - name: Galaxy DiT Wan2.2 model perf tests
-  cmd: export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" && pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8sp1tp0 and resolution_720p and t2v" --timeout=1200
+  cmd: |
+    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8sp1tp0 and resolution_720p and t2v" --timeout=1200
   model: wan2-2
   skus:
     wh_galaxy:
@@ -61,7 +63,10 @@
   model-type: Wan2.2
 
 - name: Galaxy Mochi model perf tests
-  cmd: export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" && export NO_PROMPT=1 && pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 " --timeout=1000
+  cmd: |
+    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    export NO_PROMPT=1
+    pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 " --timeout=1000
   model: mochi
   skus:
     wh_galaxy:
@@ -73,7 +78,9 @@
   model-type: mochi
 
 - name: Galaxy DiT Qwen-Image model perf tests
-  cmd: export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" && pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x8" --timeout=1000
+  cmd: |
+    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x8" --timeout=1000
   model: qwenimage
   skus:
     wh_galaxy:
@@ -85,7 +92,9 @@
   model-type: QwenImage
 
 - name: Galaxy Sentence Bert tests
-  cmd: pytest --timeout 600 models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py
+  cmd: |
+    pytest --timeout 600 models/demos/tg/sentence_bert/tests/device_perf_test.py
+    python3 models/perf/merge_perf_results.py
   model: sentence_bert
   skus:
     wh_galaxy:

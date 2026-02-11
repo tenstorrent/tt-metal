@@ -39,7 +39,9 @@
   team: fabric
 
 - name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
-  cmd: python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml
   skus:
     wh_galaxy:
       timeout: 15
@@ -47,7 +49,9 @@
   team: fabric
 
 - name: Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests
-  cmd: python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml
   skus:
     wh_galaxy:
       timeout: 15
@@ -72,7 +76,9 @@
   team: fabric
 
 - name: BH Galaxy Socket Pipeline Latency SendRecv Single Galaxy
-  cmd: python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline --gtest_filter="*SendRecvPipelineSingleGalaxy*"
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline --gtest_filter="*SendRecvPipelineSingleGalaxy*"
   skus:
     bh_galaxy:
       timeout: 10
