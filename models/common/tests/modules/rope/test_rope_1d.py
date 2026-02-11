@@ -17,7 +17,12 @@ from loguru import logger
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
-from models.common.modules.rope.rope_1d import RotarySetup1D, RotarySetup1DConfig, _compute_cos_sin_matrices
+from models.common.modules.rope.rope_1d import (
+    RotarySetup1D,
+    RotarySetup1DConfig,
+    _compute_cos_sin_matrices,
+    _get_rot_transformation_mat,
+)
 from models.common.utility_functions import comp_pcc
 
 # RopeScaling helpers (import from common.py for test setup)
@@ -137,10 +142,23 @@ def _list_init_test_cases() -> list[pytest.param]:
         pytest.param((1, 8), 1, 128, 8192, 1000000.0, "none", True, id="1x8-b1-hd128-none-fused"),
 
         # === Slow tests (remaining from CSV) ===
-        # Batch=32 variants
+        # (1,1) batch=32
         pytest.param((1, 1), 32, 64, 2048, 500000.0, "llama3", True, id="1x1-b32-hd64-llama3-fused", marks=_slow),
         pytest.param((1, 1), 32, 128, 2048, 500000.0, "llama3", True, id="1x1-b32-hd128-llama3-fused-8B", marks=_slow),
         pytest.param((1, 1), 32, 128, 2048, 1000000.0, "none", True, id="1x1-b32-hd128-none-fused-Mistral", marks=_slow),
+        # (1,1) hd=128, llama3, batch=1 (missing from original — Llama-3.2-3B, 3.1-8B on N150)
+        pytest.param((1, 1), 1, 128, 8192, 500000.0, "llama3", True, id="1x1-b1-hd128-llama3-fused-8B", marks=_slow),
+        pytest.param((1, 1), 1, 128, 1024, 500000.0, "llama3", True, id="1x1-b1-hd128-llama3-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 1), 32, 128, 1024, 500000.0, "llama3", True, id="1x1-b32-hd128-llama3-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 1), 1, 128, 32768, 500000.0, "llama3", True, id="1x1-b1-hd128-llama3-fused-seqlen32k", marks=_slow),
+        # (1,1) hd=128, none (Mistral), additional seq_len
+        pytest.param((1, 1), 1, 128, 1024, 1000000.0, "none", True, id="1x1-b1-hd128-none-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 1), 32, 128, 1024, 1000000.0, "none", True, id="1x1-b32-hd128-none-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 1), 1, 128, 32768, 1000000.0, "none", True, id="1x1-b1-hd128-none-fused-seqlen32k", marks=_slow),
+        # (1,1) hd=64 additional seq_len
+        pytest.param((1, 1), 1, 64, 1024, 500000.0, "llama3", True, id="1x1-b1-hd64-llama3-seqlen1024", marks=_slow),
+        pytest.param((1, 1), 32, 64, 1024, 500000.0, "llama3", True, id="1x1-b32-hd64-llama3-seqlen1024", marks=_slow),
+        pytest.param((1, 1), 1, 64, 32768, 500000.0, "llama3", True, id="1x1-b1-hd64-llama3-seqlen32k", marks=_slow),
         # (1,2) variants
         pytest.param((1, 2), 32, 64, 2048, 500000.0, "llama3", True, id="1x2-b32-hd64-llama3-fused", marks=_slow),
         pytest.param((1, 2), 32, 128, 2048, 500000.0, "llama3", True, id="1x2-b32-hd128-llama3-fused", marks=_slow),
@@ -150,19 +168,46 @@ def _list_init_test_cases() -> list[pytest.param]:
         pytest.param((1, 2), 32, 128, 1024, 500000.0, "llama3", True, id="1x2-b32-hd128-llama3-fused-seqlen1024", marks=_slow),
         pytest.param((1, 2), 1, 128, 32768, 500000.0, "llama3", True, id="1x2-b1-hd128-llama3-fused-seqlen32k", marks=_slow),
         pytest.param((1, 2), 1, 128, 8192, 1000000.0, "none", True, id="1x2-b1-hd128-none-fused-Qwen2", marks=_slow),
-        # (1,8) variants
+        pytest.param((1, 2), 1, 64, 8192, 500000.0, "llama3", True, id="1x2-b1-hd64-llama3-fused", marks=_slow),
+        pytest.param((1, 2), 1, 64, 1024, 500000.0, "llama3", True, id="1x2-b1-hd64-llama3-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 2), 32, 64, 1024, 500000.0, "llama3", True, id="1x2-b32-hd64-llama3-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 2), 1, 64, 32768, 500000.0, "llama3", True, id="1x2-b1-hd64-llama3-fused-seqlen32k", marks=_slow),
+        pytest.param((1, 2), 1, 128, 1024, 500000.0, "llama3", False, id="1x2-b1-hd128-llama3-nofused-11B-seqlen1024", marks=_slow),
+        pytest.param((1, 2), 32, 128, 1024, 500000.0, "llama3", False, id="1x2-b32-hd128-llama3-nofused-11B-seqlen1024", marks=_slow),
+        pytest.param((1, 2), 1, 128, 32768, 500000.0, "llama3", False, id="1x2-b1-hd128-llama3-nofused-11B-seqlen32k", marks=_slow),
+        pytest.param((1, 2), 1, 128, 1024, 1000000.0, "none", True, id="1x2-b1-hd128-none-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 2), 32, 128, 1024, 1000000.0, "none", True, id="1x2-b32-hd128-none-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 2), 1, 128, 32768, 1000000.0, "none", True, id="1x2-b1-hd128-none-fused-seqlen32k", marks=_slow),
+        # (1,2) batch=4, 16 from Llama-3.2-11B (nofused)
+        pytest.param((1, 2), 16, 128, 512, 500000.0, "llama3", False, id="1x2-b16-hd128-llama3-nofused-11B", marks=_slow),
+        pytest.param((1, 2), 4, 128, 512, 500000.0, "llama3", False, id="1x2-b4-hd128-llama3-nofused-11B", marks=_slow),
+        # (1,8) variants — hd=64
+        pytest.param((1, 8), 1, 64, 8192, 500000.0, "llama3", True, id="1x8-b1-hd64-llama3-fused", marks=_slow),
         pytest.param((1, 8), 32, 64, 2048, 500000.0, "llama3", True, id="1x8-b32-hd64-llama3-fused", marks=_slow),
+        pytest.param((1, 8), 1, 64, 1024, 500000.0, "llama3", True, id="1x8-b1-hd64-llama3-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 8), 32, 64, 1024, 500000.0, "llama3", True, id="1x8-b32-hd64-llama3-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 8), 1, 64, 32768, 500000.0, "llama3", True, id="1x8-b1-hd64-llama3-fused-seqlen32k", marks=_slow),
+        # (1,8) variants — hd=128, llama3, fused
         pytest.param((1, 8), 32, 128, 2048, 500000.0, "llama3", True, id="1x8-b32-hd128-llama3-fused-8B", marks=_slow),
-        pytest.param((1, 8), 32, 128, 2048, 1000000.0, "none", True, id="1x8-b32-hd128-none-fused-Qwen72B", marks=_slow),
+        pytest.param((1, 8), 1, 128, 1024, 500000.0, "llama3", True, id="1x8-b1-hd128-llama3-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 8), 32, 128, 1024, 500000.0, "llama3", True, id="1x8-b32-hd128-llama3-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 8), 1, 128, 32768, 500000.0, "llama3", True, id="1x8-b1-hd128-llama3-fused-seqlen32k", marks=_slow),
+        # (1,8) variants — hd=128, llama3, nofused (11B)
         pytest.param((1, 8), 1, 128, 8192, 500000.0, "llama3", False, id="1x8-b1-hd128-llama3-nofused-11B", marks=_slow),
         pytest.param((1, 8), 32, 128, 2048, 500000.0, "llama3", False, id="1x8-b32-hd128-llama3-nofused-11B", marks=_slow),
-        pytest.param((1, 8), 1, 128, 32768, 500000.0, "llama3", True, id="1x8-b1-hd128-llama3-fused-seqlen32k", marks=_slow),
+        pytest.param((1, 8), 1, 128, 1024, 500000.0, "llama3", False, id="1x8-b1-hd128-llama3-nofused-11B-seqlen1024", marks=_slow),
+        pytest.param((1, 8), 32, 128, 1024, 500000.0, "llama3", False, id="1x8-b32-hd128-llama3-nofused-11B-seqlen1024", marks=_slow),
+        pytest.param((1, 8), 1, 128, 32768, 500000.0, "llama3", False, id="1x8-b1-hd128-llama3-nofused-11B-seqlen32k", marks=_slow),
+        # (1,8) variants — hd=128, none (Qwen/Mistral/Mixtral)
+        pytest.param((1, 8), 32, 128, 2048, 1000000.0, "none", True, id="1x8-b32-hd128-none-fused-Qwen72B", marks=_slow),
+        pytest.param((1, 8), 1, 128, 1024, 1000000.0, "none", True, id="1x8-b1-hd128-none-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 8), 32, 128, 1024, 1000000.0, "none", True, id="1x8-b32-hd128-none-fused-seqlen1024", marks=_slow),
+        pytest.param((1, 8), 1, 128, 32768, 1000000.0, "none", True, id="1x8-b1-hd128-none-fused-seqlen32k", marks=_slow),
+        # (1,8) batch=4 from Llama-3.2-11B (nofused)
+        pytest.param((1, 8), 4, 128, 512, 500000.0, "llama3", False, id="1x8-b4-hd128-llama3-nofused-11B", marks=_slow),
+        pytest.param((1, 8), 32, 128, 512, 500000.0, "llama3", False, id="1x8-b32-hd128-llama3-nofused-11B-seqlen512", marks=_slow),
         # Llama-3.2-90B (from api CSV)
         pytest.param((1, 8), 1, 128, 512, 500000.0, "llama3", False, id="1x8-b1-hd128-llama3-nofused-90B", marks=_slow),
-        # Different max_seq_len values
-        pytest.param((1, 1), 1, 64, 1024, 500000.0, "llama3", True, id="1x1-b1-hd64-llama3-seqlen1024", marks=_slow),
-        pytest.param((1, 1), 32, 64, 1024, 500000.0, "llama3", True, id="1x1-b32-hd64-llama3-seqlen1024", marks=_slow),
-        pytest.param((1, 1), 1, 64, 32768, 500000.0, "llama3", True, id="1x1-b1-hd64-llama3-seqlen32k", marks=_slow),
     ]
     # fmt: on
 
@@ -208,12 +253,25 @@ def test_rope_1d_init_and_api(
         use_qk_fused=use_qk_fused,
     )
 
-    # Test get_both_trans_mats
     trans_mats = rope.get_both_trans_mats()
     assert "decode" in trans_mats
     assert "prefill" in trans_mats
-    assert isinstance(trans_mats["decode"], ttnn.Tensor)
-    assert isinstance(trans_mats["prefill"], ttnn.Tensor)
+
+    # Prefill trans mat: _get_rot_transformation_mat(head_dim) → 32x32 (dhead forced to TILE_SIZE)
+    prefill_ref = _get_rot_transformation_mat(dhead=head_dim)  # [1, 1, 32, 32]
+    prefill_tt = to_torch_auto_compose(trans_mats["prefill"])
+    # Trim TT output to match ref shape (replicated, same on all devices)
+    prefill_tt_trimmed = prefill_tt[:1, :1, : prefill_ref.shape[2], : prefill_ref.shape[3]]
+    pcc_prefill, msg_prefill = comp_pcc(prefill_ref.to(torch.bfloat16), prefill_tt_trimmed.to(torch.bfloat16), 0.9999)
+    assert pcc_prefill, f"prefill trans_mat PCC failed: {msg_prefill}"
+
+    # Decode trans mat: same base matrix repeated batch_size_per_device_group times on dim 2
+    effective_batch = batch_size * 2 if use_qk_fused else batch_size
+    decode_ref = _get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, effective_batch, 1)
+    decode_tt = to_torch_auto_compose(trans_mats["decode"])
+    decode_tt_trimmed = decode_tt[:1, :1, : decode_ref.shape[2], : decode_ref.shape[3]]
+    pcc_decode, msg_decode = comp_pcc(decode_ref.to(torch.bfloat16), decode_tt_trimmed.to(torch.bfloat16), 0.9999)
+    assert pcc_decode, f"decode trans_mat PCC failed: {msg_decode}"
 
     # Test get_rot_idxs
     position_idxs = torch.arange(batch_size)
@@ -238,27 +296,39 @@ def test_rope_1d_init_and_api(
     assert len(rot_mats_2) == 2
     assert isinstance(rot_idxs_2, ttnn.Tensor)
 
-    # PCC check: compare cos/sin against torch reference cos/sin lookup
+    # PCC check: use non-zero positions to avoid sin(0)=0 (PCC undefined for all-zero tensors)
+    pcc_position_idxs = torch.arange(42, 42 + batch_size)  # positions [42..42+batch-1], always non-zero sin
+
+    # Test production calling pattern: get_rot_idxs(on_host=True) → get_rot_mats(ttnn_input)
+    # This is how the API is used in real models (see rope_1d_api_test_cases.csv)
+    pcc_rot_idxs_host = rope.get_rot_idxs(pcc_position_idxs, on_host=True)
+    pcc_rot_mats_via_ttnn = rope.get_rot_mats(pcc_rot_idxs_host)
+    assert len(pcc_rot_mats_via_ttnn) == 2
+
+    # Also test the torch→internal path for comparison
+    pcc_rot_mats = rope.get_rot_mats(pcc_position_idxs)
+
     cos_torch_ref, sin_torch_ref = _compute_cos_sin_matrices(
         head_dim=head_dim,
         max_seq_len=max_seq_len,
         rope_theta=rope_theta,
         rope_scaling=rope_scaling,
     )
-    # Gather the cos/sin for the specific position indices
-    # position_idxs = [0, 1, ..., batch_size-1]
-    # cos_torch_ref shape: [1, 1, max_seq_len, head_dim]
-    # After embedding lookup, cos shape per device: [1, batch, 1, head_dim] (sharded)
-    cos_tt = to_torch_auto_compose(rot_mats[0])  # composed back from sharded
-    sin_tt = to_torch_auto_compose(rot_mats[1])
 
-    # Build expected cos/sin from torch reference for positions 0..batch_size-1
+    cos_tt = to_torch_auto_compose(pcc_rot_mats[0])
+    sin_tt = to_torch_auto_compose(pcc_rot_mats[1])
+
+    # Build expected cos/sin from torch reference for the chosen positions
     effective_batch = batch_size * 2 if use_qk_fused else batch_size
-    expected_cos = cos_torch_ref[:, :, :effective_batch, :]  # [1, 1, batch, head_dim]
-    expected_sin = sin_torch_ref[:, :, :effective_batch, :]
+    # For fused: positions are [42..42+batch-1] repeated 2x → [42,..,42+b-1, 42,..,42+b-1]
+    if use_qk_fused:
+        ref_positions = list(range(42, 42 + batch_size)) * 2
+    else:
+        ref_positions = list(range(42, 42 + batch_size))
+    expected_cos = cos_torch_ref[:, :, ref_positions, :]  # [1, 1, effective_batch, head_dim]
+    expected_sin = sin_torch_ref[:, :, ref_positions, :]
 
-    # Reshape TT output to match: TT is [1, batch, TILE_SIZE, head_dim] after transpose+shard
-    # Flatten to [1, 1, batch*TILE_SIZE, head_dim] for comparison on relevant rows
+    # Reshape TT output: [1, batch, TILE_SIZE, head_dim] → [1, 1, batch*TILE_SIZE, head_dim]
     cos_tt_flat = cos_tt.reshape(1, 1, -1, head_dim)
     sin_tt_flat = sin_tt.reshape(1, 1, -1, head_dim)
 
@@ -274,6 +344,16 @@ def test_rope_1d_init_and_api(
 
     assert pcc_cos, f"cos PCC failed: {msg_cos}"
     assert pcc_sin, f"sin PCC failed: {msg_sin}"
+
+    # PCC check: ttnn-input path (production pattern) must match torch-input path
+    cos_tt_via_ttnn = to_torch_auto_compose(pcc_rot_mats_via_ttnn[0])
+    sin_tt_via_ttnn = to_torch_auto_compose(pcc_rot_mats_via_ttnn[1])
+    pcc_cos_path, msg_cos_path = comp_pcc(cos_tt, cos_tt_via_ttnn, 0.9999)
+    pcc_sin_path, msg_sin_path = comp_pcc(sin_tt, sin_tt_via_ttnn, 0.9999)
+    logger.info(f"torch-path vs ttnn-path cos PCC: {msg_cos_path}")
+    logger.info(f"torch-path vs ttnn-path sin PCC: {msg_sin_path}")
+    assert pcc_cos_path, f"ttnn-input path cos mismatch vs torch-input path: {msg_cos_path}"
+    assert pcc_sin_path, f"ttnn-input path sin mismatch vs torch-input path: {msg_sin_path}"
 
     logger.info(
         f"RotarySetup1D: PASSED for mesh={mesh_shape}, batch={batch_size}, "
@@ -345,8 +425,8 @@ def test_rope_1d_cos_sin_vs_reference(
         datatype=ttnn.bfloat16,
     )
 
-    # Compare get_rot_mats with same position indices
-    position_idxs = torch.arange(batch_size)
+    # Compare get_rot_mats with non-zero position indices (avoid sin(0)=0 → PCC undefined)
+    position_idxs = torch.arange(42, 42 + batch_size)
     v2_cos_sin = rope_v2.get_rot_mats(position_idxs)
     v1_cos_sin = rope_v1.get_rot_mats(position_idxs)
 
@@ -431,8 +511,8 @@ def test_rope_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice)
         datatype=ttnn.bfloat16,
     )
 
-    # PCC check: get_rot_mats
-    position_idxs = torch.arange(model_args.max_batch_size)
+    # PCC check: get_rot_mats (use non-zero positions to avoid sin(0)=0 → PCC undefined)
+    position_idxs = torch.arange(42, 42 + model_args.max_batch_size)
     v2_cos_sin = rope_v2.get_rot_mats(position_idxs)
     v1_cos_sin = rope_v1.get_rot_mats(position_idxs)
 

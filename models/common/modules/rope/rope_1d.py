@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -25,6 +25,7 @@ from torch import nn
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import nearest_32
 from ttnn import replicate_tensor_to_mesh_mapper
 
@@ -283,7 +284,7 @@ def _gather_cos_sin(position_ids, cos, sin):
 
 def _get_rot_transformation_mat(dhead):
     """Build the rotation transformation matrix for RoPE (TILE_SIZE x TILE_SIZE)."""
-    dhead = 32  # ROPE op uses a single tile
+    dhead = TILE_SIZE  # ROPE op uses a single tile
     rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
     rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
     rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
