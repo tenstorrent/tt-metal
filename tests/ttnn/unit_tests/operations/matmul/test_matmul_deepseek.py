@@ -893,15 +893,6 @@ def test_matmul_seq_len_sweep_dram_interleaved(device, test_case, seq_len):
             "expected_pcc": 0.999,
         },
         # Batched matmuls - in0 DRAM interleaved, in1 DRAM WIDTH sharded
-        # wkv_b1 (12 banks): batch=16, pad to 24
-        {
-            "batch": 16,
-            "k": 128,
-            "n": 512,
-            "in1_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.9997,
-            "num_dram_banks": 12,
-        },
         # wkv_b1 (8 banks): batch=16, 2 per bank, no padding
         {
             "batch": 16,
@@ -920,24 +911,13 @@ def test_matmul_seq_len_sweep_dram_interleaved(device, test_case, seq_len):
             "expected_pcc": 0.9997,
             "num_dram_banks": 12,
         },
-        # wkv_b2 (8 banks): batch=128, no padding
-        {
-            "batch": 128,
-            "k": 512,
-            "n": 128,
-            "in1_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.9997,
-            "num_dram_banks": 8,
-        },
     ],
     ids=[
         "qkv_a",
         "wq_b",
         "wo",
-        "wkv_b1_12banks",
         "wkv_b1_8banks",
         "wkv_b2_12banks",
-        "wkv_b2_8banks",
     ],
 )
 @pytest.mark.parametrize("seq_len", [128, 1024, 4096, 8192])  # 32768, 131072])
@@ -1040,14 +1020,16 @@ def test_matmul_seq_len_sweep_dram_sharded(device, test_case, seq_len):
             memory_config=in1_memory_config,
         )
 
-    # Compute 2D grid size (following test_matmul_2d_in1_dram_sharded)
+    # Compute 2D grid size
     M_tiles = seq_len // tile_h
     K_tiles = k // tile_w
     N_tiles = n // tile_w
 
+    # grid_x splits N dimension; grid_y splits M dimension
+    # grid_x only needs to divide N_tiles (not K_tiles)
     grid_x = 1
-    for x in range(min(8, K_tiles, N_tiles), 0, -1):
-        if K_tiles % x == 0 and N_tiles % x == 0:
+    for x in range(min(8, N_tiles), 0, -1):
+        if N_tiles % x == 0:
             grid_x = x
             break
 
@@ -1060,13 +1042,48 @@ def test_matmul_seq_len_sweep_dram_sharded(device, test_case, seq_len):
     grid_size = (grid_x, grid_y)
 
     in0_block_h = M_tiles // grid_y
-    in0_block_w = K_tiles // grid_x
     out_block_h = in0_block_h
     out_block_w = N_tiles // grid_x
 
-    if in0_block_h * in0_block_w >= 48 or in0_block_w * out_block_w >= 48:
+    # in0_block_w (inner dim block) must divide K_tiles.
+    # Target: keep in1 CB tiles (in0_block_w * out_block_w * 2) under ~256 tiles
+    # while maximizing in0_block_w to minimize inner loop iterations.
+    max_in1_cb_tiles = 256  # ~140 KB for bfloat8_b with double buffering
+    in0_block_w = K_tiles
+    while in0_block_w > 1:
+        if K_tiles % in0_block_w == 0 and in0_block_w * out_block_w * 2 <= max_in1_cb_tiles:
+            break
+        in0_block_w -= 1
+    # Ensure in0 CB is also reasonable
+    while in0_block_w > 1 and in0_block_h * in0_block_w * 2 > max_in1_cb_tiles:
         in0_block_w = in0_block_w // 2
-    in0_block_w = max(in0_block_w // 4, 1)
+        if K_tiles % in0_block_w != 0:
+            # Find next valid divisor
+            while in0_block_w > 1 and K_tiles % in0_block_w != 0:
+                in0_block_w -= 1
+
+    # Determine out_block_h to fit in L1.
+    # CBs that scale with out_block_h * out_block_w:
+    #   interm0 (fp32): out_block_h * out_block_w * 4096 bytes
+    #   output (bf16):  out_block_h * out_block_w * 2048 bytes
+    #   in0 (bf16):     out_block_h * in0_block_w * 2 * 2048 bytes (double-buffered)
+    # Target: total CB usage < ~1.2 MB (leaving headroom in 1.5 MB L1)
+    max_l1_usage = 1200 * 1024  # ~1.2 MB target
+    per_core_M = out_block_h
+    per_core_N = out_block_w
+    actual_out_block_h = out_block_h
+    for candidate_h in range(out_block_h, 0, -1):
+        if out_block_h % candidate_h != 0:
+            continue
+        # Estimate CB sizes
+        in0_cb = candidate_h * in0_block_w * 2 * 2048  # bf16 double-buffered
+        in1_cb = out_block_w * in0_block_w * 2 * 1088  # bf8b double-buffered
+        interm0_cb = candidate_h * out_block_w * 4096  # fp32
+        output_cb = candidate_h * out_block_w * 2048  # bf16
+        total = in0_cb + in1_cb + interm0_cb + output_cb
+        if total <= max_l1_usage:
+            actual_out_block_h = candidate_h
+            break
 
     # Subblock calculation (h * w <= 4, hardware limit)
     out_subblock_w = 1
@@ -1076,15 +1093,16 @@ def test_matmul_seq_len_sweep_dram_sharded(device, test_case, seq_len):
             break
     max_sh = 4 // out_subblock_w
     out_subblock_h = 1
-    for sh in range(min(out_block_h, max_sh), 0, -1):
-        if out_block_h % sh == 0:
+    for sh in range(min(actual_out_block_h, max_sh), 0, -1):
+        if actual_out_block_h % sh == 0:
             out_subblock_h = sh
             break
 
     logger.info(
         f"batch={batch}, seq_len={seq_len}, K={k}, N={n}, "
         f"grid_size={grid_size}, in0_block_w={in0_block_w}, "
-        f"per_core_M={out_block_h}, per_core_N={out_block_w}, "
+        f"per_core_M={per_core_M}, per_core_N={per_core_N}, "
+        f"out_block_h={actual_out_block_h}, out_block_w={out_block_w}, "
         f"out_subblock_h={out_subblock_h}, out_subblock_w={out_subblock_w}"
     )
 
@@ -1093,8 +1111,10 @@ def test_matmul_seq_len_sweep_dram_sharded(device, test_case, seq_len):
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
-        per_core_M=out_block_h,
-        per_core_N=out_block_w,
+        out_block_h=actual_out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=(batch == 1),

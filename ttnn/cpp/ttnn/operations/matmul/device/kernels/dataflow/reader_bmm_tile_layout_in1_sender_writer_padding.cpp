@@ -252,9 +252,6 @@ void kernel_main() {
                 }
             }
 
-#ifdef IN1_DRAM_SHARDED
-            uint32_t l1_read_addr_in1_offset = 0;
-#endif  // IN1_DRAM_SHARDED
             uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
             uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
@@ -265,6 +262,11 @@ void kernel_main() {
 #endif  // FUSE_BIAS
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
+#ifdef IN1_DRAM_SHARDED
+                    // Reset DRAM read offset for each output block — in1 K×N data
+                    // is the same for all (bh, bw) output blocks
+                    uint32_t l1_read_addr_in1_offset = 0;
+#endif  // IN1_DRAM_SHARDED
 
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                         if constexpr (fuse_op_all_gather) {
