@@ -36,7 +36,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* tile_sent_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_sent_semaphore_addr);
 
-    uint64_t receiver_sem_mcast_addr = get_noc_multicast_addr(
+    uint64_t tile_sent_mcast_addr = get_noc_multicast_addr(
         receiver_start_x, receiver_start_y, receiver_end_x, receiver_end_y, tile_sent_semaphore_addr);
 
     ////////// MAIN LOOP: READ AND MULTICAST EACH BATCH OF TILES //////////
@@ -72,7 +72,7 @@ void kernel_main() {
         noc_async_writes_flushed();
 
         *tile_sent_sem_ptr = VALID;
-        noc_semaphore_set_multicast(tile_sent_semaphore_addr, receiver_sem_mcast_addr, num_receivers);
+        noc_semaphore_set_multicast(tile_sent_semaphore_addr, tile_sent_mcast_addr, num_receivers);
 
         noc_async_write_barrier();
 
