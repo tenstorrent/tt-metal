@@ -43,24 +43,15 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 //                                         .to_host() and .to_device()
 // ======================================================================================
 
-Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
-
-// TODO: Move this to tt_metal
 HostTensor to_host(distributed::MeshCommandQueue& queue, const DeviceTensor& tensor, bool blocking = true);
 
-void copy_to_host(
-    const Tensor& device_tensor,
-    Tensor& host_tensor,
-    bool blocking = true,
-    std::optional<QueueId> cq_id = std::nullopt);
-
-// TODO: Move this to tt_metal
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
     const DeviceTensor& device_tensor,
     HostTensor& host_tensor,
     bool blocking = true);
 
+// TODO: figure out what to do with this.
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
     const Tensor& device_tensor,
@@ -68,23 +59,14 @@ void copy_to_host(
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-Tensor to_device(
-    const Tensor& tensor,
-    distributed::MeshDevice* mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
-    std::optional<QueueId> cq_id = std::nullopt);
-
-// TODO: Move this to tt_metal
 DeviceTensor to_device(
     distributed::MeshCommandQueue& queue,
     const HostTensor& tensor,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
-
-// TODO: Move this to tt_metal
 void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, DeviceTensor& device_tensor);
 
+// TODO: figure out what to do with this.
 void copy_to_device(
     distributed::MeshCommandQueue& queue,
     const std::byte* src,
