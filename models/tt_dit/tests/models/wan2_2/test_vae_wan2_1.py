@@ -267,10 +267,16 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
     ],
     indirect=["mesh_device"],
 )
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
+    ids=["bf16", "f32"],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, reset_seeds):
+def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dtype, reset_seeds):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanAttentionBlock as TorchWanAttentionBlock
 
+    tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
     torch_model = TorchWanAttentionBlock(dim=C)
     torch_model.eval()
@@ -286,6 +292,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, re
         mesh_device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
+        dtype=dtype,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -296,7 +303,11 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, re
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
 
     tt_input_tensor = bf16_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+        tt_input_tensor,
+        mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        shard_mapping={h_axis: 2, w_axis: 3},
+        dtype=tt_input_dtype,
     )
 
     with torch.no_grad():
@@ -983,6 +994,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     torch_feat_idx = [0]
     tt_feat_idx = [0]
     for i in range(num_convs):
+        torch.manual_seed(0)
         if cache_len is not None:
             torch_cache_tensor = torch.randn(B, dim, cache_len, H, W, dtype=torch_dtype) * std + mean
             torch_feat_cache.append(torch_cache_tensor)

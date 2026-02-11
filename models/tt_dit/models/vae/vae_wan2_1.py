@@ -42,6 +42,7 @@ class WanAttentionBlock:
         mesh_device,
         parallel_config,
         ccl_manager,
+        dtype=ttnn.DataType.FLOAT32,
     ):
         self.dim = dim
         self.mesh_device = mesh_device
@@ -54,16 +55,19 @@ class WanAttentionBlock:
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.to_qkv = Linear(
             in_features=dim,
             out_features=dim * 3,
             mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.proj = Linear(
             in_features=dim,
             out_features=dim,
             mesh_device=mesh_device,
+            dtype=dtype,
         )
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -130,21 +134,6 @@ class WanAttentionBlock:
         assert len(x_BTHWC.shape) == 5
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
-        # Attention layers (matmul, SDPA) can OOM in L1 with float32.
-        # Cast to bfloat16 for attention, then restore original dtype.
-        input_dtype = x_BTHWC.dtype
-        if input_dtype != ttnn.bfloat16:
-            # TODO: ttnn.typecast hangs on ROW_MAJOR tensors — must convert to TILE first.
-            # File a bug to add a proper assert/error in ttnn.typecast for non-TILE inputs.
-            # Reshape to 2D before TILE conversion to avoid 5D typecast data corruption
-            # when inner dims are not tile-aligned (e.g. W=26).
-            shape_5d = x_BTHWC.shape
-            x = ttnn.reshape(x_BTHWC, (shape_5d[0] * shape_5d[1] * shape_5d[2] * shape_5d[3], shape_5d[4]))
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = ttnn.typecast(x, ttnn.bfloat16)
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x_BTHWC = ttnn.reshape(x, shape_5d)
-
         residual_BTHWC = x_BTHWC
 
         # Gather height and width for replicated attention
@@ -187,20 +176,26 @@ class WanAttentionBlock:
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        x_TND = self.to_qkv(x_TNC, compute_kernel_config=self.mm_compute_kernel_config)
+        default_block_size = (2, 2, 2) if x_TNC.dtype == ttnn.DataType.FLOAT32 else (8, 8, 8)
+        x_TND = self.to_qkv(
+            x_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
+        )
         q_THNC, k_THNC, v_THNC = ttnn.transformer.split_query_key_value_and_split_heads(
             x_TND, num_heads=1, transpose_key=False
         )
         out_THNC = ttnn.transformer.scaled_dot_product_attention(
-            q_THNC,
-            k_THNC,
-            v_THNC,
+            ttnn.typecast(q_THNC, ttnn.bfloat16) if q_THNC.dtype != ttnn.bfloat16 else q_THNC,
+            ttnn.typecast(k_THNC, ttnn.bfloat16) if k_THNC.dtype != ttnn.bfloat16 else k_THNC,
+            ttnn.typecast(v_THNC, ttnn.bfloat16) if v_THNC.dtype != ttnn.bfloat16 else v_THNC,
             is_causal=False,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
+        out_THNC = ttnn.typecast(out_THNC, q_THNC.dtype) if out_THNC.dtype != q_THNC.dtype else out_THNC
         out_TNC = ttnn.transformer.concatenate_heads(out_THNC)
-        out_TND = self.proj(out_TNC, compute_kernel_config=self.mm_compute_kernel_config)
+        out_TND = self.proj(
+            out_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
+        )
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
 
         if logical_h % self.parallel_config.height_parallel.factor != 0:
@@ -227,16 +222,6 @@ class WanAttentionBlock:
             )
 
         result_BTHWC = out_BTHWC + residual_BTHWC
-
-        if input_dtype != ttnn.bfloat16:
-            # TODO: ttnn.typecast hangs on ROW_MAJOR tensors — must convert to TILE first.
-            # Reshape to 2D to avoid 5D typecast data corruption (see entry typecast comment).
-            shape_5d = result_BTHWC.shape
-            r = ttnn.reshape(result_BTHWC, (shape_5d[0] * shape_5d[1] * shape_5d[2] * shape_5d[3], shape_5d[4]))
-            r = ttnn.to_layout(r, ttnn.TILE_LAYOUT)
-            r = ttnn.typecast(r, input_dtype)
-            r = ttnn.to_layout(r, ttnn.ROW_MAJOR_LAYOUT)
-            result_BTHWC = ttnn.reshape(r, shape_5d)
 
         return result_BTHWC
 
@@ -654,6 +639,7 @@ class WanMidBlock:
                     mesh_device=mesh_device,
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
+                    dtype=dtype,
                 )
             )
             resnets.append(
@@ -1433,6 +1419,7 @@ class WanEncoder3D:
                             mesh_device=mesh_device,
                             ccl_manager=ccl_manager,
                             parallel_config=parallel_config,
+                            dtype=dtype,
                         )
                     )
                 in_dim = out_dim

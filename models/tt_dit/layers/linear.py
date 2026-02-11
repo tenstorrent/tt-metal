@@ -53,10 +53,10 @@ class Linear(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N, core_grid)
+        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=self.weight.data,
@@ -160,7 +160,7 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
@@ -177,7 +177,7 @@ class ColParallelLinear(Module):
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N, core_grid)
+        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=weight,
@@ -256,6 +256,7 @@ class RowParallelLinear(Module):
         *,
         compute_kernel_config=None,
         use_persistent_buffer: bool = True,
+        default_block_size: tuple = None,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -273,7 +274,7 @@ class RowParallelLinear(Module):
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N, core_grid)
+        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=weight,
