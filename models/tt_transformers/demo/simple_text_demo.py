@@ -431,272 +431,272 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        # (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     8192,  # max_seq_len
-        #     1,  # batch_size
-        #     4096,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     False,  # stop_at_eos
-        #     True,  # ci_only
-        #     1,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # ci-32 [CI-only] - Measures the performance of 32 users over 4096 iterations
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     2048,  # max_seq_len
-        #     32,  # batch_size
-        #     1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
-        #     True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
-        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     False,  # stop_at_eos
-        #     True,  # ci_only
-        #     1,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # DP-4-b1 - single user, data-parallel=4, small prompt
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     1024,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     False,  # ci_only
-        #     4,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # DP-8-b1 - single user, data-parallel=8, small prompt
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     1024,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     False,  # ci_only
-        #     8,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # DP-4-b32 - 32 users, data-parallel=4, small prompt
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     1024,  # max_seq_len
-        #     32,  # batch_size
-        #     200,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     False,  # ci_only
-        #     4,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # ci-b1-DP-4 [CI-Only] - single user, data-parallel=4, small prompt
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     8192,  # max_seq_len
-        #     1,  # batch_size
-        #     4096,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     False,  # stop_at_eos
-        #     True,  # ci_only
-        #     4,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # ci-b1-DP-8 [CI-Only] - single user, data-parallel=8, small prompt
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     8192,  # max_seq_len
-        #     1,  # batch_size
-        #     4096,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     False,  # stop_at_eos
-        #     True,  # ci_only
-        #     8,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # ci-b1-DP-16 [CI-Only] - single user, data-parallel=16, small prompt
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     8192,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     True,  # ci_only
-        #     16,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # ci-b1-DP-32 [CI-Only] - single user, data-parallel=32, small prompt
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     8192,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     True,  # ci_only
-        #     32,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # ci-stress-1 [CI-only] stress test - Runs a short prefill (128) and loops the same iteration over 20000 times
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     128 * 1024,  # max_seq_len
-        #     1,  # batch_size
-        #     20000,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     False,  # stop_at_eos
-        #     True,  # ci_only
-        #     1,  # data_parallel
-        #     False,  # token_accuracy
-        #     True,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
-        #     "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-        #     False,  # instruct mode
-        #     1,  # repeat_batches
-        #     1024,  # max_seq_len
-        #     1,  # batch_size
-        #     500,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     True,  # ci_only
-        #     1,  # data_parallel
-        #     True,  # token_accuracy
-        #     False,  # stress_test
-        #     False,  # enable_trace -> Teacher forcing does not work if it is on
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # ci-eval-1 - 6 repeat batches with output comparison
-        #     "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch1.json",  # input_prompts
-        #     True,  # instruct mode
-        #     6,  # repeat_batches
-        #     1024,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     True,  # ci_only
-        #     1,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # ci-eval-32 - 32 users with 3 repeat batches and shifting prompts
-        #     "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json",  # input_prompts
-        #     True,  # instruct mode
-        #     3,  # repeat_batches
-        #     1024,  # max_seq_len
-        #     32,  # batch_size
-        #     200,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     True,  # ci_only
-        #     1,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
-        # (  # [CI only] Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
-        #     "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     32 * 1024,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-        #     {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     True,  # ci_only
-        #     1,  # data_parallel
-        #     False,  # token_accuracy
-        #     False,  # stress_test
-        #     True,  # enable_trace
-        #     None,  # num_layers, if None -> defaults to all layers
-        #     "full",  # performs both prefill and decode
-        # ),
+        (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            4096,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # ci-32 [CI-only] - Measures the performance of 32 users over 4096 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            2048,  # max_seq_len
+            32,  # batch_size
+            1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
+            True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # DP-4-b1 - single user, data-parallel=4, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            4,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # DP-8-b1 - single user, data-parallel=8, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            8,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # DP-4-b32 - 32 users, data-parallel=4, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            4,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # ci-b1-DP-4 [CI-Only] - single user, data-parallel=4, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            4096,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            4,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # ci-b1-DP-8 [CI-Only] - single user, data-parallel=8, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            4096,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            8,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # ci-b1-DP-16 [CI-Only] - single user, data-parallel=16, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            16,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # ci-b1-DP-32 [CI-Only] - single user, data-parallel=32, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            32,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # ci-stress-1 [CI-only] stress test - Runs a short prefill (128) and loops the same iteration over 20000 times
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            20000,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            True,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            False,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            500,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            True,  # token_accuracy
+            False,  # stress_test
+            False,  # enable_trace -> Teacher forcing does not work if it is on
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # ci-eval-1 - 6 repeat batches with output comparison
+            "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch1.json",  # input_prompts
+            True,  # instruct mode
+            6,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # ci-eval-32 - 32 users with 3 repeat batches and shifting prompts
+            "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json",  # input_prompts
+            True,  # instruct mode
+            3,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # [CI only] Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
         (  # device-perf - Measures device performance of a prefill or decode run (by default runs prefill but test_device_perf uses args to override defaults)
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
@@ -725,20 +725,20 @@ def prepare_generator_args(
         "long-context-32k",  # 32k context, max_seq_len=32k
         "long-context-16k",  # 16k context, max_seq_len=32k
         "reasoning-1",  # reasoning
-        # "ci-1",  # CI batch 1
-        # "ci-32",  # CI batch 32
-        # "DP-4-b1",  # DP 4 latency
-        # "DP-8-b1",  # DP 8 latency
-        # "DP-4-b32",  # DP 4 throughput
-        # "ci-b1-DP-4",  # CI DP 4 batch 1
-        # "ci-b1-DP-8",  # CI DP 8 batch 1
-        # "ci-b1-DP-16",  # CI DP 16 batch 1
-        # "ci-b1-DP-32",  # CI DP 32 batch 1
-        # "ci-stress-1",  # CI Stress test batch-1
-        # "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
-        # "ci-eval-1",  # CI 6 repeat batches with output comparison
-        # "ci-eval-32",  # CI batch 32 with 3 repeat batches and output comparison
-        # "ci-long-context-16k",  # 16k context, max_seq_len=32k, used for testing --max_seq_len=16k override
+        "ci-1",  # CI batch 1
+        "ci-32",  # CI batch 32
+        "DP-4-b1",  # DP 4 latency
+        "DP-8-b1",  # DP 8 latency
+        "DP-4-b32",  # DP 4 throughput
+        "ci-b1-DP-4",  # CI DP 4 batch 1
+        "ci-b1-DP-8",  # CI DP 8 batch 1
+        "ci-b1-DP-16",  # CI DP 16 batch 1
+        "ci-b1-DP-32",  # CI DP 32 batch 1
+        "ci-stress-1",  # CI Stress test batch-1
+        "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
+        "ci-eval-1",  # CI 6 repeat batches with output comparison
+        "ci-eval-32",  # CI batch 32 with 3 repeat batches and output comparison
+        "ci-long-context-16k",  # 16k context, max_seq_len=32k, used for testing --max_seq_len=16k override
         "device-perf",  # Device perf
     ],
 )
