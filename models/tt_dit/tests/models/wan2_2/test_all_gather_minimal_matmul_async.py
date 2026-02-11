@@ -171,7 +171,7 @@ def run_test_linear_impl(
             barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
             force_transpose=force_transpose,
             num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=2,
+            num_buffers_per_channel=48,
         )
 
     ttnn.synchronize_device(device)
