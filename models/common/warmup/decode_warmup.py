@@ -20,24 +20,37 @@ class DecodeWarmupMixin:
     - self.decode_forward_text(): method to perform decode forward pass
     """
 
-    def _create_sampling_params(self, sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size):
-        if not sample_on_device_mode:
+    def _create_sampling_params(self, sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size, mode):
+        assert mode in ["prefill", "decode"], "Mode should be either 'prefill' or 'decode'"
+
+        if mode == "decode" and not sample_on_device_mode:
+            return [None]
+
+        if mode == "prefill" and sample_on_device_mode != "all":
             return [None]
 
         sampling_configs = []
 
         if non_greedy_decoding_on_device:
             for penalties, log_probs in product([True, False], repeat=2):
-                presence_penalty = [1.2] * max_batch_size if penalties else None
-                frequency_penalty = [1.2] * max_batch_size if penalties else None
-                repetition_penalty = [1.5] * max_batch_size if penalties else None
-                enable_log_probs = [log_probs] * max_batch_size
+                presence_penalty, frequency_penalty, repetition_penalty = None, None, None
+
+                if penalties:
+                    presence_penalty = [1.2] * max_batch_size if mode == "decode" else 1.2
+                    frequency_penalty = [1.2] * max_batch_size if mode == "decode" else 1.2
+                    repetition_penalty = [1.5] * max_batch_size if mode == "decode" else 1.5
+
+                enable_log_probs = [log_probs] * max_batch_size if mode == "decode" else log_probs
+
+                temperature = [1.0] * max_batch_size if mode == "decode" else 1.0
+                top_k = [10] * max_batch_size if mode == "decode" else 10
+                top_p = [0.9] * max_batch_size if mode == "decode" else 0.9
 
                 sampling_configs.append(
                     SamplingParams(
-                        temperature=[1.0] * max_batch_size,
-                        top_k=[10] * max_batch_size,
-                        top_p=[0.9] * max_batch_size,
+                        temperature=temperature,
+                        top_k=top_k,
+                        top_p=top_p,
                         presence_penalty=presence_penalty,
                         frequency_penalty=frequency_penalty,
                         repetition_penalty=repetition_penalty,
@@ -45,7 +58,13 @@ class DecodeWarmupMixin:
                     )
                 )
 
-        sampling_configs.append(SamplingParams(temperature=0.0, top_k=1, top_p=1.0))
+        sampling_configs.append(
+            SamplingParams(
+                temperature=[0.0] * max_batch_size if mode == "decode" else 0.0,
+                top_k=[1] * max_batch_size if mode == "decode" else 1,
+                top_p=[1.0] * max_batch_size if mode == "decode" else 1.0,
+            )
+        )
 
         sampling_configs.append(None)
 
@@ -67,7 +86,7 @@ class DecodeWarmupMixin:
         non_greedy_decoding_on_device=False,
     ):
         sampling_params = self._create_sampling_params(
-            sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size
+            sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size, mode="decode"
         )
 
         tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_gpu_blocks)
