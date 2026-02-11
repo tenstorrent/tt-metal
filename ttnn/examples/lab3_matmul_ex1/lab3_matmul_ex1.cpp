@@ -378,7 +378,7 @@ void multicast_tensor_tensix(
          n_tiles});
 
     // Args for the write_tiles kernel to write tiles back to DRAM.
-    // Each receiver writes to a different section of the output buffer.
+    // Each receiver writes to a different section of the output tensor.
     // receiver_idx determines the starting tile offset for each receiver.
     int receiver_idx = 0;
     for (const CoreCoord& core : all_cores_logical) {
