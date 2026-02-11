@@ -13,6 +13,7 @@ namespace ckernel {
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
+    // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
             to_from_int8,
@@ -30,6 +31,7 @@ ALWI void reconfig_data_format(
     const uint32_t srca_new_operand,
     const uint32_t srcb_old_operand,
     const uint32_t srcb_new_operand) {
+    // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
             to_from_int8,
@@ -44,6 +46,7 @@ ALWI void reconfig_data_format(
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
+    // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
             to_from_int8,
@@ -57,6 +60,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+    // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
             to_from_int8,
@@ -70,6 +74,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
+    // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
             to_from_int8,
@@ -83,6 +88,7 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+    // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
             to_from_int8,
