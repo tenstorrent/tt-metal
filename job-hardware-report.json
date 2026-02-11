@@ -1,0 +1,695 @@
+{
+  "jobs": [
+    {
+      "job_name": "single-card-demo-tests",
+      "workflow_file": "blackhole-demo-tests-impl.yaml",
+      "machines": [
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "models/demos/audio/whisper/demo/demo.py -k conditional_generation",
+        "models/tt_transformers/demo/simple_text_demo.py -k performance",
+        "models/experimental/functional_unet/tests/test_unet_perf.py -k test_unet_trace_perf"
+      ],
+      "triggered_from": [
+        "blackhole-demo-tests.yaml:single-card-demo-tests",
+        "blackhole-post-commit.yaml:blackhole-demo-tests",
+        "release-build-test-publish.yaml:blackhole-demo-tests"
+      ]
+    },
+    {
+      "job_name": "single-card-p150-demo-tests",
+      "workflow_file": "blackhole-demo-tests-impl.yaml",
+      "machines": [
+        "P150"
+      ],
+      "tests": [
+        "models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline"
+      ],
+      "triggered_from": [
+        "blackhole-demo-tests.yaml:single-card-demo-tests",
+        "blackhole-post-commit.yaml:blackhole-demo-tests",
+        "release-build-test-publish.yaml:blackhole-demo-tests"
+      ]
+    },
+    {
+      "job_name": "multi-card-demo-tests",
+      "workflow_file": "blackhole-multi-card-demo-tests-impl.yaml",
+      "machines": [
+        "Blackhole (generic)",
+        "Galaxy (Blackhole)",
+        "P300"
+      ],
+      "tests": [
+        "models/tt_transformers/demo/simple_text_demo.py -k performance",
+        "models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1",
+        "models/tt_transformers/tests/test_device_perf.py -k decode-llama3_8b-2-131072-2-10-1-1-False",
+        "models/tt_transformers/tests/test_device_perf.py -k prefill-llama3_8b-2-131072-2-2-1-1-False"
+      ],
+      "triggered_from": [
+        "blackhole-multi-card-demo-tests.yaml:blackhole-multi-card-demo-tests",
+        "blackhole-nightly-tests.yaml:blackhole-multi-card-demo-tests",
+        "release-build-test-publish.yaml:blackhole-multi-card-demo-tests"
+      ]
+    },
+    {
+      "job_name": "multi-card-demo-tests-large",
+      "workflow_file": "blackhole-multi-card-demo-tests-impl.yaml",
+      "machines": [
+        "Blackhole (generic)",
+        "Galaxy (Blackhole)",
+        "P300"
+      ],
+      "tests": [],
+      "triggered_from": [
+        "blackhole-multi-card-demo-tests.yaml:blackhole-multi-card-demo-tests",
+        "blackhole-nightly-tests.yaml:blackhole-multi-card-demo-tests",
+        "release-build-test-publish.yaml:blackhole-multi-card-demo-tests"
+      ]
+    },
+    {
+      "job_name": "multi-card-demo-tt_dit-tests",
+      "workflow_file": "blackhole-multi-card-demo-tests-impl.yaml",
+      "machines": [
+        "Blackhole (generic)",
+        "Galaxy (Blackhole)",
+        "P300"
+      ],
+      "tests": [],
+      "triggered_from": [
+        "blackhole-multi-card-demo-tests.yaml:blackhole-multi-card-demo-tests",
+        "blackhole-nightly-tests.yaml:blackhole-multi-card-demo-tests",
+        "release-build-test-publish.yaml:blackhole-multi-card-demo-tests"
+      ]
+    },
+    {
+      "job_name": "multi-card-unit-tests",
+      "workflow_file": "blackhole-multi-card-post-commit-tests-impl.yaml",
+      "machines": [
+        "Blackhole (generic)",
+        "Galaxy (Blackhole)",
+        "P300"
+      ],
+      "tests": [
+        "tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit",
+        "./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=*HDSocketFixture*"
+      ],
+      "triggered_from": [
+        "blackhole-post-commit.yaml:blackhole-multi-card-post-commit-tests"
+      ]
+    },
+    {
+      "job_name": "multi-card-unit-tests",
+      "workflow_file": "blackhole-multi-card-unit-tests-impl.yaml",
+      "machines": [
+        "Blackhole (generic)",
+        "Galaxy (Blackhole)",
+        "P300"
+      ],
+      "tests": [
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric1D*Fixture.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric2D*Fixture.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=*Fabric2DUDMModeFixture.*",
+        "./build/test/tt_metal/tt_fabric/test_system_health",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml",
+        "./build/test/tt_metal/unit_tests_eth",
+        "build/test/tt_metal/unit_tests_eth",
+        "build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint",
+        "build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause",
+        "build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TestWatcherAssert",
+        "build/test/tt_metal/unit_tests_debug_tools --gtest_filter=MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth",
+        "build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms",
+        "build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace",
+        "tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly",
+        "tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py",
+        "./build/test/ttnn/unit_tests_ttnn_udm",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml"
+      ],
+      "triggered_from": [
+        "blackhole-multi-card-unit-tests.yaml:blackhole-multi-card-unit-tests",
+        "blackhole-nightly-tests.yaml:blackhole-multi-card-unit-tests"
+      ]
+    },
+    {
+      "job_name": "nightly-bh-models",
+      "workflow_file": "blackhole-nightly-tests-impl.yaml",
+      "machines": [
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/nightly/single_card/whisper",
+        "models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1"
+      ],
+      "triggered_from": [
+        "blackhole-nightly-tests.yaml:bh-nightly"
+      ]
+    },
+    {
+      "job_name": "nightly-bh-models-ci-v2",
+      "workflow_file": "blackhole-nightly-tests-impl.yaml",
+      "machines": [
+        "P150"
+      ],
+      "tests": [
+        "models/experimental/panoptic_deeplab/tests/pcc/",
+        "models/experimental/bevformer/tests/pcc/"
+      ],
+      "triggered_from": [
+        "blackhole-nightly-tests.yaml:bh-nightly"
+      ]
+    },
+    {
+      "job_name": "galaxy-apc-fast-tests",
+      "workflow_file": "galaxy-apc-fast-tests-impl.yaml",
+      "machines": [
+        "Wormhole (generic)"
+      ],
+      "tests": [
+        "models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc"
+      ],
+      "triggered_from": [
+        "galaxy-apc-fast-tests.yaml:galaxy-apc-fast-tests"
+      ]
+    },
+    {
+      "job_name": "galaxy-deepseek-tests",
+      "workflow_file": "galaxy-deepseek-tests-impl.yaml",
+      "machines": [
+        "Wormhole (generic)"
+      ],
+      "tests": [
+        "models/demos/deepseek_v3/tests/unit",
+        "models/demos/deepseek_v3/tests"
+      ],
+      "triggered_from": [
+        "galaxy-deepseek-tests.yaml:Galaxy-DeepSeek-tests"
+      ]
+    },
+    {
+      "job_name": "galaxy-demo-tests",
+      "workflow_file": "galaxy-demo-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "models/demos/llama3_70b_galaxy/demo/demo_decode.py -k full",
+        "models/demos/llama3_70b_galaxy/demo/text_demo.py -k repeat",
+        "models/demos/llama3_70b_galaxy/demo/text_demo.py -k pcc-80L",
+        "models/demos/llama3_70b_galaxy/demo/text_demo.py -k batch-32-non-uniform-sampling",
+        "models/tt_transformers/demo/simple_text_demo.py",
+        "models/demos/tg/falcon7b/demo_tg.py",
+        "models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py",
+        "models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation",
+        "models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k 4x8cfg1sp0tp1",
+        "models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k 4x8sp0tp1-dev",
+        "models/demos/gpt_oss/demo/text_demo.py -k 4x8",
+        "models/demos/gpt_oss/tests/accuracy/test_model.py -k 4x8",
+        "models/tt_dit/tests/models/motif/test_pipeline_motif.py -k 4x8cfg1sp0tp1",
+        "models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k wh_4x8sp1tp0",
+        "models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k 4x8sp1tp0",
+        "models/demos/deepseek_v3/demo/test_demo.py",
+        "models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k 4x8",
+        "models/demos/llama3_70b_galaxy/demo/demo_qwen_decode.py -k full",
+        "models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k batch-32",
+        "models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k repeat2",
+        "models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k long-8k-b1",
+        "models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k long-32k-b1",
+        "models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k long-128k-b1"
+      ],
+      "triggered_from": [
+        "galaxy-demo-tests.yaml:galaxy-demo-tests",
+        "pipeline-select-galaxy.yaml:galaxy-demo-tests",
+        "release-build-test-publish.yaml:galaxy-demos"
+      ]
+    },
+    {
+      "job_name": "galaxy-e2e-tests",
+      "workflow_file": "galaxy-e2e-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "tests/nightly/tg/ccl",
+        "build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=NightlyFabric*Fixture.*",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml",
+        "tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args \"--allow-run-as-root --tag-output\" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_me",
+        "tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args \"--allow-run-as-root --tag-output\" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_me",
+        "tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml",
+        "tt-run --gtest_filter=*SendRecvPipelineSingleGalaxy*"
+      ],
+      "triggered_from": [
+        "galaxy-e2e-tests.yaml:galaxy-e2e-tests"
+      ]
+    },
+    {
+      "job_name": "galaxy-integration-tests",
+      "workflow_file": "galaxy-integration-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "./tests/scripts/tg/run_tg_frequent_tests.sh"
+      ],
+      "triggered_from": [
+        "galaxy-integration-tests.yaml:galaxy-integration-tests",
+        "pipeline-select-galaxy.yaml:galaxy-integration-tests"
+      ]
+    },
+    {
+      "job_name": "galaxy-perf-tests",
+      "workflow_file": "galaxy-perf-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "models/tt_dit/tests/models/sd35/test_performance_sd35.py -k 4x8cfg1sp0tp1",
+        "models/tt_dit/tests/models/flux1/test_performance_flux1.py -k wh_4x8sp0tp1",
+        "models/tt_dit/tests/models/motif/test_performance_motif.py -k 4x8cfg1sp0tp1",
+        "models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k wh_4x8sp1tp0",
+        "models/tt_dit/tests/models/mochi/test_performance_mochi.py -k 4x8sp1tp0",
+        "models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k 4x8",
+        "models/demos/tg/sentence_bert/tests/device_perf_test.py"
+      ],
+      "triggered_from": [
+        "galaxy-perf-tests.yaml:galaxy-perf-tests",
+        "pipeline-select-galaxy.yaml:galaxy-model-perf-tests"
+      ]
+    },
+    {
+      "job_name": "quick-wh-glx-health",
+      "workflow_file": "galaxy-quick-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter=Cluster.ReportSystemHealth",
+        "./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardFixture.*",
+        "./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardProgramFixture.*",
+        "./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric2D*Fixture.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric1D*Fixture.*",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml"
+      ],
+      "triggered_from": [
+        "galaxy-quick.yaml:galaxy-quick-test",
+        "pipeline-select-galaxy.yaml:galaxy-quick"
+      ]
+    },
+    {
+      "job_name": "quick-wh-glx-quick",
+      "workflow_file": "galaxy-quick-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k quick",
+        "models/demos/llama3_70b_galaxy/demo/demo_decode.py -k quick",
+        "models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py",
+        "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_2d]",
+        "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-2-20-fabric_linear-DRAM_memconfig-sd35_prompt_check-3links]",
+        "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-mesh_device0-8-2-2-fabric_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]",
+        "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_1d_line]",
+        "tests/nightly/tg/ccl/test_all_broadcast.py::test_all_broadcast_trace[wormhole_b0-mesh_device0-device_params0-3-mem_config0-deepseek_1]",
+        "tests/nightly/tg/ccl/test_all_reduce.py::test_line_all_reduce_on_TG_rows_post_commit[wormhole_b0-device_params0-ReduceType.Sum-8x4_grid-8-BufferType.DRAM-DataType.BFLOAT16-4-2-per_chip_output_shape0-Layout.TILE]",
+        "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_combine_fabric_manager_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_manager_enabled_2d]",
+        "tests/scale_out/test_ccl_fabric_manager.py::test_all_gather_async_fabric_manager[wormhole_b0-mesh_device0-normal-2-2-20-fabric_manager_enabled_linear-DRAM_memconfig-sd35_prompt_check-3links]",
+        "tests/scale_out/test_ccl_fabric_manager.py::test_reduce_scatter_async_fabric_manager[wormhole_b0-mesh_device0-8-2-2-fabric_manager_enabled_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]",
+        "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_dispatch_fabric_manager_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]"
+      ],
+      "triggered_from": [
+        "galaxy-quick.yaml:galaxy-quick-test",
+        "pipeline-select-galaxy.yaml:galaxy-quick"
+      ]
+    },
+    {
+      "job_name": "quick-bh-glx-health",
+      "workflow_file": "galaxy-quick-impl.yaml",
+      "machines": [
+        "Galaxy (Blackhole)"
+      ],
+      "tests": [
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml"
+      ],
+      "triggered_from": [
+        "galaxy-quick.yaml:galaxy-quick-test",
+        "pipeline-select-galaxy.yaml:galaxy-quick"
+      ]
+    },
+    {
+      "job_name": "galaxy-stress",
+      "workflow_file": "galaxy-stress-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "models/demos/llama3_70b_galaxy/demo/demo_decode.py -k nd-hang-test"
+      ],
+      "triggered_from": [
+        "galaxy-stress-tests.yaml:galaxy-stress-test"
+      ]
+    },
+    {
+      "job_name": "galaxy-long-tests",
+      "workflow_file": "galaxy-stress-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml",
+        "models/demos/llama3_70b_galaxy/demo/demo_decode.py -k stress-test"
+      ],
+      "triggered_from": [
+        "galaxy-stress-tests.yaml:galaxy-stress-test"
+      ]
+    },
+    {
+      "job_name": "galaxy-unit-tests",
+      "workflow_file": "galaxy-unit-tests-impl.yaml",
+      "machines": [
+        "Wormhole (generic)"
+      ],
+      "tests": [
+        "./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCard*Fixture.*",
+        "./build/test/tt_metal/unit_tests_device --gtest_filter=GalaxyFixture.*:TGFixture.*",
+        "./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQMultiDevice*Fixture.*",
+        "./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=*DispatchContext*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric2D*Fixture.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric*MuxFixture.*",
+        "tt-run --mpi-args \"--allow-run-as-root\" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_",
+        "tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args \"--tag-output --allow-run-as-root\"  python3 tests/ttnn/distributed/test_multi_mesh.py",
+        "tt-run --mpi-args \"--allow-run-as-root\" --rank-binding 4x4_multi_mesh_rank_binding.yaml ./build/test/tt_metal/multi_host_socket_tests",
+        "tt-run --gtest_filter=*Socket*",
+        "tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args \"--allow-run-as-root --tag-output\" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_meta",
+        "tt-run --rank-binding 4x2_multi_mesh_rank_binding.yaml --mpi-args \"--allow-run-as-root --tag-output\" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_me",
+        "models/demos/llama3_70b_galaxy/tests/unit_tests",
+        "tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py",
+        "tests/ttnn/distributed/test_distributed_layernorm_TG.py",
+        "models/demos/gpt_oss/tests/unit -k 4x8",
+        "models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py",
+        "models/common/tests/modules/mlp/test_mlp_2d.py",
+        "models/common/tests/test_auto_compose.py"
+      ],
+      "triggered_from": [
+        "galaxy-unit-tests.yaml:galaxy-unit-tests",
+        "pipeline-select-galaxy.yaml:galaxy-unit-tests"
+      ]
+    },
+    {
+      "job_name": "profiler-tests",
+      "workflow_file": "profiler-tests-impl.yaml",
+      "machines": [
+        "Wormhole (generic)"
+      ],
+      "tests": [],
+      "triggered_from": [
+        "galaxy-profiler-tests.yaml:profiler-tests",
+        "pipeline-select-t3k.yaml:t3000-profiler-tests",
+        "profiler-ci-selector.yaml:t3k-profiler-tests",
+        "profiler-ci-selector.yaml:galaxy-profiler-tests",
+        "t3000-profiler-tests.yaml:profiler-tests"
+      ]
+    },
+    {
+      "job_name": "t3000-demo-tests",
+      "workflow_file": "t3000-demo-tests-impl.yaml",
+      "machines": [
+        "T3K (Wormhole)"
+      ],
+      "tests": [
+        "run_t3000_mixtral_tests",
+        "run_t3000_falcon40b_tests",
+        "run_t3000_llama3_tests",
+        "run_t3000_qwen25_tests",
+        "run_t3000_llama3_vision_tests",
+        "run_t3000_llama3_90b_vision_tests",
+        "run_t3000_llama3_70b_tests",
+        "run_t3000_falcon7b_tests",
+        "run_t3000_resnet50_tests",
+        "run_t3000_sentence_bert_tests",
+        "run_t3000_sd35large_tests",
+        "run_t3000_flux1_tests",
+        "run_t3000_motif_tests",
+        "run_t3000_qwenimage_tests",
+        "run_t3000_mistral_tests",
+        "run_t3000_qwen3_tests",
+        "run_t3000_qwen25_vl_tests",
+        "run_t3000_qwen3_vl_tests",
+        "run_t3000_gemma3_tests",
+        "run_t3000_wan22_tests",
+        "run_t3000_mochi_tests",
+        "run_t3000_whisper_tests",
+        "run_t3000_gpt_oss_tests"
+      ],
+      "triggered_from": [
+        "pipeline-select-t3k.yaml:t3000-demo-tests",
+        "release-build-test-publish.yaml:t3000-demo-tests",
+        "t3000-demo-tests.yaml:t3000-demo-tests"
+      ]
+    },
+    {
+      "job_name": "t3000-e2e-tests",
+      "workflow_file": "t3000-e2e-tests-impl.yaml",
+      "machines": [
+        "T3K (Wormhole)"
+      ],
+      "tests": [
+        "tests/nightly/t3000/ccl",
+        "tests/nightly/t3000/2d_ccl",
+        "build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=NightlyFabric*Fixture.*",
+        "build/test/tt_metal/tt_fabric/test_addrgen_write",
+        "build/test/tt_metal/unit_tests_dispatch --gtest_filter=Large*.NIGHTLY_DRAMReadback/*",
+        "build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability.yaml",
+        "models/common/tests/modules/mlp",
+        "models/common/demos/llama31_8B_demo.py"
+      ],
+      "triggered_from": [
+        "pipeline-select-t3k.yaml:t3000-e2e-tests",
+        "t3000-e2e-tests.yaml:t3000-e2e-tests"
+      ]
+    },
+    {
+      "job_name": "t3000-fast-tests",
+      "workflow_file": "t3000-fast-tests-impl.yaml",
+      "machines": [
+        "N300"
+      ],
+      "tests": [
+        "run_t3000_ttfabric_tests",
+        "run_t3000_ttnn_multiprocess_tests",
+        "run_t3000_ccl_tests"
+      ],
+      "triggered_from": [
+        "all-post-commit-workflows.yaml:t3000-apc-fast-tests",
+        "t3000-fast-tests.yaml:t3000-fast-tests",
+        "tm-fabric-tests-impl.yaml:wh-t3k-fabric-tests"
+      ]
+    },
+    {
+      "job_name": "t3000-integration-tests",
+      "workflow_file": "t3000-integration-tests-impl.yaml",
+      "machines": [
+        "T3K (Wormhole)"
+      ],
+      "tests": [
+        "run_t3000_tteager_tests",
+        "run_t3000_trace_stress_tests",
+        "run_t3000_falcon40b_tests",
+        "run_t3000_llama3.2-11b-vision_freq_tests",
+        "run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests",
+        "run_t3000_llama3.2-90b-vision_freq_tests",
+        "run_t3000_llama3_tests",
+        "run_t3000_llama3_accuracy_tests",
+        "run_t3000_llama3_70n90b_accuracy_tests",
+        "run_t3000_llama3_90b_tests",
+        "run_t3000_resnet_tests",
+        "run_t3000_sd35large_tests",
+        "run_t3000_flux1_tests",
+        "run_t3000_motif_tests",
+        "run_t3000_mistral_tests",
+        "run_t3000_wan22_tests",
+        "run_t3000_mochi_tests",
+        "run_t3000_qwenimage_tests"
+      ],
+      "triggered_from": [
+        "pipeline-select-t3k.yaml:t3000-integration-tests",
+        "t3000-integration-tests.yaml:t3000-integration-tests"
+      ]
+    },
+    {
+      "job_name": "t3000-perf-tests",
+      "workflow_file": "t3000-perf-tests-impl.yaml",
+      "machines": [
+        "T3K (Wormhole)"
+      ],
+      "tests": [
+        "run_t3000_falcon7b_tests",
+        "run_t3000_falcon40b_tests",
+        "run_t3000_resnet50_tests",
+        "run_t3000_sentence_bert_tests",
+        "run_t3000_stable_diffusion_35_large_tests",
+        "run_t3000_mochi_tests",
+        "run_t3000_wan22_tests",
+        "run_t3000_flux1_tests",
+        "run_t3000_motif_tests",
+        "run_t3000_qwenimage_tests",
+        "run_t3000_gemma3_tests",
+        "run_t3000_gemma3_tests_op_to_op"
+      ],
+      "triggered_from": [
+        "pipeline-select-t3k.yaml:t3000-perf-tests",
+        "t3000-perf-tests.yaml:t3000-perf-tests"
+      ]
+    },
+    {
+      "job_name": "t3000-accuracy-perplexity-tests",
+      "workflow_file": "t3000-perplexity-tests-impl.yaml",
+      "machines": [
+        "T3K (Wormhole)"
+      ],
+      "tests": [
+        "run_t3000_falcon40b_perplexity_tests",
+        "run_t3000_llama70b_perplexity_tests",
+        "run_t3000_mixtral8x7b_perplexity_tests",
+        "run_t3000_mistral_perplexity_tests",
+        "run_t3000_llama3_perplexity_tests_single_card",
+        "run_t3000_llama3_perplexity_tests_t3000",
+        "run_t3000_qwen25_perplexity_tests",
+        "run_t3000_qwen3_perplexity_tests",
+        "run_t3000_gemma3_accuracy_tests"
+      ],
+      "triggered_from": [
+        "t3000-perplexity-tests.yaml:t3000-model-accuracy-perplexity-tests"
+      ]
+    },
+    {
+      "job_name": "t3000-unit-tests",
+      "workflow_file": "t3000-unit-tests-impl.yaml",
+      "machines": [
+        "T3K (Wormhole)"
+      ],
+      "tests": [
+        "run_t3000_ttmetal_tests",
+        "run_t3000_ttnn_tests",
+        "run_t3000_tt_metal_multiprocess_tests",
+        "run_t3000_ttnn_udm_tests",
+        "run_t3000_falcon7b_tests",
+        "run_t3000_falcon40b_tests",
+        "run_t3000_llama3-small_tests",
+        "run_t3000_llama3.2-11b_tests",
+        "run_t3000_llama3.2-11b-vision_unit_tests",
+        "run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests",
+        "run_t3000_llama3.2-90b-vision_unit_tests",
+        "run_t3000_llama3.2-90b_tests",
+        "run_t3000_mixtral_tests",
+        "run_t3000_grok_tests",
+        "run_t3000_unet_shallow_tests",
+        "run_t3000_mistral_tests",
+        "run_t3000_qwen25_vl_unit_tests",
+        "run_t3000_qwen3_vl_unit_tests",
+        "run_t3000_gemma3-small_tests",
+        "run_t3000_tt_dit_tests",
+        "run_t3000_gpt_oss_unit_tests",
+        "run_t3000_deepseek_tests",
+        "run_t3000_tttv2_fast_unit_tests"
+      ],
+      "triggered_from": [
+        "pipeline-select-t3k.yaml:t3000-unit-tests",
+        "t3000-unit-tests.yaml:t3000-unit-tests"
+      ]
+    },
+    {
+      "job_name": "tg-op-perf-tests",
+      "workflow_file": "tg-op-perf-tests-impl.yaml",
+      "machines": [
+        "Wormhole (generic)"
+      ],
+      "tests": [
+        "tests/ttnn/multidevice_perf_tests/ -k TG"
+      ],
+      "triggered_from": [
+        "tg-op-perf-tests.yaml:tg-op-perf-tests"
+      ]
+    },
+    {
+      "job_name": "wh-t3k-udm-tests",
+      "workflow_file": "tm-fabric-tests-impl.yaml",
+      "machines": [
+        "N300"
+      ],
+      "tests": [
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric2DUDMModeFixture.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=NightlyFabric2DUDMModeFixture.*",
+        "./build/test/ttnn/unit_tests_ttnn_udm"
+      ],
+      "triggered_from": [
+        "tm-fabric-tests.yaml:fabric-tests"
+      ]
+    },
+    {
+      "job_name": "wh-6u-fabric-tests",
+      "workflow_file": "tm-fabric-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric2D*Fixture.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric1D*Fixture.*",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml"
+      ],
+      "triggered_from": [
+        "tm-fabric-tests.yaml:fabric-tests"
+      ]
+    },
+    {
+      "job_name": "bh-multi-card-unit-tests",
+      "workflow_file": "tm-fabric-tests-impl.yaml",
+      "machines": [
+        "Blackhole (generic)"
+      ],
+      "tests": [
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric1D*Fixture.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric2D*Fixture.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=FabricTrafficGeneratorKernelIntegrationTest.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric2DUDMModeFixture.*",
+        "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=NightlyFabric2DUDMModeFixture.*",
+        "./build/test/ttnn/unit_tests_ttnn_udm",
+        "./build/test/tt_metal/tt_fabric/test_system_health",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml",
+        "tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml"
+      ],
+      "triggered_from": [
+        "tm-fabric-tests.yaml:fabric-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn",
+      "workflow_file": "ttnn-stress-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Blackhole)",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/stress_tests/"
+      ],
+      "triggered_from": [
+        "blackhole-nightly-tests.yaml:blackhole-ttnn-stress-tests",
+        "ttnn-stress-tests.yaml:test"
+      ]
+    }
+  ],
+  "generated_at": "2026-02-11T19:58:13Z"
+}
