@@ -79,6 +79,7 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+            print(self.args.is_multichip, self.args.is_distributed_norm(mode))
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
