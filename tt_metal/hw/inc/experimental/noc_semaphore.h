@@ -141,6 +141,31 @@ public:
         }
     }
 
+    /**
+     * @brief Atomically increment the semaphore value on multiple cores in a specified rectangular region of the NoC.
+     * @note Sender cannot be part of the multicast destinations.
+     *
+     * @param noc The Noc object representing the NoC to use for the transaction.
+     * @param noc_x_start The starting X coordinate of the region (inclusive).
+     * @param noc_y_start The starting Y coordinate of the region (inclusive).
+     * @param noc_x_end The ending X coordinate of the region (inclusive).
+     * @param noc_y_end The ending Y coordinate of the region (inclusive).
+     * @param value The value to increment the semaphore by.
+     * @param num_dests The number of destination cores in the region.
+     */
+    void inc_multicast(
+        const Noc& noc,
+        uint32_t noc_x_start,
+        uint32_t noc_y_start,
+        uint32_t noc_x_end,
+        uint32_t noc_y_end,
+        uint32_t value,
+        uint32_t num_dests) {
+        uint64_t multicast_addr =
+            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
+        noc_semaphore_inc_multicast(multicast_addr, value, num_dests, noc.get_noc_id());
+    }
+
 private:
     uint32_t local_l1_addr_;
 };
