@@ -37,8 +37,8 @@
       "job_name": "multi-card-demo-tests",
       "workflow_file": "blackhole-multi-card-demo-tests-impl.yaml",
       "machines": [
-        "Blackhole (generic)",
         "Galaxy (Blackhole)",
+        "P150",
         "P300"
       ],
       "tests": [
@@ -57,8 +57,8 @@
       "job_name": "multi-card-demo-tests-large",
       "workflow_file": "blackhole-multi-card-demo-tests-impl.yaml",
       "machines": [
-        "Blackhole (generic)",
         "Galaxy (Blackhole)",
+        "P150",
         "P300"
       ],
       "tests": [],
@@ -72,8 +72,8 @@
       "job_name": "multi-card-demo-tt_dit-tests",
       "workflow_file": "blackhole-multi-card-demo-tests-impl.yaml",
       "machines": [
-        "Blackhole (generic)",
         "Galaxy (Blackhole)",
+        "P150",
         "P300"
       ],
       "tests": [],
@@ -87,7 +87,6 @@
       "job_name": "multi-card-unit-tests",
       "workflow_file": "blackhole-multi-card-post-commit-tests-impl.yaml",
       "machines": [
-        "Blackhole (generic)",
         "Galaxy (Blackhole)",
         "P300"
       ],
@@ -103,8 +102,8 @@
       "job_name": "multi-card-unit-tests",
       "workflow_file": "blackhole-multi-card-unit-tests-impl.yaml",
       "machines": [
-        "Blackhole (generic)",
         "Galaxy (Blackhole)",
+        "P150",
         "P300"
       ],
       "tests": [
@@ -164,10 +163,54 @@
       ]
     },
     {
+      "job_name": "fd-frequent",
+      "workflow_file": "fast-dispatch-frequent-tests-impl.yaml",
+      "machines": [
+        "N300",
+        "P150"
+      ],
+      "tests": [
+        "./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json --benchmark_repetitions=2",
+        "./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py",
+        "./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json --benchmark_repetitions=11",
+        "./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py",
+        "./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json --benchmark_repetitions=5"
+      ],
+      "triggered_from": [
+        "fast-dispatch-frequent-tests.yaml:fd-nightly"
+      ]
+    },
+    {
+      "job_name": "nightly-wh-models",
+      "workflow_file": "fast-dispatch-full-regressions-and-models-impl.yaml",
+      "machines": [
+        "N150",
+        "N300"
+      ],
+      "tests": [],
+      "triggered_from": [
+        "fast-dispatch-full-regressions-and-models.yaml:fd-nightly",
+        "pipeline-select.yaml:single-card-ttnn-models-frequent"
+      ]
+    },
+    {
+      "job_name": "nightly-wh-unstable-models",
+      "workflow_file": "fast-dispatch-full-regressions-and-models-impl.yaml",
+      "machines": [
+        "N150",
+        "N300"
+      ],
+      "tests": [],
+      "triggered_from": [
+        "fast-dispatch-full-regressions-and-models.yaml:fd-nightly",
+        "pipeline-select.yaml:single-card-ttnn-models-frequent"
+      ]
+    },
+    {
       "job_name": "galaxy-apc-fast-tests",
       "workflow_file": "galaxy-apc-fast-tests-impl.yaml",
       "machines": [
-        "Wormhole (generic)"
+        "Galaxy (Wormhole)"
       ],
       "tests": [
         "models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc"
@@ -180,7 +223,7 @@
       "job_name": "galaxy-deepseek-tests",
       "workflow_file": "galaxy-deepseek-tests-impl.yaml",
       "machines": [
-        "Wormhole (generic)"
+        "Galaxy (Wormhole)"
       ],
       "tests": [
         "models/demos/deepseek_v3/tests/unit",
@@ -371,10 +414,25 @@
       ]
     },
     {
+      "job_name": "galaxy-umd-tests",
+      "workflow_file": "galaxy-unit-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Wormhole)"
+      ],
+      "tests": [
+        "./build/test/umd/galaxy/unit_tests_glx",
+        "./build/test/umd/api/api_tests"
+      ],
+      "triggered_from": [
+        "galaxy-unit-tests.yaml:galaxy-unit-tests",
+        "pipeline-select-galaxy.yaml:galaxy-unit-tests"
+      ]
+    },
+    {
       "job_name": "galaxy-unit-tests",
       "workflow_file": "galaxy-unit-tests-impl.yaml",
       "machines": [
-        "Wormhole (generic)"
+        "Galaxy (Wormhole)"
       ],
       "tests": [
         "./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCard*Fixture.*",
@@ -404,10 +462,57 @@
       ]
     },
     {
+      "job_name": "run-microbenchmarks",
+      "workflow_file": "metal-run-microbenchmarks-impl.yaml",
+      "machines": [
+        "N300",
+        "P150",
+        "T3K (Wormhole)"
+      ],
+      "tests": [
+        "./tests/scripts/run_moreh_microbenchmark.sh",
+        "./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml",
+        "tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py",
+        "tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py",
+        "build/tools/mem_bench --benchmark_filter=\"Device (Reading|Writing) Host\"",
+        "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/ci_run_unicast.sh"
+      ],
+      "triggered_from": [
+        "metal-run-microbenchmarks.yaml:run-microbenchmarks"
+      ]
+    },
+    {
+      "job_name": "device-perf",
+      "workflow_file": "perf-device-models-impl.yaml",
+      "machines": [
+        "N300",
+        "P150"
+      ],
+      "tests": [],
+      "triggered_from": [
+        "perf-device-models.yaml:device-perf",
+        "pipeline-select.yaml:single-card-perf-device-models-tests"
+      ]
+    },
+    {
+      "job_name": "models-perf",
+      "workflow_file": "perf-models-impl.yaml",
+      "machines": [
+        "N300",
+        "P150"
+      ],
+      "tests": [],
+      "triggered_from": [
+        "perf-models.yaml:models-perf",
+        "pipeline-select.yaml:single-card-perf-models-tests"
+      ]
+    },
+    {
       "job_name": "profiler-tests",
       "workflow_file": "profiler-tests-impl.yaml",
       "machines": [
-        "Wormhole (generic)"
+        "Galaxy (Wormhole)",
+        "T3K (Wormhole)"
       ],
       "tests": [],
       "triggered_from": [
@@ -416,6 +521,50 @@
         "profiler-ci-selector.yaml:t3k-profiler-tests",
         "profiler-ci-selector.yaml:galaxy-profiler-tests",
         "t3000-profiler-tests.yaml:profiler-tests"
+      ]
+    },
+    {
+      "job_name": "single-card-demo-tests",
+      "workflow_file": "single-card-demo-tests-impl.yaml",
+      "machines": [
+        "N150",
+        "N300"
+      ],
+      "tests": [
+        "run_falcon7b_func",
+        "run_llama3_func",
+        "run_vgg_func",
+        "run_bert_tiny_func",
+        "run_bert_func",
+        "run_resnet_func",
+        "run_distilbert_func",
+        "run_mnist_func",
+        "run_squeezebert_func",
+        "run_stable_diffusion_func",
+        "run_segformer_func",
+        "run_sentencebert_func",
+        "run_mobilenetv2_perf",
+        "run_ufld_v2_func",
+        "run_swin_s_demo",
+        "run_vit_demo",
+        "run_vanilla_unet_demo",
+        "run_vgg_unet_demo",
+        "run_resnet_stability",
+        "run_sdxl_func",
+        "run_efficientnet_b0_func",
+        "run_vovnet_demo",
+        "run_swin_v2_demo",
+        "run_mistral7b_perf",
+        "run_falcon7b_perf",
+        "run_whisper_perf",
+        "run_qwen25_vl_perfunc",
+        "run_ds_r1_qwen_func",
+        "run_gemma3_perf"
+      ],
+      "triggered_from": [
+        "pipeline-select.yaml:single-card-demo-tests",
+        "release-build-test-publish.yaml:single-card-demo-tests",
+        "single-card-demo-tests.yaml:single-card-demo-tests"
       ]
     },
     {
@@ -607,16 +756,55 @@
       ]
     },
     {
+      "job_name": "install-and-run-mnist",
+      "workflow_file": "test-installing-step-impl.yaml",
+      "machines": [
+        "N150"
+      ],
+      "tests": [],
+      "triggered_from": [
+        "test-installing-step.yaml:test-installing-step"
+      ]
+    },
+    {
       "job_name": "tg-op-perf-tests",
       "workflow_file": "tg-op-perf-tests-impl.yaml",
       "machines": [
-        "Wormhole (generic)"
+        "Galaxy (Wormhole)"
       ],
       "tests": [
         "tests/ttnn/multidevice_perf_tests/ -k TG"
       ],
       "triggered_from": [
         "tg-op-perf-tests.yaml:tg-op-perf-tests"
+      ]
+    },
+    {
+      "job_name": "bare-metal-tests",
+      "workflow_file": "tm-data-movement-perf-impl.yaml",
+      "machines": [
+        "N300"
+      ],
+      "tests": [
+        "tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py"
+      ],
+      "triggered_from": [
+        "tm-data-movement-wrapper.yaml:data-movement-perf-tests"
+      ]
+    },
+    {
+      "job_name": "data-movement-tests",
+      "workflow_file": "tm-data-movement-unit-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P150"
+      ],
+      "tests": [
+        "./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER"
+      ],
+      "triggered_from": [
+        "tm-data-movement-wrapper.yaml:data-movement-unit-tests"
       ]
     },
     {
@@ -655,7 +843,8 @@
       "job_name": "bh-multi-card-unit-tests",
       "workflow_file": "tm-fabric-tests-impl.yaml",
       "machines": [
-        "Blackhole (generic)"
+        "Galaxy (Blackhole)",
+        "P300"
       ],
       "tests": [
         "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=Fabric1D*Fixture.*",
@@ -676,6 +865,244 @@
       ]
     },
     {
+      "job_name": "fabric-perf-tests",
+      "workflow_file": "tm-fabric-tests-perf-impl.yaml",
+      "machines": [
+        "T3K (Wormhole)"
+      ],
+      "tests": [],
+      "triggered_from": [
+        "tm-fabric-tests.yaml:fabric-perf-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-conv-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/conv"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-matmul-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/matmul"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-docs-examples-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/docs_examples"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-fused-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/fused"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-experimental-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/experimental -k not"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-pool-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/pool"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-sdxl-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py",
+        "models/experimental/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py",
+        "models/experimental/stable_diffusion_xl_base/demo/demo.py -k device_vae"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-train-nightly-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "build/tt-train/tests/ttml_tests --gtest_filter=*NIGHTLY_*"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-sdpa-stress-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/nightly/single_card/sdpa"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-eltwise-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/eltwise"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-transformers-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/transformers"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-moreh-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/moreh"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-data_movement-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/data_movement",
+        "tests/ttnn/unit_tests/operations/data_movement"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
+      "job_name": "ttnn-misc-tests",
+      "workflow_file": "tt-metal-l2-nightly-impl.yaml",
+      "machines": [
+        "N150",
+        "N300",
+        "P100",
+        "P150"
+      ],
+      "tests": [
+        "tests/ttnn/nightly/unit_tests/operations/rand"
+      ],
+      "triggered_from": [
+        "tt-metal-l2-nightly.yaml:tt-metal-l2-tests"
+      ]
+    },
+    {
       "job_name": "ttnn",
       "workflow_file": "ttnn-stress-tests-impl.yaml",
       "machines": [
@@ -689,7 +1116,21 @@
         "blackhole-nightly-tests.yaml:blackhole-ttnn-stress-tests",
         "ttnn-stress-tests.yaml:test"
       ]
+    },
+    {
+      "job_name": "vllm-tests",
+      "workflow_file": "vllm-nightly-tests-impl.yaml",
+      "machines": [
+        "Galaxy (Blackhole)",
+        "N300"
+      ],
+      "tests": [
+        "vllm/tests/tt"
+      ],
+      "triggered_from": [
+        "vllm-nightly-tests.yaml:vllm-tests"
+      ]
     }
   ],
-  "generated_at": "2026-02-11T19:58:13Z"
+  "generated_at": "2026-02-11T20:52:43Z"
 }
