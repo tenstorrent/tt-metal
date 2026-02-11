@@ -6,13 +6,16 @@ Tests for the RotarySetup1D module (1D mesh topology: N150, N300, T3K).
 
 This test suite verifies:
 1. Unit tests for config dataclass and transformation matrix utility
-2. RotarySetup1D init + API methods (get_both_trans_mats, get_rot_idxs, get_rot_mats, forward)
-3. Numerical correctness vs TTTv1 RotarySetup
-4. from_model_args backward compatibility
+2. RotarySetup1D init + API methods (get_both_trans_mats, forward)
+3. Numerical correctness vs pure-torch HF reference
+4. from_model_args backward compatibility (vs TTTv1)
 """
 
+import math
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Tuple
 
 import pytest
 import torch
@@ -25,26 +28,81 @@ from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prep
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.common.utility_functions import comp_pcc
 
-# RopeScaling helpers (import from TTTv1 for test setup)
-from models.tt_transformers.tt.common import RopeScalingLlama3, RopeScalingType
-from models.tt_transformers.tt.rope import compute_gather_cos_sin
-
 # ============================================================================
-# Test helpers
+# Pure-torch RoPE reference (no TTTv1 dependency)
 # ============================================================================
 
 _slow = pytest.mark.slow
 
 
-def _llama3_scaling():
-    """Llama-3.x rope scaling config (factor=8, low=1, high=4)."""
-    return RopeScalingLlama3(
-        rope_type=RopeScalingType.LLAMA3,
-        factor=8.0,
-        original_max_position_embeddings=8192,
-        low_freq_factor=1.0,
-        high_freq_factor=4.0,
-    )
+@dataclass
+class Llama3Scaling:
+    """Llama-3.x frequency scaling parameters."""
+
+    factor: float = 8.0
+    original_max_position_embeddings: int = 8192
+    low_freq_factor: float = 1.0
+    high_freq_factor: float = 4.0
+
+
+def _apply_llama3_scaling(freqs: torch.Tensor, s: Llama3Scaling) -> torch.Tensor:
+    """Apply Llama-3.x frequency scaling (pure torch, mirrors HF implementation)."""
+    low_freq_wavelen = s.original_max_position_embeddings / s.low_freq_factor
+    high_freq_wavelen = s.original_max_position_embeddings / s.high_freq_factor
+    new_freqs = []
+    for freq in freqs:
+        wavelen = 2 * math.pi / freq
+        if wavelen < high_freq_wavelen:
+            new_freqs.append(freq)
+        elif wavelen > low_freq_wavelen:
+            new_freqs.append(freq / s.factor)
+        else:
+            smooth = (s.original_max_position_embeddings / wavelen - s.low_freq_factor) / (
+                s.high_freq_factor - s.low_freq_factor
+            )
+            new_freqs.append((1 - smooth) * freq / s.factor + smooth * freq)
+    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def _rope_cos_sin(
+    head_dim: int,
+    max_seq_len: int,
+    theta: float,
+    scaling: Optional[Llama3Scaling] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Compute RoPE cos/sin tables in Meta interleaved format (pure torch).
+
+    This is the HF reference implementation for RoPE, independent of TTTv1.
+
+    Returns:
+        cos, sin: [1, 1, max_seq_len, head_dim] in Meta interleaved format
+            where adjacent pairs repeat: [c0, c0, c1, c1, ...]
+    """
+    inv_freq = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
+
+    if scaling is not None:
+        # Scaled: apply frequency adjustment, then gather
+        inv_freq = _apply_llama3_scaling(inv_freq, scaling)
+        t = torch.arange(max_seq_len * 2.0)
+        freqs = torch.outer(t, inv_freq).float()
+        cos = freqs.cos()
+        sin = freqs.sin()
+        # Gather sequential positions and interleave
+        positions = torch.arange(max_seq_len)
+        pos_expanded = positions.unsqueeze(1).expand(-1, cos.shape[-1])
+        cos = cos.gather(0, pos_expanded)
+        sin = sin.gather(0, pos_expanded)
+    else:
+        # Unscaled: standard RoPE
+        t = torch.arange(max_seq_len, dtype=inv_freq.dtype)
+        freqs = torch.outer(t, inv_freq)
+        cos = freqs.cos()
+        sin = freqs.sin()
+
+    # Convert to Meta interleaved format: [c0, c0, c1, c1, ...]
+    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    return cos, sin
 
 
 # ============================================================================
@@ -106,7 +164,7 @@ def test_rope_1d_from_model_args_rejects_galaxy():
 
 def test_compute_cos_sin_no_scaling():
     """Test cos/sin computation without scaling (Mistral/Qwen-style)."""
-    cos, sin = compute_gather_cos_sin(dhead=128, end=2 * 8192, theta=1000000.0, rope_scaling=None)
+    cos, sin = _rope_cos_sin(head_dim=128, max_seq_len=8192, theta=1000000.0)
     assert cos.shape == (1, 1, 8192, 128)
     assert sin.shape == (1, 1, 8192, 128)
     # cos/sin values should be in [-1, 1]
@@ -116,15 +174,14 @@ def test_compute_cos_sin_no_scaling():
 
 def test_compute_cos_sin_llama3_scaling():
     """Test cos/sin computation with Llama-3.x scaling."""
-    scaling = _llama3_scaling()
-    cos, sin = compute_gather_cos_sin(dhead=128, end=2 * 8192, theta=500000.0, rope_scaling=scaling)
+    cos, sin = _rope_cos_sin(head_dim=128, max_seq_len=8192, theta=500000.0, scaling=Llama3Scaling())
     assert cos.shape == (1, 1, 8192, 128)
     assert sin.shape == (1, 1, 8192, 128)
 
 
 def test_compute_cos_sin_head_dim_64():
     """Test cos/sin computation with head_dim=64 (Llama-3.2-1B)."""
-    cos, sin = compute_gather_cos_sin(dhead=64, end=2 * 8192, theta=500000.0, rope_scaling=_llama3_scaling())
+    cos, sin = _rope_cos_sin(head_dim=64, max_seq_len=8192, theta=500000.0, scaling=Llama3Scaling())
     assert cos.shape == (1, 1, 8192, 64)
     assert sin.shape == (1, 1, 8192, 64)
 
@@ -234,7 +291,7 @@ def _list_init_test_cases() -> list[pytest.param]:
     "mesh_shape,batch_size,head_dim,max_seq_len,rope_theta,rope_scaling_str,use_qk_fused",
     _list_init_test_cases(),
 )
-def test_rope_1d_init_and_api(
+def test_rope_1d_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
     mesh_shape,
     batch_size,
@@ -254,12 +311,10 @@ def test_rope_1d_init_and_api(
     4. get_rot_mats() produces cos/sin with correct shapes and PCC vs reference
     5. forward() with ttnn.Tensor input matches torch-input path
     """
-    rope_scaling = _llama3_scaling() if rope_scaling_str == "llama3" else None
+    scaling = Llama3Scaling() if rope_scaling_str == "llama3" else None
 
-    cos_torch, sin_torch = compute_gather_cos_sin(
-        dhead=head_dim, end=2 * max_seq_len, theta=rope_theta, rope_scaling=rope_scaling
-    )
-    scaling_tag = type(rope_scaling).__name__ if rope_scaling else "none"
+    cos_torch, sin_torch = _rope_cos_sin(head_dim=head_dim, max_seq_len=max_seq_len, theta=rope_theta, scaling=scaling)
+    scaling_tag = "llama3" if scaling else "none"
     tag = f"theta{rope_theta}_{scaling_tag}"
     cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/rope_1d"))
     cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"cos_{tag}"))
@@ -300,42 +355,17 @@ def test_rope_1d_init_and_api(
     pcc_decode, msg_decode = comp_pcc(decode_ref.to(torch.bfloat16), decode_tt_trimmed.to(torch.bfloat16), 0.9999)
     assert pcc_decode, f"decode trans_mat PCC failed: {msg_decode}"
 
-    # --- get_rot_idxs ---
-    position_idxs = torch.arange(batch_size)
-    rot_idxs = rope.get_rot_idxs(position_idxs, on_host=True)
-    assert isinstance(rot_idxs, ttnn.Tensor)
-
-    # --- get_rot_mats (torch input) ---
-    rot_mats = rope.get_rot_mats(position_idxs)
-    assert len(rot_mats) == 2
-    cos, sin = rot_mats
-    assert isinstance(cos, ttnn.Tensor)
-    assert isinstance(sin, ttnn.Tensor)
-
-    # --- get_rot_mats with return_rot_idxs ---
-    result = rope.get_rot_mats(position_idxs, return_rot_idxs=True)
-    assert len(result) == 2
-    rot_mats_2, rot_idxs_2 = result
-    assert len(rot_mats_2) == 2
-    assert isinstance(rot_idxs_2, ttnn.Tensor)
-
     # --- PCC check: cos/sin vs torch reference ---
     # Use non-zero positions to avoid sin(0)=0 (PCC undefined for all-zero tensors)
     pcc_position_idxs = torch.arange(42, 42 + batch_size)
 
-    # Production calling pattern: get_rot_idxs(on_host=True) → get_rot_mats(ttnn_input)
-    pcc_rot_idxs_host = rope.get_rot_idxs(pcc_position_idxs, on_host=True)
-    pcc_rot_mats_via_ttnn = rope.get_rot_mats(pcc_rot_idxs_host)
-    assert len(pcc_rot_mats_via_ttnn) == 2
+    # TTTv2 API: prepare_rot_idxs → forward
+    rot_idxs = prepare_rot_idxs(rope.config, pcc_position_idxs, on_host=True)
+    pcc_rot_mats = rope.forward(rot_idxs)
+    assert len(pcc_rot_mats) == 2
 
-    # Also test torch→internal path for comparison
-    pcc_rot_mats = rope.get_rot_mats(pcc_position_idxs)
-
-    cos_torch_ref, sin_torch_ref = compute_gather_cos_sin(
-        dhead=head_dim,
-        end=2 * max_seq_len,
-        theta=rope_theta,
-        rope_scaling=rope_scaling,
+    cos_torch_ref, sin_torch_ref = _rope_cos_sin(
+        head_dim=head_dim, max_seq_len=max_seq_len, theta=rope_theta, scaling=scaling
     )
 
     cos_tt = to_torch_auto_compose(pcc_rot_mats[0])
@@ -365,16 +395,6 @@ def test_rope_1d_init_and_api(
 
     assert pcc_cos, f"cos PCC failed: {msg_cos}"
     assert pcc_sin, f"sin PCC failed: {msg_sin}"
-
-    # --- PCC check: ttnn-input path must match torch-input path ---
-    cos_tt_via_ttnn = to_torch_auto_compose(pcc_rot_mats_via_ttnn[0])
-    sin_tt_via_ttnn = to_torch_auto_compose(pcc_rot_mats_via_ttnn[1])
-    pcc_cos_path, msg_cos_path = comp_pcc(cos_tt, cos_tt_via_ttnn, 0.9999)
-    pcc_sin_path, msg_sin_path = comp_pcc(sin_tt, sin_tt_via_ttnn, 0.9999)
-    logger.info(f"torch-path vs ttnn-path cos PCC: {msg_cos_path}")
-    logger.info(f"torch-path vs ttnn-path sin PCC: {msg_sin_path}")
-    assert pcc_cos_path, f"ttnn-input path cos mismatch vs torch-input path: {msg_cos_path}"
-    assert pcc_sin_path, f"ttnn-input path sin mismatch vs torch-input path: {msg_sin_path}"
 
     logger.info(
         f"RotarySetup1D: PASSED for mesh={mesh_shape}, batch={batch_size}, "
@@ -408,10 +428,8 @@ def test_prepare_rot_idxs(
     use_qk_fused,
 ):
     """Test prepare_rot_idxs standalone helper produces correct ttnn tensor."""
-    rope_scaling = _llama3_scaling()
-    cos_torch, sin_torch = compute_gather_cos_sin(dhead=128, end=2 * 8192, theta=500000.0, rope_scaling=rope_scaling)
-    scaling_tag = type(rope_scaling).__name__
-    tag = f"theta500000.0_{scaling_tag}"
+    cos_torch, sin_torch = _rope_cos_sin(head_dim=128, max_seq_len=8192, theta=500000.0, scaling=Llama3Scaling())
+    tag = "theta500000.0_llama3"
     cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/rope_1d"))
     cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"cos_{tag}"))
     sin_lw = LazyWeight(source=sin_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"sin_{tag}"))
@@ -447,122 +465,6 @@ def test_prepare_rot_idxs(
     cos_h = to_torch_auto_compose(cos_sin_host[0])
     pcc_ok, msg = comp_pcc(cos_d, cos_h, 0.9999)
     assert pcc_ok, f"on-device vs on-host cos mismatch: {msg}"
-
-
-# ============================================================================
-# Numerical correctness: compare cos/sin against TTTv1 RotarySetup
-# ============================================================================
-
-
-@pytest.mark.parametrize(
-    "ttnn_mesh_device",
-    [(1, 1), (1, 2), (1, 8)],
-    ids=["1x1", "1x2", "1x8"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "batch_size,head_dim,max_seq_len,rope_theta,rope_scaling_str,use_qk_fused",
-    [
-        pytest.param(1, 128, 8192, 500000.0, "llama3", True, id="b1-hd128-llama3-fused"),
-        pytest.param(32, 128, 2048, 500000.0, "llama3", True, id="b32-hd128-llama3-fused"),
-        pytest.param(1, 64, 8192, 500000.0, "llama3", True, id="b1-hd64-llama3-fused"),
-        pytest.param(1, 128, 8192, 1000000.0, "none", True, id="b1-hd128-none-fused"),
-        pytest.param(1, 128, 8192, 500000.0, "llama3", False, id="b1-hd128-llama3-nofused"),
-    ],
-)
-def test_rope_1d_cos_sin_vs_reference(
-    ttnn_mesh_device: ttnn.MeshDevice,
-    batch_size,
-    head_dim,
-    max_seq_len,
-    rope_theta,
-    rope_scaling_str,
-    use_qk_fused,
-):
-    """
-    Compare RotarySetup1D get_rot_mats output against TTTv1 RotarySetup.
-
-    Uses identical parameters and position indices, comparing cos/sin outputs
-    via PCC to ensure numerical equivalence.
-    """
-    from models.tt_transformers.tt.rope import RotarySetup as TTTv1RotarySetup
-
-    rope_scaling = _llama3_scaling() if rope_scaling_str == "llama3" else None
-
-    # Build TTTv2
-    cos_torch, sin_torch = compute_gather_cos_sin(
-        dhead=head_dim, end=2 * max_seq_len, theta=rope_theta, rope_scaling=rope_scaling
-    )
-    scaling_tag = type(rope_scaling).__name__ if rope_scaling else "none"
-    tag = f"theta{rope_theta}_{scaling_tag}"
-    cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/rope_1d"))
-    cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"cos_{tag}"))
-    sin_lw = LazyWeight(source=sin_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"sin_{tag}"))
-    config = Rope1DConfig(
-        cos_matrix=cos_lw,
-        sin_matrix=sin_lw,
-        max_batch_size=batch_size,
-        head_dim=head_dim,
-        device=ttnn_mesh_device,
-        use_qk_fused=use_qk_fused,
-    )
-    rope_v2 = RotarySetup1D.from_config(config)
-
-    # Build TTTv1 (for reference)
-    rope_v1 = TTTv1RotarySetup(
-        device=ttnn_mesh_device,
-        batch_size=batch_size,
-        head_dim=head_dim,
-        max_seq_len=max_seq_len,
-        rope_theta=rope_theta,
-        rope_scaling=rope_scaling,
-        use_qk_fused=use_qk_fused,
-        datatype=ttnn.bfloat16,
-    )
-
-    # Compare get_rot_mats with non-zero positions (avoid sin(0)=0 → PCC undefined)
-    position_idxs = torch.arange(42, 42 + batch_size)
-    v2_cos_sin = rope_v2.get_rot_mats(position_idxs)
-    v1_cos_sin = rope_v1.get_rot_mats(position_idxs)
-
-    v2_cos_torch = to_torch_auto_compose(v2_cos_sin[0])
-    v1_cos_torch = to_torch_auto_compose(v1_cos_sin[0])
-    v2_sin_torch = to_torch_auto_compose(v2_cos_sin[1])
-    v1_sin_torch = to_torch_auto_compose(v1_cos_sin[1])
-
-    pcc_cos, msg_cos = comp_pcc(v1_cos_torch, v2_cos_torch, 0.9999)
-    pcc_sin, msg_sin = comp_pcc(v1_sin_torch, v2_sin_torch, 0.9999)
-
-    logger.info(f"cos PCC: {msg_cos}")
-    logger.info(f"sin PCC: {msg_sin}")
-
-    assert pcc_cos, f"cos mismatch: {msg_cos}"
-    assert pcc_sin, f"sin mismatch: {msg_sin}"
-
-    # Compare decode transformation matrix (both use TILE_SIZE — should match exactly)
-    v2_trans = rope_v2.get_both_trans_mats()
-    v1_trans = rope_v1.get_both_trans_mats()
-
-    v2_decode = to_torch_auto_compose(v2_trans["decode"])
-    v1_decode = to_torch_auto_compose(v1_trans["decode"])
-    pcc_decode, msg_decode = comp_pcc(v1_decode, v2_decode, 0.9999)
-    logger.info(f"trans_mat[decode] PCC: {msg_decode}")
-    assert pcc_decode, f"trans_mat[decode] mismatch: {msg_decode}"
-
-    # Compare prefill transformation matrix
-    # Note: TTTv2 uses head_dim x head_dim (intentional fix), TTTv1 always uses 32x32.
-    # Compare the overlapping 32x32 block (the RoPE permutation pattern).
-    v2_prefill = to_torch_auto_compose(v2_trans["prefill"])
-    v1_prefill = to_torch_auto_compose(v1_trans["prefill"])
-    min_h = min(v1_prefill.shape[-2], v2_prefill.shape[-2])
-    min_w = min(v1_prefill.shape[-1], v2_prefill.shape[-1])
-    v1_prefill_trimmed = v1_prefill[:1, :1, :min_h, :min_w]
-    v2_prefill_trimmed = v2_prefill[:1, :1, :min_h, :min_w]
-    pcc_prefill, msg_prefill = comp_pcc(v1_prefill_trimmed, v2_prefill_trimmed, 0.9999)
-    logger.info(f"trans_mat[prefill] PCC (overlapping region): {msg_prefill}")
-    assert pcc_prefill, f"trans_mat[prefill] mismatch (overlapping region): {msg_prefill}"
-
-    logger.info("RotarySetup1D vs TTTv1: PASSED")
 
 
 # ============================================================================
@@ -617,11 +519,26 @@ def test_rope_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice)
         datatype=ttnn.bfloat16,
     )
 
-    # PCC check: get_rot_mats (use non-zero positions)
+    # --- Backward-compat wrappers: get_rot_idxs, get_rot_mats, return_rot_idxs ---
     position_idxs = torch.arange(42, 42 + model_args.max_batch_size)
+
+    # get_rot_idxs
+    rot_idxs = rope_v2.get_rot_idxs(position_idxs, on_host=True)
+
+    # get_rot_mats (torch input)
     v2_cos_sin = rope_v2.get_rot_mats(position_idxs)
     v1_cos_sin = rope_v1.get_rot_mats(position_idxs)
 
+    # get_rot_mats with return_rot_idxs
+    v2_mats_and_idxs = rope_v2.get_rot_mats(position_idxs, return_rot_idxs=True)
+    assert len(v2_mats_and_idxs) == 2
+    v2_rot_mats_2, v2_rot_idxs_2 = v2_mats_and_idxs
+    assert len(v2_rot_mats_2) == 2
+
+    # get_rot_mats via ttnn rot_idxs (production calling pattern)
+    v2_cos_sin_via_ttnn = rope_v2.get_rot_mats(rot_idxs)
+
+    # PCC: v2 vs v1
     v2_cos_torch = to_torch_auto_compose(v2_cos_sin[0])
     v1_cos_torch = to_torch_auto_compose(v1_cos_sin[0])
     v2_sin_torch = to_torch_auto_compose(v2_cos_sin[1])
@@ -635,6 +552,11 @@ def test_rope_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice)
 
     assert pcc_cos, f"from_model_args cos mismatch: {msg_cos}"
     assert pcc_sin, f"from_model_args sin mismatch: {msg_sin}"
+
+    # PCC: torch-input vs ttnn-input paths should match
+    cos_via_ttnn = to_torch_auto_compose(v2_cos_sin_via_ttnn[0])
+    pcc_path, msg_path = comp_pcc(v2_cos_torch, cos_via_ttnn, 0.9999)
+    assert pcc_path, f"torch vs ttnn input path mismatch: {msg_path}"
 
     # PCC check: decode transformation matrix
     v2_trans = rope_v2.get_both_trans_mats()
