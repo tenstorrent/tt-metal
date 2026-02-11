@@ -13,6 +13,7 @@
 
 #include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 #include "api/alignment.h"
 #include "internal/risc_attribs.h"
@@ -195,7 +196,7 @@ struct ChannelCounter {
 /*
  * Tracks receiver channel pointers (from sender side)
  */
-template <uint8_t RECEIVER_NUM_BUFFERS>
+template <uint8_t RECEIVER_NUM_BUFFERS, bool UNUSED = false>
 struct OutboundReceiverChannelPointers {
     uint32_t slot_size_bytes;
     uint32_t remote_receiver_channel_address_base;
@@ -203,20 +204,28 @@ struct OutboundReceiverChannelPointers {
     uint32_t remote_receiver_channel_address_last;
     uint32_t num_free_slots;
 
+    // Completion tracking - shared across all sender channels to this receiver channel
+    volatile uint32_t* completions_received_counter_ptr;
+    uint32_t completions_received_and_processed;
+
     FORCE_INLINE void init() {
         this->slot_size_bytes = 0U;
         this->remote_receiver_channel_address_base = 0U;
         this->remote_receiver_channel_address_ptr = 0U;
         this->remote_receiver_channel_address_last = 0U;
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
+        this->completions_received_counter_ptr = nullptr;
+        this->completions_received_and_processed = 0;
     }
 
-    FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes) {
+    FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes, volatile uint32_t* completion_counter_ptr) {
         this->slot_size_bytes = slot_size_bytes;
         this->remote_receiver_channel_address_base = remote_receiver_buffer_address;
         this->remote_receiver_channel_address_ptr = remote_receiver_buffer_address;
         this->remote_receiver_channel_address_last = remote_receiver_buffer_address + ((RECEIVER_NUM_BUFFERS - 1U) * slot_size_bytes);
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
+        this->completions_received_counter_ptr = completion_counter_ptr;
+        this->completions_received_and_processed = 0;
     }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
@@ -228,46 +237,110 @@ struct OutboundReceiverChannelPointers {
             remote_receiver_channel_address_ptr = remote_receiver_channel_address_base;
         }
     }
+
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
+    FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+        uint32_t received = *completions_received_counter_ptr;
+        uint32_t unprocessed = received - completions_received_and_processed;
+        return unprocessed;
+    }
+
+    FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
+        completions_received_and_processed += num_completions;
+    }
+};
+
+template <uint8_t RECEIVER_NUM_BUFFERS, bool enable_first_level_ack>
+struct ReceiverChannelPointersMembers {
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
+    uint32_t unsent_first_level_acks;
+    uint8_t unsent_messages;
+    // Always include src_chan_ids for enable_first_level_ack=true to support both
+    // packed credits (WH) and unpacked credits (BH). Small memory overhead but simpler.
+    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+
+    FORCE_INLINE void reset() {
+        wr_sent_counter.reset();
+        completion_counter.reset();
+        unsent_first_level_acks = 0;
+        unsent_messages = 0;
+    }
+};
+
+template <uint8_t RECEIVER_NUM_BUFFERS>
+struct ReceiverChannelPointersMembers<RECEIVER_NUM_BUFFERS, false> {
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
+    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+    uint8_t unsent_messages;
+    // no ack_counter
+
+    FORCE_INLINE void reset() {
+        wr_sent_counter.reset();
+        completion_counter.reset();
+        unsent_messages = 0;
+    }
 };
 
 /*
  * Tracks receiver channel pointers (from receiver side). Must call reset() before using.
+ *
+ * Template parameter enable_first_level_ack controls first-level acknowledgment
+ * behavior for this specific receiver channel. Each virtual channel (VC0, VC1)
+ * is instantiated separately with its appropriate value:
+ * - VC0: Can have enable_first_level_ack=true for Ring/Torus topologies
+ * - VC1: Always has enable_first_level_ack=false (no bubble flow control needed)
  */
-template <uint8_t RECEIVER_NUM_BUFFERS>
+template <uint8_t RECEIVER_NUM_BUFFERS, bool enable_first_level_ack>
 struct ReceiverChannelPointers {
-    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
-    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+    ReceiverChannelPointersMembers<RECEIVER_NUM_BUFFERS, enable_first_level_ack> m;
 
-    FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
-        src_chan_ids[buffer_index.get()] = src_chan_id;
+    FORCE_INLINE auto& wr_sent_counter() { return m.wr_sent_counter; }
+    FORCE_INLINE const auto& wr_sent_counter() const { return m.wr_sent_counter; }
+
+    FORCE_INLINE auto& wr_flush_counter() { return m.wr_flush_counter; }
+    FORCE_INLINE const auto& wr_flush_counter() const { return m.wr_flush_counter; }
+
+    FORCE_INLINE auto& completion_counter() { return m.completion_counter; }
+    FORCE_INLINE const auto& completion_counter() const { return m.completion_counter; }
+
+    template <bool E = enable_first_level_ack, typename = std::enable_if_t<E>>
+    FORCE_INLINE auto& ack_counter() {
+        return m.ack_counter;
+    }
+    template <bool E = enable_first_level_ack, typename = std::enable_if_t<E>>
+    FORCE_INLINE const auto& ack_counter() const {
+        return m.ack_counter;
     }
 
-    FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const { return src_chan_ids[buffer_index.get()]; }
+    FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
+        m.src_chan_ids[buffer_index.get()] = src_chan_id;
+    }
 
-    FORCE_INLINE uint8_t get_src_chan_id() const { return src_chan_ids[0]; }
+    FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const {
+        return m.src_chan_ids[buffer_index.get()];
+    }
+
+    FORCE_INLINE uint8_t get_src_chan_id() const {
+        return m.src_chan_ids[0];
+    }
 
     FORCE_INLINE void init() { reset(); }
 
-    FORCE_INLINE void reset() {
-        wr_sent_counter.reset();
-        wr_flush_counter.reset();
-        ack_counter.reset();
-        completion_counter.reset();
-    }
+    FORCE_INLINE void reset() { m.reset(); }
 };
 
 // Forward‐declare the Impl primary template:
-template <template <uint8_t> class ChannelType, auto& BufferSizes, typename Seq>
+template <template <uint8_t, bool> class ChannelType, auto& BufferSizes, bool ExtraParam, typename Seq>
 struct ChannelPointersTupleImpl;
 
 // Provide the specialization that actually holds the tuple and `get<>`:
-template <template <uint8_t> class ChannelType, auto& BufferSizes, size_t... Is>
-struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is...>> {
+template <template <uint8_t, bool> class ChannelType, auto& BufferSizes, bool ExtraParam, size_t... Is>
+struct ChannelPointersTupleImpl<ChannelType, BufferSizes, ExtraParam, std::index_sequence<Is...>> {
     static constexpr size_t N = sizeof...(Is);
-    std::tuple<ChannelType<BufferSizes[Is]>...> channel_ptrs;
+    std::tuple<ChannelType<BufferSizes[Is], ExtraParam>...> channel_ptrs;
 
     template <size_t I>
     constexpr auto& get() {
@@ -276,13 +349,14 @@ struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is
 };
 
 // Simplify the "builder" so that make() returns the Impl<…> directly:
-template <template <uint8_t> class ChannelType, auto& BufferSizes>
+template <template <uint8_t, bool> class ChannelType, auto& BufferSizes, bool ExtraParam = false>
 struct ChannelPointersTuple {
     static constexpr size_t N = std::size(BufferSizes);
 
     static constexpr auto make() {
         // call init() on each element and return it
-        auto channel_ptrs = ChannelPointersTupleImpl<ChannelType, BufferSizes, std::make_index_sequence<N>>{};
+        auto channel_ptrs =
+            ChannelPointersTupleImpl<ChannelType, BufferSizes, ExtraParam, std::make_index_sequence<N>>{};
         std::apply(
             [&](auto&... chans) { ((chans.init()), ...); },
             channel_ptrs.channel_ptrs);  // Apply to the actual tuple member

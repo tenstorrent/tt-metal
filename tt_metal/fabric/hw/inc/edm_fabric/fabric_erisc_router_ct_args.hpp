@@ -135,7 +135,7 @@ static_assert(
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 0);
+    100;//get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 0);
 #else
     0;
 #endif
@@ -163,8 +163,8 @@ constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_STA
 constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
-constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
-constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = true;//get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = true;//get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 constexpr bool z_router_enabled = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 11);
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 12);
@@ -341,7 +341,7 @@ constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT =
 #else
     128;
 #endif
-constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
+constexpr bool IDLE_CONTEXT_SWITCHING = true;//get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
 
 constexpr size_t MY_ETH_CHANNEL = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 14);
 
@@ -688,5 +688,18 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
     eth_remote_channel_pools_args,
     eth_remote_channel_pools_args::receiver_channel_to_pool_index,
     NUM_RECEIVER_CHANNELS>();
+
+// Get maximum buffer slots across all sender channels (for packed credit width calculation)
+constexpr size_t get_max_sender_buffer_slots() {
+    size_t max_slots = 0;
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        if (SENDER_NUM_BUFFERS_ARRAY[i] > max_slots) {
+            max_slots = SENDER_NUM_BUFFERS_ARRAY[i];
+        }
+    }
+    return max_slots;
+}
+
+constexpr size_t MAX_SENDER_BUFFER_SLOTS = get_max_sender_buffer_slots();
 
 }  // namespace tt::tt_fabric

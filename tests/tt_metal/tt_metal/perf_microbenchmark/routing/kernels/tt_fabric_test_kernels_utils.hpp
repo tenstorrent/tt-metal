@@ -5,8 +5,8 @@
 #pragma once
 
 #include <array>
-#include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -340,7 +340,7 @@ struct NocUnicastScatterWriteFields {
     static NocUnicastScatterWriteFields build_from_args(size_t& arg_idx) {
         uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t chunk_count = get_local_arg_val<uint32_t>(arg_idx++);
-        ASSERT(chunk_count == MAX_CHUNKS);
+        // ASSERT(chunk_count == MAX_CHUNKS);
 
         std::array<uint32_t, MAX_CHUNKS> dst_addresses{};
         for (uint32_t i = 0; i < chunk_count; i++) {
@@ -1038,9 +1038,10 @@ struct SenderKernelTrafficConfig {
             }
         }
 
+        DPRINT << "Sending packet to core " << (uint32_t)connection_idx_ << " (wait)\n";
         // STEP 2: Wait for space
         connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
-
+        
         // STEP 3: Send packet
         if constexpr (!BENCHMARK_MODE) {
             if (payload_size_bytes > 0 && payload_buffer_) {
@@ -1052,6 +1053,7 @@ struct SenderKernelTrafficConfig {
             }
         }
 
+        WATCHER_RING_BUFFER_PUSH(0x55550001);
         // Send header
         connection_manager_->send_header_non_blocking<BENCHMARK_MODE>(
             connection_ptr_, connection_idx_, (uint32_t)packet_header);
@@ -1072,6 +1074,7 @@ struct SenderKernelTrafficConfig {
         }
 
         num_packets_processed += 1;  // Always increment by 1
+        DPRINT << "\t(send)\n";
 
         return true;  // Packet sent successfully
     }

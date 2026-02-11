@@ -43,3 +43,23 @@ Tests:
     patterns:
       - type: all_to_all
         iterations: 3
+
+  ### 2D TORUS LATENCY TESTS ###
+  - name: "Latency2DTorusUnicast"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+
+    parametrization_params:
+      size: [16, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 256  # number of independent latency samples to collect
+            destination:
+              device: [0, 1]

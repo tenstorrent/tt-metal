@@ -356,20 +356,22 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             },
             // BLACKHOLE
             {
-                {8, 16, 0, 0},  // Option 1: VC0 only
-                {8, 8, 0, 0},   // Option 2: VC0 only
-                {4, 8, 0, 0},   // Option 3: VC0 only
-                {4, 4, 0, 0},   // Option 4: VC0 only, smaller
-                {2, 4, 0, 0},   // Option 5: VC0 only, smaller
-                {2, 2, 0, 0},   // Option 6: VC0 only, smaller
-                {1, 2, 0, 0},   // Option 7: VC0 only, smallest
-                {1, 1, 0, 0},   // Option 8: VC0 only, smallest
-                {4, 8, 2, 4},   // Option 9: supports both VCs
-                {4, 8, 2, 2},   // Option 10: supports both VCs, smaller VC1 receiver
-                {2, 4, 2, 2},   // Option 11: supports both VCs, smaller overall
-                {2, 4, 1, 1},   // Option 12: supports both VCs, smaller overall
-                {2, 2, 1, 1},   // Option 13: supports both VCs, smaller overall
-                {1, 1, 1, 1}    // Option 14: supports both VCs, smaller overall
+                {16, 32, 0, 0},  // Option 1: VC0 only
+                {16, 16, 0, 0},  // Option 2: VC0 only
+                {8, 16, 0, 0},  // Option 3: VC0 only
+                {8, 8, 0, 0},   // Option 4: VC0 only
+                {4, 8, 0, 0},   // Option 5: VC0 only
+                {4, 4, 0, 0},   // Option 6: VC0 only, smaller
+                {2, 4, 0, 0},   // Option 7: VC0 only, smaller
+                {2, 2, 0, 0},   // Option 8: VC0 only, smaller
+                {1, 2, 0, 0},   // Option 9: VC0 only, smallest
+                {1, 1, 0, 0},   // Option 10: VC0 only, smallest
+                {4, 8, 2, 4},   // Option 11: supports both VCs
+                {4, 8, 2, 2},   // Option 12: supports both VCs, smaller VC1 receiver
+                {2, 4, 2, 2},   // Option 13: supports both VCs, smaller overall
+                {2, 4, 1, 1},   // Option 14: supports both VCs, smaller overall
+                {2, 2, 1, 1},   // Option 15: supports both VCs, smaller overall
+                {1, 1, 1, 1}    // Option 16: supports both VCs, smaller overall
             }};
         static const std::vector<std::vector<PerVcBufferSlots>> other_buffer_slot_options = {
             // WORMHOLE_B0
