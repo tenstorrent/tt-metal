@@ -452,12 +452,15 @@ int main(int argc, char** argv) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
         auto sharded_benchmark_args = {TRANSFER_SIZE_ARGS, CONTIGUITY_ARGS, BUFFER_TYPE_ARGS, {device_id}};
+        std::vector<std::string> benchmark_arg_names = {"size", "page_size", "type", "device"};
+        std::vector<std::string> sharded_benchmark_arg_names = {"size", "contiguity", "type", "device"};
         auto compute_min = [](const std::vector<double>& v) -> double { return *std::min_element(v.begin(), v.end()); };
         auto compute_max = [](const std::vector<double>& v) -> double { return *std::max_element(v.begin(), v.end()); };
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
         // benchmark
         benchmark::RegisterBenchmark("Write", BM_write, device, host_buffer_max)
             ->ArgsProduct(benchmark_args)
+            ->ArgNames(benchmark_arg_names)
             ->UseRealTime()
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
@@ -465,12 +468,14 @@ int main(int argc, char** argv) {
 
         benchmark::RegisterBenchmark("Read", BM_read, device)
             ->ArgsProduct(benchmark_args)
+            ->ArgNames(benchmark_arg_names)
             ->UseRealTime()
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
         benchmark::RegisterBenchmark("WriteSharded", BM_write_sharded, device)
             ->ArgsProduct(sharded_benchmark_args)
+            ->ArgNames(sharded_benchmark_arg_names)
             ->UseRealTime()
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
@@ -480,18 +485,21 @@ int main(int argc, char** argv) {
         if (can_map_to_noc) {
             benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
                 ->ArgsProduct(benchmark_args)
+                ->ArgNames(benchmark_arg_names)
                 ->UseRealTime()
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
                 ->ComputeStatistics("min", compute_min)
                 ->ComputeStatistics("max", compute_max);
             benchmark::RegisterBenchmark("WritePinnedMemory", BM_write_pinned_memory, device)
                 ->ArgsProduct(benchmark_args)
+                ->ArgNames(benchmark_arg_names)
                 ->UseRealTime()
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
                 ->ComputeStatistics("min", compute_min)
                 ->ComputeStatistics("max", compute_max);
             benchmark::RegisterBenchmark("WritePinnedMemorySharded", BM_write_pinned_memory_sharded, device)
                 ->ArgsProduct(sharded_benchmark_args)
+                ->ArgNames(sharded_benchmark_arg_names)
                 ->UseRealTime()
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
                 ->ComputeStatistics("min", compute_min)
