@@ -9,6 +9,7 @@ import numpy as np
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 
+# Exp2 test
 def test_exp2_arange_masking(device):
     # Exp2 Working range - Overflow from 128(inf), Underflow till -127(<0)
     low = -5.0
