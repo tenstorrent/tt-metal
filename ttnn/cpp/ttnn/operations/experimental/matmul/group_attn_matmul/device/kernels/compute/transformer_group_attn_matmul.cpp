@@ -153,17 +153,14 @@ void kernel_main() {
             } // in0_num_blocks_w
 
             // cb_intermed1 comes from reader; untilized row-major tile
-            reconfig_data_format_srca(cb_in1, cb_intermed1);
-            pack_reconfig_data_format(cb_intermed0, out_cb_id);
-
-            // tilize CB::intermed1 and write to CBIndex::c_16
+            // tilize CB::intermed1 and write to CBIndex::c_16 with reconfiguration
             compute_kernel_lib::tilize<
                 cb_intermed1,
                 out_cb_id,
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-                cb_in1>(
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
                 out_num_tiles,
                 1);
 
