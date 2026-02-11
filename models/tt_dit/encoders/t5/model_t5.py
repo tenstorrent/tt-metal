@@ -485,18 +485,6 @@ class RelativePositionEmbeddings(Module):
         parallel_config: EncoderParallelConfig,
     ) -> None:
         super().__init__()
-
-        self.token_embedding_weights = Parameter(
-            total_shape=[config.vocab_size, config.embed_dim],
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-        )
-        self.relative_attention_bias_weights = Parameter(
-            total_shape=[config.relative_attention_num_buckets, config.num_heads],
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-        )
-
         self.config = config
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
