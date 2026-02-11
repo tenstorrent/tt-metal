@@ -226,10 +226,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = split_work_to_cores(requested_cores, num_tile_rows, true /* row_wise */);
 
-    // Compute bounding box for grid_size
-    auto bbox = all_cores.bounding_box();
-    CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
-
     // Use passed-in reciprocal LUT tensor if using Welford
     std::optional<Tensor> recip_tensor = std::nullopt;
     uint32_t reciprocal_CB_size_bytes = 0;
