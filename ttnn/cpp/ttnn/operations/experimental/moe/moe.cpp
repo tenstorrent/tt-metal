@@ -18,7 +18,7 @@ ttnn::Tensor ExecuteMoE::invoke(
     const uint32_t num_tokens_total,
     const uint32_t output_height_shard_dim,
     const uint32_t output_width_shard_dim,
-    const CoreRangeSet& output_shard_core_ranges) {
+    const std::vector<ttnn::CoreCoord>& output_shard_cores) {
     return ttnn::prim::moe(
         input_tensor,
         w0_w1_tensor,
@@ -30,7 +30,7 @@ ttnn::Tensor ExecuteMoE::invoke(
         num_tokens_total,
         output_height_shard_dim,
         output_width_shard_dim,
-        output_shard_core_ranges);
+        output_shard_cores);
 }
 
 }  // namespace ttnn::operations::experimental::moe

@@ -41,7 +41,7 @@ struct MoEDeviceOperation {
         const uint32_t num_tokens_total,
         const uint32_t output_height_shard_dim,
         const uint32_t output_width_shard_dim,
-        const CoreRangeSet& output_shard_core_ranges);
+        const std::vector<ttnn::CoreCoord>& output_shard_cores);
 };
 
 }  // namespace ttnn::operations::experimental::moe

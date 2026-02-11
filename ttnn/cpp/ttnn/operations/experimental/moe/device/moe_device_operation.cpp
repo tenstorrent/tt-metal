@@ -56,7 +56,7 @@ std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tenso
     const uint32_t num_tokens_total,
     const uint32_t output_height_shard_dim,
     const uint32_t output_width_shard_dim,
-    const CoreRangeSet& output_shard_core_ranges) {
+    const std::vector<ttnn::CoreCoord>& output_shard_cores) {
     return {
         operation_attributes_t{
             .hidden_dim = hidden_dim,
@@ -65,7 +65,7 @@ std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tenso
             .num_tokens_total = num_tokens_total,
             .output_height_shard_dim = output_height_shard_dim,
             .output_width_shard_dim = output_width_shard_dim,
-            .output_shard_core_ranges = output_shard_core_ranges},
+            .output_shard_cores = output_shard_cores},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_w1_tensor = w0_w1_tensor,

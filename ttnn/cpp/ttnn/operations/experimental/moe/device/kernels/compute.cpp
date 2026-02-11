@@ -14,6 +14,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/debug/dprint_tensix.h"
 #include "enumerate.h"
+#include "api/compute/untilize.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -204,7 +205,7 @@ void kernel_main() {
         cb_reserve_back(cb_c2w_rdy, 1);
         cb_push_back(cb_c2w_rdy, 1);
 
-        pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
+        // pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
 
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 4)
@@ -252,34 +253,36 @@ void kernel_main() {
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
 
-            ckernel::enumerate_tile_init();
-            ckernel::enumerate_tile(0, true, 1.0, expert_id * 32);
-            ckernel::enumerate_tile(1, true, 1.0, expert_id * 32);
-            ckernel::enumerate_tile(2, true, 1.0, expert_id * 32);
-            ckernel::enumerate_tile(3, true, 1.0, expert_id * 32);
+            //             ckernel::enumerate_tile_init();
+            //             ckernel::enumerate_tile(0, true, 1.0, expert_id * 32);
+            //             ckernel::enumerate_tile(1, true, 1.0, expert_id * 32);
+            //             ckernel::enumerate_tile(2, true, 1.0, expert_id * 32);
+            //             ckernel::enumerate_tile(3, true, 1.0, expert_id * 32);
 
-            //             fill_tile_init();
-            //             fill_tile(0, (float) (ring_core_id + 1) * (expert_id+1));
-            //             fill_tile(1,(float) (ring_core_id + 1) * (expert_id+1));
-            //             fill_tile(2,(float) (ring_core_id + 1) * (expert_id+1));
-            //             fill_tile(3, (float) (ring_core_id + 1) * (expert_id+1));
-
-            dprint_tensix_dest_reg(0);
-            dprint_tensix_dest_reg(1);
-            dprint_tensix_dest_reg(2);
-            dprint_tensix_dest_reg(3);
+            if (expert_id == 1) {
+                dprint_tensix_dest_reg(0);
+                dprint_tensix_dest_reg(1);
+                dprint_tensix_dest_reg(2);
+                dprint_tensix_dest_reg(3);
+            }
 
             tile_regs_commit();
-
-            // Reserve space in the output CB for the untilized data
-
             tile_regs_wait();
+
+            //             pack_tile(0, cb_c2s_out);
+            //             pack_tile(1, cb_c2s_out);
+            //             pack_tile(2, cb_c2s_out);
+            //             pack_tile(3, cb_c2s_out);
+
+            pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
+
             pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(
                 cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
+            pack_untilize_uninit(cb_c2s_out);
 
             tile_regs_release();
         }
-        pack_untilize_uninit(cb_c2s_out);
+        // pack_untilize_uninit(cb_c2s_out);
         cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
     }  // end for (expert_id)
 

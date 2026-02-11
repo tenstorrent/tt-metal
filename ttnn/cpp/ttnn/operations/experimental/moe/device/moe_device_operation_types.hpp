@@ -16,7 +16,7 @@ struct operation_attributes_t {
     uint32_t num_tokens_total{};
     uint32_t output_height_shard_dim{};
     uint32_t output_width_shard_dim{};
-    CoreRangeSet output_shard_core_ranges{};
+    std::vector<ttnn::CoreCoord> output_shard_cores{};
 };
 
 struct tensor_args_t {

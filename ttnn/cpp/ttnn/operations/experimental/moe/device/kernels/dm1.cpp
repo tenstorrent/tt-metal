@@ -83,7 +83,6 @@ void kernel_main() {
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
         num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
-    constexpr uint32_t source_buffer_iter_offset = 224 * in_tile_size;
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     constexpr uint32_t source_width_tiles = 20;  // token segments/core are all padded up to 20
     const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
@@ -243,6 +242,10 @@ void kernel_main() {
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
 
+                    noc_async_posted_writes_flushed(1);
+
+                    noc_async_posted_atomic_barrier(1);
+
                     if (++shard_row == max_tokens_per_height_shard) {
                         ++dest_height_shard;
                         shard_row = 0;
@@ -251,8 +254,9 @@ void kernel_main() {
                 width_tiles_sent += width_transfer_tiles;
                 width_tiles_to_send -= width_transfer_tiles;
             }
+            noc_async_posted_writes_flushed(1);
 
-            noc_async_posted_atomic_barrier();
+            noc_async_posted_atomic_barrier(1);
             cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
 
             source_buffer_iter = !source_buffer_iter;

@@ -36,7 +36,7 @@ void bind_moe(nb::module_& mod) {
             nb::arg("num_tokens_total"),
             nb::arg("output_height_shard_dim"),
             nb::arg("output_width_shard_dim"),
-            nb::arg("output_shard_core_ranges")});
+            nb::arg("output_shard_cores")});
 }
 
 }  // namespace ttnn::operations::experimental::moe::detail

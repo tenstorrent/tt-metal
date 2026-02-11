@@ -19,11 +19,11 @@
 namespace ttnn::operations::experimental::moe::program {
 namespace detail {
 
-std::string serialize_physical_core_coords(const ttnn::CoreRangeSet& coreranges, const ttnn::MeshDevice& device) {
+std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& cores, const ttnn::MeshDevice& device) {
     std::vector<uint32_t> flat_physical_core_coords;
-    flat_physical_core_coords.reserve(2 * coreranges.num_cores());
+    flat_physical_core_coords.reserve(2 * cores.size());
 
-    for (const auto& c : corerange_to_cores(coreranges, /*max_cores=*/std::nullopt, /*row_wise=*/true)) {
+    for (const auto& c : cores) {
         const auto pc = device.worker_core_from_logical_core(c);
         flat_physical_core_coords.push_back(pc.x);
         flat_physical_core_coords.push_back(pc.y);
@@ -147,9 +147,9 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
-    const auto& output_shard_core_ranges = operation_attributes.output_shard_core_ranges;
+    const auto& output_shard_cores = operation_attributes.output_shard_cores;
     std::map<std::string, std::string> dm1_defines = {
-        {"OUTPUT_SHARD_CORE_MAP", detail::serialize_physical_core_coords(output_shard_core_ranges, *device)}};
+        {"OUTPUT_SHARD_CORE_MAP", detail::serialize_physical_core_coords(output_shard_cores, *device)}};
 
     auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,

@@ -105,26 +105,28 @@ def create_torch_input(L, in0_core_range_set, all_core_range_set, E, M, K):
     #         torch_input[..., i] = -0.25
     # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
 
-    torch_input = torch.rand((L, E, M, K), dtype=torch.bfloat16) - 0.5
+    torch_input_ref = torch.rand((L, E, M, K), dtype=torch.bfloat16) - 0.5
     #     torch_input = torch.zeros((L, E, M, K), dtype=torch.bfloat16)
     #     for e in range(E):
     #         torch_input[:,e,:2] = torch.rand(K) - 0.5
 
     # torch_input[:,1,:,:] *= 2
 
-    torch_input = torch_input.unsqueeze(1).repeat(1, in0_core_range_set.num_cores(), 1, 1, 1)
-
+    torch_input = torch_input_ref.unsqueeze(1).repeat(1, in0_core_range_set.num_cores(), 1, 1, 1)
     torch_input_shard_placed = torch.zeros([L, all_core_range_set.num_cores(), E, M, K], dtype=torch.bfloat16)
+
+    # just to be really sure the input cores are ordered consistently
+    sorted_all_cores = sorted(ttnn.corerange_to_cores(all_core_range_set), key=lambda x: (x.y, x.x))
 
     for l in range(L):
         for e in range(E):
             sidx = 0
-            for idx, c in enumerate(ttnn.corerange_to_cores(all_core_range_set, row_wise=True)):
+            for idx, c in enumerate(sorted_all_cores):
                 if in0_core_range_set.contains(c):
                     torch_input_shard_placed[l, idx, e, :, :] = torch_input[l, sidx, e, :, :]
                     sidx += 1
 
-    return torch_input_shard_placed, torch_input
+    return torch_input_shard_placed, torch_input_ref
 
 
 def create_torch_w0(L, E, K, N):
@@ -154,7 +156,7 @@ def create_torch_w0(L, E, K, N):
     #             le_val *= -1
 
     torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    # torch_w0 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
+    #     torch_w0 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
     #
     #     k = min(K,N)
     #     torch_w0[..., torch.arange(k), torch.arange(k)] = 1
@@ -189,7 +191,7 @@ def create_torch_w1(L, E, K, N):
     #             le_val *= -1
 
     torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    #     torch_w1 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
+    #  torch_w1 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
     #     k = min(K,N)
     #     torch_w1[..., torch.arange(k), torch.arange(k)] = 1
 
@@ -221,6 +223,7 @@ def create_torch_w2(L, E, N, K):
     #                     k_val = k_chunk
     #                     torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
     #             le_val *= -1
+
     torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
 
     #     torch_w2 = torch.zeros((L, E, N, K), dtype=torch.bfloat16) - 0.5
@@ -395,17 +398,24 @@ def prepare_output_tensor(tt_output, E, M, K, ring2cores):
 def prepare_output_tensor_from_combine_writer(
     raw_torch_output,
     all_core_range_set,
-    output_shard_core_range_set,
+    output_shard_cores,
     output_shard_height_dim,
     output_shard_width_dim,
     E,
     M,
     K,
 ):
+    # python in doesn't work as expected with list of CoreCoord
+    def _output_shard_contains(core):
+        for c in output_shard_cores:
+            if core.x == c.x and core.y == c.y:
+                return True
+        return False
+
     torch.set_printoptions(profile="full")
     output_shards = []
     for i, c in enumerate(ttnn.corerange_to_cores(all_core_range_set, row_wise=True)):
-        if output_shard_core_range_set.contains(c):
+        if _output_shard_contains(c):
             output_shards.append(raw_torch_output[i, :, :, :])
 
     output_core_shards = torch.stack(output_shards)
@@ -516,11 +526,15 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     output_width_shard_dim = 4
 
     unused_core_range_set = all_core_range_set.subtract(dram_core_range_set).subtract(in0_core_range_set)
-    output_shard_core_ranges = [
-        ttnn.CoreRange(c, c) for c in ttnn.corerange_to_cores(unused_core_range_set, row_wise=True)
-    ][: output_height_shard_dim * output_width_shard_dim]
 
-    output_shard_core_range_set = ttnn.CoreRangeSet(output_shard_core_ranges)
+    # Gaurantee core iteration order is consistent with ttnn.corerange_to_cores(all_core_range_set, row_wise=True)
+    # even if output shard cares span multiple ranges
+    sorted_output_shard_cores = sorted(
+        ttnn.corerange_to_cores(unused_core_range_set, row_wise=True)[
+            : output_height_shard_dim * output_width_shard_dim
+        ],
+        key=lambda x: (x.y, x.x),
+    )
 
     # --------------------------------------------------------------------------
     # Tensor shapes and memory configurations
@@ -646,7 +660,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             num_tokens_total=TOTAL_TOKENS,
             output_height_shard_dim=output_height_shard_dim,
             output_width_shard_dim=output_width_shard_dim,
-            output_shard_core_ranges=output_shard_core_range_set,
+            output_shard_cores=sorted_output_shard_cores,
         )
 
         # Output is produced in-place on the input tensor buffer, but output re-perceives it as RM
@@ -655,7 +669,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
         tt_to_torch_output = prepare_output_tensor_from_combine_writer(
             tt_raw_output,
             all_core_range_set,
-            output_shard_core_range_set,
+            sorted_output_shard_cores,
             output_height_shard_dim,
             output_width_shard_dim,
             E,
@@ -697,8 +711,6 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     if check_accuracy:
         with torch.no_grad():
             # Reference calculation to match TT output shape (2*M, N) = (E*M, N)
-            # Use first 2*M rows of input (one copy of the original replicated input)
-            torch_input_ref = torch_input_ref[:, 0, ...]
 
             # Compute gate activations for each expert
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
@@ -718,8 +730,8 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
             for t in range(torch_layer_output.shape[0]):
                 print(f"{expert_id=} {t=}")
-                # print(f"{torch_layer_output[t,:512]=}")
-                print(f"{tt_layer_output[t,:512]=}")
+                print(f"{torch_layer_output[t,6656:]=}")
+                print(f"{tt_layer_output[t,6656:]=}")
 
             layer_metrics = get_accuracy_metrics(torch_layer_output, tt_layer_output)
             all_accuracy_metrics[(layer_id, expert_id)] = layer_metrics
