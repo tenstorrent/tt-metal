@@ -1949,6 +1949,10 @@ uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstrea
     dptr->header.raw_copy = true;
     scratch_read_addr += sizeof(CQPrefetchHToPrefetchDHeader);
 
+    // Initialize the src NoC address once, since all sub-commands will use the same address.
+    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNdl, CQ_NOC_send, CQ_NOC_WAIT>(
+        noc_index, noc_xy_addr, 0, 0, 0);
+
     // First step - read multiple sub_cmds worth into DB0
     CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr*)(l1_cache);
     uint64_t current_addr = sub_cmd->addr;
@@ -1963,7 +1967,7 @@ uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstrea
         while (amt_to_read_to_scratch_db > 0) {
             uint32_t amt_to_read_sub_cmd =
                 amt_to_read_to_scratch_db > current_length ? current_length : amt_to_read_to_scratch_db;
-            noc_read_64bit_any_len<true>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read_sub_cmd);
+            noc_read_64bit_any_len<false>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read_sub_cmd);
             scratch_read_addr += amt_to_read_sub_cmd;
 
             amt_to_read_to_scratch_db -= amt_to_read_sub_cmd;
