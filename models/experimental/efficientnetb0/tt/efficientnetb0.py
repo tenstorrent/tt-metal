@@ -216,9 +216,9 @@ class MBConvBlock:
     def __call__(self, x):
         if not self.is_depthwise_first:
             x = self._expand_conv(x)
-            x = x * ttnn.sigmoid_accurate(x, True)
+            x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
         x = self._depthwise_conv(x)
-        x = x * ttnn.sigmoid_accurate(x, True)
+        x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
         mul1 = x
 
         if x.is_sharded():
@@ -229,10 +229,10 @@ class MBConvBlock:
 
         x = self._se_reduce(x)
 
-        x = x * ttnn.sigmoid_accurate(x, True)
+        x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
         x = self._se_expand(x)
 
-        x = ttnn.sigmoid_accurate(x, True)
+        x = ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
         mul1_interleaved = mul1
         if mul1.is_sharded():
             mul1_interleaved = ttnn.sharded_to_interleaved(mul1, ttnn.L1_MEMORY_CONFIG)
@@ -477,7 +477,7 @@ class Efficientnetb0:
 
         x = self._conv_head(x)
 
-        x = x * ttnn.sigmoid_accurate(x, True)
+        x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
 
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.global_avg_pool2d(x)

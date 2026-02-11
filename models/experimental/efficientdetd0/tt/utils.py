@@ -196,6 +196,6 @@ class TtSeparableConvBlock:
         x = self.pointwise_conv(x)
 
         if self.activation:
-            x = x * ttnn.sigmoid_accurate(x, True)
+            x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
 
         return x
