@@ -75,7 +75,7 @@ verify_llama_dir_() {
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
 }
 
 test_suite_bh_multi_pcie_metal_unit_tests() {
@@ -136,7 +136,7 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
     echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
 
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel "$data_parallel_devices"
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$data_parallel_devices" --max_generated_tokens 220
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel "$data_parallel_devices" --max_generated_tokens 220
 }
 
 test_suite_bh_multi_pcie_llama_stress_tests() {
@@ -154,7 +154,7 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
 
     echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$data_parallel_devices" --max_generated_tokens 22000
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel "$data_parallel_devices" --max_generated_tokens 22000
 }
 
 test_suite_wh_6u_metal_unit_tests() {
