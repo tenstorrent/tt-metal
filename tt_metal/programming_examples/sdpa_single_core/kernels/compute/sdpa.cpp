@@ -295,7 +295,6 @@ void sub_exp_first_col_blocks_2x1(uint32_t in0_cb, uint32_t in1_cb, uint32_t out
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
     {
-        SDPA_DeviceZoneScopedN("SUB_m");
         tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -306,7 +305,6 @@ void sub_exp_first_col_blocks_2x1(uint32_t in0_cb, uint32_t in1_cb, uint32_t out
     }
 
     {
-        SDPA_DeviceZoneScopedN("EXP_m");
         tile_regs_wait();
         for (uint32_t dst_index = 0; dst_index < tiles_per_row; dst_index++) {
             PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(dst_index)));
@@ -316,7 +314,6 @@ void sub_exp_first_col_blocks_2x1(uint32_t in0_cb, uint32_t in1_cb, uint32_t out
 
     cb_reserve_back(out_cb, tiles_per_row);
     {
-        SDPA_DeviceZoneScopedN("EXP_PACK_m");
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t tile_index = global_row_base + i;
             pack_tile<true>(i /*dst_index*/, out_cb, tile_index);
@@ -332,7 +329,6 @@ void sub_exp_first_col_blocks_2x1(uint32_t in0_cb, uint32_t in1_cb, uint32_t out
  */
 template <bool pop_in1 = true>
 void add_block_2x1_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t q_subblock) {
-    SDPA_DeviceZoneScopedN("ADD_INPLACE");
     constexpr uint32_t tiles_per_row = 2;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
 
@@ -359,7 +355,6 @@ void mul_tiles_bcast_cols_2x1_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t
      * Given in0_cb and in1_cb, multiply each tile of in0_cb by the corresponding tile of in1_cb
      * and bcast cols of in1_cb.
      */
-    SDPA_DeviceZoneScopedN("MUL_BCAST_COLS_INPLACE");
     constexpr uint32_t tiles_per_row = 2;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
@@ -414,6 +409,7 @@ void mul_block_bcast_cols_acc_2x4(uint32_t in0_cb, uint32_t in1_cb, uint32_t out
 template <uint32_t in0_cb, uint32_t scale_fp32, bool do_reduce = true, int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace_2x4(
     uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols, uint32_t q_subblock, uint32_t kt_subblock) {
+    SDPA_DeviceZoneScopedN("SUB_EXP_2x4");
     constexpr uint32_t tiles_per_row = 2;
     constexpr uint32_t tiles_per_column = 4;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
@@ -434,7 +430,6 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     // }
 
     {
-        SDPA_DeviceZoneScopedN("SUB");
         tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -448,7 +443,6 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     }
 
     {
-        SDPA_DeviceZoneScopedN("EXP");
         tile_regs_wait();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -460,7 +454,6 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     }
 
     {
-        SDPA_DeviceZoneScopedN("EXP PACK");
         tile_regs_wait();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -598,7 +591,6 @@ void sdpa_inner_loop_8x4x16(
     const uint32_t cb_out_A,
     const uint32_t cb_out_B,
     const uint32_t num_iter) {
-    DeviceZoneScopedN("sdpa_inner_loop_8x4x16");
     // Set up ping pong buffers
     // To be used (and swapped) later on, when we loop over Q chunks.
     uint32_t alias_prev_sum = cb_sum_A;
@@ -621,6 +613,7 @@ void sdpa_inner_loop_8x4x16(
     for (uint32_t iter = 0; iter < num_iter; iter++) {
         // Reset per-iteration state
         MATH(DPRINT << "******************ITERATION " << iter << " ******************" << ENDL());
+        DeviceZoneScopedN("sdpa_inner_loop_8x4x16");
         uint32_t q_wait_tiles = q_subblock_num_tiles;
         uint32_t q_index_offset = 0;
         uint32_t kt_index_offset = 0;
@@ -647,7 +640,7 @@ void sdpa_inner_loop_8x4x16(
 
                 {
                     {
-                        SDPA_DeviceZoneScopedN("matmul_blocks 2x4 init");
+                        // SDPA_DeviceZoneScopedN("matmul_blocks 2x4 init");
                         mm_block_init_short(
                             cb_q_in,
                             cb_kt_in,
@@ -831,6 +824,7 @@ void sdpa_inner_loop_8x4x16(
                 {
                     // SALAD: cb_exp_max_diff = slowexp((cb_prev_max - cb_cur_max) * scale)
                     MATH(DPRINT << "SUB_EXP_m for Q[" << q_subblock << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN("S_SUB_EXP");
                     sub_exp_first_col_blocks_2x1<scale_fp32>(
                         alias_prev_max, alias_cur_max, cb_exp_max_diff, q_subblock);
                     // todo: don't need these rows of prev_max anymore, so pop to free up buffer space now.
@@ -839,15 +833,20 @@ void sdpa_inner_loop_8x4x16(
                 {
                     // SALAD: cb_prev_sum *= cb_exp_max_diff
                     MATH(DPRINT << "Mul tiles bcast cols for Q[" << q_subblock << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN("S_MUL_TILES");
                     mul_tiles_bcast_cols_2x1_inplace(alias_prev_sum, cb_exp_max_diff, q_subblock);
                 }
 
                 {
-                    // SALAD:cb_prev_sum += cb_cur_sum
+                    // SALAD: cb_prev_sum += cb_cur_sum
                     MATH(DPRINT << "Add tiles inplace for Q[" << q_subblock << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN("S_ADD_TILES");
                     add_block_2x1_inplace(alias_cur_sum, alias_prev_sum, q_subblock);
                 }
                 {
+                    // SALAD: alias_cur_out += alias_prev_out * cb_exp_max_diff
+                    MATH(DPRINT << "Element-wise mul of Q[" << q_subblock << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN("S_MUL_BLOCK");
                     mul_block_bcast_cols_acc_2x4(alias_prev_out, cb_exp_max_diff, alias_cur_out, q_subblock);
                 }
 
