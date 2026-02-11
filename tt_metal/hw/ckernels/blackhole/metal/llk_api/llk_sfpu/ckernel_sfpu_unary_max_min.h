@@ -54,7 +54,7 @@ inline void calculate_unary_max_min(uint value) {
 
 template <bool IS_UNSIGNED = false>
 sfpi_inline void load_value_param_int(uint value) {
-    // if msb(value) == IS_UNSIGNED ? 0 : 1, we need to invert for SFPSWAP to work
+    // if msb(value) == (IS_UNSIGNED ? 0 : 1), we need to invert for SFPSWAP to work
     sfpi::vConstIntPrgm0 = IS_UNSIGNED ^ ((int)value >= 0) ? value : ~value;
 }
 
