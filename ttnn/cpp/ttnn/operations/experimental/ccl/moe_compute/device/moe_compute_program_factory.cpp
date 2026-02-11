@@ -107,6 +107,16 @@ std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& c
 
 namespace ttnn::experimental::prim {
 
+// expose a helper function so callers know what cores are available for subsequently running a2a combine
+ttnn::CoreRangeSet get_occupied_cores(ttnn::MeshDevice* mesh_device){
+    const auto get_cores_return = get_cores(mesh_device);
+    
+    const auto & tilize_core_range_set=std::get<2>(get_cores_return);
+    const auto & matmul_core_range_set=std::get<3>(get_cores_return);
+    
+    return tilize_core_range_set.merge(matmul_core_range_set);
+}
+
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
     const MoEComputeParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -320,7 +330,7 @@ MoEComputeMeshWorkloadFactory::create_at(
      */
     uint32_t tilize_output_cb_id = tt::CBIndex::c_0;
     [[maybe_unused]] uint32_t cb_s2c_in_id = tt::CBIndex::c_0;
-    uint32_t matmul_writer_cb_id = tt::CBIndex::c_14;  // TODO, cleaner to make this c_1 and change all the others
+    uint32_t matmul_writer_cb_id = tt::CBIndex::c_14; // TODO, cleaner to make this c_1 and change all the others
 
     // All cores (not just Tilize and Matmul)
     const uint32_t shared_cb_num_pages = output_pages / shard_cores.num_cores();
@@ -334,7 +344,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype()),
         tilize_output_tensor.buffer());
     tt::tt_metal::CBHandle sharded_output_cb_handle = std::get<1>(output_cb);
-
+    
     // MoE output for combine uses the same buffer as input but create a new CB to manage control flow
     auto matmul_writer_cb = tt::tt_metal::create_cb(
         matmul_writer_cb_id,
@@ -345,7 +355,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype()),
         tilize_output_tensor.buffer());
     tt::tt_metal::CBHandle matmul_writer_cb_handle = std::get<1>(matmul_writer_cb);
-
+    
     //-------------------------------------------------------------------------
     // Tilize CBs
     //-------------------------------------------------------------------------
@@ -888,7 +898,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     for (const auto& tensor : matmul_tensors) {
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(matmul_compile_time_args);
     }
-
+    
     const uint32_t tile_width = tilize_input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tilize_input_tensor.tensor_spec().tile().get_height();
     //const uint32_t num_tokens_total = operation_attributes.num_tokens_total;
@@ -927,7 +937,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
-
+    
     const auto& output_shard_cores = args.output_shard_cores;
     std::map<std::string, std::string> dm1_defines = {
         {"OUTPUT_SHARD_CORE_MAP", serialize_physical_core_coords(output_shard_cores, *mesh_device)}};
@@ -1044,7 +1054,7 @@ MoEComputeMeshWorkloadFactory::create_at(
          .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
          .matmul_cores = matmul_cores,
          .sharded_output_cb_handle = sharded_output_cb_handle,
-         .matmul_writer_cb_handle = matmul_writer_cb_handle}};
+         .matmul_writer_cb_handle=matmul_writer_cb_handle}};
 }
 
 void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
@@ -1064,7 +1074,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
         // Update sharded circular buffer address
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
             program, shared_variables.sharded_output_cb_handle, *tilize_output_tensor.buffer());
-
+            
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
             program, shared_variables.matmul_writer_cb_handle, *tilize_output_tensor.buffer());
 
