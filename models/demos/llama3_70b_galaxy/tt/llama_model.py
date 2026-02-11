@@ -800,7 +800,7 @@ class TtTransformer(LightweightModule):
         # Prefill: for prefix caching (start_pos > 0), slice rot_mats to [chunk_start_idx, max_seq_len).
         # When start_pos == 0, use full rot_mats as-is (no slice) to avoid ttnn.concat/ttnn.slice device
         # ops that can hang on some builds; trace capture for prefix-cached runs uses start_pos > 0.
-        if mode == "prefill" and start_pos > 0 and False:
+        if mode == "prefill" and start_pos > 0:
             full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
             num_devices = self.args.cluster_shape[0] * self.args.cluster_shape[1]
             z = self._tt_slice_start_zeros_4

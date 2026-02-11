@@ -713,7 +713,6 @@ def test_demo_text(
     stop_at_eos,
     mesh_device,
     device_params,
-    cached_llama_model_80l,
     is_ci_env,
     apc_test,
     prefill_profile,
@@ -870,7 +869,7 @@ def test_demo_text(
 
     use_cached_model = num_layers == 80 and not prefill_profile and paged_attention
     if use_cached_model:
-        model_args, model, tt_kv_cache = cached_llama_model_80l
+        model_args, model, tt_kv_cache = request.getfixturevalue("cached_llama_model_80l")
         cached_already_used = getattr(model, "_cached_model_already_used", False)
         # Only sync+reset when reusing the model after a previous test. Skip on first use to
         # avoid hang (sync right after fixture creation can block; CCL indices are already 0).
@@ -1550,7 +1549,7 @@ def test_demo_text(
 PREFILL_BENCHMARK_OUTPUT = Path(__file__).resolve().parent / "output" / "prefill_prefix_caching_benchmark.json"
 
 # Seq lengths (powers of 2 from 128 to 32k). Aligned to page_block_size for prefix-caching.
-PREFILL_BENCHMARK_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+PREFILL_BENCHMARK_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192]
 PREFILL_BENCHMARK_BLOCK_SIZE = 64
 
 

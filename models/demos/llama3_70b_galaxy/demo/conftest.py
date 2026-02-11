@@ -2,9 +2,34 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pytest
 from pathlib import Path
 from loguru import logger
+
+
+@pytest.fixture(scope="function")
+def galaxy_type():
+    """
+    Use GALAXY_TYPE env var if set, otherwise delegate to root conftest logic.
+    E.g. GALAXY_TYPE=6U pytest ... to force 6U.
+    """
+    galaxy_type_override = os.environ.get("GALAXY_TYPE")
+    if galaxy_type_override is not None and galaxy_type_override != "":
+        return galaxy_type_override
+    # Delegate to root conftest logic (get_cluster_type via is_6u/is_tg_cluster)
+    import importlib.util
+
+    root_conftest_path = Path(__file__).resolve().parents[4] / "conftest.py"
+    spec = importlib.util.spec_from_file_location("root_conftest", root_conftest_path)
+    root_conftest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(root_conftest)
+    if root_conftest.is_6u():
+        return "6U"
+    elif root_conftest.is_tg_cluster():
+        return "4U"
+    else:
+        return None
 
 
 # Default device params matching text_demo.py parametrize (single value)

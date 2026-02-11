@@ -335,18 +335,18 @@ class Generator:
                 tt_out_logits_saved = torch.zeros(1, self.model.args.padded_vocab_size)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
+            # With prefix caching, trace output has only prefill_seq_len positions (the chunk).
+            # Use relative index for process_output_prefill / process_output_prefill_logits.
+            num_cached = num_cached_tokens_list[id]
+            last_token_idx_output = last_token_idx - num_cached if num_cached > 0 else last_token_idx
+
             if enable_trace:
                 # For batched prefill, reset to empty list since we use extend()
                 if use_batched_prefill and do_device_sampling:
                     self.tt_logits_accumulated_batched = []
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
-                last_token_idx_output = last_token_idx
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
-                # With prefix caching, output tensor has only prefill_seq_len positions (the chunk).
-                # Use relative index within the chunk for slicing.
-                num_cached = num_cached_tokens_list[id]
-                last_token_idx_output = last_token_idx - num_cached if num_cached > 0 else last_token_idx
 
             if not do_device_sampling:
                 tt_tok = self.model.process_output_prefill(
