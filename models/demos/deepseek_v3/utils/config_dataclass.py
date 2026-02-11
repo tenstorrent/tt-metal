@@ -7,6 +7,8 @@ from typing import Any, Union
 
 import ttnn
 
+optimal_topology = ttnn.Topology.Linear
+
 # Union type for all possible program configs used with ttnn.linear
 ProgramConfig = Union[
     ttnn.MatmulMultiCoreReuseMultiCastProgramConfig,
