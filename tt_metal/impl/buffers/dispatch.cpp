@@ -340,6 +340,7 @@ public:
 
     void reset_params_for_core(const CoreCoord& core, const BufferCorePageMapping& core_page_mapping) {
         this->core = core;
+ //       fmt::println(stderr, "Host mapping count: {}", core_page_mapping.host_ranges.size());
         this->core_page_mapping_it = core_page_mapping.begin();
         this->address =
             this->buffer->address() + core_page_mapping.device_start_page * this->buffer->aligned_page_size();
@@ -605,6 +606,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     }
 }
 
+bool logged_writes = false;
 void populate_sharded_buffer_write_dispatch_cmds(
     const void* src,
     HugepageDeviceCommand& command_sequence,
@@ -618,6 +620,12 @@ void populate_sharded_buffer_write_dispatch_cmds(
         buffer.device()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
         dispatch_params.address,
         data_size_bytes);
+
+        #if 0
+    if (!logged_writes) {
+        fmt::println(stderr, "Host mappign count: {}", dispatch_params.core_page_mapping_it.
+    }
+    #endif
 
     uint8_t* dst = command_sequence.reserve_space<uint8_t*, true>(data_size_bytes);
     // TODO: Expose getter for cmd_write_offsetB?
@@ -650,6 +658,11 @@ void populate_sharded_buffer_write_dispatch_cmds(
             uint64_t src_offset = (uint64_t)(range.host_page_start) * dispatch_params.page_size_to_write;
             auto cmd_region_offset =
                 dispatch_params.page_size_to_write * (range.device_page_offset - start_device_page_offset);
+                #if 0
+            if (!logged_writes) {
+                fmt::println(stderr, "Writing pages to offset {} from offset {} size {} \n", dst_offset + cmd_region_offset, src_offset, range.num_pages * dispatch_params.page_size_to_write);
+            }
+            #endif
             command_sequence.update_cmd_sequence(
                 dst_offset + cmd_region_offset,
                 static_cast<const char*>(src) + src_offset,
@@ -670,6 +683,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
         }
     }
     command_sequence.align_write_offset();
+    logged_writes = true;
 }
 
 // Issue dispatch commands for writing sharded buffer data from pinned memory
