@@ -8,6 +8,9 @@ import ttnn
 import numpy as np
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose, flush_subnormal_values_to_zero
 
+# Exp2 test for arange masking
+# Experimental
+
 
 @pytest.mark.parametrize(
     "input_shapes",
