@@ -21,7 +21,7 @@ void kernel_main() {
 // ============================================================================
 // Define args per RISC (different compile-time arg layout per processor)
 // ============================================================================
-for (int loop_index = 0; loop_index < 500000000; loop_index++) {
+for (uint64_t loop_index = 0; loop_index < 1000000000; loop_index++) {
 #if defined(COMPILE_FOR_NCRISC)
 
     // CTArgs type alias (required for Op template)

@@ -38,6 +38,40 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
     [
         pytest.param(
             1,
+            7168,
+            128,  # Not accurate, should be 160. TODO: Add support to custom MM
+            ttnn.bfloat16,
+            ttnn.bfloat4_b,
+            False,
+            None,
+            False,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(10, 9), ttnn.CoreCoord(10, 9)),
+                }
+            ),
+            id="lm_head",
+        ),
+        pytest.param(
+            1,
+            896,
+            32,
+            ttnn.bfloat16,
+            ttnn.bfloat4_b,
+            False,
+            None,
+            False,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(11, 9)),
+                }
+            ),
+            id="gate_proj_up_proj",
+        ),
+        pytest.param(
+            1,
             8192,
             64,
             ttnn.bfloat16,
@@ -53,23 +87,6 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
             ),
             id="out_proj",
         ),
-        # pytest.param(
-        #     1,
-        #     896,
-        #     32,
-        #     ttnn.bfloat16,
-        #     ttnn.bfloat4_b,
-        #     False,
-        #     None,
-        #     False,
-        #     ttnn.CoreRangeSet(
-        #         {
-        #             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 7)),
-        #             ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(11, 9)),
-        #         }
-        #     ),
-        #     id="gate_proj_up_proj",
-        # ),
         pytest.param(
             1,
             256,
