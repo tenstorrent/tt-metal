@@ -4,10 +4,9 @@
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run (env vars must be inlined).
 #   model: Model identifier for filtering (workflow_dispatch model selection).
-#   sku: Machine type to target (e.g. wh_galaxy, bh_galaxy).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   timeout: The maximum allowed runtime for this job in minutes.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -15,130 +14,146 @@
 - name: Galaxy Llama3 demo tests
   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG && pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
   model: llama3
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 20
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
-  timeout: 20
 
 - name: Galaxy Llama3 8B data-parallel demo tests
   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE=TG && pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000
   model: llama3_8b_dp
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 20
   owner_id: U08BH66EXAL # Radoica Draskic
   team: models
-  timeout: 20
 
 - name: Galaxy Llama3 70B data-parallel demo tests
   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct MESH_DEVICE=TG && pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000
   model: llama3_70b_dp
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 20
   owner_id: U08BH66EXAL # Radoica Draskic
   team: models
-  timeout: 20
 
 - name: Galaxy Falcon7b demo tests
   cmd: pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/tg/falcon7b/input_data_tg.json' models/demos/tg/falcon7b/demo_tg.py --timeout=1500
   model: falcon7b
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 10
   owner_id: U05RWH3QUPM # Salar Hosseini
   team: models
-  timeout: 10
 
 - name: Galaxy SentenceBert demo tests
   cmd: pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
   model: sentence_bert
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 5
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
-  timeout: 5
 
 - name: Galaxy Whisper demo tests
   cmd: pytest models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout 1500
   model: whisper
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 5
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
-  timeout: 5
 
 - name: Galaxy Stable Diffusion 3.5 Large demo tests
   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 && pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "4x8cfg1sp0tp1" --timeout 1200
   model: sd35
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 10
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
-  timeout: 10
 
 - name: Galaxy Flux.1-dev demo tests
   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 && pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-dev" --timeout 1200
   model: flux1
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 15
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
-  timeout: 15
 
 - name: Galaxy GPT-OSS demo tests
   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache && uv pip install -r models/demos/gpt_oss/requirements.txt && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8" --timeout 1000 && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8" --timeout 900 && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8" --timeout 1000 && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8" --timeout 900
   model: gpt-oss
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 45
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
-  timeout: 45
 
 - name: Galaxy Motif-Image-6B-Preview demo tests
   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 && pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
   model: motif
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 15
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
-  timeout: 15
 
 - name: Galaxy Wan2.2 demo tests
   cmd: export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 && pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
   model: wan22
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 20
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
-  timeout: 20
 
 - name: Galaxy Mochi demo tests
   cmd: export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 && pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500
   model: mochi
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 15
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
-  timeout: 15
 
 - name: Galaxy DeepSeek v3 demo tests
   cmd: export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG && pytest models/demos/deepseek_v3/demo/test_demo.py --timeout 600
   model: deepseek_v3
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 10
   owner_id: U08H32XUS9W # Yousef Al Rawwash
   team: models
-  timeout: 10
 
 - name: Galaxy QwenImage demo tests
   cmd: export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 && pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k "4x8" --timeout 1200
   model: qwenimage
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 20
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
-  timeout: 20
 
 - name: Galaxy Qwen3-32B demo tests
   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B MESH_DEVICE=TG && pytest models/demos/llama3_70b_galaxy/demo/demo_qwen_decode.py -k "full" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "batch-32" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "repeat2" --timeout 1000
   model: qwen3_32b
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 20
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
-  timeout: 20
 
 - name: Galaxy Qwen3-32B long context demo tests
   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B MESH_DEVICE=TG && pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-8k-b1" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-32k-b1" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000
   model: qwen3_32b_long_context
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 20
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
-  timeout: 20
 
 # - name: Galaxy Llama3 long context demo tests
 #   cmd: export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG && pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-4k-b1" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-8k-b1" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-16k-b1" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-32k-b1" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-64k-b1" --timeout 1000 && pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-128k-b1" --timeout 1000
