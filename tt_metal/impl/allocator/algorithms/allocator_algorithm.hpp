@@ -51,6 +51,9 @@ public:
     // Returns all allocated address ranges as (start_address, end_address) pairs; start address is not sorted
     virtual std::vector<std::pair<DeviceAddr, DeviceAddr>> allocated_addresses() const = 0;
 
+    // Returns the size of the allocation at the given absolute address, or nullopt if not found
+    virtual std::optional<DeviceAddr> get_allocation_size(DeviceAddr absolute_address) const = 0;
+
     // bottom_up=true indicates that allocation grows from address 0
     // Address limit is only used as a final check to see if selected address is > address limit
     // - Effectively, this means that address limit should only be used with top-down allocation

@@ -178,7 +178,7 @@ size_t AllocatorImpl::get_num_allocated_buffers() const {
 }
 
 uint32_t AllocatorImpl::get_num_banks(const BufferType& buffer_type) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    // Don't lock mutex_ because the number of banks is a constant and does not change.
     switch (buffer_type) {
         case BufferType::DRAM: return dram_manager_->num_banks();
         case BufferType::L1: return l1_manager_->num_banks();
@@ -355,6 +355,31 @@ void AllocatorImpl::mark_allocations_unsafe() {
 void AllocatorImpl::mark_allocations_safe() {
     std::lock_guard<std::mutex> lock(mutex_);
     allocations_unsafe_ = false;
+}
+
+void AllocatorImpl::begin_dram_high_water_mark_tracking() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dram_manager_->begin_high_water_mark_tracking();
+}
+
+DeviceAddr AllocatorImpl::end_dram_high_water_mark_tracking() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->end_high_water_mark_tracking();
+}
+
+DeviceAddr AllocatorImpl::get_dram_high_water_mark() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_high_water_mark();
+}
+
+DeviceAddr AllocatorImpl::get_dram_allocation_high_water_mark() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_allocation_high_water_mark();
+}
+
+DeviceAddr AllocatorImpl::get_dram_deletion_high_water_mark() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_deletion_high_water_mark();
 }
 
 void AllocatorImpl::clear() {

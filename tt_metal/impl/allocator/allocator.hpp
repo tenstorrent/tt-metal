@@ -74,6 +74,14 @@ public:
     void mark_allocations_unsafe();
     void mark_allocations_safe();
 
+    // High water mark tracking for DRAM allocations during trace capture
+    // Delegates to BankManager to account for banking properly
+    void begin_dram_high_water_mark_tracking();
+    DeviceAddr end_dram_high_water_mark_tracking();
+    DeviceAddr get_dram_high_water_mark() const;
+    DeviceAddr get_dram_allocation_high_water_mark() const;
+    DeviceAddr get_dram_deletion_high_water_mark() const;
+
     // what does clear even mean on an allocator???
     void clear();
 
