@@ -180,7 +180,8 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             x == 0 for x in start_pos
         ), f"Prefix caching is not supported for Qwen3VL, got start_pos: {start_pos}"
         # Must add this so that vLLM can call without errors
-        assert enable_trace is False, "Tracing in prefill mode is not supported for Qwen3VL"
+        enable_trace = False
+        logger.warning("Tracing in prefill mode is not supported for Qwen3VL")
 
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
