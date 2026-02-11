@@ -437,7 +437,6 @@ class DPTDepthEstimationHeadTT(nn.Module):
             hidden_state = F.relu(hidden_state)
 
         predicted_depth = self.head(hidden_state)
-        predicted_depth = predicted_depth.squeeze(dim=1)
         return predicted_depth
 
     def _forward_tt(self, hidden_states):

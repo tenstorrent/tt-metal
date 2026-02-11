@@ -151,15 +151,12 @@ class DPTTTPipeline:
         fusion_head_ms = 0.0
         normalize_ms = 0.0
         t_total = time.perf_counter()
+        use_tt_neck_head = bool(self.config.tt_device_reassembly or self.config.tt_device_fusion)
 
         with torch.no_grad():
             for pv in preprocessed:
-                t0 = time.perf_counter()
-                feats = self.backbone(pv.to(self.device), return_tt=True)
-                backbone_ms += (time.perf_counter() - t0) * 1000.0
-
                 # Strict path (no TT neck/head flags): use HF neck+head for perfect parity.
-                if not (self.config.tt_device_reassembly or self.config.tt_device_fusion):
+                if not use_tt_neck_head:
                     t1 = time.perf_counter()
                     depth = self.fallback._forward(pv)
                     # HF returns [B,1,H,W]; treat as torch tensor for normalization below.
@@ -167,6 +164,10 @@ class DPTTTPipeline:
                     fusion_head_ms += (time.perf_counter() - t1) * 1000.0
                     depth_t = torch.as_tensor(depth)
                 else:
+                    t0 = time.perf_counter()
+                    feats = self.backbone(pv.to(self.device), return_tt=True)
+                    backbone_ms += (time.perf_counter() - t0) * 1000.0
+
                     t1 = time.perf_counter()
                     pyramid = self.reassembly(feats)
                     reassembly_ms += (time.perf_counter() - t1) * 1000.0
