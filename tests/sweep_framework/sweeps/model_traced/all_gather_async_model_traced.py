@@ -40,6 +40,7 @@ FABRIC_CONFIGS_1D = [
 
 FABRIC_CONFIGS_2D = [
     ttnn.FabricConfig.FABRIC_2D,
+    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
 FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D
@@ -140,38 +141,31 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
     # Original validation for generality/lead_model suites
     # L1 sharding only
-    shard_specs = test_vector.get("shard_specs")
-    buffer_type = test_vector.get("buffer_type")
-    if shard_specs is not None and buffer_type == ttnn.BufferType.DRAM:
+    if test_vector["shard_specs"] is not None and test_vector["buffer_type"] == ttnn.BufferType.DRAM:
         return True, "L1 Sharding only"
 
-    cluster_axis = test_vector.get("cluster_axis")
-    mesh_shape = test_vector.get("mesh_shape")
-    input_shape = test_vector.get("input_shape")
-    dim = test_vector.get("dim")
-
-    # If any required field is missing, skip validation (shouldn't happen for generality/lead suites)
-    if None in [cluster_axis, mesh_shape, input_shape, dim]:
-        return False, None
-
+    cluster_axis = test_vector["cluster_axis"]
+    mesh_shape = test_vector["mesh_shape"]
+    input_shape = test_vector["input_shape"]
+    dim = test_vector["dim"]
     cluster_size = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
 
-    if not validate_serializable_shard_spec(input_shape, shard_specs, dim, cluster_size, "gather"):
+    if not validate_serializable_shard_spec(input_shape, test_vector["shard_specs"], dim, cluster_size, "gather"):
         return True, "Invalid shard spec"
 
     # hardcode for 6U
     if mesh_shape in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
 
-    if cluster_axis is not None and mesh_shape[cluster_axis] == 1:
+    if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
         return True, "Only one device along axis"
 
     if dim >= len(input_shape):
         return True, "Dim greater than rank"
-
-    topology = test_vector.get("topology")
-    fabric_config = test_vector.get("fabric_config")
-    if topology == ttnn.Topology.Ring and fabric_config != ttnn.FabricConfig.FABRIC_1D_RING:
+    if (
+        test_vector["topology"] == ttnn.Topology.Ring
+        and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
+    ):
         return True, "Ring fabric config required for ring topology"
 
     return False, None
@@ -232,7 +226,7 @@ def run(
         # Model traced format - use defaults for multi-device setup
         if NUM_DEVICES < 2:
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
-            return [(True, "Skipped: requires 2+ devices"), 0.0]
+            return [1.0, 0.0]
 
         # Use defaults for model_traced
         mesh_shape = (2, 1)
