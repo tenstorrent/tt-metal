@@ -118,7 +118,7 @@ TEST_P(FabricSendRecv2x4Fixture, SendRecvAsync) {
 
 INSTANTIATE_TEST_SUITE_P(FabricSendRecv2x4Tests, FabricSendRecv2x4Fixture, ::testing::ValuesIn(get_socket_test_args()));
 
-TEST_F(FabricSendRecv2x4Fixture, SRTest) {
+TEST_F(FabricSendRecv2x4Fixture, SRTest4) {
     using namespace tt::tt_metal::distributed;
     auto mesh_device = get_mesh_device();
 
@@ -141,40 +141,45 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     std::cout << "Intermed Device 3 ID: " << mesh_device->get_device(intermed_device_coord_3)->id() << std::endl;
     std::cout << "End Device ID: " << mesh_device->get_device(end_device_coord)->id() << std::endl;
 
-    // Create connections for:
-    // Stage 0 -> 1
-    // Stage 1 -> 2
+    //=============================================== 2 device =================================================
+    // distributed::SocketConnection socket_connection_01 = distributed::SocketConnection(
+    //     distributed::MeshCoreCoord(start_device_coord, sender_logical_coord),
+    //     distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord));
+    // distributed::SocketConnection socket_connection_10 = distributed::SocketConnection(
+    //     distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord),
+    //     distributed::MeshCoreCoord(end_device_coord, recv_logical_coord));
+
+    // =============================================== 4 device ====================================================
+
     distributed::SocketConnection socket_connection_01 = distributed::SocketConnection(
         distributed::MeshCoreCoord(start_device_coord, sender_logical_coord),
         distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord));
-    distributed::SocketConnection socket_connection_10 = distributed::SocketConnection(
+    distributed::SocketConnection socket_connection_12 = distributed::SocketConnection(
         distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord),
+        distributed::MeshCoreCoord(intermed_device_coord_2, copy_logical_coord));
+    distributed::SocketConnection socket_connection_23 = distributed::SocketConnection(
+        distributed::MeshCoreCoord(intermed_device_coord_2, copy_logical_coord),
+        distributed::MeshCoreCoord(intermed_device_coord_3, copy_logical_coord));
+    distributed::SocketConnection socket_connection_34 = distributed::SocketConnection(
+        distributed::MeshCoreCoord(intermed_device_coord_3, copy_logical_coord),
         distributed::MeshCoreCoord(end_device_coord, recv_logical_coord));
-
-    // distributed::SocketConnection socket_connection_12 = distributed::SocketConnection(
-    //     distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord),
-    //     distributed::MeshCoreCoord(intermed_device_coord_2, copy_logical_coord));
-    // distributed::SocketConnection socket_connection_23 = distributed::SocketConnection(
-    //     distributed::MeshCoreCoord(intermed_device_coord_2, copy_logical_coord),
-    //     distributed::MeshCoreCoord(intermed_device_coord_3, copy_logical_coord));
-    // distributed::SocketConnection socket_connection_34 = distributed::SocketConnection(
-    //     distributed::MeshCoreCoord(intermed_device_coord_3, copy_logical_coord),
-    //     distributed::MeshCoreCoord(end_device_coord, recv_logical_coord));
 
     distributed::SocketMemoryConfig socket_mem_config =
         distributed::SocketMemoryConfig(BufferType::L1, socket_fifo_size);
 
+    //=============================================== 2 device =================================================
+    // distributed::SocketConfig socket_config_01 = distributed::SocketConfig({socket_connection_01},
+    // socket_mem_config); distributed::SocketConfig socket_config_10 =
+    // distributed::SocketConfig({socket_connection_10}, socket_mem_config);
+
+    // =============================================== 4 device ====================================================
     distributed::SocketConfig socket_config_01 = distributed::SocketConfig({socket_connection_01}, socket_mem_config);
-    distributed::SocketConfig socket_config_10 = distributed::SocketConfig({socket_connection_10}, socket_mem_config);
 
-    // distributed::SocketConfig socket_config_12 = distributed::SocketConfig({socket_connection_12},
-    // socket_mem_config);
+    distributed::SocketConfig socket_config_12 = distributed::SocketConfig({socket_connection_12}, socket_mem_config);
 
-    // distributed::SocketConfig socket_config_23 = distributed::SocketConfig({socket_connection_23},
-    // socket_mem_config);
+    distributed::SocketConfig socket_config_23 = distributed::SocketConfig({socket_connection_23}, socket_mem_config);
 
-    // distributed::SocketConfig socket_config_34 = distributed::SocketConfig({socket_connection_34},
-    // socket_mem_config);
+    distributed::SocketConfig socket_config_34 = distributed::SocketConfig({socket_connection_34}, socket_mem_config);
 
     auto input_tensor_spec = TensorSpec(
         ttnn::Shape({1, 1, 1, 3584}),
@@ -198,19 +203,25 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
 
     auto output_tensor = tt::tt_metal::create_device_tensor(output_tensor_spec, mesh_device.get());
 
+    //=============================================== 2 device =================================================
+    // auto [send_socket_0, recv_socket_1] =
+    //     distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_01);
+
+    // auto [send_socket_1, recv_socket_end] =
+    //     distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_10);
+
+    // =============================================== 4 device ====================================================
     auto [send_socket_0, recv_socket_1] =
         distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_01);
 
-    auto [send_socket_1, recv_socket_end] =
-        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_10);
-    // auto [send_socket_1, recv_socket_2] =
-    //     distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_12);
+    auto [send_socket_1, recv_socket_2] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_12);
 
-    // auto [send_socket_2, recv_socket_3] =
-    //     distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_23);
+    auto [send_socket_2, recv_socket_3] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_23);
 
-    // auto [send_socket_3, recv_socket_end] =
-    //     distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_34);
+    auto [send_socket_3, recv_socket_end] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_34);
 
     // Create Barrier Buffer
     auto barrier_buffer_size = 832;
@@ -239,11 +250,133 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
             .to_device(mesh_device.get(), memory_config);
 
     // Sender forwards downstream and waits for ack from last receiver
+
+    //=============================================== 2 device =================================================
+    // ttnn::experimental::send_async(input_tensor, send_socket_0, recv_socket_end);
+    // ttnn::experimental::socket_forward(output_tensor, recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t));
+
+    // =============================================== 4 device ====================================================
     ttnn::experimental::send_async(input_tensor, send_socket_0, recv_socket_end);
     ttnn::experimental::socket_forward(output_tensor, recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t));
-    // ttnn::experimental::socket_forward(output_tensor, recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t));
-    // ttnn::experimental::socket_forward(output_tensor, recv_socket_2, send_socket_2, num_elems * sizeof(uint32_t));
-    // ttnn::experimental::socket_forward(output_tensor, recv_socket_3, send_socket_3, num_elems * sizeof(uint32_t));
+    ttnn::experimental::socket_forward(output_tensor, recv_socket_2, send_socket_2, num_elems * sizeof(uint32_t));
+    ttnn::experimental::socket_forward(output_tensor, recv_socket_3, send_socket_3, num_elems * sizeof(uint32_t));
+
+    Synchronize(mesh_device.get(), std::nullopt);
+
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto start_device_id = mesh_device->get_device(start_device_coord)->id();
+    auto start_core_coord = mesh_device->worker_core_from_logical_core(sender_logical_coord);
+    std::vector<uint64_t> latencies = std::vector<uint64_t>(100, 0);
+    uint32_t base_addr = barrier_buffer->address();
+    cluster.read_core(
+        latencies.data(), sizeof(uint64_t) * 100, tt_cxy_pair(start_device_id, start_core_coord), base_addr);
+
+    int freq_mhz = cluster.get_device_aiclk(start_device_id);
+    for (uint32_t i = 0; i < 100; i++) {
+        double latency_ns = 1000 * ((float)latencies[i] / freq_mhz);
+        std::cout << "Iteration " << i << " RTT latency (ns): " << latency_ns
+                  << " Per hop latency (ns): " << latency_ns / 4.0f << std::endl;
+    }
+}
+
+TEST_F(FabricSendRecv2x4Fixture, SRTest2) {
+    using namespace tt::tt_metal::distributed;
+    auto mesh_device = get_mesh_device();
+
+    auto sender_logical_coord = CoreCoord(0, 0);
+    auto recv_logical_coord = CoreCoord(0, 0);
+    auto copy_logical_coord = CoreCoord(0, 0);
+
+    constexpr uint32_t XFER_SIZE = 14 * 1024;
+    auto socket_fifo_size = XFER_SIZE * 16;
+
+    auto start_device_coord = distributed::MeshCoordinate(0, 0);
+    auto intermed_device_coord = distributed::MeshCoordinate(1, 0);
+    auto intermed_device_coord_2 = distributed::MeshCoordinate(1, 1);
+    auto intermed_device_coord_3 = distributed::MeshCoordinate(0, 1);
+    auto end_device_coord = distributed::MeshCoordinate(0, 0);
+
+    std::cout << "Start Device ID: " << mesh_device->get_device(start_device_coord)->id() << std::endl;
+    std::cout << "Intermed Device ID: " << mesh_device->get_device(intermed_device_coord)->id() << std::endl;
+    std::cout << "Intermed Device 2 ID: " << mesh_device->get_device(intermed_device_coord_2)->id() << std::endl;
+    std::cout << "Intermed Device 3 ID: " << mesh_device->get_device(intermed_device_coord_3)->id() << std::endl;
+    std::cout << "End Device ID: " << mesh_device->get_device(end_device_coord)->id() << std::endl;
+
+    //=============================================== 2 device =================================================
+    distributed::SocketConnection socket_connection_01 = distributed::SocketConnection(
+        distributed::MeshCoreCoord(start_device_coord, sender_logical_coord),
+        distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord));
+    distributed::SocketConnection socket_connection_10 = distributed::SocketConnection(
+        distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord),
+        distributed::MeshCoreCoord(end_device_coord, recv_logical_coord));
+
+    distributed::SocketMemoryConfig socket_mem_config =
+        distributed::SocketMemoryConfig(BufferType::L1, socket_fifo_size);
+
+    //=============================================== 2 device =================================================
+    distributed::SocketConfig socket_config_01 = distributed::SocketConfig({socket_connection_01}, socket_mem_config);
+    distributed::SocketConfig socket_config_10 = distributed::SocketConfig({socket_connection_10}, socket_mem_config);
+
+    auto input_tensor_spec = TensorSpec(
+        ttnn::Shape({1, 1, 1, 3584}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
+
+    const auto output_tensor_spec = TensorSpec(
+        ttnn::Shape({1, 1, 1, 3584}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
+
+    const auto& input_shape = input_tensor_spec.logical_shape();
+    const auto& memory_config = input_tensor_spec.memory_config();
+    uint32_t num_elems = input_shape.volume();
+    auto layout = input_tensor_spec.layout();
+    auto dtype = input_tensor_spec.data_type();
+
+    auto output_tensor = tt::tt_metal::create_device_tensor(output_tensor_spec, mesh_device.get());
+
+    //=============================================== 2 device =================================================
+    auto [send_socket_0, recv_socket_1] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_01);
+
+    auto [send_socket_1, recv_socket_end] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_10);
+
+    // Create Barrier Buffer
+    auto barrier_buffer_size = 832;
+    CoreRangeSet barrier_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    auto shard_params = ShardSpecBuffer(barrier_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    DeviceLocalBufferConfig barrier_buffer_specs = {
+        .page_size = barrier_buffer_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = std::nullopt,
+        .sub_device_id = std::nullopt,
+    };
+    auto barrier_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = barrier_buffer_size}, barrier_buffer_specs, mesh_device.get());
+    // Write 0 to barrier buffer
+    std::vector<uint32_t> barrier_data(barrier_buffer_size / sizeof(uint32_t), 0);
+    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), barrier_buffer, barrier_data, true);
+    std::cout << "Barrier buffer address: " << barrier_buffer->address() << std::endl;
+    // return;
+    const uint32_t i = 0;
+    const Tensor input_tensor =
+        ttnn::distributed::distribute_tensor(
+            ttnn::experimental::view(ttnn::arange(i, num_elems + i, 1, dtype), input_shape).to_layout(layout),
+            *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device),
+            std::nullopt)
+            .to_device(mesh_device.get(), memory_config);
+
+    // Sender forwards downstream and waits for ack from last receiver
+    //=============================================== 2 device =================================================
+    ttnn::experimental::send_async(input_tensor, send_socket_0, recv_socket_end);
+    ttnn::experimental::socket_forward(output_tensor, recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t));
+
     Synchronize(mesh_device.get(), std::nullopt);
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();

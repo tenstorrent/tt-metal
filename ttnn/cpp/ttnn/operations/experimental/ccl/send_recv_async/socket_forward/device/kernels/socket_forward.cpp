@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <tools/profiler/kernel_profiler.hpp>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/debug/dprint.h"
@@ -31,7 +32,7 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
         NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size}, packet_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
-    fabric_connection.send_payload_flush_blocking_from_address(
+    fabric_connection.send_payload_flush_non_blocking_from_address(
         (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
@@ -105,12 +106,19 @@ void kernel_main() {
     // Done handshake
 
     for (uint32_t i = 0; i < 100; ++i) {
-        socket_reserve_pages(send_socket, 1);
-        socket_wait_for_pages(recv_socket, 1);
+        {
+            DeviceZoneScopedN("Socket reserve pages");
+            socket_reserve_pages(send_socket, 1);
+        }
+        {
+            DeviceZoneScopedN("Socket wait for pages");
+            socket_wait_for_pages(recv_socket, 1);
+        }
         auto l1_read_addr = recv_socket.read_ptr;
         uint64_t dst_addr = receiver_noc_coord_addr + send_socket.write_ptr;
 
         // Forward data to downstream
+        // interleave acks
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection,
@@ -121,8 +129,7 @@ void kernel_main() {
                 whole_packet_size);
             dst_addr += whole_packet_size;
             l1_read_addr += whole_packet_size;
-        }
-        for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
+
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
                 downstream_data_packet_header_addr_2,
@@ -132,7 +139,10 @@ void kernel_main() {
                 whole_packet_size);
             dst_addr += whole_packet_size;
             l1_read_addr += whole_packet_size;
+
+            noc_async_writes_flushed();
         }
+
         if constexpr (aligned_partial_packet_size) {
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
@@ -143,14 +153,23 @@ void kernel_main() {
                 aligned_partial_packet_size);
         }
         // Notify Upstream and Downstream that data has been consumed or produced
-        socket_push_pages(send_socket, 1);
-        socket_pop_pages(recv_socket, 1);
+        {
+            DeviceZoneScopedN("socket push pages");
+            socket_push_pages(send_socket, 1);
+        }
+        {
+            DeviceZoneScopedN("socket pop pages");
+            socket_pop_pages(recv_socket, 1);
+        }
         if ((i & 7) == 0) {
-            fabric_socket_notify_sender_stateful(
-                recv_socket,
-                upstream_fabric_connection,
-                upstream_socket_packet_header_addr,
-                upstream_bytes_acked_noc_addr);
+            {
+                DeviceZoneScopedN("socket notify stateful");
+                fabric_socket_notify_sender_stateful(
+                    recv_socket,
+                    upstream_fabric_connection,
+                    upstream_socket_packet_header_addr,
+                    upstream_bytes_acked_noc_addr);
+            }
         }
         DPRINT << "socket forward on latency it: " << BF16(i) << ENDL();
     }

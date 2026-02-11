@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <tools/profiler/kernel_profiler.hpp>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/debug/dprint.h"
@@ -36,7 +37,7 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
         NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size}, packet_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
-    fabric_connection.send_payload_flush_blocking_from_address(
+    fabric_connection.send_payload_flush_non_blocking_from_address(
         (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
@@ -130,48 +131,60 @@ void kernel_main() {
     auto l1_read_addr = get_read_ptr(data_cb_id);
     for (uint32_t i = 0; i < 100; ++i) {
         uint64_t start_timestamp = get_timestamp();
-        socket_reserve_pages(sender_socket, 1);
         uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
 
-        // serialize these two paths
+        // interleave acks
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection,
-                data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
-        DPRINT << "Send async sent on link0" << ENDL();
+            {
+                write_data_to_remote_core_with_ack(
+                    fabric_connection,
+                    data_packet_header_addr,
+                    l1_read_addr,
+                    dst_addr,
+                    downstream_bytes_sent_noc_addr,
+                    whole_packet_size);
+                dst_addr += whole_packet_size;
+                l1_read_addr += whole_packet_size;
+            }
 
-        for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection_2,
-                data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
-        DPRINT << "Send async sent on link1" << ENDL();
+            {
+                write_data_to_remote_core_with_ack(
+                    fabric_connection_2,
+                    data_packet_header_addr_2,
+                    l1_read_addr,
+                    dst_addr,
+                    downstream_bytes_sent_noc_addr,
+                    whole_packet_size);
+                dst_addr += whole_packet_size;
+                l1_read_addr += whole_packet_size;
+            }
 
-        if constexpr (aligned_partial_packet_size) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection_2,
-                data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                aligned_partial_packet_size);
+            noc_async_writes_flushed();
         }
-        socket_push_pages(sender_socket, 1);
+        // DPRINT << "Send async sent on link0" << ENDL();
 
-        socket_wait_for_pages(receiver_socket, 1);
+        // for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
+        // }
+        // DPRINT << "Send async sent on link1" << ENDL();
+
+        // if constexpr (aligned_partial_packet_size) {
+        //     write_data_to_remote_core_with_ack(
+        //         fabric_connection_2,
+        //         data_packet_header_addr_2,
+        //         l1_read_addr,
+        //         dst_addr,
+        //         downstream_bytes_sent_noc_addr,
+        //         aligned_partial_packet_size);
+        // }
+        {
+            DeviceZoneScopedN("sender push pages");
+            socket_push_pages(sender_socket, 1);
+        }
+
+        {
+            DeviceZoneScopedN("Wait for pages");
+            socket_wait_for_pages(receiver_socket, 1);
+        }
         // uint32_t socket_read_addr = receiver_socket.read_ptr;
         // uint32_t val = 0;
         // for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
@@ -180,17 +193,17 @@ void kernel_main() {
         //     }
         //     val++;
         // }
-        DPRINT << "send async Received pages" << ENDL();
-        socket_pop_pages(receiver_socket, 1);
-        DPRINT << "send async Popped pages" << ENDL();
+        {
+            DeviceZoneScopedN("pop pages");
+            socket_pop_pages(receiver_socket, 1);
+        }
         if ((i & 7) == 0) {
-            DPRINT << "send async start" << ENDL();
+            DeviceZoneScopedN("sender notify stateful");
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
-            DPRINT << "send async end" << ENDL();
         }
         uint64_t end_timestamp = get_timestamp();
         uint64_t latency = end_timestamp - start_timestamp;

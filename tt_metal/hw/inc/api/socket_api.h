@@ -19,6 +19,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include <tools/profiler/kernel_profiler.hpp>
 
 static_assert(offsetof(receiver_socket_md, bytes_sent) % L1_ALIGNMENT == 0);
 
@@ -299,7 +300,6 @@ FORCE_INLINE void fabric_socket_notify_sender_stateful(
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
     DPRINT << "unicast_addr" << ENDL();
-    // dead here
     fabric_connection.wait_for_empty_write_slot();
     DPRINT << "empty write slot" << ENDL();
     fabric_connection.send_payload_flush_blocking_from_address(
