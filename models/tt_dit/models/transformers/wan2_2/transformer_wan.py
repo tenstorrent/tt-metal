@@ -26,7 +26,7 @@ from ....utils.tensor import bf16_tensor, float32_tensor
 from .attention_wan import WanAttention
 
 
-class WanTransformerBlock:
+class WanTransformerBlock(Module):
     def __init__(
         self,
         *,
@@ -338,7 +338,6 @@ class WanTransformer3DModel(Module):
 
         # Torch fallbacks
         torch.save(self.rope.state_dict(), directory / f"{prefix}rope.pt")
-        torch.save(self.condition_embedder.state_dict(), directory / f"{prefix}condition_embedder.pt")
 
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         super().load(directory, prefix=prefix)
@@ -347,12 +346,10 @@ class WanTransformer3DModel(Module):
 
         # Torch fallbacks
         self.rope.load_state_dict(torch.load(directory / f"{prefix}rope.pt"))
-        self.condition_embedder.load_state_dict(torch.load(directory / f"{prefix}condition_embedder.pt"))
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Torch fallbacks
         self.rope.load_state_dict(pop_substate(state, "rope"))
-        self.condition_embedder.load_state_dict(pop_substate(state, "condition_embedder"))
 
     def prepare_rope_features(self, hidden_states):
         """
