@@ -59,7 +59,7 @@ on:
           JSON object containing all tool image tags (from build-docker-tools.yaml).
           When provided, skips building tool images and uses these tags instead.
           Use with .github/actions/setup-tool-buildargs to extract individual tags.
-          Example: ${{ needs.build-tools.outputs.tool-tags }}
+          Example: needs.build-tools.outputs.tool-tags
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -128,24 +128,25 @@ jobs:
     secrets: inherit
 
   # Resolve tool tags from either input (external) or build-tools job
+  # The || operator in outputs handles the case where build-tools is skipped
   resolve-tools:
     runs-on: ubuntu-latest
     needs: build-tools
     if: always() && !failure() && !cancelled()
     outputs:
-      tool-tags: ${{ steps.resolve.outputs.tool-tags }}
+      # Use input tool-tags if provided, otherwise use build-tools output
+      # The || operator correctly handles skipped jobs
+      tool-tags: ${{ inputs.tool-tags || needs.build-tools.outputs.tool-tags }}
     steps:
-      - name: Resolve tool tags source
-        id: resolve
+      - name: Validate tool-tags resolved
+        env:
+          TOOL_TAGS: ${{ inputs.tool-tags || needs.build-tools.outputs.tool-tags }}
         run: |
-          # Use input tool-tags if provided, otherwise use build-tools output
-          if [ -n '${{ inputs.tool-tags }}' ]; then
-            echo "Using external tool-tags from input"
-            echo 'tool-tags=${{ inputs.tool-tags }}' >> $GITHUB_OUTPUT
-          else
-            echo "Using tool-tags from build-tools job"
-            echo 'tool-tags=${{ needs.build-tools.outputs.tool-tags }}' >> $GITHUB_OUTPUT
+          if [ -z "$TOOL_TAGS" ]; then
+            echo "::error::tool-tags not resolved - neither input nor build-tools output available"
+            exit 1
           fi
+          echo "Tool tags resolved successfully"
 
   # =============================================================================
   # PYTHON VENV IMAGES: Check and build pre-built Python virtual environments
