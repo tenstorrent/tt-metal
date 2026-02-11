@@ -6,7 +6,7 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
 from torch.utils._pytree import tree_map
@@ -847,6 +847,254 @@ class CPU(NormalRun):
         return result
 
 
+# --- Trace Infrastructure ---
+
+
+def _compute_tensor_signature(tensor) -> Tuple:
+    """Compute hashable signature from tensor properties."""
+    if isinstance(tensor, ttnn.Tensor):
+        return (tuple(tensor.shape), tensor.dtype, tensor.layout)
+    if hasattr(tensor, "ttnn_tensor") and tensor.ttnn_tensor is not None:
+        t = tensor.ttnn_tensor
+        return (tuple(t.shape), t.dtype, t.layout)
+    if isinstance(tensor, torch.Tensor):
+        return (tuple(tensor.shape), tensor.dtype)
+    return ()
+
+
+def _compute_args_signature(args) -> Tuple:
+    """Compute signature for all tensor args."""
+    sigs = []
+    for arg in args:
+        sig = _compute_tensor_signature(arg)
+        if sig:
+            sigs.append(sig)
+    return tuple(sigs)
+
+
+@dataclass(slots=True)
+class TraceEntry:
+    """Single trace cache entry."""
+
+    trace_id: int
+    trace_inputs: List[Any]
+    trace_output: Any
+    device: Any
+
+
+# Registry of trace-enabled classes
+_TRACE_ENABLED_CLASSES: Set[Type] = set()
+
+
+def trace_enabled(cls: Type) -> Type:
+    """
+    Decorator to mark a TTNNModule subclass as trace-enabled.
+
+    Usage:
+        @trace_enabled
+        class MyModule(TTNNModule):
+            ...
+    """
+    _TRACE_ENABLED_CLASSES.add(cls)
+    return cls
+
+
+def is_trace_enabled(module) -> bool:
+    """Check if module's class is trace-enabled."""
+    return isinstance(module, tuple(_TRACE_ENABLED_CLASSES))
+
+
+class TracedRun(NormalRun):
+    """
+    Traced execution mode with automatic caching.
+    Only traces modules decorated with @trace_enabled.
+    """
+
+    _device: Any = None
+    _cq_id: int = 0
+    _input_memory_config: Any = None
+    _trace_cache: Dict[Tuple, TraceEntry] = {}
+
+    @classmethod
+    def configure(
+        cls,
+        device=None,
+        cq_id: int = 0,
+        input_memory_config=None,
+    ) -> None:
+        """Configure traced run mode."""
+        cls._device = device
+        cls._cq_id = cq_id
+        cls._input_memory_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
+        cls._trace_cache = {}
+
+    @classmethod
+    def cache_size(cls) -> int:
+        return len(cls._trace_cache)
+
+    @classmethod
+    def cached_keys(cls) -> List[Tuple]:
+        return list(cls._trace_cache.keys())
+
+    @classmethod
+    def release_all(cls) -> None:
+        """Release all cached traces."""
+        for entry in cls._trace_cache.values():
+            ttnn.release_trace(entry.device, entry.trace_id)
+        cls._trace_cache.clear()
+
+    @classmethod
+    def release(cls, module_name: str) -> int:
+        """Release all traces for a specific module. Returns count released."""
+        to_remove = [k for k in cls._trace_cache if k[0] == module_name]
+        for key in to_remove:
+            entry = cls._trace_cache.pop(key)
+            ttnn.release_trace(entry.device, entry.trace_id)
+        return len(to_remove)
+
+    @staticmethod
+    def _make_cache_key(module_name: str, args) -> Tuple:
+        """Create cache key from module name and input signatures."""
+        return (module_name, _compute_args_signature(args))
+
+    @staticmethod
+    def _copy_inputs_to_trace_buffer(new_args, trace_inputs) -> None:
+        """Copy new inputs to trace input buffers."""
+        trace_idx = 0
+        for arg in new_args:
+            if trace_idx >= len(trace_inputs):
+                break
+            trace_input = trace_inputs[trace_idx]
+            if trace_input is None:
+                trace_idx += 1
+                continue
+
+            if isinstance(arg, ttnn.Tensor):
+                ttnn.copy(arg, trace_input)
+                trace_idx += 1
+            elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
+                ttnn.copy(arg.ttnn_tensor, trace_input)
+                trace_idx += 1
+
+    @staticmethod
+    def _capture_trace(module, func_args, func_kwargs, cache_key) -> TraceEntry:
+        """Capture trace for module."""
+        from loguru import logger
+
+        device = module.device
+        cq_id = TracedRun._cq_id
+        mem_config = TracedRun._input_memory_config or ttnn.DRAM_MEMORY_CONFIG
+
+        logger.debug(f"Capturing trace for {module.module_name}")
+
+        # Warm-up
+        _ = module.forward(*func_args, **func_kwargs)
+        ttnn.synchronize_device(device)
+
+        # Allocate persistent input buffers
+        trace_inputs = []
+        trace_func_args = []
+
+        for arg in func_args:
+            if isinstance(arg, ttnn.Tensor):
+                host_tensor = arg.cpu() if arg.storage_type() != ttnn.StorageType.HOST else arg
+                trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_inputs.append(trace_input)
+                trace_func_args.append(trace_input)
+            elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
+                t = arg.ttnn_tensor
+                host_tensor = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
+                trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_inputs.append(trace_input)
+                # Clone the wrapper and set trace input
+                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                new_arg = TorchTTNNTensor(trace_input)
+                trace_func_args.append(new_arg)
+            else:
+                trace_inputs.append(None)
+                trace_func_args.append(arg)
+
+        # Capture
+        trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
+        trace_output = module.forward(*trace_func_args, **func_kwargs)
+        ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
+
+        entry = TraceEntry(
+            trace_id=trace_id,
+            trace_inputs=trace_inputs,
+            trace_output=trace_output,
+            device=device,
+        )
+        TracedRun._trace_cache[cache_key] = entry
+        logger.debug(f"Trace cached id={trace_id}, total={TracedRun.cache_size()}")
+        return entry
+
+    @staticmethod
+    def module_run(self, *args, **kwds):
+        assert self.device is not None, "Device must be set for TTNN module execution."
+
+        # Transform inputs
+        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        func_args = tree_map(transform, args)
+        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
+        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
+
+        begin = time.time()
+        self.preprocess_weights()
+        end = time.time()
+        DispatchManager.set_current_module_name(self.module_name)
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_preprocess_weights", {}, end - begin
+        )
+        begin = time.time()
+        self.move_weights_to_device()
+        end = time.time()
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_move_weights_to_device", {}, end - begin
+        )
+        if NormalRun.signpost_mode is not None:
+            signpost(f"{self.module_name}", f"{self.__class__.__name__}")
+
+        begin = time.time()
+        # Check if this module is trace-enabled
+        if not is_trace_enabled(self):
+            print(
+                f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Running Normally]"
+            )
+            # Fall back to normal execution
+            result = self.forward(*func_args, **func_kwargs)
+            end = time.time()
+            DispatchManager.record_timing(
+                "TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin
+            )
+            DispatchManager.set_current_module_name(None)
+            return post_process_ttnn_module_output(self, result)
+
+        # Traced execution path
+        cache_key = TracedRun._make_cache_key(self.module_name, func_args)
+
+        if cache_key in TracedRun._trace_cache:
+            # Execute cached trace
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
+            entry = TracedRun._trace_cache[cache_key]
+            TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
+            ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
+            result = entry.trace_output
+        else:
+            print(
+                f"{self.__class__.__name__}: {self.module_name} on device {self.device} [First Run - Capturing Trace]"
+            )
+            # Capture new trace
+            entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
+            result = entry.trace_output
+        end = time.time()
+        DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
+        DispatchManager.set_current_module_name(None)
+        return post_process_ttnn_module_output(self, result)
+
+
 # Add at module level
 _RUN_MODE_REGISTRY = {
     "LIGHTWEIGHT": LightweightRun,
@@ -856,6 +1104,7 @@ _RUN_MODE_REGISTRY = {
     "DPL": DPLRun,
     "DPL_NO_ERROR_PROP": DPLRunNoErrorProp,
     "CPU": CPU,
+    "TRACED": TracedRun,
 }
 
 _current_run_mode = None  # Default
