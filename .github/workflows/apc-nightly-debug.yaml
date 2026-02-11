@@ -1,5 +1,7 @@
 name: "apc nightly debug run"
 
+run-name: "apc nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
+
 on:
   schedule:
     # Runs nightly at 12:00 AM UTC
@@ -28,22 +30,22 @@ permissions:
   checks: write
 
 jobs:
-  nightly-debug:
-    name: apc nightly debug run (${{ matrix.platform }}${{ (github.event.schedule == '0 1 * * *' || inputs.enable-watcher) && matrix.platform == 'Ubuntu 22.04' && ' with watcher' || '' }})
-    if: ${{ github.event.schedule != '0 1 * * *' || github.event_name == 'workflow_dispatch' }}
-    strategy:
-      matrix:
-        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
-    uses: ./.github/workflows/all-post-commit-workflows.yaml
-    secrets: inherit
-    with:
-      build-type: RelWithDebInfo
-      platform: ${{ matrix.platform }}
-      enable-lto: ${{ inputs.enable-lto || false }}
+  determine-watcher:
+    runs-on: ubuntu-latest
+    outputs:
+      enable-watcher: ${{ steps.check.outputs.enable-watcher }}
+    steps:
+      - id: check
+        run: |
+          if [[ "${{ github.event.schedule }}" == "0 1 * * *" || "${{ inputs.enable-watcher }}" == "true" ]]; then
+            echo "enable-watcher=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enable-watcher=false" >> "$GITHUB_OUTPUT"
+          fi
 
-  nightly-debug-watcher:
-    name: apc nightly debug run (${{ matrix.platform }} with watcher)
-    if: ${{ github.event.schedule == '0 1 * * *' || (github.event_name == 'workflow_dispatch' && inputs.enable-watcher) }}
+  nightly-debug:
+    name: apc nightly debug run (${{ matrix.platform }}${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+    needs: determine-watcher
     strategy:
       matrix:
         platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
@@ -53,7 +55,7 @@ jobs:
       build-type: RelWithDebInfo
       platform: ${{ matrix.platform }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      enable-watcher: true
-      run-profiler-regression: false
-      run-models-unit-tests: false
-      run-ops-unit-tests: false
+      enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
+      run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
+      run-models-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
+      run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
