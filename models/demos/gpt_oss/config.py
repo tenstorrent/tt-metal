@@ -143,6 +143,9 @@ class MeshConfig:
             topology=ccl_manager.topology,
             cluster_axis=axis,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            # num_workers_per_link=2,
+            # num_buffers_per_channel=8,
+            # chunks_per_sync=16,
         )
 
         # All-gather back
@@ -156,6 +159,10 @@ class MeshConfig:
             num_links=ccl_manager.num_links,
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            # num_workers_per_link=2,
+            # num_buffers_per_channel=8,
+            # chunks_per_sync=16,
+            # persistent_output_buffer=None
         )
 
         # Remove padding if applied

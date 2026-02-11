@@ -576,7 +576,7 @@ def test_decoder(
 
     # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
     if mode == "decode":
-        grid_size = setup["mesh_device"].compute_with_storage_grid_size()
+        grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
         batch_grid = ttnn.num_cores_to_corerangeset(local_batch_size, grid_size, row_wise=True)
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, config.head_dim),
