@@ -311,6 +311,11 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
                 !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Flush),
             "UnicastFusedAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
     }
+
+    // Chunk count = 2 unicast write chunks + 1 semaphore increment chunk (constant)
+    packet_header->command_fields.unicast_scatter_write.chunk_count =
+        NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS + 1;
+
     if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::WriteDstAddr)) {
         auto comps = get_noc_address_components(command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
