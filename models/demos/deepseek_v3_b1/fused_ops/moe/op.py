@@ -720,8 +720,8 @@ class MoeRoutedExpertOp:
         mcast_data_receiver_semaphore_id = 1
         gather_noc0_receiver_semaphore_id = 2
         gather_noc1_receiver_semaphore_id = 3
-        expert_scale_mcast_sender_semaphore_id = 4
-        expert_scale_mcast_receiver_semaphore_id = 5
+        expert_scale_mcast_sender_semaphore_id = 0  # Reuse sender semaphore
+        expert_scale_mcast_receiver_semaphore_id = 4
 
         # ==================================================================
         # CB indices
@@ -1783,17 +1783,17 @@ class MoeSharedExpertOp:
         # ==================================================================
         # Semaphore IDs (offset from routed expert's semaphores 0-5)
         # ==================================================================
-        ag_receiver_semaphore_id = 6
-        bg_receiver_semaphore_id = 7
-        ag_noc1_receiver_semaphore_id = 8
-        bg_noc1_receiver_semaphore_id = 9
+        ag_receiver_semaphore_id = 5
+        bg_receiver_semaphore_id = 6
+        ag_noc1_receiver_semaphore_id = 7
+        bg_noc1_receiver_semaphore_id = 8
         # Shared mcasts (residual, down, output) are serialized — reuse one pair
-        shared_mcast_sender_semaphore_id = 10
-        shared_mcast_receiver_semaphore_id = 11
-        output_gather_noc0_receiver_semaphore_id = 12
-        output_gather_noc1_receiver_semaphore_id = 13
-        output_mcast_sender_semaphore_id = 14
-        output_mcast_receiver_semaphore_id = 15
+        shared_mcast_sender_semaphore_id = 0  # Reuse unified sender semaphore
+        shared_mcast_receiver_semaphore_id = 9
+        output_gather_noc0_receiver_semaphore_id = 10
+        output_gather_noc1_receiver_semaphore_id = 11
+        output_mcast_sender_semaphore_id = 0  # Reuse unified sender semaphore
+        output_mcast_receiver_semaphore_id = 12
 
         # ==================================================================
         # Core grids
@@ -2728,11 +2728,6 @@ class MoeOp:
                 initial_value=0,
             ),
             ttnn.SemaphoreDescriptor(
-                id=routed_ctx.expert_scale_mcast_sender_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=1,  # Sender starts as VALID
-            ),
-            ttnn.SemaphoreDescriptor(
                 id=routed_ctx.expert_scale_mcast_receiver_semaphore_id,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
@@ -2760,12 +2755,6 @@ class MoeOp:
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
-            # Shared mcast semaphores (reused by residual/down/output mcasts)
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.shared_mcast_sender_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=1,  # Sender starts as VALID
-            ),
             ttnn.SemaphoreDescriptor(
                 id=shared_ctx.shared_mcast_receiver_semaphore_id,
                 core_ranges=routed_ctx.full_device_grid,
@@ -2781,12 +2770,6 @@ class MoeOp:
                 id=shared_ctx.output_gather_noc1_receiver_semaphore_id,
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
-            ),
-            # Shared expert output mcast semaphores (separate from residual/down mcasts)
-            ttnn.SemaphoreDescriptor(
-                id=shared_ctx.output_mcast_sender_semaphore_id,
-                core_ranges=routed_ctx.full_device_grid,
-                initial_value=1,  # Sender starts as VALID
             ),
             ttnn.SemaphoreDescriptor(
                 id=shared_ctx.output_mcast_receiver_semaphore_id,
