@@ -41,12 +41,14 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
-    uint32_t tensor_height = a.physical_volume() / tensor_width;
+    // uint32_t tensor_height = a.physical_volume() / tensor_width;
+    uint32_t output_tensor_width = output.padded_shape()[-1];
+    uint32_t output_tensor_height = output.physical_volume() / output_tensor_width;
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
-    uint32_t num_tiles_per_row = tensor_width / tile_width;
+    uint32_t num_tiles_per_input_row = tensor_width / tile_width;
 
     const auto& nd_shard_spec = a.nd_shard_spec().value();
     uint32_t input_shard_height = nd_shard_spec.shard_shape[-2];
@@ -128,7 +130,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     // Writer compile-time args
     uint32_t output_element_size = output.element_size();
     uint32_t output_page_width =
-        tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
+        output_tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -137,7 +139,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
         } else {
             output_page_width = output.nd_shard_spec().value().shard_shape[-1];
         }
-        output_num_blocks_across_width = tt::div_up(tensor_width, output_page_width);
+        output_num_blocks_across_width = tt::div_up(output_tensor_width, output_page_width);
     }
 
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
@@ -155,10 +157,10 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
         (uint32_t)input_single_tile_size,
         (uint32_t)num_shards,
         (uint32_t)num_compute_cores,
-        (uint32_t)num_tiles_per_row,
+        (uint32_t)num_tiles_per_input_row,
         (uint32_t)tile_width,
-        (uint32_t)tensor_width,
-        (uint32_t)tensor_height,
+        (uint32_t)output_tensor_width,
+        (uint32_t)output_tensor_height,
     };
 
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
