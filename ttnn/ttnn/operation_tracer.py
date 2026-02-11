@@ -11,6 +11,7 @@ to JSON files for debugging and analysis purposes.
 import json
 import pathlib
 import sys
+import os
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, Optional, Tuple
@@ -36,6 +37,30 @@ _SERIALIZE_TENSOR_VALUES = False
 
 # Command-line flag constant
 _TRACE_PARAMS_FLAG = "--trace-params"
+
+
+# Helper function to get serializers from tensor_utils (imported lazily to avoid circular imports)
+def _get_tensor_utils_serializers():
+    """Lazy import of tensor_utils serializers to avoid circular imports."""
+    try:
+        # Import inside function to avoid circular dependency at module load time
+        import importlib.util
+
+        # Check if models.common.tensor_utils exists
+        spec = importlib.util.find_spec("models.common.tensor_utils")
+        if spec is None:
+            return None
+
+        from models.common import tensor_utils
+
+        return {
+            "memory_config_to_dict": tensor_utils.memory_config_to_dict,
+            "compute_kernel_config_to_dict": tensor_utils.compute_kernel_config_to_dict,
+            "program_config_to_dict": tensor_utils.program_config_to_dict,
+        }
+    except (ImportError, AttributeError) as e:
+        logger.debug(f"Could not import tensor_utils serializers: {e}")
+        return None
 
 
 def enable_tracing(enable: bool = True) -> None:
@@ -120,6 +145,57 @@ def _serialize_ttnn_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]
         "original_dtype": str(value.dtype) if hasattr(value, "dtype") else None,
     }
 
+    # Check if tensor is distributed and get logical shape
+    if hasattr(value, "logical_shape"):
+        logical_shape = value.logical_shape()
+        if logical_shape != value.shape:
+            tensor_data["logical_shape"] = list(logical_shape)
+    # Get tensor topology and placement information for distributed tensors
+    if hasattr(value, "tensor_topology"):
+        topology = value.tensor_topology()
+        # Get placements
+        if hasattr(topology, "placements"):
+            placements = topology.placements()
+            if placements:
+                placement_strs = []
+                for placement in placements:
+                    placement_type = type(placement).__name__
+                    if hasattr(placement, "dim"):
+                        placement_strs.append(f"{placement_type}({placement.dim})")
+                    else:
+                        placement_strs.append(placement_type)
+                if placement_strs:
+                    if "mesh_device" not in tensor_data:
+                        tensor_data["mesh_device"] = {}
+                    tensor_data["mesh_device"]["placements"] = placement_strs
+        # Get distribution shape
+        if hasattr(topology, "distribution_shape"):
+            dist_shape = topology.distribution_shape()
+            if "mesh_device" not in tensor_data:
+                tensor_data["mesh_device"] = {}
+            tensor_data["mesh_device"]["distribution_shape"] = list(dist_shape)
+    # Check if tensor is on a mesh device and capture mesh information
+    if hasattr(value, "device") and value.device is not None:
+        device = value.device()
+        # Initialize mesh_device dict if it's a mesh device
+        is_mesh_device = type(device).__name__ == "MeshDevice" or hasattr(device, "get_device_ids")
+        if is_mesh_device:
+            if "mesh_device" not in tensor_data:
+                tensor_data["mesh_device"] = {}
+            # Check if device is a MeshDevice and get shape (it's a property, not a method)
+            if hasattr(device, "shape"):
+                mesh_shape = device.shape
+                # Try to convert to list, fallback to string if not iterable
+                if hasattr(mesh_shape, "__iter__"):
+                    tensor_data["mesh_device"]["shape"] = list(mesh_shape)
+                else:
+                    tensor_data["mesh_device"]["shape"] = str(mesh_shape)
+
+            # Get device IDs if available
+            if hasattr(device, "get_device_ids"):
+                device_ids = device.get_device_ids()
+                tensor_data["mesh_device"]["device_ids"] = list(device_ids) if device_ids else None
+
     if serialize_values:
         # Move tensor to CPU and convert to numpy for human-readable format
         cpu_tensor = value
@@ -161,6 +237,22 @@ def _serialize_ttnn_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]
         if storage_type_value is not None:
             tensor_data["storage_type"] = str(storage_type_value)
 
+    # Get memory config if available (it's a method)
+    if hasattr(value, "memory_config"):
+        memory_config_value = value.memory_config()
+        if memory_config_value is not None:
+            # Try to use tensor_utils serializer first
+            serializers = _get_tensor_utils_serializers()
+            if serializers and "memory_config_to_dict" in serializers:
+                try:
+                    tensor_data["memory_config"] = serializers["memory_config_to_dict"](memory_config_value)
+                except Exception as exc:
+                    # Fallback to repr if serializer fails
+                    logger.debug(f"memory_config_to_dict serializer failed, using repr: {exc}")
+                    tensor_data["memory_config"] = repr(memory_config_value)
+            else:
+                # No serializer available, use repr
+                tensor_data["memory_config"] = repr(memory_config_value)
     return tensor_data
 
 
@@ -261,6 +353,49 @@ def serialize_operation_parameters(
                 return {k: serialize_value(v, f"{name_prefix}.{k}") for k, v in value.items()}
 
             else:
+                # Special handling for MeshDevice
+                if type(value).__name__ == "MeshDevice":
+                    mesh_data = {
+                        "type": "MeshDevice",
+                        "repr": str(value),
+                    }
+                    # Try to get mesh shape (it's a property, not a method)
+                    if hasattr(value, "shape"):
+                        mesh_shape = value.shape
+                        # Try to convert to list, fallback to string if not iterable
+                        if hasattr(mesh_shape, "__iter__"):
+                            mesh_data["shape"] = list(mesh_shape)
+                        else:
+                            mesh_data["shape"] = str(mesh_shape)
+
+                    # Try to get device IDs
+                    if hasattr(value, "get_device_ids"):
+                        device_ids = value.get_device_ids()
+                        mesh_data["device_ids"] = list(device_ids) if device_ids else None
+                    return mesh_data
+                # For other types, try specialized serializers
+                type_name = type(value).__name__
+
+                # Try to use tensor_utils serializers first
+                serializers = _get_tensor_utils_serializers()
+
+                # Try tensor_utils serializers for specific types
+                if serializers:
+                    try:
+                        if type_name == "MemoryConfig":
+                            return serializers["memory_config_to_dict"](value)
+                        elif type_name in [
+                            "WormholeComputeKernelConfig",
+                            "BlackholeComputeKernelConfig",
+                            "DeviceComputeKernelConfig",
+                        ]:
+                            return serializers["compute_kernel_config_to_dict"](value)
+                        elif "ProgramConfig" in type_name and "Matmul" in type_name:
+                            # tensor_utils only handles Matmul program configs
+                            return serializers["program_config_to_dict"](value)
+                    except Exception as e:
+                        logger.debug(f"tensor_utils serializer failed for {type_name}: {e}")
+                        # Fall through to use __repr__
                 # For other types, convert to string or get basic info
                 if hasattr(value, "__dict__"):
                     return {"type": type(value).__name__, "repr": str(value)}
@@ -332,7 +467,10 @@ def wrap_function_for_tracing(original_function: Any, operation_name: str) -> An
         if _is_tracing_enabled():
             # Determine log directory - use config if available, otherwise default
             log_dir = None
-            if hasattr(ttnn.CONFIG, "operation_parameter_log_dir") and ttnn.CONFIG.operation_parameter_log_dir:
+            # First check environment variable (highest priority for custom trace directory)
+            if os.environ.get("TTNN_OPERATION_TRACE_DIR"):
+                log_dir = pathlib.Path(os.environ["TTNN_OPERATION_TRACE_DIR"])
+            elif hasattr(ttnn.CONFIG, "operation_parameter_log_dir") and ttnn.CONFIG.operation_parameter_log_dir:
                 log_dir = pathlib.Path(ttnn.CONFIG.operation_parameter_log_dir)
             elif hasattr(ttnn.CONFIG, "root_report_path") and ttnn.CONFIG.root_report_path:
                 log_dir = pathlib.Path(ttnn.CONFIG.root_report_path) / "operation_parameters"
