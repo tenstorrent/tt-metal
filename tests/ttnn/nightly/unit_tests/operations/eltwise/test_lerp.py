@@ -20,7 +20,7 @@ def run_lerp_test(
     end,
     weight,
     ttnn_function,
-    scalar_weight=False,
+    use_scalar_weight=False,
     ulp_threshold=1,
     input_dtype="bfloat16",
     output_dtype=None,
@@ -32,7 +32,7 @@ def run_lerp_test(
 
     golden_function = ttnn.get_golden_function(ttnn_function)
 
-    if scalar_weight:
+    if use_scalar_weight:
         torch_weight = weight
         ttnn_weight = weight
     else:
@@ -70,7 +70,7 @@ def run_lerp_test(
 @pytest.mark.parametrize("weight", [0.5])
 @pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
 def test_lerp_float_a(device, h, w, weight, input_dtype):
-    run_lerp_test(device, h, w, 0, 90, 100, weight, ttnn.lerp, scalar_weight=True, input_dtype=input_dtype)
+    run_lerp_test(device, h, w, 0, 90, 100, weight, ttnn.lerp, use_scalar_weight=True, input_dtype=input_dtype)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -79,7 +79,7 @@ def test_lerp_float_a(device, h, w, weight, input_dtype):
 @pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
 def test_lerp_float_b(device, h, w, weight, input_dtype):
     run_lerp_test(
-        device, h, w, 1, 80, 99, weight, ttnn.lerp, scalar_weight=True, ulp_threshold=2, input_dtype=input_dtype
+        device, h, w, 1, 80, 99, weight, ttnn.lerp, use_scalar_weight=True, ulp_threshold=2, input_dtype=input_dtype
     )
 
 
@@ -88,7 +88,7 @@ def test_lerp_float_b(device, h, w, weight, input_dtype):
 @pytest.mark.parametrize("weight", [0.5])
 @pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
 def test_lerp_tensor_a(device, h, w, weight, input_dtype):
-    run_lerp_test(device, h, w, 0, 90, 100, weight, ttnn.lerp, scalar_weight=False, input_dtype=input_dtype)
+    run_lerp_test(device, h, w, 0, 90, 100, weight, ttnn.lerp, use_scalar_weight=False, input_dtype=input_dtype)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -97,7 +97,7 @@ def test_lerp_tensor_a(device, h, w, weight, input_dtype):
 @pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
 def test_lerp_tensor_b(device, h, w, weight, input_dtype):
     run_lerp_test(
-        device, h, w, 1, 80, 99, weight, ttnn.lerp, scalar_weight=False, ulp_threshold=2, input_dtype=input_dtype
+        device, h, w, 1, 80, 99, weight, ttnn.lerp, use_scalar_weight=False, ulp_threshold=2, input_dtype=input_dtype
     )
 
 
@@ -117,7 +117,7 @@ def test_lerp_fp32_preallocated_output(device, h, w, weight, input_dtype):
         99,
         weight,
         ttnn.lerp,
-        scalar_weight=True,
+        use_scalar_weight=True,
         ulp_threshold=1,
         output_dtype="float32",
         input_dtype=input_dtype,
