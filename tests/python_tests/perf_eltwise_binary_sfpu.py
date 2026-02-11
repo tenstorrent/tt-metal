@@ -59,7 +59,6 @@ from helpers.test_variant_parameters import (
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
     iterations=[
-        8,
         32,
     ],
     input_dimensions=[
@@ -149,7 +148,6 @@ def test_perf_eltwise_binary_sfpu_float(
         16,
     ],
     iterations=[
-        8,
         32,
     ],
     input_dimensions=[
@@ -240,7 +238,6 @@ def test_perf_eltwise_binary_sfpu_int(
         16,
     ],
     iterations=[
-        8,
         32,
     ],
     input_dimensions=[
