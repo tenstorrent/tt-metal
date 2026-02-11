@@ -10,10 +10,7 @@ import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
 
 
-def test_sampling_argmax_single_device_101_cores(device):
-    """
-    Test k=1 sampling (argmax path) for a single device and 101 cores.
-    """
+def _run_sampling_argmax_single_device_101_cores(device, seed: int, final_core_idx: int):
     grid_size = device.compute_with_storage_grid_size()
     all_device_cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
     if len(all_device_cores) < 101:
@@ -21,7 +18,8 @@ def test_sampling_argmax_single_device_101_cores(device):
 
     active_cores = all_device_cores[:101]
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in active_cores})
-    final_core = active_cores[-1]
+    assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
+    final_core = active_cores[final_core_idx]
 
     num_cores = len(active_cores)
     scores_shape = (1, 160 * num_cores)
@@ -29,9 +27,12 @@ def test_sampling_argmax_single_device_101_cores(device):
     output_shape = (1, 1)
     tile_1x32 = ttnn.Tile([1, 32])
 
-    logger.info("Testing sampling argmax: single-device/101-cores, 160 values per core")
+    logger.info(
+        f"Testing sampling argmax: single-device/101-cores, seed={seed}, final_core_idx={final_core_idx}, "
+        "160 values per core"
+    )
 
-    torch.manual_seed(2005)
+    torch.manual_seed(seed)
     torch_scores = torch.randn(scores_shape, dtype=torch.bfloat16)
     torch_indices = torch.arange(scores_shape[1], dtype=torch.int32).reshape(scores_shape)
 
@@ -98,4 +99,23 @@ def test_sampling_argmax_single_device_101_cores(device):
         output_torch.to(torch.uint32), torch_expected_idx
     ), f"Argmax index mismatch. expected={torch_expected_idx.item()}, got={output_torch.item()}"
 
-    logger.info(f"Sampling argmax test passed. index={int(output_torch.item())}")
+    logger.info(
+        f"Sampling argmax test passed. seed={seed}, final_core_idx={final_core_idx}, index={int(output_torch.item())}"
+    )
+
+
+@pytest.mark.parametrize(
+    "seed, final_core_idx",
+    [
+        (2005, 100),  # last active core (original behavior)
+        (17, 0),  # first active core
+        (1337, 50),  # middle active core
+        (4242, 73),  # non-boundary core
+    ],
+)
+def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
+    """
+    Test k=1 sampling (argmax path) for a single device and 101 cores.
+    Covers multiple random seeds and different final-core placements.
+    """
+    _run_sampling_argmax_single_device_101_cores(device, seed=seed, final_core_idx=final_core_idx)
