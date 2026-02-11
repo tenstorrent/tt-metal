@@ -23,6 +23,7 @@ void bind_moe(nb::module_& mod) {
             output_tensor: Output tensor (sharded)
             num_experts: Number of experts per layer
             layer_id: The layer for which the MoE operation is being performed
+            output_shard_core_ranges: The core ranges for the output shard
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
@@ -32,6 +33,7 @@ void bind_moe(nb::module_& mod) {
             nb::arg("output_tensor"),
             nb::arg("num_experts"),
             nb::arg("layer_id"),
+            nb::arg("output_shard_core_ranges"),
         });
 }
 

@@ -20,88 +20,101 @@ from tracy.process_model_log import (
 
 PCC_THRESHOLD = 0.98
 
-
-def compute_tensor_checksum(tensor):
-    """Compute SHA256 checksum for a tensor."""
-    if isinstance(tensor, torch.Tensor):
-        # Convert tensor to bytes for hashing
-        torch_tensor = tensor.detach().cpu()
-    else:
-        raise ValueError(f"Unsupported tensor type: {type(tensor)}")
-
-    # Convert BFloat16 and other unsupported dtypes to float32 for numpy conversion
-    if torch_tensor.dtype == torch.bfloat16:
-        torch_tensor = torch_tensor.float()
-    elif torch_tensor.dtype not in [
-        torch.float32,
-        torch.float64,
-        torch.int32,
-        torch.int64,
-        torch.int16,
-        torch.int8,
-        torch.uint8,
-    ]:
-        # Convert any other unsupported dtypes to float32
-        torch_tensor = torch_tensor.float()
-
-    tensor_bytes = torch_tensor.numpy().tobytes()
-    return hashlib.sha256(tensor_bytes).hexdigest()
-
-
-def load_or_create_checksum_dict(pickle_file="moe_input_checksums.pkl"):
-    """Load checksum dictionary from pickle file, or create empty dict if file doesn't exist."""
-    try:
-        with open(pickle_file, "rb") as f:
-            return pickle.load(f)
-    except (FileNotFoundError, EOFError):
-        return {}
-
-
-def save_checksum_dict(checksum_dict, pickle_file="moe_input_checksums.pkl"):
-    """Save checksum dictionary to pickle file."""
-    with open(pickle_file, "wb") as f:
-        pickle.dump(checksum_dict, f)
-
-
-def untilize2tile_pos(row, col):
-    total_index = row * 20 * ttnn.TILE_SIZE + col
-
-    c_f = total_index % 16
-    r_f = (total_index // 16) % 16
-    f_x = (total_index // (16 * 16)) % 2
-    f_y = (total_index // (16 * 16 * 2)) % 2
-    t_x = (total_index // (16 * 16 * 2 * 2)) % 224
-    t_y = total_index // (16 * 16 * 2 * 2 * 224)
-
-    assert t_y == 0
-    return t_y, t_x, f_y, f_x, r_f, c_f
-
-
-def tile2torch_coord(t_y, t_x, f_y, f_x, r_f, c_f):
-    total_index = (
-        2 * 16 * 224 * 2 * 16 * t_y + 16 * 224 * 2 * 16 * f_y + 224 * 2 * 16 * r_f + 2 * 16 * t_x + 16 * f_x + c_f
-    )
-    torch_x = total_index % 7168
-    torch_y = total_index // 7168
-    return torch_x, torch_y
-
-
-def get_untilized_data(tt_output):
-    untilized_data = torch.empty((32, 20 * 32), dtype=tt_output.dtype)
-    for row in range(32):
-        for col in range(20 * 32):
-            t_y, t_x, f_y, f_x, r_f, c_f = untilize2tile_pos(row, col)
-            torch_x, torch_y = tile2torch_coord(t_y, t_x, f_y, f_x, r_f, c_f)
-            untilized_data[row, col] = tt_output[torch_y, torch_x]
-    return untilized_data
-
-
 # Some cores have more tiles than others, but they are sprinkled around the ring for boundary alignment.
 FULL_CORES_A = {0, 1, 8, 9}
 PAD_CORES_A = {2, 3, 4, 5, 6, 7, 10, 11}
 
+# In this case, we spread the tiles evenly around the ring, in groups of 3.
 FULL_CORES_B = {0, 3, 6, 9}
 PAD_CORES_B = {1, 2, 4, 5, 7, 8, 10, 11}
+
+NUM_COMBINE_CORES_W = 4
+NUM_COMBINE_CORES_H = 4
+NUM_COMBINE_CORES = NUM_COMBINE_CORES_W * NUM_COMBINE_CORES_H
+
+# These are the number of tokens written to each combine core before we round robin
+NUM_TOKENS_PER_CORE = 8
+
+FACE_WIDTH = 16
+FACE_HEIGHT = 16
+
+NUM_FACES_PER_TILE_WIDTH = ttnn.TILE_SIZE // FACE_WIDTH
+NUM_FACES_PER_TILE_HEIGHT = ttnn.TILE_SIZE // FACE_HEIGHT
+
+
+def flat_idx_to_tile_pos(flat_idx, num_tile_cols):
+    """Decompose a flat buffer index into tile coordinates.
+
+    ttnn stores tiles with the following hierarchy (innermost to outermost):
+    c_f, r_f, f_x, f_y, t_x, t_y — where t_x wraps at num_tile_cols.
+
+    Args:
+        flat_idx: flat index into the raw buffer
+        num_tile_cols: number of tile columns ttnn assumed (K // TILE_SIZE)
+    """
+    c_f = flat_idx % FACE_WIDTH
+    r_f = (flat_idx // FACE_WIDTH) % FACE_HEIGHT
+    f_x = (flat_idx // (FACE_WIDTH * FACE_HEIGHT)) % NUM_FACES_PER_TILE_WIDTH
+    f_y = (flat_idx // (FACE_WIDTH * FACE_HEIGHT * NUM_FACES_PER_TILE_WIDTH)) % NUM_FACES_PER_TILE_HEIGHT
+    t_x = (
+        flat_idx // (FACE_WIDTH * FACE_HEIGHT * NUM_FACES_PER_TILE_WIDTH * NUM_FACES_PER_TILE_HEIGHT)
+    ) % num_tile_cols
+    t_y = flat_idx // (FACE_WIDTH * FACE_HEIGHT * NUM_FACES_PER_TILE_WIDTH * NUM_FACES_PER_TILE_HEIGHT * num_tile_cols)
+
+    return t_y, t_x, f_y, f_x, r_f, c_f
+
+
+def tile_pos_to_untilized_coord(t_y, t_x, f_y, f_x, r_f, c_f):
+    """Convert tile coordinates to (row, col) in the untilized tensor that ttnn produced.
+
+    Args:
+        t_y, t_x, f_y, f_x, r_f, c_f: tile coordinates
+    """
+    row = t_y * ttnn.TILE_SIZE + f_y * FACE_HEIGHT + r_f
+    col = t_x * ttnn.TILE_SIZE + f_x * FACE_WIDTH + c_f
+    return row, col
+
+
+def get_untilized_data(tt_output, E, M, K):
+    """Recover row-major data (width=K//NUM_COMBINE_CORES_W) from a torch tensor
+    that ttnn incorrectly untilized assuming tile layout with width K.
+
+    The device wrote row-major data with width (K // NUM_COMBINE_CORES_W) into the
+    buffer. ttnn.to_torch() treated the buffer as tile-layout with shape (E*M, K)
+    and untilized it, producing a garbled (E*M, K) tensor. This function reverses
+    that untilization to recover the original flat buffer, then reshapes it as
+    row-major with the correct width.
+
+    The total buffer has E*M*K elements. Reshaped at width_per_core, that gives
+    (E*M*K // width_per_core) rows of row-major data.
+
+    Args:
+        tt_output: torch tensor of shape (E, M, K) from ttnn.to_torch()
+        E: number of experts
+        M: sequence length
+        K: full output width (ttnn's assumed untilize width)
+    """
+    width_per_core = K // NUM_COMBINE_CORES_W
+    num_tile_cols = K // ttnn.TILE_SIZE  # tile columns as ttnn assumed (224)
+    total_elements = E * M * K
+    num_rm_rows = total_elements // width_per_core
+    output = tt_output.view(E * M, K)
+
+    result = torch.empty((num_rm_rows, width_per_core), dtype=tt_output.dtype)
+    for rm_row in range(num_rm_rows):
+        for rm_col in range(width_per_core):
+            # Flat buffer index for this row-major position
+            flat_idx = rm_row * width_per_core + rm_col
+
+            # Decompose flat_idx into tile coordinates (how ttnn interpreted it)
+            t_y, t_x, f_y, f_x, r_f, c_f = flat_idx_to_tile_pos(flat_idx, num_tile_cols)
+
+            # Convert tile coords to where ttnn placed this element after untilizing
+            row, col = tile_pos_to_untilized_coord(t_y, t_x, f_y, f_x, r_f, c_f)
+
+            result[rm_row, rm_col] = output[row, col]
+
+    return result
 
 
 def create_torch_input(L, in0_num_cores, E, M, K):
@@ -118,25 +131,6 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     Returns:
         torch_input: Tensor of shape (L, in0_num_cores, 2, M, K)
     """
-    # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # le_val = 1
-    # for layer in range(L):
-    #     for expert in range(E):
-    #         for k_chunk_id in range(K // 32):
-    #             k_start, k_end = k_chunk_id * 32, k_chunk_id * 32 + 32
-    #             chunk_value = le_val * 0.001 * k_chunk_id
-    #             torch_input[layer, :, expert, :, k_start:k_end] = chunk_value
-    #         le_val *= -1
-    # torch_input = 0.25 * 0.25 *torch.ones((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # k_half = K // 2
-    # # Interleave the positive and negatives
-    # for i in range(K):
-    #     if i % 2 == 0:
-    #         torch_input[..., i] = 0.25
-    #     else:
-    #         torch_input[..., i] = -0.25
-    # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
     torch_input = torch.rand((L, 2, M, K), dtype=torch.bfloat16) - 0.5
     torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
     return torch_input
@@ -155,19 +149,6 @@ def create_torch_w0(L, E, K, N):
     Returns:
         torch_w0: Tensor of shape (L, E, K, N)
     """
-    # torch_w0 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
-
     torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w0
 
@@ -185,19 +166,6 @@ def create_torch_w1(L, E, K, N):
     Returns:
         torch_w1: Tensor of shape (L, E, K, N)
     """
-    # torch_w1 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = -1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
-
     torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w1
 
@@ -366,7 +334,7 @@ def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
     return all_groups_per_bank
 
 
-def prepare_output_tensor(tt_output, E, M, K, ring2cores):
+def prepare_output_tensor(tt_output, E, M, K):
     """
     Prepare the output tensor by padding and reordering tiles.
 
@@ -375,11 +343,26 @@ def prepare_output_tensor(tt_output, E, M, K, ring2cores):
         E: Number of experts
         M: Number of input features
         K: Number of output features
-        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
-
     Returns:
         torch_output: Tensor of shape (E, M, K)
     """
+    width_per_core = K // NUM_COMBINE_CORES_W
+
+    # Get the values in the first 16 cores
+    torch_write_out = tt_output[:NUM_COMBINE_CORES]
+
+    untilized_data = []
+    for core_id in range(NUM_COMBINE_CORES):
+        untilized_data.append(get_untilized_data(torch_write_out[core_id], E, M, K))
+    torch_write_out_rm = torch.stack(untilized_data).reshape(NUM_COMBINE_CORES, -1, width_per_core)
+
+    # Put the cores in a 4x4 grid, in row major order
+    torch_write_out_grid = torch_write_out_rm.view(NUM_COMBINE_CORES_H, NUM_COMBINE_CORES_W, -1, width_per_core)
+    torch_write_out_w = torch_write_out_grid.permute(0, 2, 1, 3)
+    torch_write_out_token = torch_write_out_w.reshape(NUM_COMBINE_CORES_H, -1, NUM_TOKENS_PER_CORE, K)
+    torch_write_out_per_expert = torch_write_out_token.permute(1, 0, 2, 3).reshape(E, -1, K)
+    return torch_write_out_per_expert[:, :M, :]
+    # --------------------------------------------------------------------------
     # This works for the tilize, we want to keep this for testing.
     # each_shard = []
 
@@ -391,23 +374,25 @@ def prepare_output_tensor(tt_output, E, M, K, ring2cores):
     # result = torch.cat(each_shard, dim=-1)
     # assert result.shape == (2, M, K)
     # return result
+    # --------------------------------------------------------------------------
 
-    # View it as a row major tensor on each core
-    tt_output_a = tt_output.view(len(ring2cores), E, M * K)
+    # # View it as a row major tensor on each core
+    # tt_output_a = tt_output.view(len(ring2cores) + len(combine_core_coords), E, M * K)
 
-    expert_shards = []
+    # expert_shards = []
 
-    for expert in range(E):
-        each_shard = []
-        for ring_pos in range(len(ring2cores)):
-            (_, _, pad_flag) = ring2cores[ring_pos]
-            num_tiles = 19 if pad_flag else 18
-            untilized_data = get_untilized_data(tt_output[ring_pos, expert])
-            each_shard.append(untilized_data[:, : num_tiles * ttnn.TILE_SIZE])
-        expert_shards.append(torch.cat(each_shard, dim=-1))
+    # for expert in range(E):
+    #     each_shard = []
+    #     for ring_pos in range(len(ring2cores)):
+    #         (_, _, pad_flag) = ring2cores[ring_pos]
+    #         num_tiles = 19 if pad_flag else 18
+    #         untilized_data = get_untilized_data(tt_output[ring_pos, expert])
+    #         each_shard.append(untilized_data[:, : num_tiles * ttnn.TILE_SIZE])
+    #     expert_shards.append(torch.cat(each_shard, dim=-1))
 
-    result = torch.stack(expert_shards)
-    return result
+    # result = torch.stack(expert_shards)
+    # return result
+    # --------------------------------------------------------------------------
 
 
 def get_accuracy_metrics(torch_output, tt_output):
@@ -451,6 +436,24 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     in0_core_range = [ttnn.CoreRange(ring2cores[i][0], ring2cores[i][0]) for i in range(in0_num_cores)]
     in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
 
+    # Now pick the last 16 cores as the combine cores, skipping the ones in in0_core_coords
+    out_num_cores = NUM_COMBINE_CORES
+    all_core_grid = device.compute_with_storage_grid_size()
+
+    dram_coords = [(coord.x, coord.y) for coord in in0_core_coords]
+
+    combine_core_xy = []
+    for x_coord, y_coord in itertools.product(range(all_core_grid.x - 1, -1, -1), range(all_core_grid.y - 1, -1, -1)):
+        if (x_coord, y_coord) not in dram_coords:
+            combine_core_xy.append((x_coord, y_coord))
+
+        if len(combine_core_xy) == out_num_cores:
+            break
+    else:
+        raise ValueError(f"Did not find {out_num_cores} combine cores")
+
+    combine_core_coords = [ttnn.CoreCoord(x_coord, y_coord) for x_coord, y_coord in combine_core_xy]
+
     # --------------------------------------------------------------------------
     # Constants
     # --------------------------------------------------------------------------
@@ -462,15 +465,23 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
     dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
 
+    combine_core_range = [
+        ttnn.CoreRange(combine_core_coord, combine_core_coord) for combine_core_coord in combine_core_coords
+    ]
+    combine_core_range_set = ttnn.CoreRangeSet(combine_core_range)
+
+    input_and_combine_core_range_set = ttnn.CoreRangeSet(combine_core_range + in0_core_range)
+    total_num_cores = in0_num_cores + out_num_cores
+
     # --------------------------------------------------------------------------
     # Tensor shapes and memory configurations
     # --------------------------------------------------------------------------
     # Define tensor shapes - same for both accuracy and performance testing
-    input_shape = (in0_num_cores, 2, M, K)
+    input_shape = (total_num_cores, 2, M, K)
 
     in0_shard_spec = ttnn.ShardSpec(
-        grid=in0_core_range_set,
-        shard_shape=(2 * M, K),  # Your shard dimensions
+        grid=input_and_combine_core_range_set,
+        shard_shape=(2 * M, K),
         shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
@@ -509,7 +520,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     # Prepare the tensors
     # --------------------------------------------------------------------------
     if check_accuracy:
-        torch_input = create_torch_input(L, in0_num_cores, E, M, K)
+        torch_input = create_torch_input(L, total_num_cores, E, M, K)
         torch_w0 = create_torch_w0(L, E, K, N)
         torch_w1 = create_torch_w1(L, E, K, N)
         torch_w2 = create_torch_w2(L, E, N, K)
@@ -582,11 +593,12 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             output_tensor=tt_input,
             num_experts=E,
             layer_id=layer_id,
+            output_shard_core_ranges=combine_core_range_set,
         )
 
         # Output is produced in-place on the input tensor
         tt_raw_output = ttnn.to_torch(tt_input)
-        tt_to_torch_output = prepare_output_tensor(tt_raw_output, E, M, K, ring2cores)
+        tt_to_torch_output = prepare_output_tensor(tt_raw_output, E, M, K)
 
         all_outputs.append(tt_to_torch_output)
 
@@ -635,7 +647,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048, 2, 1): 225.0,
+    (32, 7168, 2048, 2, 1): 234.0,
     # (32, 7168, 2048, 3, 1): 329.0,
 }
 

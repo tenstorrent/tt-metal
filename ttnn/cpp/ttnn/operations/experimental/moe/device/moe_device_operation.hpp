@@ -36,7 +36,8 @@ struct MoEDeviceOperation {
         const Tensor& w2_tensor,
         const Tensor& output_tensor,
         const uint32_t num_experts,
-        const uint32_t layer_id);
+        const uint32_t layer_id,
+        const tt::tt_metal::CoreRangeSet& output_shard_core_ranges);
 };
 
 }  // namespace ttnn::operations::experimental::moe

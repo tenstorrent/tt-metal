@@ -44,9 +44,11 @@ std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tenso
     const Tensor& w2_tensor,
     const Tensor& output_tensor,
     const uint32_t num_experts,
-    const uint32_t layer_id) {
+    const uint32_t layer_id,
+    const tt::tt_metal::CoreRangeSet& output_shard_core_ranges) {
     return {
-        operation_attributes_t{.num_experts = num_experts, .layer_id = layer_id},
+        operation_attributes_t{
+            .num_experts = num_experts, .layer_id = layer_id, .output_shard_core_ranges = output_shard_core_ranges},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_w1_tensor = w0_w1_tensor,
