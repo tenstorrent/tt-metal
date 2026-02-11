@@ -278,6 +278,103 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         tile=out_tile,
     )
 
+    # ── Tensor-backed CB tensors ──
+
+    # CB 28/29: Gate/Up gather destination (64 tiles each on sender core)
+    total_gather_tiles = k_parallel * n_parallel  # 64
+    ag_dummy_shape = (total_gather_tiles, 32)
+    ag_dummy_shard_spec = ttnn.ShardSpec(sender_core_grid, ag_dummy_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    ag_dummy_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ag_dummy_shard_spec)
+    ttnn_ag_gather_dst = ttnn.from_torch(
+        torch.zeros(total_gather_tiles, 32, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ag_dummy_mem,
+        tile=a_tile,
+    )
+    ttnn_bg_gather_dst = ttnn.from_torch(
+        torch.zeros(total_gather_tiles, 32, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ag_dummy_mem,
+        tile=a_tile,
+    )
+
+    # Determine face-view tile for intermed/mcast_src CBs
+    from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
+
+    use_face_view = can_use_face_view(M, 32, k_parallel, n_parallel)
+    assert use_face_view, "Expected face_view=True for M=1, tile_w=32, k_parallel=8, n_parallel=8"
+    face_tile = ttnn.Tile([FACE_HEIGHT, FACE_WIDTH])
+
+    # CB 27: Gate/Up matmul output (1 tile per core on 128 compute cores)
+    gu_out_shard = ttnn.ShardSpec(compute_core_grid, (M, 32), ttnn.ShardOrientation.ROW_MAJOR)
+    gu_out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gu_out_shard)
+    num_compute_cores = len(compute_cores_list)
+    ttnn_gu_out = ttnn.from_torch(
+        torch.zeros((M * num_compute_cores, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=gu_out_mem,
+        tile=a_tile,
+    )
+
+    # CB 30: Gated reduce intermediate (2 face tiles on sender core)
+    intermed_shard = ttnn.ShardSpec(sender_core_grid, (2 * FACE_HEIGHT, FACE_WIDTH), ttnn.ShardOrientation.ROW_MAJOR)
+    intermed_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, intermed_shard)
+    ttnn_intermed = ttnn.from_torch(
+        torch.zeros((2 * FACE_HEIGHT, FACE_WIDTH), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=intermed_mem,
+        tile=face_tile,
+    )
+
+    # CB 31: Gated reduce output / down mcast source (1 face tile on sender core)
+    mcast_src_shard = ttnn.ShardSpec(sender_core_grid, (FACE_HEIGHT, FACE_WIDTH), ttnn.ShardOrientation.ROW_MAJOR)
+    mcast_src_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, mcast_src_shard)
+    ttnn_down_mcast_src = ttnn.from_torch(
+        torch.zeros((FACE_HEIGHT, FACE_WIDTH), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mcast_src_mem,
+        tile=face_tile,
+    )
+
+    # CB 36: Down proj matmul output (N_per_core/32 tiles of [1,32] per core on 112 matmul cores)
+    down_matmul_out_shard = ttnn.ShardSpec(matmul_core_grid, (M, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
+    down_matmul_out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, down_matmul_out_shard
+    )
+    num_matmul_cores = DownProj.NUM_MATMUL_CORES
+    ttnn_down_matmul_out = ttnn.from_torch(
+        torch.zeros((M, N_per_core * num_matmul_cores), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=down_matmul_out_mem,
+        tile=out_tile,
+    )
+
+    # CB 37: Residual add output (same shape as down matmul output on 112 matmul cores)
+    residual_add_out_shard = ttnn.ShardSpec(matmul_core_grid, (M, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
+    residual_add_out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, residual_add_out_shard
+    )
+    ttnn_residual_add_out = ttnn.from_torch(
+        torch.zeros((M, N_per_core * num_matmul_cores), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=residual_add_out_mem,
+        tile=out_tile,
+    )
+
     return {
         # TTNN tensors
         "ttnn_activation": ttnn_activation,
@@ -291,6 +388,14 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         # Params
         "k_parallel": k_parallel,
         "n_parallel": n_parallel,
+        # Tensor-backed CB tensors
+        "ttnn_ag_gather_dst": ttnn_ag_gather_dst,
+        "ttnn_bg_gather_dst": ttnn_bg_gather_dst,
+        "ttnn_gu_out": ttnn_gu_out,
+        "ttnn_intermed": ttnn_intermed,
+        "ttnn_down_mcast_src": ttnn_down_mcast_src,
+        "ttnn_down_matmul_out": ttnn_down_matmul_out,
+        "ttnn_residual_add_out": ttnn_residual_add_out,
         # Torch tensors for golden
         "torch_activation": torch_activation,
         "torch_gate_weights": torch_gate_weights,
@@ -858,6 +963,14 @@ def test_moe_fused(device, use_hardcoded_expert_index):
             shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
             shared_down_weights_tensor=s["ttnn_down_weights"],
             shared_output_tensor=s["ttnn_output"],
+            # Shared expert tensor-backed CB tensors
+            shared_ag_gather_dst_tensor=s["ttnn_ag_gather_dst"],
+            shared_bg_gather_dst_tensor=s["ttnn_bg_gather_dst"],
+            shared_gu_out_tensor=s["ttnn_gu_out"],
+            shared_intermed_tensor=s["ttnn_intermed"],
+            shared_down_mcast_src_tensor=s["ttnn_down_mcast_src"],
+            shared_down_matmul_out_tensor=s["ttnn_down_matmul_out"],
+            shared_residual_add_out_tensor=s["ttnn_residual_add_out"],
             shared_k_parallel=s["k_parallel"],
             shared_n_parallel=s["n_parallel"],
             use_hardcoded_expert_index=use_hardcoded_expert_index,

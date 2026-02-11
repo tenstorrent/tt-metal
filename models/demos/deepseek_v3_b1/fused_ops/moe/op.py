@@ -23,8 +23,6 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-import torch
-
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
@@ -137,109 +135,72 @@ class _MoeRoutedExpertContext:
 class _MoeSharedExpertContext:
     """Holds shared expert values for the fused MoE kernel."""
 
-    # Gate/Up KN-sliced matmul
-    gu_weights_cb: int
-    gu_out_cb: int
-    gu_k_per_core: int
-    gu_act_total_tiles: int
-    gu_weights_num_pages: int
+    # Core grids
     compute_core_grid: Any
-    gu_k_offset_core_values: list
-    gu_weights_cb_descriptor: Any
-    gu_out_cb_descriptor: Any
-
-    # Gate/Up Gather + Gated Reduce
-    a_cores_list: list
-    b_cores_list: list
     a_compute_grid: Any
     b_compute_grid: Any
+    a_cores_list: list
+    b_cores_list: list
+
+    # CB indices (flat for compile-time arg readability)
+    gu_weights_cb: int
+    gu_out_cb: int
     group1_cb: int  # gate gather dst (on sender)
     group2_cb: int  # up gather dst (on sender)
     intermed_cb: int  # gated reduce intermediate (on sender)
     mcast_src_cb: int  # gated reduce output (on sender)
+    residual_mcast_src_cb: int
+    residual_mcast_dst_cb: int
+    down_mcast_dst_cb: int
+
+    # Parallelism
     n_parallel: int
     k_parallel: int
-    tiles_per_k: int
-    k_num_tiles: int
     num_compute_cores: int  # 64 per branch
-    use_face_view: bool
-    face_tile_desc: Any
-    face_tile_size: Any
-    kernel_tiles_per_k: int
-    kernel_k_num_tiles: int
-    mcast_src_num_pages: int
-    reduce_tile_size: int
-    input_tile_size: int
+
+    # Gather params (shared between A and B gathers)
+    gather_dest_noc_core: Any
     gu_gather_data_size_bytes: int
     total_gather_tiles: int
-    gather_dest_noc_core: Any
-    mcast_gather_core_grid: Any
+
+    # Semaphore IDs
     ag_receiver_semaphore_id: int
     bg_receiver_semaphore_id: int
     ag_noc1_receiver_semaphore_id: int
     bg_noc1_receiver_semaphore_id: int
+    shared_mcast_sender_semaphore_id: int
+    shared_mcast_receiver_semaphore_id: int
+    output_gather_noc0_receiver_semaphore_id: int
+    output_gather_noc1_receiver_semaphore_id: int
+    output_mcast_sender_semaphore_id: int
+    output_mcast_receiver_semaphore_id: int
+
+    # Keep-alive tensors and derived addresses
     ag_dummy_tensor: Any
     bg_dummy_tensor: Any
     ag_receiver_data_addr: int
     bg_receiver_data_addr: int
-    group1_cb_descriptor: Any
-    group2_cb_descriptor: Any
-    intermed_cb_descriptor: Any
-    mcast_src_cb_descriptor: Any
+    residual_mcast_dst_dummy_tensor: Any
+    down_mcast_dst_dummy_tensor: Any
+    output_gather_dst_dummy_tensor: Any
+
+    # Setup result dicts (grouped by operation)
+    gu_matmul_params: dict  # from setup_kn_sliced_matmul
+    gated_reduce_params: dict  # from setup_gated_reduce
+    residual_mcast_params: dict  # from setup_mcast
+    down_mcast_params: dict  # down mcast dimensions + CB descriptor
+    down_matmul_params: dict  # down proj matmul dimensions + CB descriptors
+    residual_add_params: dict  # residual add dimensions + CB descriptor
+    output_gather_params: dict  # output gather dimensions + CB descriptor
+    output_mcast_params: dict  # output mcast dimensions
+
+    # Residual mcast source CB descriptor
+    residual_mcast_src_cb_descriptor: Any
+
+    # Per-core values
+    gu_k_offset_core_values: list
     ag_sender_idx_core_values: list
     bg_sender_idx_core_values: list
-
-    # Shared mcast semaphores (reused for residual/down mcasts — they are serialized)
-    shared_mcast_sender_semaphore_id: int
-    shared_mcast_receiver_semaphore_id: int
-
-    # Output mcast semaphores (separate to avoid race with earlier mcasts)
-    output_mcast_sender_semaphore_id: int
-    output_mcast_receiver_semaphore_id: int
-
-    # Residual Mcast
-    residual_mcast_src_cb: int
-    residual_mcast_dst_cb: int
-    residual_mcast_params: dict
-    residual_mcast_src_cb_descriptor: Any
-    residual_mcast_dst_cb_descriptor: Any
-    residual_mcast_dst_dummy_tensor: Any  # keep-alive for dst tensor backing the CB
-
-    # Down Mcast (gated reduce output → all 130 cores)
-    down_mcast_dst_cb: int
-    down_mcast_data_size_bytes: int
-    down_mcast_src_num_pages: int
-    down_mcast_dst_cb_descriptor: Any
-    down_mcast_dst_dummy_tensor: Any  # keep-alive for dst tensor backing the CB
-
-    # Down Proj Matmul (SRAM matmul on 112 cores)
-    down_matmul_in1_cb: int
-    down_matmul_out_cb: int
-    down_matmul_k_num_tiles: int
-    down_matmul_out_w_per_core: int
-    down_matmul_in1_cb_descriptor: Any
-    down_matmul_out_cb_descriptor: Any
-    down_weights_num_pages: int  # for setup_sharded_buffer
-
-    # Residual Add (on 112 matmul cores)
-    residual_add_out_cb: int
-    residual_add_total_in1_tiles: int
-    residual_add_out_cb_descriptor: Any
-
-    # Output Gather (112 matmul cores → sender)
-    output_gather_dst_cb: int
-    output_gather_data_size_bytes: int
-    output_gather_src_num_pages: int
-    output_gather_dst_num_pages: int
-    output_gather_noc0_receiver_semaphore_id: int
-    output_gather_noc1_receiver_semaphore_id: int
-    output_gather_dst_cb_descriptor: Any
-    output_gather_dst_dummy_tensor: Any  # keep-alive for tensor backing the CB
-
-    # Output Mcast (sender → 130 cores, 8 DRAM cores receive into add_cb_in1)
-    output_mcast_data_size_bytes: int
-    output_mcast_src_num_pages: int
-    output_mcast_dst_num_pages: int
 
 
 class MoeRoutedExpertOp:
@@ -414,61 +375,116 @@ class MoeRoutedExpertOp:
         }
 
     @staticmethod
-    def setup_sram_matmul(
-        in0_cb,
-        in1_cb,
-        out_cb,
-        weights_tensor,
-        output_tensor,
-        k_num_tiles,
-        fused_activation=0,
+    def setup_eltwise_add(
+        in0_tensor,
+        in1_tensor,
+        out_tensor,
+        cb_in0_index,
+        cb_in1_index,
+        cb_out_index,
     ):
         """
-        Set up parameters for an SRAM matmul operation.
+        Set up parameters and CB descriptors for element-wise add with per-core indexing.
 
-        SRAM matmul computes: output = input @ weights with optional fused activation.
-        Weights and output are sharded in L1 (SRAM).
+        Used after down_proj to add fused_add tensor. Each core uses sender_index to
+        offset into the replicated in1 tensor.
 
         Args:
-            in0_cb: Input CB index (receives mcasted input)
-            in1_cb: Weights CB index
-            out_cb: Output CB index
-            weights_tensor: Weight tensor (WIDTH_SHARDED in L1)
-            output_tensor: Output tensor (WIDTH_SHARDED in L1)
-            k_num_tiles: K dimension in tiles
-            fused_activation: Activation to fuse (0=none, 1=sigmoid, 2=silu)
+            in0_tensor: First input tensor (e.g., down_proj output), WIDTH_SHARDED
+            in1_tensor: Second input tensor (e.g., fused_add), HEIGHT_SHARDED (replicated)
+            out_tensor: Output tensor, WIDTH_SHARDED (padded to 32x32 tile)
+            cb_in0_index: CB index for first input (aliased with 32x32 tile format)
+            cb_in1_index: CB index for second input (replicated tensor)
+            cb_out_index: CB index for output
 
         Returns:
-            Dictionary with matmul parameters and CB descriptors
+            Dictionary with eltwise_add parameters and CB descriptors
         """
-        # Get per-core output width in tiles from weights tensor
-        weights_tile = weights_tensor.get_tile()
-        weights_shard_shape = weights_tensor.memory_config().shard_spec.shape
-        weights_shard_width = weights_shard_shape[1]
-        out_w = weights_shard_width // weights_tile.tile_shape[1]
+        # Get core ranges from in0_tensor (same as previous mm)
+        core_ranges = in0_tensor.memory_config().shard_spec.grid
+        compute_cores_list = ttnn.corerange_to_cores(core_ranges, row_wise=True)
+        # Get tensor info
+        in0_dtype = in0_tensor.dtype
+        in0_shard_shape = in0_tensor.memory_config().shard_spec.shape
+        in1_shard_shape = in1_tensor.memory_config().shard_spec.shape
 
-        # Get core grid from weights tensor
-        core_grid = weights_tensor.memory_config().shard_spec.grid
+        # Dimensions
+        width_per_core = in0_shard_shape[1]  # per-core width (e.g., 896)
+        total_width = in1_shard_shape[1]  # full width of replicated tensor (e.g., 7168)
 
-        # CB descriptors
-        weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_tensor)
-        output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
+        # Element size
+        if in0_dtype == ttnn.bfloat16:
+            element_size_bytes = 2
+        else:
+            raise ValueError(f"Unsupported dtype: {in0_dtype}")
+
+        slice_size_bytes = width_per_core * element_size_bytes
+
+        # Use 32x32 tile view for CB (not tensor's actual tile format)
+        # This is CB aliasing - tensor uses 1x32 tiles but CB views as 32x32
+        cb_tile_h = 32
+        cb_tile_w = 32
+        cb_tile_size_bytes = cb_tile_h * cb_tile_w * element_size_bytes
+        cb_tile = ttnn.Tile([cb_tile_h, cb_tile_w])
+        cb_tile_desc = ttnn.TileDescriptor(cb_tile)
+
+        # CB sizes
+        in0_size_bytes = slice_size_bytes
+        in1_size_bytes = total_width * element_size_bytes
+
+        # Number of pages for CB wait (total_size / page_size)
+        # cb_in0: 1 page (in0_size_bytes / in0_size_bytes = 1)
+        # cb_in1: multiple pages (in1_size_bytes / in0_size_bytes)
+        in0_wait_tiles = in0_size_bytes // in0_size_bytes  # 1
+        in1_wait_tiles = in1_size_bytes // in0_size_bytes
+
+        # Number of output tiles (based on 32x32 CB view, not tensor tile format)
+        out_shard_shape = out_tensor.memory_config().shard_spec.shape
+        out_shard_elements = out_shard_shape[0] * out_shard_shape[1]
+        cb_tile_elements = cb_tile_h * cb_tile_w
+        num_tiles = out_shard_elements // cb_tile_elements
+        assert num_tiles == 1, f"Expected 1 tile (32x32 view), got {num_tiles}"
+
+        # CB for in0: down_proj output aliased with 32x32 tile format
+        cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
+        cb_in0_descriptor.total_size = in0_size_bytes
+        cb_in0_descriptor.format_descriptors[0].tile = cb_tile_desc
+        cb_in0_descriptor.format_descriptors[0].page_size = in0_size_bytes
+
+        # CB for in1: replicated tensor (tensor-backed)
+        cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
+        cb_in1_descriptor.total_size = in1_size_bytes
+        cb_in1_descriptor.format_descriptors[0].tile = cb_tile_desc
+        cb_in1_descriptor.format_descriptors[0].page_size = in0_size_bytes  # page_size = slice size for reading
+
+        # CB for out: output (tensor-backed, uses 32x32 CB view)
+        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
+        cb_out_descriptor.total_size = num_tiles * cb_tile_size_bytes
+        cb_out_descriptor.format_descriptors[0].tile = cb_tile_desc
+        cb_out_descriptor.format_descriptors[0].page_size = cb_tile_size_bytes
+
+        # Per-core sender_index values
+        sender_index_core_values = []
+        for idx, core in enumerate(compute_cores_list):
+            sender_index_core_values.append((core, idx))
 
         return {
             # CB indices
-            "in0_cb": in0_cb,
-            "in1_cb": in1_cb,
-            "out_cb": out_cb,
-            # Matmul parameters
-            "k_num_tiles": k_num_tiles,
-            "out_w": out_w,
-            "fused_activation": fused_activation,
-            # Core grid
-            "core_grid": core_grid,
-            "num_cores": core_grid.num_cores(),
+            "cb_in0": cb_in0_index,
+            "cb_in1": cb_in1_index,
+            "cb_out": cb_out_index,
+            # Dimensions
+            "num_tiles": num_tiles,
+            "slice_size_bytes": slice_size_bytes,
+            # Wait tiles
+            "cb_in0_wait_tiles": in0_wait_tiles,
+            "cb_in1_wait_tiles": in1_wait_tiles,
             # CB descriptors
-            "weights_cb_descriptor": weights_cb_descriptor,
-            "output_cb_descriptor": output_cb_descriptor,
+            "cb_in0_descriptor": cb_in0_descriptor,
+            "cb_in1_descriptor": cb_in1_descriptor,
+            "cb_out_descriptor": cb_out_descriptor,
+            # Per-core values
+            "sender_index_core_values": sender_index_core_values,
         }
 
     @staticmethod
@@ -757,7 +773,7 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Gate MM (SRAM Matmul)
         # ==================================================================
-        gate_mm_params = MoeRoutedExpertOp.setup_sram_matmul(
+        gate_mm_params = MoeOp.setup_sram_matmul(
             in0_cb=gate_mm_input_cb,
             in1_cb=gate_mm_weights_cb,
             out_cb=gate_mm_output_cb,
@@ -939,7 +955,7 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Eltwise Add: down_proj + fused_add
         # ==================================================================
-        add_params = MoeOp.setup_eltwise_add(
+        add_params = MoeRoutedExpertOp.setup_eltwise_add(
             in0_tensor=down_proj_output_tensor,
             in1_tensor=fused_add_tensor,
             out_tensor=final_output_tensor,
@@ -1424,6 +1440,260 @@ class MoeSharedExpertOp:
     used by MoeOp to compose the fused kernel.
     """
 
+    # ========================================================================
+    # Setup APIs
+    # ========================================================================
+
+    @staticmethod
+    def setup_kn_sliced_matmul(
+        weights_tensor,
+        output_tensor,
+        cb_weights_index,
+        cb_out_index,
+        num_tiles_k,
+        k_parallel,
+        n_parallel,
+    ):
+        """
+        Setup KN-sliced matmul: [1, K] x [K, N] distributed across K*N cores.
+
+        Each core holds a shard of shape [K/k_parallel, N/n_parallel] of the weight matrix.
+        Each core computes: activation[k_offset:k_offset+k_per_core] @ weights_shard → 1 output tile.
+
+        Args:
+            weights_tensor: Gate/Up weights tensor (HEIGHT_SHARDED on K*N compute cores)
+            output_tensor: Matmul output tensor (HEIGHT_SHARDED on K*N compute cores, 1 tile per core)
+            cb_weights_index: CB index for weights
+            cb_out_index: CB index for output
+            num_tiles_k: Total K dimension in tiles
+            k_parallel: K parallelism factor (number of K slices)
+            n_parallel: N parallelism factor (number of N slices)
+
+        Returns:
+            dict with:
+            - k_per_core: K tiles per core
+            - act_total_tiles: Total activation tiles (= num_tiles_k)
+            - weights_num_pages: Pages in weights CB per core (= k_per_core)
+            - cb_weights_descriptor: CB descriptor for weights (tensor-backed)
+            - cb_out_descriptor: CB descriptor for output (tensor-backed)
+        """
+        k_per_core = num_tiles_k // k_parallel
+        act_total_tiles = num_tiles_k
+        weights_num_pages = k_per_core
+
+        cb_weights_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_weights_index, weights_tensor)
+        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+
+        return {
+            "k_per_core": k_per_core,
+            "act_total_tiles": act_total_tiles,
+            "weights_num_pages": weights_num_pages,
+            "cb_weights_descriptor": cb_weights_descriptor,
+            "cb_out_descriptor": cb_out_descriptor,
+        }
+
+    @staticmethod
+    def setup_gated_reduce(
+        group1_tensor,
+        group2_tensor,
+        intermed_tensor,
+        output_tensor,
+        cb_group1_index,
+        cb_group2_index,
+        cb_intermed_index,
+        cb_out_index,
+        input_tile,
+        data_format,
+        k_parallel,
+        n_parallel,
+    ):
+        """
+        Setup gated reduce: SiLU(reduce(group1)) * reduce(group2).
+
+        Requires face-view optimization (asserted). Creates CB descriptors
+        with face-view tile aliasing.
+
+        Args:
+            group1_tensor: Gate gather destination tensor (tensor-backed on sender)
+            group2_tensor: Up gather destination tensor (tensor-backed on sender)
+            intermed_tensor: Intermediate tensor for reduce (tensor-backed on sender)
+            output_tensor: Gated reduce output / mcast source tensor (tensor-backed on sender)
+            cb_group1_index: CB index for gate gather destination
+            cb_group2_index: CB index for up gather destination
+            cb_intermed_index: CB index for intermediate
+            cb_out_index: CB index for gated reduce output
+            input_tile: Original tile format (e.g., Tile([1, 32]))
+            data_format: Data format (dtype)
+            k_parallel: K parallelism factor (= tiles_per_k)
+            n_parallel: N parallelism factor (= k_num_tiles)
+
+        Returns:
+            dict with:
+            - tiles_per_k, k_num_tiles: Parallelism dimensions
+            - kernel_tiles_per_k, kernel_k_num_tiles: Kernel-level tile counts (face-view)
+            - mcast_src_num_pages: Pages in mcast source CB (1 with face-view)
+            - face_tile_desc, face_tile_size: Face tile descriptor and size
+            - input_tile_size, reduce_tile_size: Tile sizes
+            - cb_group1_descriptor, cb_group2_descriptor: CB descriptors (face-view aliased)
+            - cb_intermed_descriptor, cb_out_descriptor: CB descriptors
+        """
+        tiles_per_k = k_parallel
+        k_num_tiles = n_parallel
+
+        tile_h, tile_w = input_tile.tile_shape
+        input_tile_size = input_tile.get_tile_size(data_format)
+        assert can_use_face_view(tile_h, tile_w, tiles_per_k, k_num_tiles), (
+            f"Face-view optimization is required for shared expert gated reduce "
+            f"(tile={tile_h}x{tile_w}, tiles_per_k={tiles_per_k}, k_num_tiles={k_num_tiles})"
+        )
+
+        face_tile = ttnn.Tile([FACE_HEIGHT, FACE_WIDTH])
+        face_tile_desc = ttnn.TileDescriptor(FACE_HEIGHT, FACE_WIDTH, False)
+        face_tile_size = face_tile.get_tile_size(data_format)
+        kernel_tiles_per_k = tiles_per_k
+        kernel_k_num_tiles = 1
+        mcast_src_num_pages = 1
+        reduce_tile_size = face_tile_size
+
+        # CB descriptors with face-view aliasing
+        cb_group1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_group1_index, group1_tensor)
+        cb_group1_descriptor.format_descriptors[0].tile = face_tile_desc
+        cb_group1_descriptor.format_descriptors[0].page_size = face_tile_size
+
+        cb_group2_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_group2_index, group2_tensor)
+        cb_group2_descriptor.format_descriptors[0].tile = face_tile_desc
+        cb_group2_descriptor.format_descriptors[0].page_size = face_tile_size
+
+        cb_intermed_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_intermed_index, intermed_tensor)
+        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+
+        return {
+            "tiles_per_k": tiles_per_k,
+            "k_num_tiles": k_num_tiles,
+            "kernel_tiles_per_k": kernel_tiles_per_k,
+            "kernel_k_num_tiles": kernel_k_num_tiles,
+            "mcast_src_num_pages": mcast_src_num_pages,
+            "face_tile_desc": face_tile_desc,
+            "face_tile_size": face_tile_size,
+            "input_tile_size": input_tile_size,
+            "reduce_tile_size": reduce_tile_size,
+            "cb_group1_descriptor": cb_group1_descriptor,
+            "cb_group2_descriptor": cb_group2_descriptor,
+            "cb_intermed_descriptor": cb_intermed_descriptor,
+            "cb_out_descriptor": cb_out_descriptor,
+        }
+
+    @staticmethod
+    def setup_residual_add(
+        output_tensor,
+        cb_out_index,
+        num_matmul_cores,
+        out_w_per_core,
+    ):
+        """
+        Setup residual add: matmul_out + residual → residual_add_out on matmul cores.
+
+        A simple element-wise add where both operands are already present on
+        each core (matmul output and mcasted residual).
+
+        Args:
+            output_tensor: Output tensor for residual add (WIDTH_SHARDED on matmul cores)
+            cb_out_index: CB index for output
+            num_matmul_cores: Number of matmul cores performing the add
+            out_w_per_core: Output width per core in tiles
+
+        Returns:
+            dict with:
+            - out_cb: Output CB index
+            - total_in1_tiles: Total residual tiles across all cores
+            - cb_out_descriptor: CB descriptor for output (tensor-backed)
+        """
+        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+
+        return {
+            "out_cb": cb_out_index,
+            "total_in1_tiles": num_matmul_cores * out_w_per_core,
+            "cb_out_descriptor": cb_out_descriptor,
+        }
+
+    @staticmethod
+    def setup_kn_per_core_values(
+        a_cores_list,
+        b_cores_list,
+        k_per_core,
+        n_parallel,
+    ):
+        """
+        Compute per-core values for KN-sliced matmul + gather.
+
+        For each compute core, determines:
+        - k_offset: Starting K-tile index for the matmul slice
+        - sender_idx: Index into the gather destination CB (face-view layout)
+
+        Args:
+            a_cores_list: Gate (group A) compute cores
+            b_cores_list: Up (group B) compute cores
+            k_per_core: K tiles per core (from setup_kn_sliced_matmul)
+            n_parallel: N parallelism factor
+
+        Returns:
+            dict with:
+            - k_offset_core_values: [(core, k_offset), ...] for A and B cores
+            - ag_sender_idx_core_values: [(core, sender_idx), ...] for A cores
+            - bg_sender_idx_core_values: [(core, sender_idx), ...] for B cores
+        """
+        # K-offset for matmul: each row of k_parallel cores shares the same k_offset
+        k_offset_core_values = [(core, (i // n_parallel) * k_per_core) for i, core in enumerate(a_cores_list)] + [
+            (core, (i // n_parallel) * k_per_core) for i, core in enumerate(b_cores_list)
+        ]
+
+        # Gather sender indices (face-view layout: row-major in [k_parallel, n_parallel])
+        def _sender_indices(cores_list):
+            return [
+                (core, (lid // n_parallel) * n_parallel + (lid % n_parallel)) for lid, core in enumerate(cores_list)
+            ]
+
+        return {
+            "k_offset_core_values": k_offset_core_values,
+            "ag_sender_idx_core_values": _sender_indices(a_cores_list),
+            "bg_sender_idx_core_values": _sender_indices(b_cores_list),
+        }
+
+    @staticmethod
+    def setup_output_mcast(
+        gather_dst_num_pages,
+        tile_size,
+        dst_num_pages,
+    ):
+        """
+        Setup output mcast: sender → all cores, DRAM cores receive shared expert output.
+
+        The sender multicasts the full gathered output. DRAM cores receive it
+        into their eltwise add input CB (add_cb_in1) which has a different
+        page size than the source CB.
+
+        src_num_pages and dst_num_pages differ because the source CB uses
+        1×32 tile-sized pages while the destination CB (add_cb_in1) uses
+        slice-sized pages (width_per_core elements each). The total bytes
+        are the same: gather_dst_num_pages * tile_size == dst_num_pages * slice_size.
+
+        Args:
+            gather_dst_num_pages: Total pages in the gather destination (= num_matmul_cores * out_w)
+            tile_size: Size of one tile in bytes (1×32 tile)
+            dst_num_pages: Pages in the destination CB (= total_width / width_per_core)
+
+        Returns:
+            dict with:
+            - data_size_bytes: Total mcast data size
+            - src_num_pages: Pages to read from source CB (tile-sized pages)
+            - dst_num_pages: Pages each receiver pushes (slice-sized pages)
+        """
+        return {
+            "data_size_bytes": gather_dst_num_pages * tile_size,
+            "src_num_pages": gather_dst_num_pages,
+            "dst_num_pages": dst_num_pages,
+        }
+
     @staticmethod
     def _setup_dimensions(
         device,
@@ -1433,6 +1703,13 @@ class MoeSharedExpertOp:
         shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
         shared_output_tensor,
+        shared_ag_gather_dst_tensor,
+        shared_bg_gather_dst_tensor,
+        shared_gu_out_tensor,
+        shared_intermed_tensor,
+        shared_down_mcast_src_tensor,
+        shared_down_matmul_out_tensor,
+        shared_residual_add_out_tensor,
         num_tiles_k,
         tile_1x32_size,
         data_format,
@@ -1452,6 +1729,16 @@ class MoeSharedExpertOp:
             shared_gate_up_weights_tensor: Gate/Up weights tensor for shared expert
             shared_bias_tensor: Bias/residual tensor [1, N] on sender core
             shared_residual_mcast_dst_tensor: Destination tensor for residual mcast (on mcast grid)
+            shared_down_mcast_dst_tensor: Destination tensor for down mcast (on mcast grid)
+            shared_down_weights_tensor: Down projection weights tensor
+            shared_output_tensor: Output tensor for shared expert
+            shared_ag_gather_dst_tensor: Tensor-backed CB for gate gather destination (sender core)
+            shared_bg_gather_dst_tensor: Tensor-backed CB for up gather destination (sender core)
+            shared_gu_out_tensor: Tensor-backed CB for gate/up matmul output (128 compute cores)
+            shared_intermed_tensor: Tensor-backed CB for gated reduce intermediate (sender core)
+            shared_down_mcast_src_tensor: Tensor-backed CB for gated reduce output / down mcast source (sender core)
+            shared_down_matmul_out_tensor: Tensor-backed CB for down proj matmul output (112 matmul cores)
+            shared_residual_add_out_tensor: Tensor-backed CB for residual add output (112 matmul cores)
             num_tiles_k: Number of K tiles (from routed expert context)
             tile_1x32_size: Size of a 1x32 tile in bytes
             data_format: Data format (dtype)
@@ -1481,8 +1768,8 @@ class MoeSharedExpertOp:
         shared_residual_mcast_dst_cb = 33  # residual mcast destination on 112 matmul cores
         shared_down_mcast_dst_cb = 34  # down mcast destination (gated reduce output → all 130 cores)
         shared_down_matmul_in1_cb = 35  # down proj weights (112 matmul cores, tensor-backed)
-        shared_down_matmul_out_cb = 36  # down proj matmul output (112 matmul cores, manual)
-        shared_residual_add_out_cb = 37  # residual add output (112 matmul cores, manual)
+        shared_down_matmul_out_cb = 36  # down proj matmul output (112 matmul cores, tensor-backed)
+        shared_residual_add_out_cb = 37  # residual add output (112 matmul cores, tensor-backed)
         shared_output_gather_dst_cb = 38  # output gather destination (sender core, tensor-backed)
 
         # ==================================================================
@@ -1490,36 +1777,7 @@ class MoeSharedExpertOp:
         # ==================================================================
         num_compute_cores = 64  # per branch (gate/up)
         assert k_parallel * n_parallel == num_compute_cores
-        gu_k_per_core = num_tiles_k // k_parallel
-        gu_act_total_tiles = num_tiles_k
-        gu_weights_num_pages = gu_k_per_core  # tiles per core
-
-        tiles_per_k = k_parallel
-        k_num_tiles = n_parallel
         total_gather_tiles = num_compute_cores  # 64
-
-        # ==================================================================
-        # Face-view parameters (for gated reduce)
-        # ==================================================================
-        tile_h, tile_w = input_tile.tile_shape
-        use_face_view = can_use_face_view(tile_h, tile_w, tiles_per_k, k_num_tiles)
-
-        if use_face_view:
-            face_tile = ttnn.Tile([FACE_HEIGHT, FACE_WIDTH])
-            face_tile_desc = ttnn.TileDescriptor(FACE_HEIGHT, FACE_WIDTH, False)
-            face_tile_size = face_tile.get_tile_size(data_format)
-            kernel_tiles_per_k = tiles_per_k
-            kernel_k_num_tiles = 1
-            mcast_src_num_pages = 1
-            reduce_tile_size = face_tile_size
-        else:
-            face_tile_desc = None
-            face_tile_size = None
-            kernel_tiles_per_k = tiles_per_k
-            kernel_k_num_tiles = k_num_tiles
-            mcast_src_num_pages = k_num_tiles
-            reduce_tile_size = input_tile_size
-
         gu_gather_data_size_bytes = input_tile_size  # each compute core sends 1 tile
 
         # ==================================================================
@@ -1550,91 +1808,37 @@ class MoeSharedExpertOp:
         gather_dest_noc_core = device.worker_core_from_logical_core(sender_core)
 
         # ==================================================================
-        # Dummy tensors for gather destination CBs (on sender core)
+        # Gather destination addresses (from tensor-backed CBs)
         # ==================================================================
-        ag_dummy_shape = (total_gather_tiles, 32)
-        ag_dummy_shard_spec = ttnn.ShardSpec(sender_core_grid, ag_dummy_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        ag_dummy_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ag_dummy_shard_spec
-        )
-        ag_dummy_tensor = ttnn.from_torch(
-            torch.zeros(total_gather_tiles, 32, dtype=torch.bfloat16),
-            dtype=data_format,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ag_dummy_mem,
-            tile=input_tile,
-        )
-        bg_dummy_tensor = ttnn.from_torch(
-            torch.zeros(total_gather_tiles, 32, dtype=torch.bfloat16),
-            dtype=data_format,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ag_dummy_mem,
-            tile=input_tile,
-        )
-        ag_receiver_data_addr = ag_dummy_tensor.buffer_address()
-        bg_receiver_data_addr = bg_dummy_tensor.buffer_address()
+        ag_receiver_data_addr = shared_ag_gather_dst_tensor.buffer_address()
+        bg_receiver_data_addr = shared_bg_gather_dst_tensor.buffer_address()
 
         # ==================================================================
-        # CB descriptors
+        # Setup APIs — KN-sliced matmul and gated reduce
         # ==================================================================
-        # CB 26: Gate/Up weights (tensor-backed on 128 compute cores)
-        gu_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            shared_gu_weights_cb, shared_gate_up_weights_tensor
+        gu_matmul_params = MoeSharedExpertOp.setup_kn_sliced_matmul(
+            weights_tensor=shared_gate_up_weights_tensor,
+            output_tensor=shared_gu_out_tensor,
+            cb_weights_index=shared_gu_weights_cb,
+            cb_out_index=shared_gu_out_cb,
+            num_tiles_k=num_tiles_k,
+            k_parallel=k_parallel,
+            n_parallel=n_parallel,
         )
 
-        # CB 27: Gate/Up matmul output (1 tile on 128 compute cores)
-        input_tile_desc = ttnn.TileDescriptor(input_tile)
-        gu_out_format = ttnn.CBFormatDescriptor(
-            buffer_index=shared_gu_out_cb,
+        gated_reduce_params = MoeSharedExpertOp.setup_gated_reduce(
+            group1_tensor=shared_ag_gather_dst_tensor,
+            group2_tensor=shared_bg_gather_dst_tensor,
+            intermed_tensor=shared_intermed_tensor,
+            output_tensor=shared_down_mcast_src_tensor,
+            cb_group1_index=shared_group1_cb,
+            cb_group2_index=shared_group2_cb,
+            cb_intermed_index=shared_intermed_cb,
+            cb_out_index=shared_mcast_src_cb,
+            input_tile=input_tile,
             data_format=data_format,
-            page_size=input_tile_size,
-            tile=input_tile_desc,
-        )
-        gu_out_cb_descriptor = ttnn.CBDescriptor(
-            total_size=input_tile_size,
-            core_ranges=compute_core_grid,
-            format_descriptors=[gu_out_format],
-        )
-
-        # CB 28: Gate gather dst (tensor-backed on sender, face-view aliased)
-        group1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(shared_group1_cb, ag_dummy_tensor)
-        if use_face_view:
-            group1_cb_descriptor.format_descriptors[0].tile = face_tile_desc
-            group1_cb_descriptor.format_descriptors[0].page_size = face_tile_size
-
-        # CB 29: Up gather dst (tensor-backed on sender, face-view aliased)
-        group2_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(shared_group2_cb, bg_dummy_tensor)
-        if use_face_view:
-            group2_cb_descriptor.format_descriptors[0].tile = face_tile_desc
-            group2_cb_descriptor.format_descriptors[0].page_size = face_tile_size
-
-        # CB 30: Intermediate (2 tiles on sender core)
-        tile_desc_for_reduce = face_tile_desc if use_face_view else input_tile_desc
-        intermed_format = ttnn.CBFormatDescriptor(
-            buffer_index=shared_intermed_cb,
-            data_format=data_format,
-            page_size=reduce_tile_size,
-            tile=tile_desc_for_reduce,
-        )
-        intermed_cb_descriptor = ttnn.CBDescriptor(
-            total_size=2 * reduce_tile_size,
-            core_ranges=sender_core_grid,
-            format_descriptors=[intermed_format],
-        )
-
-        # CB 31: Mcast source / gated reduce output (on sender core)
-        mcast_src_format = ttnn.CBFormatDescriptor(
-            buffer_index=shared_mcast_src_cb,
-            data_format=data_format,
-            page_size=reduce_tile_size,
-            tile=tile_desc_for_reduce,
-        )
-        mcast_src_cb_descriptor = ttnn.CBDescriptor(
-            total_size=mcast_src_num_pages * reduce_tile_size,
-            core_ranges=sender_core_grid,
-            format_descriptors=[mcast_src_format],
+            k_parallel=k_parallel,
+            n_parallel=n_parallel,
         )
 
         # ==================================================================
@@ -1663,16 +1867,25 @@ class MoeSharedExpertOp:
         residual_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             shared_residual_mcast_src_cb, shared_bias_tensor
         )
-        residual_mcast_dst_cb_descriptor = residual_mcast_params["dst_cb_descriptor"]
 
         # ==================================================================
         # Down Mcast (gated reduce output → all 130 cores for down proj)
         # ==================================================================
+        mcast_src_num_pages = gated_reduce_params["mcast_src_num_pages"]
+        reduce_tile_size = gated_reduce_params["reduce_tile_size"]
         down_mcast_data_size_bytes = mcast_src_num_pages * reduce_tile_size
-        down_mcast_grid = shared_down_mcast_dst_tensor.memory_config().shard_spec.grid
-        down_mcast_src_num_pages = mcast_src_num_pages
-        down_mcast_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            shared_down_mcast_dst_cb, shared_down_mcast_dst_tensor
+
+        down_mcast_params = MoeOp.setup_mcast(
+            device=device,
+            sender_core=sender_core,
+            mcast_grid=shared_down_mcast_dst_tensor.memory_config().shard_spec.grid,
+            src_cb=shared_mcast_src_cb,
+            src_tensor=shared_down_mcast_src_tensor,
+            dst_cb=shared_down_mcast_dst_cb,
+            dst_tensor=shared_down_mcast_dst_tensor,
+            sender_semaphore_id=shared_mcast_sender_semaphore_id,
+            receiver_semaphore_id=shared_mcast_receiver_semaphore_id,
+            data_size_bytes=down_mcast_data_size_bytes,
         )
 
         # ==================================================================
@@ -1680,188 +1893,123 @@ class MoeSharedExpertOp:
         # ==================================================================
         from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 
-        TILE_1x32 = ttnn.Tile([1, 32])
-        down_weights_shard_spec = shared_down_weights_tensor.memory_config().shard_spec
-        down_n_per_core = down_weights_shard_spec.shape[1]
-        down_matmul_out_w_per_core = down_n_per_core // TILE_1x32.tile_shape[1]
-        down_matmul_k_num_tiles = n_parallel  # K_down_tiles = n_parallel
-        down_weights_num_pages = down_matmul_k_num_tiles * down_matmul_out_w_per_core
-
-        down_matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            shared_down_matmul_in1_cb, shared_down_weights_tensor
-        )
-
-        tile_1x32_descriptor = ttnn.TileDescriptor(TILE_1x32)
-        down_matmul_out_format = ttnn.CBFormatDescriptor(
-            buffer_index=shared_down_matmul_out_cb,
-            data_format=data_format,
-            page_size=tile_1x32_size,
-            tile=tile_1x32_descriptor,
-        )
-        down_matmul_out_cb_descriptor = ttnn.CBDescriptor(
-            total_size=down_matmul_out_w_per_core * tile_1x32_size,
-            core_ranges=DownProj.build_matmul_core_grid(),
-            format_descriptors=[down_matmul_out_format],
+        down_matmul_params = MoeOp.setup_sram_matmul(
+            in0_cb=shared_down_mcast_dst_cb,
+            in1_cb=shared_down_matmul_in1_cb,
+            out_cb=shared_down_matmul_out_cb,
+            weights_tensor=shared_down_weights_tensor,
+            output_tensor=shared_down_matmul_out_tensor,
+            k_num_tiles=n_parallel,  # K_down_tiles = n_parallel
         )
 
         # ==================================================================
         # Residual Add (matmul_out + residual → residual_add_out on 112 cores)
         # ==================================================================
-        residual_add_total_in1_tiles = DownProj.NUM_MATMUL_CORES * down_matmul_out_w_per_core
-        residual_add_out_format = ttnn.CBFormatDescriptor(
-            buffer_index=shared_residual_add_out_cb,
-            data_format=data_format,
-            page_size=tile_1x32_size,
-            tile=tile_1x32_descriptor,
-        )
-        residual_add_out_cb_descriptor = ttnn.CBDescriptor(
-            total_size=down_matmul_out_w_per_core * tile_1x32_size,
-            core_ranges=DownProj.build_matmul_core_grid(),
-            format_descriptors=[residual_add_out_format],
+        residual_add_params = MoeSharedExpertOp.setup_residual_add(
+            output_tensor=shared_residual_add_out_tensor,
+            cb_out_index=shared_residual_add_out_cb,
+            num_matmul_cores=DownProj.NUM_MATMUL_CORES,
+            out_w_per_core=down_matmul_params["out_w"],
         )
 
         # ==================================================================
         # Output Gather (112 matmul cores → sender)
         # ==================================================================
-        output_gather_data_size_bytes = down_matmul_out_w_per_core * tile_1x32_size
-        output_gather_src_num_pages = down_matmul_out_w_per_core
-        output_gather_dst_num_pages = DownProj.NUM_MATMUL_CORES * down_matmul_out_w_per_core
-        output_gather_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            shared_output_gather_dst_cb, shared_output_tensor
+        output_gather_params = MoeOp.setup_gather(
+            device=device,
+            receiver_core=sender_core,
+            sender_core_ranges=DownProj.build_matmul_core_grid(),
+            num_senders=DownProj.NUM_MATMUL_CORES,
+            data_size_bytes_per_sender=down_matmul_params["out_w"] * tile_1x32_size,
+            src_cb=shared_residual_add_out_cb,
+            src_num_pages=down_matmul_params["out_w"],
+            dst_cb=shared_output_gather_dst_cb,
+            dst_tensor=shared_output_tensor,
+            noc0_receiver_semaphore_id=output_gather_noc0_receiver_semaphore_id,
+            noc1_receiver_semaphore_id=output_gather_noc1_receiver_semaphore_id,
         )
 
         # ==================================================================
         # Output Mcast (sender → 130 cores, 8 DRAM cores receive into add_cb_in1)
         # ==================================================================
-        # The mcast sends the full shared expert output [1, N] from the output gather dst CB
-        # to the add_cb_in1 CB on all 130 cores. Only DRAM cores (is_gate_proj_core) receive
-        # into their CB for the subsequent Eltwise Add.
-        output_mcast_data_size_bytes = output_gather_dst_num_pages * tile_1x32_size
-        output_mcast_src_num_pages = output_gather_dst_num_pages  # pages in output gather dst CB
-        # dst_num_pages = N / width_per_dram_core = num_dram_cores
-        # N = NUM_MATMUL_CORES * N_per_core, width_per_dram_core = N / num_dram_cores
-        # The eltwise add CB page_size = width_per_dram_core * element_size,
-        # so in1_wait_tiles = (N * elem_size) / (width_per_dram_core * elem_size) = num_dram_cores
-        num_dram_cores = len(DownProj.DRAM_WORKER_POSITIONS)
-        output_mcast_dst_num_pages = num_dram_cores
+        output_mcast_params = MoeSharedExpertOp.setup_output_mcast(
+            gather_dst_num_pages=output_gather_params["dst_num_pages"],
+            tile_size=tile_1x32_size,
+            dst_num_pages=len(DownProj.DRAM_WORKER_POSITIONS),
+        )
 
         # ==================================================================
         # Per-core values
         # ==================================================================
-        # K-offset for matmul
-        gu_k_offset_core_values = [(core, (i // n_parallel) * gu_k_per_core) for i, core in enumerate(a_cores_list)] + [
-            (core, (i // n_parallel) * gu_k_per_core) for i, core in enumerate(b_cores_list)
-        ]
-
-        # Gather sender indices (determines where each core writes in the gather dst CB)
-        def compute_gu_sender_indices(cores_list):
-            indices = []
-            for linear_id, core in enumerate(cores_list):
-                k_idx = linear_id // n_parallel
-                n_idx = linear_id % n_parallel
-                if use_face_view:
-                    sender_idx = k_idx * n_parallel + n_idx
-                else:
-                    sender_idx = n_idx * tiles_per_k + k_idx
-                indices.append((core, sender_idx))
-            return indices
-
-        ag_sender_idx_core_values = compute_gu_sender_indices(a_cores_list)
-        bg_sender_idx_core_values = compute_gu_sender_indices(b_cores_list)
-
-        return _MoeSharedExpertContext(
-            gu_weights_cb=shared_gu_weights_cb,
-            gu_out_cb=shared_gu_out_cb,
-            gu_k_per_core=gu_k_per_core,
-            gu_act_total_tiles=gu_act_total_tiles,
-            gu_weights_num_pages=gu_weights_num_pages,
-            compute_core_grid=compute_core_grid,
-            gu_k_offset_core_values=gu_k_offset_core_values,
-            gu_weights_cb_descriptor=gu_weights_cb_descriptor,
-            gu_out_cb_descriptor=gu_out_cb_descriptor,
-            # Gather + Reduce
+        per_core_values = MoeSharedExpertOp.setup_kn_per_core_values(
             a_cores_list=a_cores_list,
             b_cores_list=b_cores_list,
+            k_per_core=gu_matmul_params["k_per_core"],
+            n_parallel=n_parallel,
+        )
+        gu_k_offset_core_values = per_core_values["k_offset_core_values"]
+        ag_sender_idx_core_values = per_core_values["ag_sender_idx_core_values"]
+        bg_sender_idx_core_values = per_core_values["bg_sender_idx_core_values"]
+
+        return _MoeSharedExpertContext(
+            # Core grids
+            compute_core_grid=compute_core_grid,
             a_compute_grid=a_compute_grid,
             b_compute_grid=b_compute_grid,
+            a_cores_list=a_cores_list,
+            b_cores_list=b_cores_list,
+            # CB indices
+            gu_weights_cb=shared_gu_weights_cb,
+            gu_out_cb=shared_gu_out_cb,
             group1_cb=shared_group1_cb,
             group2_cb=shared_group2_cb,
             intermed_cb=shared_intermed_cb,
             mcast_src_cb=shared_mcast_src_cb,
+            residual_mcast_src_cb=shared_residual_mcast_src_cb,
+            residual_mcast_dst_cb=shared_residual_mcast_dst_cb,
+            down_mcast_dst_cb=shared_down_mcast_dst_cb,
+            # Parallelism
             n_parallel=n_parallel,
             k_parallel=k_parallel,
-            tiles_per_k=tiles_per_k,
-            k_num_tiles=k_num_tiles,
             num_compute_cores=num_compute_cores,
-            use_face_view=use_face_view,
-            face_tile_desc=face_tile_desc,
-            face_tile_size=face_tile_size,
-            kernel_tiles_per_k=kernel_tiles_per_k,
-            kernel_k_num_tiles=kernel_k_num_tiles,
-            mcast_src_num_pages=mcast_src_num_pages,
-            reduce_tile_size=reduce_tile_size,
-            input_tile_size=input_tile_size,
+            # Gather params
+            gather_dest_noc_core=gather_dest_noc_core,
             gu_gather_data_size_bytes=gu_gather_data_size_bytes,
             total_gather_tiles=total_gather_tiles,
-            gather_dest_noc_core=gather_dest_noc_core,
-            mcast_gather_core_grid=sender_core_grid,
+            # Semaphore IDs
             ag_receiver_semaphore_id=ag_receiver_semaphore_id,
             bg_receiver_semaphore_id=bg_receiver_semaphore_id,
             ag_noc1_receiver_semaphore_id=ag_noc1_receiver_semaphore_id,
             bg_noc1_receiver_semaphore_id=bg_noc1_receiver_semaphore_id,
-            ag_dummy_tensor=ag_dummy_tensor,
-            bg_dummy_tensor=bg_dummy_tensor,
-            ag_receiver_data_addr=ag_receiver_data_addr,
-            bg_receiver_data_addr=bg_receiver_data_addr,
-            group1_cb_descriptor=group1_cb_descriptor,
-            group2_cb_descriptor=group2_cb_descriptor,
-            intermed_cb_descriptor=intermed_cb_descriptor,
-            mcast_src_cb_descriptor=mcast_src_cb_descriptor,
-            ag_sender_idx_core_values=ag_sender_idx_core_values,
-            bg_sender_idx_core_values=bg_sender_idx_core_values,
-            # Shared mcast semaphores (reused for residual/down/output — serialized)
             shared_mcast_sender_semaphore_id=shared_mcast_sender_semaphore_id,
             shared_mcast_receiver_semaphore_id=shared_mcast_receiver_semaphore_id,
-            # Residual Mcast
-            residual_mcast_src_cb=shared_residual_mcast_src_cb,
-            residual_mcast_dst_cb=shared_residual_mcast_dst_cb,
-            residual_mcast_params=residual_mcast_params,
-            residual_mcast_src_cb_descriptor=residual_mcast_src_cb_descriptor,
-            residual_mcast_dst_cb_descriptor=residual_mcast_dst_cb_descriptor,
-            residual_mcast_dst_dummy_tensor=shared_residual_mcast_dst_tensor,
-            # Down Mcast
-            down_mcast_dst_cb=shared_down_mcast_dst_cb,
-            down_mcast_data_size_bytes=down_mcast_data_size_bytes,
-            down_mcast_src_num_pages=down_mcast_src_num_pages,
-            down_mcast_dst_cb_descriptor=down_mcast_dst_cb_descriptor,
-            down_mcast_dst_dummy_tensor=shared_down_mcast_dst_tensor,
-            # Down Proj Matmul
-            down_matmul_in1_cb=shared_down_matmul_in1_cb,
-            down_matmul_out_cb=shared_down_matmul_out_cb,
-            down_matmul_k_num_tiles=down_matmul_k_num_tiles,
-            down_matmul_out_w_per_core=down_matmul_out_w_per_core,
-            down_matmul_in1_cb_descriptor=down_matmul_in1_cb_descriptor,
-            down_matmul_out_cb_descriptor=down_matmul_out_cb_descriptor,
-            down_weights_num_pages=down_weights_num_pages,
-            # Residual Add
-            residual_add_out_cb=shared_residual_add_out_cb,
-            residual_add_total_in1_tiles=residual_add_total_in1_tiles,
-            residual_add_out_cb_descriptor=residual_add_out_cb_descriptor,
-            # Output Gather
-            output_gather_dst_cb=shared_output_gather_dst_cb,
-            output_gather_data_size_bytes=output_gather_data_size_bytes,
-            output_gather_src_num_pages=output_gather_src_num_pages,
-            output_gather_dst_num_pages=output_gather_dst_num_pages,
             output_gather_noc0_receiver_semaphore_id=output_gather_noc0_receiver_semaphore_id,
             output_gather_noc1_receiver_semaphore_id=output_gather_noc1_receiver_semaphore_id,
-            output_gather_dst_cb_descriptor=output_gather_dst_cb_descriptor,
-            output_gather_dst_dummy_tensor=shared_output_tensor,
-            # Output Mcast
             output_mcast_sender_semaphore_id=output_mcast_sender_semaphore_id,
             output_mcast_receiver_semaphore_id=output_mcast_receiver_semaphore_id,
-            output_mcast_data_size_bytes=output_mcast_data_size_bytes,
-            output_mcast_src_num_pages=output_mcast_src_num_pages,
-            output_mcast_dst_num_pages=output_mcast_dst_num_pages,
+            # Keep-alive tensors
+            ag_dummy_tensor=shared_ag_gather_dst_tensor,
+            bg_dummy_tensor=shared_bg_gather_dst_tensor,
+            ag_receiver_data_addr=ag_receiver_data_addr,
+            bg_receiver_data_addr=bg_receiver_data_addr,
+            residual_mcast_dst_dummy_tensor=shared_residual_mcast_dst_tensor,
+            down_mcast_dst_dummy_tensor=shared_down_mcast_dst_tensor,
+            output_gather_dst_dummy_tensor=shared_output_tensor,
+            # Setup result dicts
+            gu_matmul_params=gu_matmul_params,
+            gated_reduce_params=gated_reduce_params,
+            residual_mcast_params=residual_mcast_params,
+            down_mcast_params=down_mcast_params,
+            down_matmul_params=down_matmul_params,
+            residual_add_params=residual_add_params,
+            output_gather_params=output_gather_params,
+            output_mcast_params=output_mcast_params,
+            # Residual mcast source CB descriptor
+            residual_mcast_src_cb_descriptor=residual_mcast_src_cb_descriptor,
+            # Per-core values
+            gu_k_offset_core_values=gu_k_offset_core_values,
+            ag_sender_idx_core_values=ag_sender_idx_core_values,
+            bg_sender_idx_core_values=bg_sender_idx_core_values,
         )
 
     @staticmethod
@@ -1877,123 +2025,121 @@ class MoeSharedExpertOp:
         Returns:
             (ncrisc_args, brisc_args, trisc_args) - lists of named compile-time arg tuples
         """
-        from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 
-        ctx = shared_ctx
         ncrisc_args = [
             # Gate/Up weights setup
-            ("shared_gu_weights_cb", ctx.gu_weights_cb),
-            ("shared_gu_weights_num_pages", ctx.gu_weights_num_pages),
+            ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
+            ("shared_gu_weights_num_pages", shared_ctx.gu_matmul_params["weights_num_pages"]),
             # Gate gather (A) sender
-            ("shared_ag_dest_noc_x", ctx.gather_dest_noc_core.x),
-            ("shared_ag_dest_noc_y", ctx.gather_dest_noc_core.y),
-            ("shared_ag_data_size_bytes", ctx.gu_gather_data_size_bytes),
-            ("shared_ag_receiver_semaphore_id", ctx.ag_receiver_semaphore_id),
-            ("shared_ag_src_cb", ctx.gu_out_cb),
+            ("shared_ag_dest_noc_x", shared_ctx.gather_dest_noc_core.x),
+            ("shared_ag_dest_noc_y", shared_ctx.gather_dest_noc_core.y),
+            ("shared_ag_data_size_bytes", shared_ctx.gu_gather_data_size_bytes),
+            ("shared_ag_receiver_semaphore_id", shared_ctx.ag_receiver_semaphore_id),
+            ("shared_ag_src_cb", shared_ctx.gu_out_cb),
             ("shared_ag_src_num_pages", 1),
-            ("shared_ag_receiver_data_addr", ctx.ag_receiver_data_addr),
+            ("shared_ag_receiver_data_addr", shared_ctx.ag_receiver_data_addr),
             # Up gather (B) sender
-            ("shared_bg_dest_noc_x", ctx.gather_dest_noc_core.x),
-            ("shared_bg_dest_noc_y", ctx.gather_dest_noc_core.y),
-            ("shared_bg_data_size_bytes", ctx.gu_gather_data_size_bytes),
-            ("shared_bg_receiver_semaphore_id", ctx.bg_receiver_semaphore_id),
-            ("shared_bg_src_cb", ctx.gu_out_cb),
+            ("shared_bg_dest_noc_x", shared_ctx.gather_dest_noc_core.x),
+            ("shared_bg_dest_noc_y", shared_ctx.gather_dest_noc_core.y),
+            ("shared_bg_data_size_bytes", shared_ctx.gu_gather_data_size_bytes),
+            ("shared_bg_receiver_semaphore_id", shared_ctx.bg_receiver_semaphore_id),
+            ("shared_bg_src_cb", shared_ctx.gu_out_cb),
             ("shared_bg_src_num_pages", 1),
-            ("shared_bg_receiver_data_addr", ctx.bg_receiver_data_addr),
+            ("shared_bg_receiver_data_addr", shared_ctx.bg_receiver_data_addr),
             # Residual mcast receiver
-            ("shared_residual_mcast_data_receiver_semaphore", ctx.shared_mcast_receiver_semaphore_id),
-            ("shared_residual_mcast_dst_cb", ctx.residual_mcast_dst_cb),
-            ("shared_residual_mcast_dst_num_pages", ctx.residual_mcast_params["dst_num_pages"]),
+            ("shared_residual_mcast_data_receiver_semaphore", shared_ctx.shared_mcast_receiver_semaphore_id),
+            ("shared_residual_mcast_dst_cb", shared_ctx.residual_mcast_dst_cb),
+            ("shared_residual_mcast_dst_num_pages", shared_ctx.residual_mcast_params["dst_num_pages"]),
             # Residual mcast src (needed for setup_sharded_buffer on sender)
-            ("shared_residual_mcast_src_cb", ctx.residual_mcast_src_cb),
-            ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
+            ("shared_residual_mcast_src_cb", shared_ctx.residual_mcast_src_cb),
+            ("shared_residual_mcast_src_num_pages", shared_ctx.residual_mcast_params["src_num_pages"]),
             # Down mcast receiver
-            ("shared_down_mcast_data_receiver_semaphore", ctx.shared_mcast_receiver_semaphore_id),
-            ("shared_down_mcast_dst_cb", ctx.down_mcast_dst_cb),
-            ("shared_down_mcast_dst_num_pages", ctx.down_matmul_k_num_tiles),
+            ("shared_down_mcast_data_receiver_semaphore", shared_ctx.shared_mcast_receiver_semaphore_id),
+            ("shared_down_mcast_dst_cb", shared_ctx.down_mcast_dst_cb),
+            ("shared_down_mcast_dst_num_pages", shared_ctx.down_matmul_params["k_num_tiles"]),
             # Down proj weights (setup_sharded_buffer on 112 matmul cores)
-            ("shared_down_matmul_in1", ctx.down_matmul_in1_cb),
-            ("shared_down_matmul_k_num_tiles", ctx.down_matmul_k_num_tiles),
-            ("shared_down_matmul_out_w_per_core", ctx.down_matmul_out_w_per_core),
+            ("shared_down_matmul_in1", shared_ctx.down_matmul_params["in1_cb"]),
+            ("shared_down_matmul_k_num_tiles", shared_ctx.down_matmul_params["k_num_tiles"]),
+            ("shared_down_matmul_out_w_per_core", shared_ctx.down_matmul_params["out_w"]),
             # Output gather sender (112 matmul cores → sender)
-            ("shared_og_dest_noc_x", ctx.gather_dest_noc_core.x),
-            ("shared_og_dest_noc_y", ctx.gather_dest_noc_core.y),
-            ("shared_og_data_size_bytes", ctx.output_gather_data_size_bytes),
-            ("shared_og_receiver_semaphore_id", ctx.output_gather_noc0_receiver_semaphore_id),
-            ("shared_og_src_cb", ctx.residual_add_out_cb),
-            ("shared_og_src_num_pages", ctx.output_gather_src_num_pages),
-            ("shared_og_receiver_data_addr", ctx.output_gather_dst_dummy_tensor.buffer_address()),
+            ("shared_og_dest_noc_x", shared_ctx.output_gather_params["dest_noc_x"]),
+            ("shared_og_dest_noc_y", shared_ctx.output_gather_params["dest_noc_y"]),
+            ("shared_og_data_size_bytes", shared_ctx.output_gather_params["data_size_bytes"]),
+            ("shared_og_receiver_semaphore_id", shared_ctx.output_gather_params["receiver_semaphore_id"]),
+            ("shared_og_src_cb", shared_ctx.output_gather_params["src_cb"]),
+            ("shared_og_src_num_pages", shared_ctx.output_gather_params["src_num_pages"]),
+            ("shared_og_receiver_data_addr", shared_ctx.output_gather_params["receiver_data_addr"]),
             # Output mcast receiver (DRAM cores receive into add_cb_in1) — separate semaphore
-            ("shared_output_mcast_data_receiver_semaphore", ctx.output_mcast_receiver_semaphore_id),
-            ("shared_output_mcast_dst_num_pages", ctx.output_mcast_dst_num_pages),
+            ("shared_output_mcast_data_receiver_semaphore", shared_ctx.output_mcast_receiver_semaphore_id),
+            ("shared_output_mcast_dst_num_pages", shared_ctx.output_mcast_params["dst_num_pages"]),
         ]
         brisc_args = [
             # Gate gather (A) receiver
-            ("shared_ag_noc0_num_senders", ctx.num_compute_cores),
-            ("shared_ag_noc0_receiver_semaphore_id", ctx.ag_receiver_semaphore_id),
-            ("shared_ag_noc1_receiver_semaphore_id", ctx.ag_noc1_receiver_semaphore_id),
-            ("shared_ag_dst_cb", ctx.group1_cb),
-            ("shared_ag_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
+            ("shared_ag_noc0_num_senders", shared_ctx.num_compute_cores),
+            ("shared_ag_noc0_receiver_semaphore_id", shared_ctx.ag_receiver_semaphore_id),
+            ("shared_ag_noc1_receiver_semaphore_id", shared_ctx.ag_noc1_receiver_semaphore_id),
+            ("shared_ag_dst_cb", shared_ctx.group1_cb),
+            ("shared_ag_dst_num_pages", shared_ctx.gated_reduce_params["kernel_tiles_per_k"]),
             # Up gather (B) receiver
-            ("shared_bg_noc0_num_senders", ctx.num_compute_cores),
-            ("shared_bg_noc0_receiver_semaphore_id", ctx.bg_receiver_semaphore_id),
-            ("shared_bg_noc1_receiver_semaphore_id", ctx.bg_noc1_receiver_semaphore_id),
-            ("shared_bg_dst_cb", ctx.group2_cb),
-            ("shared_bg_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
+            ("shared_bg_noc0_num_senders", shared_ctx.num_compute_cores),
+            ("shared_bg_noc0_receiver_semaphore_id", shared_ctx.bg_receiver_semaphore_id),
+            ("shared_bg_noc1_receiver_semaphore_id", shared_ctx.bg_noc1_receiver_semaphore_id),
+            ("shared_bg_dst_cb", shared_ctx.group2_cb),
+            ("shared_bg_dst_num_pages", shared_ctx.gated_reduce_params["kernel_tiles_per_k"]),
             # Residual mcast sender (CTArgs reused from routed mcast; only need semaphores, CBs, sizes)
-            ("shared_residual_mcast_data_sender_semaphore", ctx.shared_mcast_sender_semaphore_id),
-            ("shared_residual_mcast_data_receiver_semaphore", ctx.shared_mcast_receiver_semaphore_id),
-            ("shared_residual_mcast_data_size_bytes", ctx.residual_mcast_params["data_size_bytes"]),
-            ("shared_residual_mcast_src_cb", ctx.residual_mcast_src_cb),
-            ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
-            ("shared_residual_mcast_dst_cb", ctx.residual_mcast_dst_cb),
+            ("shared_residual_mcast_data_sender_semaphore", shared_ctx.shared_mcast_sender_semaphore_id),
+            ("shared_residual_mcast_data_receiver_semaphore", shared_ctx.shared_mcast_receiver_semaphore_id),
+            ("shared_residual_mcast_data_size_bytes", shared_ctx.residual_mcast_params["data_size_bytes"]),
+            ("shared_residual_mcast_src_cb", shared_ctx.residual_mcast_src_cb),
+            ("shared_residual_mcast_src_num_pages", shared_ctx.residual_mcast_params["src_num_pages"]),
+            ("shared_residual_mcast_dst_cb", shared_ctx.residual_mcast_dst_cb),
             # Down mcast sender (CTArgs reused from routed mcast; only need semaphores, CBs, sizes)
-            ("shared_down_mcast_data_sender_semaphore", ctx.shared_mcast_sender_semaphore_id),
-            ("shared_down_mcast_data_receiver_semaphore", ctx.shared_mcast_receiver_semaphore_id),
-            ("shared_down_mcast_data_size_bytes", ctx.down_mcast_data_size_bytes),
-            ("shared_down_mcast_src_cb", ctx.mcast_src_cb),  # gated reduce output (CB 31)
-            ("shared_down_mcast_src_num_pages", ctx.down_mcast_src_num_pages),
-            ("shared_down_mcast_dst_cb", ctx.down_mcast_dst_cb),
+            ("shared_down_mcast_data_sender_semaphore", shared_ctx.shared_mcast_sender_semaphore_id),
+            ("shared_down_mcast_data_receiver_semaphore", shared_ctx.shared_mcast_receiver_semaphore_id),
+            ("shared_down_mcast_data_size_bytes", shared_ctx.down_mcast_params["data_size_bytes"]),
+            ("shared_down_mcast_src_cb", shared_ctx.mcast_src_cb),  # gated reduce output (CB 31)
+            ("shared_down_mcast_src_num_pages", shared_ctx.down_mcast_params["src_num_pages"]),
+            ("shared_down_mcast_dst_cb", shared_ctx.down_mcast_dst_cb),
             # Output gather receiver (sender core)
-            ("shared_og_noc0_num_senders", DownProj.NUM_MATMUL_CORES),
-            ("shared_og_noc1_num_senders", 0),
-            ("shared_og_noc0_receiver_semaphore_id", ctx.output_gather_noc0_receiver_semaphore_id),
-            ("shared_og_noc1_receiver_semaphore_id", ctx.output_gather_noc1_receiver_semaphore_id),
-            ("shared_og_dst_cb", ctx.output_gather_dst_cb),
-            ("shared_og_dst_num_pages", ctx.output_gather_dst_num_pages),
+            ("shared_og_noc0_num_senders", shared_ctx.output_gather_params["noc0_num_senders"]),
+            ("shared_og_noc1_num_senders", shared_ctx.output_gather_params["noc1_num_senders"]),
+            ("shared_og_noc0_receiver_semaphore_id", shared_ctx.output_gather_params["noc0_receiver_semaphore_id"]),
+            ("shared_og_noc1_receiver_semaphore_id", shared_ctx.output_gather_params["noc1_receiver_semaphore_id"]),
+            ("shared_og_dst_cb", shared_ctx.output_gather_params["dst_cb"]),
+            ("shared_og_dst_num_pages", shared_ctx.output_gather_params["dst_num_pages"]),
             # Output mcast sender (sender core → 130 cores) — separate semaphores to avoid race
-            ("shared_output_mcast_data_sender_semaphore", ctx.output_mcast_sender_semaphore_id),
-            ("shared_output_mcast_data_receiver_semaphore", ctx.output_mcast_receiver_semaphore_id),
-            ("shared_output_mcast_data_size_bytes", ctx.output_mcast_data_size_bytes),
-            ("shared_output_mcast_src_cb", ctx.output_gather_dst_cb),  # read from output gather dst
-            ("shared_output_mcast_src_num_pages", ctx.output_mcast_src_num_pages),
+            ("shared_output_mcast_data_sender_semaphore", shared_ctx.output_mcast_sender_semaphore_id),
+            ("shared_output_mcast_data_receiver_semaphore", shared_ctx.output_mcast_receiver_semaphore_id),
+            ("shared_output_mcast_data_size_bytes", shared_ctx.output_mcast_params["data_size_bytes"]),
+            ("shared_output_mcast_src_cb", shared_ctx.output_gather_params["dst_cb"]),  # read from output gather dst
+            ("shared_output_mcast_src_num_pages", shared_ctx.output_mcast_params["src_num_pages"]),
         ]
         trisc_args = [
             # Gate/Up matmul
             ("shared_gu_act_cb", input_mcast_dst_cb),
-            ("shared_gu_weights_cb", ctx.gu_weights_cb),
-            ("shared_gu_out_cb", ctx.gu_out_cb),
-            ("shared_gu_k_per_core", ctx.gu_k_per_core),
-            ("shared_gu_act_total_tiles", ctx.gu_act_total_tiles),
+            ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
+            ("shared_gu_out_cb", shared_ctx.gu_out_cb),
+            ("shared_gu_k_per_core", shared_ctx.gu_matmul_params["k_per_core"]),
+            ("shared_gu_act_total_tiles", shared_ctx.gu_matmul_params["act_total_tiles"]),
             # Gated reduce
-            ("shared_gated_reduce_group1_cb", ctx.group1_cb),
-            ("shared_gated_reduce_group2_cb", ctx.group2_cb),
-            ("shared_gated_reduce_intermed_cb", ctx.intermed_cb),
-            ("shared_gated_reduce_mcast_src_cb", ctx.mcast_src_cb),
-            ("shared_gated_reduce_tiles_per_k", ctx.kernel_tiles_per_k),
-            ("shared_gated_reduce_k_num_tiles", ctx.kernel_k_num_tiles),
+            ("shared_gated_reduce_group1_cb", shared_ctx.group1_cb),
+            ("shared_gated_reduce_group2_cb", shared_ctx.group2_cb),
+            ("shared_gated_reduce_intermed_cb", shared_ctx.intermed_cb),
+            ("shared_gated_reduce_mcast_src_cb", shared_ctx.mcast_src_cb),
+            ("shared_gated_reduce_tiles_per_k", shared_ctx.gated_reduce_params["kernel_tiles_per_k"]),
+            ("shared_gated_reduce_k_num_tiles", shared_ctx.gated_reduce_params["kernel_k_num_tiles"]),
             # Down proj matmul
-            ("shared_down_matmul_in0", ctx.down_mcast_dst_cb),  # mcast'd activation
-            ("shared_down_matmul_in1", ctx.down_matmul_in1_cb),
-            ("shared_down_matmul_out", ctx.down_matmul_out_cb),
-            ("shared_down_matmul_k_num_tiles", ctx.down_matmul_k_num_tiles),
-            ("shared_down_matmul_out_w_per_core", ctx.down_matmul_out_w_per_core),
+            ("shared_down_matmul_in0", shared_ctx.down_mcast_dst_cb),  # mcast'd activation
+            ("shared_down_matmul_in1", shared_ctx.down_matmul_params["in1_cb"]),
+            ("shared_down_matmul_out", shared_ctx.down_matmul_params["out_cb"]),
+            ("shared_down_matmul_k_num_tiles", shared_ctx.down_matmul_params["k_num_tiles"]),
+            ("shared_down_matmul_out_w_per_core", shared_ctx.down_matmul_params["out_w"]),
             # Residual add
-            ("shared_residual_add_in0", ctx.down_matmul_out_cb),  # matmul output
-            ("shared_residual_add_in1", ctx.residual_mcast_dst_cb),  # residual from mcast
-            ("shared_residual_add_out", ctx.residual_add_out_cb),
-            ("shared_residual_add_out_w", ctx.down_matmul_out_w_per_core),
-            ("shared_residual_add_total_in1_tiles", ctx.residual_add_total_in1_tiles),
+            ("shared_residual_add_in0", shared_ctx.down_matmul_params["out_cb"]),  # matmul output
+            ("shared_residual_add_in1", shared_ctx.residual_mcast_dst_cb),  # residual from mcast
+            ("shared_residual_add_out", shared_ctx.residual_add_params["out_cb"]),
+            ("shared_residual_add_out_w", shared_ctx.down_matmul_params["out_w"]),
+            ("shared_residual_add_total_in1_tiles", shared_ctx.residual_add_params["total_in1_tiles"]),
         ]
         return ncrisc_args, brisc_args, trisc_args
 
@@ -2001,19 +2147,19 @@ class MoeSharedExpertOp:
     def _build_cb_descriptors(shared_ctx):
         """Build CB descriptors for shared expert."""
         return [
-            shared_ctx.gu_weights_cb_descriptor,
-            shared_ctx.gu_out_cb_descriptor,
-            shared_ctx.group1_cb_descriptor,
-            shared_ctx.group2_cb_descriptor,
-            shared_ctx.intermed_cb_descriptor,
-            shared_ctx.mcast_src_cb_descriptor,
+            shared_ctx.gu_matmul_params["cb_weights_descriptor"],
+            shared_ctx.gu_matmul_params["cb_out_descriptor"],
+            shared_ctx.gated_reduce_params["cb_group1_descriptor"],
+            shared_ctx.gated_reduce_params["cb_group2_descriptor"],
+            shared_ctx.gated_reduce_params["cb_intermed_descriptor"],
+            shared_ctx.gated_reduce_params["cb_out_descriptor"],
             shared_ctx.residual_mcast_src_cb_descriptor,
-            shared_ctx.residual_mcast_dst_cb_descriptor,
-            shared_ctx.down_mcast_dst_cb_descriptor,
-            shared_ctx.down_matmul_in1_cb_descriptor,
-            shared_ctx.down_matmul_out_cb_descriptor,
-            shared_ctx.residual_add_out_cb_descriptor,
-            shared_ctx.output_gather_dst_cb_descriptor,
+            shared_ctx.residual_mcast_params["dst_cb_descriptor"],
+            shared_ctx.down_mcast_params["dst_cb_descriptor"],
+            shared_ctx.down_matmul_params["weights_cb_descriptor"],
+            shared_ctx.down_matmul_params["output_cb_descriptor"],
+            shared_ctx.residual_add_params["cb_out_descriptor"],
+            shared_ctx.output_gather_params["dst_cb_descriptor"],
         ]
 
     @staticmethod
@@ -2295,116 +2441,61 @@ class MoeOp:
         }
 
     @staticmethod
-    def setup_eltwise_add(
-        in0_tensor,
-        in1_tensor,
-        out_tensor,
-        cb_in0_index,
-        cb_in1_index,
-        cb_out_index,
+    def setup_sram_matmul(
+        in0_cb,
+        in1_cb,
+        out_cb,
+        weights_tensor,
+        output_tensor,
+        k_num_tiles,
+        fused_activation=0,
     ):
         """
-        Set up parameters and CB descriptors for element-wise add with per-core indexing.
+        Set up parameters for an SRAM matmul operation.
 
-        Used after down_proj to add fused_add tensor. Each core uses sender_index to
-        offset into the replicated in1 tensor.
+        SRAM matmul computes: output = input @ weights with optional fused activation.
+        Weights and output are sharded in L1 (SRAM).
 
         Args:
-            in0_tensor: First input tensor (e.g., down_proj output), WIDTH_SHARDED
-            in1_tensor: Second input tensor (e.g., fused_add), HEIGHT_SHARDED (replicated)
-            out_tensor: Output tensor, WIDTH_SHARDED (padded to 32x32 tile)
-            cb_in0_index: CB index for first input (aliased with 32x32 tile format)
-            cb_in1_index: CB index for second input (replicated tensor)
-            cb_out_index: CB index for output
+            in0_cb: Input CB index (receives mcasted input)
+            in1_cb: Weights CB index
+            out_cb: Output CB index
+            weights_tensor: Weight tensor (WIDTH_SHARDED in L1)
+            output_tensor: Output tensor (WIDTH_SHARDED in L1)
+            k_num_tiles: K dimension in tiles
+            fused_activation: Activation to fuse (0=none, 1=sigmoid, 2=silu)
 
         Returns:
-            Dictionary with eltwise_add parameters and CB descriptors
+            Dictionary with matmul parameters and CB descriptors
         """
-        # Get core ranges from in0_tensor (same as previous mm)
-        core_ranges = in0_tensor.memory_config().shard_spec.grid
-        compute_cores_list = ttnn.corerange_to_cores(core_ranges, row_wise=True)
-        # Get tensor info
-        in0_dtype = in0_tensor.dtype
-        in0_shard_shape = in0_tensor.memory_config().shard_spec.shape
-        in1_shard_shape = in1_tensor.memory_config().shard_spec.shape
+        # Get per-core output width in tiles from weights tensor
+        weights_tile = weights_tensor.get_tile()
+        weights_shard_shape = weights_tensor.memory_config().shard_spec.shape
+        weights_shard_width = weights_shard_shape[1]
+        out_w = weights_shard_width // weights_tile.tile_shape[1]
 
-        # Dimensions
-        width_per_core = in0_shard_shape[1]  # per-core width (e.g., 896)
-        total_width = in1_shard_shape[1]  # full width of replicated tensor (e.g., 7168)
+        # Get core grid from weights tensor
+        core_grid = weights_tensor.memory_config().shard_spec.grid
 
-        # Element size
-        if in0_dtype == ttnn.bfloat16:
-            element_size_bytes = 2
-        else:
-            raise ValueError(f"Unsupported dtype: {in0_dtype}")
-
-        slice_size_bytes = width_per_core * element_size_bytes
-
-        # Use 32x32 tile view for CB (not tensor's actual tile format)
-        # This is CB aliasing - tensor uses 1x32 tiles but CB views as 32x32
-        cb_tile_h = 32
-        cb_tile_w = 32
-        cb_tile_size_bytes = cb_tile_h * cb_tile_w * element_size_bytes
-        cb_tile = ttnn.Tile([cb_tile_h, cb_tile_w])
-        cb_tile_desc = ttnn.TileDescriptor(cb_tile)
-
-        # CB sizes
-        in0_size_bytes = slice_size_bytes
-        in1_size_bytes = total_width * element_size_bytes
-
-        # Number of pages for CB wait (total_size / page_size)
-        # cb_in0: 1 page (in0_size_bytes / in0_size_bytes = 1)
-        # cb_in1: multiple pages (in1_size_bytes / in0_size_bytes)
-        in0_wait_tiles = in0_size_bytes // in0_size_bytes  # 1
-        in1_wait_tiles = in1_size_bytes // in0_size_bytes
-
-        # Number of output tiles (based on 32x32 CB view, not tensor tile format)
-        out_shard_shape = out_tensor.memory_config().shard_spec.shape
-        out_shard_elements = out_shard_shape[0] * out_shard_shape[1]
-        cb_tile_elements = cb_tile_h * cb_tile_w
-        num_tiles = out_shard_elements // cb_tile_elements
-        assert num_tiles == 1, f"Expected 1 tile (32x32 view), got {num_tiles}"
-
-        # CB for in0: down_proj output aliased with 32x32 tile format
-        cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
-        cb_in0_descriptor.total_size = in0_size_bytes
-        cb_in0_descriptor.format_descriptors[0].tile = cb_tile_desc
-        cb_in0_descriptor.format_descriptors[0].page_size = in0_size_bytes
-
-        # CB for in1: replicated tensor (tensor-backed)
-        cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
-        cb_in1_descriptor.total_size = in1_size_bytes
-        cb_in1_descriptor.format_descriptors[0].tile = cb_tile_desc
-        cb_in1_descriptor.format_descriptors[0].page_size = in0_size_bytes  # page_size = slice size for reading
-
-        # CB for out: output (tensor-backed, uses 32x32 CB view)
-        cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
-        cb_out_descriptor.total_size = num_tiles * cb_tile_size_bytes
-        cb_out_descriptor.format_descriptors[0].tile = cb_tile_desc
-        cb_out_descriptor.format_descriptors[0].page_size = cb_tile_size_bytes
-
-        # Per-core sender_index values
-        sender_index_core_values = []
-        for idx, core in enumerate(compute_cores_list):
-            sender_index_core_values.append((core, idx))
+        # CB descriptors
+        weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_tensor)
+        output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
 
         return {
             # CB indices
-            "cb_in0": cb_in0_index,
-            "cb_in1": cb_in1_index,
-            "cb_out": cb_out_index,
-            # Dimensions
-            "num_tiles": num_tiles,
-            "slice_size_bytes": slice_size_bytes,
-            # Wait tiles
-            "cb_in0_wait_tiles": in0_wait_tiles,
-            "cb_in1_wait_tiles": in1_wait_tiles,
+            "in0_cb": in0_cb,
+            "in1_cb": in1_cb,
+            "out_cb": out_cb,
+            # Matmul parameters
+            "k_num_tiles": k_num_tiles,
+            "out_w": out_w,
+            "fused_activation": fused_activation,
+            # Core grid
+            "core_grid": core_grid,
+            "num_cores": core_grid.num_cores(),
             # CB descriptors
-            "cb_in0_descriptor": cb_in0_descriptor,
-            "cb_in1_descriptor": cb_in1_descriptor,
-            "cb_out_descriptor": cb_out_descriptor,
-            # Per-core values
-            "sender_index_core_values": sender_index_core_values,
+            "weights_cb_descriptor": weights_cb_descriptor,
+            "output_cb_descriptor": output_cb_descriptor,
         }
 
     @staticmethod
@@ -2510,6 +2601,14 @@ class MoeOp:
         shared_down_mcast_dst_tensor,
         shared_down_weights_tensor,
         shared_output_tensor,
+        # Shared expert tensor-backed CB tensors
+        shared_ag_gather_dst_tensor,
+        shared_bg_gather_dst_tensor,
+        shared_gu_out_tensor,
+        shared_intermed_tensor,
+        shared_down_mcast_src_tensor,
+        shared_down_matmul_out_tensor,
+        shared_residual_add_out_tensor,
         shared_k_parallel,
         shared_n_parallel,
         use_hardcoded_expert_index=False,
@@ -2569,6 +2668,13 @@ class MoeOp:
             shared_down_mcast_dst_tensor=shared_down_mcast_dst_tensor,
             shared_down_weights_tensor=shared_down_weights_tensor,
             shared_output_tensor=shared_output_tensor,
+            shared_ag_gather_dst_tensor=shared_ag_gather_dst_tensor,
+            shared_bg_gather_dst_tensor=shared_bg_gather_dst_tensor,
+            shared_gu_out_tensor=shared_gu_out_tensor,
+            shared_intermed_tensor=shared_intermed_tensor,
+            shared_down_mcast_src_tensor=shared_down_mcast_src_tensor,
+            shared_down_matmul_out_tensor=shared_down_matmul_out_tensor,
+            shared_residual_add_out_tensor=shared_residual_add_out_tensor,
             num_tiles_k=routed_ctx.num_tiles_k,
             tile_1x32_size=routed_ctx.tile_1x32_size,
             data_format=routed_ctx.data_format,
@@ -2722,13 +2828,19 @@ class MoeOp:
             mul_scalar_buf_tensor,
             # Shared expert tensors
             shared_gate_up_weights_tensor,
-            shared_ctx.ag_dummy_tensor,
-            shared_ctx.bg_dummy_tensor,
+            shared_ag_gather_dst_tensor,
+            shared_bg_gather_dst_tensor,
             shared_bias_tensor,
             shared_residual_mcast_dst_tensor,
             shared_down_mcast_dst_tensor,
             shared_down_weights_tensor,
             shared_output_tensor,
+            # Shared expert tensor-backed CB tensors
+            shared_gu_out_tensor,
+            shared_intermed_tensor,
+            shared_down_mcast_src_tensor,
+            shared_down_matmul_out_tensor,
+            shared_residual_add_out_tensor,
         ]
 
         # ==================================================================
