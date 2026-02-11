@@ -24,7 +24,7 @@ void kernel_main() {
                 llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
 
-            llk_math_eltwise_binary_init<ELWADD, NONE>();
+            llk_math_eltwise_binary_init<ELWADD, NONE, MathFidelity::LoFi>();
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_math_wait_for_dest_available();
                 llk_math_eltwise_binary<ELWADD, NONE, DST_ACCUM_MODE, MATH_FIDELITY, false>(0);
