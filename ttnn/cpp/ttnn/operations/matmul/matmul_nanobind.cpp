@@ -525,8 +525,7 @@ void py_module(nb::module_& mod) {
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.
-            std::string fused_activation_repr =
-                config.fused_activation.has_value() ? fmt::format("{}", config.fused_activation.value()) : "None";
+            const char* fused_activation_repr = config.fused_activation.has_value() ? "set" : "None";
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, "
                 "fused_activation={})",
