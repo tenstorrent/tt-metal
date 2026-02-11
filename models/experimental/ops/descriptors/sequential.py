@@ -133,7 +133,10 @@ def extract_cb_names_from_kernel(kernel_desc: "ttnn.KernelDescriptor") -> Dict[s
 
 
 def _classify_kernel(kernel_desc: "ttnn.KernelDescriptor") -> str:
-    """Classify a kernel as reader, writer, or compute based on its config."""
+    """Classify a kernel as reader, writer, or compute based on its config.
+
+    DEPRECATED: Use _get_risc_type() + _get_role_key() instead.
+    """
     config = kernel_desc.config
     if isinstance(config, ttnn.ComputeConfigDescriptor):
         return "compute"
@@ -142,11 +145,38 @@ def _classify_kernel(kernel_desc: "ttnn.KernelDescriptor") -> str:
     elif isinstance(config, ttnn.WriterConfigDescriptor):
         return "writer"
     elif isinstance(config, ttnn.DataMovementConfigDescriptor):
-        if config.processor == ttnn.DataMovementProcessor.RISCV_1:
+        if config.processor == ttnn.DataMovementProcessor.RISCV_0:
             return "reader"
         else:
             return "writer"
     return "unknown"
+
+
+def _get_risc_type(kernel_desc: "ttnn.KernelDescriptor") -> str:
+    """Return the RISC processor type: 'riscv_0', 'riscv_1', or 'compute'."""
+    config = kernel_desc.config
+    if isinstance(config, ttnn.ComputeConfigDescriptor):
+        return "compute"
+    elif isinstance(config, ttnn.ReaderConfigDescriptor):
+        return "riscv_0"
+    elif isinstance(config, ttnn.WriterConfigDescriptor):
+        return "riscv_1"
+    elif isinstance(config, ttnn.DataMovementConfigDescriptor):
+        if config.processor == ttnn.DataMovementProcessor.RISCV_0:
+            return "riscv_0"
+        else:
+            return "riscv_1"
+    return "unknown"
+
+
+def _core_ranges_key(core_ranges: Any) -> frozenset:
+    """Create a hashable key from a CoreRangeSet for grouping."""
+    return frozenset((cr.start.x, cr.start.y, cr.end.x, cr.end.y) for cr in core_ranges.ranges())
+
+
+def _get_role_key(kernel_desc: "ttnn.KernelDescriptor") -> Tuple[str, frozenset]:
+    """Return (risc_type, core_ranges_key) identifying this kernel's role."""
+    return (_get_risc_type(kernel_desc), _core_ranges_key(kernel_desc.core_ranges))
 
 
 # =============================================================================
@@ -263,13 +293,19 @@ def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
             else:
                 stack.append((True, False))
 
-        elif stripped == "#else":
+        elif stripped == "#else" or stripped.startswith("#else ") or stripped.startswith("#else\t"):
             if stack and stack[-1][1]:
                 incl, known = stack[-1]
                 stack[-1] = (not incl, known)
                 directive_handled = True
 
-        elif stripped == "#endif":
+        elif (
+            stripped == "#endif"
+            or stripped.startswith("#endif ")
+            or stripped.startswith("#endif\t")
+            or stripped.startswith("#endif//")
+            or stripped.startswith("#endif /")
+        ):
             if stack:
                 _, known = stack[-1]
                 stack.pop()
@@ -504,18 +540,133 @@ def _merge_cb_descriptors(phases: List[PhaseInfo]) -> list:
 
     For each CB index used by any phase, keeps the descriptor with the
     largest total_size so the CB can accommodate any phase's data.
-    """
-    cb_by_index: Dict[int, Any] = {}  # cb_index -> (largest_total_size, cb_desc)
 
-    for phase in phases:
+    When multiple phases have buffer-backed CBs at the same index, the merge
+    always keeps phase 0's buffer. This guarantees phase 0 is correct without
+    rebinding; only phases 1+ need mid-kernel CB address rebinding.
+    """
+    cb_by_index: Dict[int, Any] = {}  # cb_index -> (largest_total_size, cb_desc, phase_idx)
+
+    for phase_idx, phase in enumerate(phases):
         desc = phase.op_descriptor.descriptor
         for cb_desc in desc.cbs:
             for fmt_desc in cb_desc.format_descriptors:
                 cb_idx = fmt_desc.buffer_index
-                if cb_idx not in cb_by_index or cb_desc.total_size > cb_by_index[cb_idx][0]:
-                    cb_by_index[cb_idx] = (cb_desc.total_size, cb_desc)
+                if cb_idx not in cb_by_index:
+                    cb_by_index[cb_idx] = (cb_desc.total_size, cb_desc, phase_idx)
+                elif cb_desc.total_size > cb_by_index[cb_idx][0]:
+                    _, old_desc, old_phase = cb_by_index[cb_idx]
+                    if old_desc.has_buffer() and old_phase == 0:
+                        # Phase 0 had the buffer — keep its descriptor (for correct
+                        # initial setup) even though a later phase has larger total_size
+                        cb_by_index[cb_idx] = (cb_desc.total_size, old_desc, old_phase)
+                    else:
+                        cb_by_index[cb_idx] = (cb_desc.total_size, cb_desc, phase_idx)
 
-    return [cb_desc for _, (_, cb_desc) in sorted(cb_by_index.items())]
+    return [cb_desc for _, (_, cb_desc, _) in sorted(cb_by_index.items())]
+
+
+# =============================================================================
+# CB Address Rebinding
+# =============================================================================
+
+
+def _compute_rebind_info(
+    phases: List[PhaseInfo],
+) -> Dict[int, List[Tuple[int, int, int]]]:
+    """Compute which CBs need address rebinding at each phase transition.
+
+    For each phase 1+, identifies CB indices where the buffer address differs
+    from what was set in the previous phase. Phase 0 never needs rebinding
+    because _merge_cb_descriptors always keeps phase 0's buffer.
+
+    Returns:
+        Dict mapping phase_idx -> list of (cb_idx, new_addr, new_size) tuples.
+    """
+    # Collect per-phase buffer addresses
+    phase_buffer_addrs: List[Dict[int, Tuple[int, int]]] = []
+    for phase in phases:
+        addrs: Dict[int, Tuple[int, int]] = {}
+        for cb_desc in phase.op_descriptor.descriptor.cbs:
+            for fmt_desc in cb_desc.format_descriptors:
+                if cb_desc.has_buffer():
+                    addr = cb_desc.buffer_address()
+                    if addr is not None:
+                        addrs[fmt_desc.buffer_index] = (addr, cb_desc.total_size)
+        phase_buffer_addrs.append(addrs)
+
+    if not phase_buffer_addrs:
+        return {}
+
+    # Start with phase 0's addresses as baseline
+    rebind_info: Dict[int, List[Tuple[int, int, int]]] = {}
+    current_addrs = dict(phase_buffer_addrs[0])
+
+    for phase_idx in range(1, len(phases)):
+        rebinds: List[Tuple[int, int, int]] = []
+        for cb_idx, (phase_addr, phase_size) in phase_buffer_addrs[phase_idx].items():
+            current = current_addrs.get(cb_idx)
+            if current is None or current[0] != phase_addr:
+                rebinds.append((cb_idx, phase_addr, phase_size))
+                current_addrs[cb_idx] = (phase_addr, phase_size)
+        rebind_info[phase_idx] = rebinds
+
+    return rebind_info
+
+
+def _generate_rebind_code(
+    rebinds: List[Tuple[int, int, int]],
+    phase_idx: int,
+    for_compute: bool = False,
+) -> List[str]:
+    """Generate C++ code to rebind CB addresses for a phase.
+
+    Args:
+        rebinds: List of (cb_idx, addr, size) tuples for this phase.
+        phase_idx: Which phase these rebinds are for.
+        for_compute: If True, shift addresses by >> 4 for TRISC and guard
+            with #ifndef TRISC_MATH (TRISC1 has no cb_interface).
+
+    Returns:
+        List of C++ source lines (indented with 4 spaces).
+    """
+    if not rebinds:
+        return []
+    lines = [f"    // Rebind CB addresses for phase {phase_idx}"]
+    if for_compute:
+        # TRISC1 (math) doesn't have cb_interface linked in — skip it
+        lines.append("#ifndef TRISC_MATH")
+    for cb_idx, _, _ in rebinds:
+        prefix = f"phase{phase_idx}_cb{cb_idx}"
+        if for_compute:
+            lines.append(f"    {{")
+            lines.append(
+                f'        constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr") >> 4;'
+            )
+            lines.append(
+                f'        constexpr uint32_t new_size = get_named_compile_time_arg_val("{prefix}_rebind_size") >> 4;'
+            )
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = new_addr;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = new_addr;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_size = new_size;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_limit = new_addr + new_size;")
+            lines.append(f"    }}")
+        else:
+            lines.append(f"    {{")
+            lines.append(
+                f'        constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr");'
+            )
+            lines.append(
+                f'        constexpr uint32_t new_size = get_named_compile_time_arg_val("{prefix}_rebind_size");'
+            )
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = new_addr;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = new_addr;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_size = new_size;")
+            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_limit = new_addr + new_size;")
+            lines.append(f"    }}")
+    if for_compute:
+        lines.append("#endif")
+    return lines
 
 
 # =============================================================================
@@ -533,16 +684,18 @@ def _get_all_cb_descriptor_indices(phases: List[PhaseInfo]) -> Set[int]:
     return indices
 
 
-def _generate_fused_reader_source(
+def _generate_fused_riscv0_source(
     phase_kernels: List[Dict[str, Any]],
+    role_key: Any,
     phases: List[PhaseInfo],
     ct_arg_offsets: Dict[int, int],
     sweep_cb_indices: List[int],
     barrier_config: Optional[BarrierConfig] = None,
+    rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
 ) -> Optional[str]:
-    """Generate fused reader kernel source with two-level barrier sync.
+    """Generate fused RISCV_0 (reader/BRISC) kernel source with two-level barrier sync.
 
-    Between phases, the reader (dataflow RISC) acts as the barrier coordinator:
+    Between phases, the RISCV_0 processor acts as the barrier coordinator:
       1. Wait for local compute + writer to signal done (L1 flag spin)
       2. Reset residual tiles from ALL CBs on BRISC
       3. Global barrier across cores (sets global_release which also serves
@@ -554,13 +707,14 @@ def _generate_fused_reader_source(
     reader_sources = []
 
     for i, pk in enumerate(phase_kernels):
-        if pk["reader"] is None:
+        kernel = pk.get(role_key)
+        if kernel is None:
             continue
-        source, kernel_dir = _read_kernel_source(pk["reader"])
+        source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
         source = _inline_local_includes(source, kernel_dir)
-        phase_defs = {name for name, _ in pk["reader"].defines} if hasattr(pk["reader"], "defines") else set()
+        phase_defs = {name for name, _ in kernel.defines} if hasattr(kernel, "defines") else set()
         resolved = _resolve_ifdef_directives(source, phase_defs)
         reader_sources.append((i, resolved))
 
@@ -609,14 +763,17 @@ def _generate_fused_reader_source(
         # All CBs are reset (generic — any CB id can be input or output).
         # Safe because all RISCs have finished (local barrier complete).
         lines.append("// BRISC-side CB reset: pop residual tiles between phases.")
+        lines.append("// Pop one tile at a time to handle circular buffer wrapping correctly.")
+        lines.append("// Some CBs (e.g. gamma) are never popped by compute, so remaining may exceed")
+        lines.append("// the CB capacity. Popping all at once would advance fifo_rd_ptr past fifo_limit.")
         lines.append("FORCE_INLINE void __cb_reset_to_empty() {")
         for cb_idx in sweep_cb_indices:
             lines.append(f"    {{")
             lines.append(
                 f"        uint16_t remaining = (uint16_t)(*get_cb_tiles_received_ptr({cb_idx})) - (uint16_t)(*get_cb_tiles_acked_ptr({cb_idx}));"
             )
-            lines.append(f"        if (remaining > 0) {{")
-            lines.append(f"            cb_pop_front({cb_idx}, remaining);")
+            lines.append(f"        for (uint16_t i = 0; i < remaining; i++) {{")
+            lines.append(f"            cb_pop_front({cb_idx}, 1);")
             lines.append(f"        }}")
             lines.append(f"    }}")
         lines.append("}")
@@ -695,6 +852,9 @@ def _generate_fused_reader_source(
         )
         lines.append("")
 
+    if rebind_info is None:
+        rebind_info = {}
+
     first = True
     for phase_idx, _ in reader_sources:
         if not first and is_multi_phase:
@@ -709,6 +869,11 @@ def _generate_fused_reader_source(
             lines.append("    // Reset residual tiles from ALL CBs")
             lines.append("    __cb_reset_to_empty();")
             lines.append("")
+            # Rebind CB addresses before global barrier (so BRISC has correct state)
+            rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=False)
+            if rebind_lines:
+                lines.extend(rebind_lines)
+                lines.append("")
             lines.append("    // Global barrier (sets global_release, releasing compute/writer)")
             lines.append(f"    __global_barrier({phase_idx - 1}, __global_arrive, __global_release);")
             lines.append("")
@@ -720,13 +885,15 @@ def _generate_fused_reader_source(
     return "\n".join(lines)
 
 
-def _generate_fused_writer_source(
+def _generate_fused_riscv1_source(
     phase_kernels: List[Dict[str, Any]],
+    role_key: Any,
     phases: List[PhaseInfo],
     ct_arg_offsets: Dict[int, int],
+    rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     barrier_config: Optional[BarrierConfig] = None,
 ) -> Optional[str]:
-    """Generate fused writer kernel source with L1 flag barrier sync.
+    """Generate fused RISCV_1 (writer/NCRISC) kernel source with L1 flag barrier sync.
 
     Between phases, the writer:
       1. Signals done by writing phase+1 to writer_done L1 flag
@@ -735,13 +902,14 @@ def _generate_fused_writer_source(
     writer_sources = []
 
     for i, pk in enumerate(phase_kernels):
-        if pk["writer"] is None:
+        kernel = pk.get(role_key)
+        if kernel is None:
             continue
-        source, kernel_dir = _read_kernel_source(pk["writer"])
+        source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
         source = _inline_local_includes(source, kernel_dir)
-        phase_defs = {name for name, _ in pk["writer"].defines} if hasattr(pk["writer"], "defines") else set()
+        phase_defs = {name for name, _ in kernel.defines} if hasattr(kernel, "defines") else set()
         resolved = _resolve_ifdef_directives(source, phase_defs)
         writer_sources.append((i, resolved))
 
@@ -803,10 +971,14 @@ def _generate_fused_writer_source(
         )
         lines.append("")
 
+    if rebind_info is None:
+        rebind_info = {}
+
     num_writers = len(writer_sources)
     for count, (phase_idx, _) in enumerate(writer_sources):
         lines.append(f"    phase{phase_idx}_writer();")
         if count < num_writers - 1 and is_multi_phase:
+            next_phase_idx = writer_sources[count + 1][0]
             lines.append("")
             lines.append(f"    // Signal done for Phase {phase_idx}")
             lines.append(f"    *__writer_done = {phase_idx + 1};")
@@ -814,6 +986,11 @@ def _generate_fused_writer_source(
             lines.append(f"    // Wait for global release (Phase {phase_idx + 1})")
             lines.append(f"    while (*__global_release < {phase_idx + 1}) {{ }}")
             lines.append("")
+            # Rebind CB addresses after barrier wait
+            rebind_lines = _generate_rebind_code(rebind_info.get(next_phase_idx, []), next_phase_idx, for_compute=False)
+            if rebind_lines:
+                lines.extend(rebind_lines)
+                lines.append("")
     lines.append("}")
     lines.append("")
 
@@ -822,10 +999,12 @@ def _generate_fused_writer_source(
 
 def _generate_fused_compute_source(
     phase_kernels: List[Dict[str, Any]],
+    role_key: Any,
     phases: List[PhaseInfo],
     ct_arg_offsets: Optional[Dict[int, int]] = None,
     sweep_cb_indices: Optional[List[int]] = None,
     barrier_config: Optional[BarrierConfig] = None,
+    rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
 ) -> Optional[str]:
     """Generate fused compute kernel with L1 flag barrier sync.
 
@@ -844,13 +1023,14 @@ def _generate_fused_compute_source(
     compute_sources = []
 
     for i, pk in enumerate(phase_kernels):
-        if pk["compute"] is None:
+        kernel = pk.get(role_key)
+        if kernel is None:
             continue
-        source, kernel_dir = _read_kernel_source(pk["compute"])
+        source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
         source = _inline_local_includes(source, kernel_dir)
-        phase_defs = {name for name, _ in pk["compute"].defines}
+        phase_defs = {name for name, _ in kernel.defines}
         resolved = _resolve_ifdef_directives(source, phase_defs)
         compute_sources.append((i, resolved))
 
@@ -904,7 +1084,7 @@ def _generate_fused_compute_source(
             lines.append(f"            uint32_t advance = swept * get_local_cb_interface({cb_idx}).fifo_page_size;")
             lines.append(f"            get_local_cb_interface({cb_idx}).fifo_rd_ptr += advance;")
             lines.append(
-                f"            if (get_local_cb_interface({cb_idx}).fifo_rd_ptr >= get_local_cb_interface({cb_idx}).fifo_limit) {{"
+                f"            while (get_local_cb_interface({cb_idx}).fifo_rd_ptr >= get_local_cb_interface({cb_idx}).fifo_limit) {{"
             )
             lines.append(
                 f"                get_local_cb_interface({cb_idx}).fifo_rd_ptr -= get_local_cb_interface({cb_idx}).fifo_size;"
@@ -944,6 +1124,9 @@ def _generate_fused_compute_source(
         )
         lines.append("")
 
+    if rebind_info is None:
+        rebind_info = {}
+
     first = True
     for count, (phase_idx, _) in enumerate(compute_sources):
         if not first and is_multi_phase:
@@ -957,6 +1140,11 @@ def _generate_fused_compute_source(
             if sweep_cb_indices:
                 lines.append("    // Resync TRISC0 local CB state (tiles_acked, fifo_rd_ptr)")
                 lines.append("    __resync_cb_state_after_sweep();")
+                lines.append("")
+            # Rebind CB addresses after resync (all TRISC instances, with >> 4 shift)
+            rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=True)
+            if rebind_lines:
+                lines.extend(rebind_lines)
                 lines.append("")
         lines.append(f"    phase{phase_idx}_compute();")
         first = False
@@ -1250,6 +1438,41 @@ def _validate_and_get_compute_config(
     return base
 
 
+def _validate_and_get_compute_config_for_role(
+    phase_kernels: List[Dict[Any, Any]],
+    role_key: Any,
+) -> "ttnn.ComputeConfigDescriptor":
+    """Validate compute config consistency for a specific role across phases."""
+    base = None
+    base_phase = -1
+
+    for phase_idx, pk in enumerate(phase_kernels):
+        kernel = pk.get(role_key)
+        if kernel is None:
+            continue
+
+        config = kernel.config
+        if base is None:
+            base = config
+            base_phase = phase_idx
+            continue
+
+        mismatches = []
+        for fld in ("fp32_dest_acc_en", "math_approx_mode", "math_fidelity", "dst_full_sync_en", "bfp8_pack_precise"):
+            base_val = getattr(base, fld, None)
+            this_val = getattr(config, fld, None)
+            if base_val != this_val:
+                mismatches.append(f"  {fld}: phase {base_phase}={base_val}, phase {phase_idx}={this_val}")
+
+        if mismatches:
+            raise ValueError(f"Compute config mismatch for role {role_key}.\n" + "\n".join(mismatches))
+
+    if base is None:
+        return ttnn.ComputeConfigDescriptor()
+
+    return base
+
+
 # =============================================================================
 # Validation
 # =============================================================================
@@ -1342,6 +1565,68 @@ def _create_barrier_config(device: Any, core_ranges: Any) -> BarrierConfig:
     return config
 
 
+def _create_role_barrier_config(
+    device: Any,
+    role_core_ranges: Any,
+    shared_config: BarrierConfig,
+) -> BarrierConfig:
+    """Create a role-specific barrier config sharing semaphore addresses.
+
+    Uses the shared GlobalSemaphore L1 addresses but computes role-specific
+    core counts and physical coordinates for the multicast barrier.
+    """
+    cfg = BarrierConfig()
+    cfg.compute_done_addr = shared_config.compute_done_addr
+    cfg.writer_done_addr = shared_config.writer_done_addr
+    cfg.global_arrive_addr = shared_config.global_arrive_addr
+    cfg.global_release_addr = shared_config.global_release_addr
+
+    logical_coords = _get_core_coords_from_ranges(role_core_ranges)
+    cfg.num_cores = len(logical_coords)
+
+    if cfg.num_cores > 0:
+        phys_coords = [device.worker_core_from_logical_core(c) for c in logical_coords]
+        cfg.core0_phys_x = phys_coords[0].x
+        cfg.core0_phys_y = phys_coords[0].y
+        cfg.mcast_start_x = min(c.x for c in phys_coords)
+        cfg.mcast_start_y = min(c.y for c in phys_coords)
+        cfg.mcast_end_x = max(c.x for c in phys_coords)
+        cfg.mcast_end_y = max(c.y for c in phys_coords)
+
+    return cfg
+
+
+def _compute_union_core_ranges(phases: List[PhaseInfo]) -> Any:
+    """Compute the union of all core ranges across all kernels in phase 0.
+
+    Returns a CoreRangeSet covering all cores used by any kernel.
+    Handles overlapping core ranges by collecting individual cores and
+    creating a bounding box CoreRange that covers all of them.
+    """
+    # Collect all unique logical core coordinates
+    all_coords = set()
+    for kernel_desc in phases[0].op_descriptor.descriptor.kernels:
+        for cr in kernel_desc.core_ranges.ranges():
+            for y in range(cr.start.y, cr.end.y + 1):
+                for x in range(cr.start.x, cr.end.x + 1):
+                    all_coords.add((x, y))
+
+    if not all_coords:
+        return phases[0].op_descriptor.descriptor.kernels[0].core_ranges
+
+    # Create a bounding box CoreRange covering all cores
+    min_x = min(x for x, y in all_coords)
+    max_x = max(x for x, y in all_coords)
+    min_y = min(y for x, y in all_coords)
+    max_y = max(y for x, y in all_coords)
+
+    bounding_range = ttnn.CoreRange(
+        ttnn.CoreCoord(min_x, min_y),
+        ttnn.CoreCoord(max_x, max_y),
+    )
+    return ttnn.CoreRangeSet([bounding_range])
+
+
 # =============================================================================
 # Sequential Chain Builder
 # =============================================================================
@@ -1407,170 +1692,174 @@ class SequentialChainBuilder:
         return self._build_fused_descriptor(device)
 
     def _build_fused_descriptor(self, device: Any) -> OpDescriptor:
-        """Build the fused descriptor with two-level barrier sync."""
+        """Build the fused descriptor with two-level barrier sync.
+
+        Dynamically discovers kernel roles from the ProgramDescriptor using
+        (risc_type, core_ranges) as a unique key. This supports any op type
+        (interleaved with 3 kernels, sharded with up to 7 kernels, etc.).
+        """
         # Validate fp32 consistency
         _validate_fp32_consistency([p.op_descriptor for p in self.phases])
 
-        # Classify kernels by type for each phase
-        phase_kernels: List[Dict[str, Any]] = []
-        for phase in self.phases:
-            kernels_by_type: Dict[str, Any] = {"reader": None, "writer": None, "compute": None}
-            for kernel_desc in phase.op_descriptor.descriptor.kernels:
-                kernel_type = _classify_kernel(kernel_desc)
-                kernels_by_type[kernel_type] = kernel_desc
-            phase_kernels.append(kernels_by_type)
+        # Discover all kernel roles from phase 0
+        # Role key = (risc_type, frozenset of core range tuples)
+        role_keys: List[Tuple[str, frozenset]] = []
+        role_keys_set: Set[Tuple[str, frozenset]] = set()
+        for kernel_desc in self.phases[0].op_descriptor.descriptor.kernels:
+            rk = _get_role_key(kernel_desc)
+            if rk not in role_keys_set:
+                role_keys.append(rk)
+                role_keys_set.add(rk)
 
-        # Merge CB descriptors (max size per index across phases)
+        # Build phase_kernels as List[Dict[role_key, KernelDescriptor]]
+        phase_kernels: List[Dict[Any, Any]] = []
+        for phase_idx, phase in enumerate(self.phases):
+            role_map: Dict[Any, Any] = {}
+            for kernel_desc in phase.op_descriptor.descriptor.kernels:
+                rk = _get_role_key(kernel_desc)
+                role_map[rk] = kernel_desc
+            phase_kernels.append(role_map)
+
+        # Merge CB descriptors (max size per index, phase 0's buffer preferred)
         merged_cbs = _merge_cb_descriptors(self.phases)
 
-        core_ranges = self.phases[0].op_descriptor.descriptor.kernels[0].core_ranges
+        # Compute CB address rebinding info for buffer-backed CBs
+        rebind_info = _compute_rebind_info(self.phases)
 
-        # Create barrier configuration (GlobalSemaphore L1 flags + core coords)
-        self._barrier_config = _create_barrier_config(device, core_ranges)
+        # DEBUG: print rebind info
+        if rebind_info:
+            print(f"\n=== REBIND INFO ({len(self.phases)} phases) ===")
+            for phase_idx, rebinds in sorted(rebind_info.items()):
+                if rebinds:
+                    for cb_idx, addr, size in rebinds:
+                        print(f"  Phase {phase_idx}: CB[{cb_idx}] -> addr=0x{addr:x}, size={size}")
+                else:
+                    print(f"  Phase {phase_idx}: no rebinds")
 
-        # Compute runtime arg offsets for each kernel type
-        reader_rt_offsets = _compute_runtime_arg_offsets(phase_kernels, "reader")
-        writer_rt_offsets = _compute_runtime_arg_offsets(phase_kernels, "writer")
-        compute_rt_offsets = _compute_runtime_arg_offsets(phase_kernels, "compute")
-
-        # Merge compile-time args (concatenate all phases, get offsets)
-        reader_ct_args, reader_ct_offsets = _merge_compile_time_args(phase_kernels, "reader")
-        writer_ct_args, writer_ct_offsets = _merge_compile_time_args(phase_kernels, "writer")
-        compute_ct_args, compute_ct_offsets = _merge_compile_time_args(phase_kernels, "compute")
+        # Create barrier config with GlobalSemaphores on union of all core ranges
+        union_core_ranges = _compute_union_core_ranges(self.phases)
+        self._barrier_config = _create_barrier_config(device, union_core_ranges)
 
         # Compute sweep CB indices: ALL CBs with descriptors across phases (generic).
         valid_cb_indices = _get_all_cb_descriptor_indices(self.phases)
         sweep_cb_indices = sorted(valid_cb_indices)
 
-        # Generate fused kernel sources
-        fused_reader_source = _generate_fused_reader_source(
-            phase_kernels,
-            self.phases,
-            reader_ct_offsets,
-            sweep_cb_indices,
-            self._barrier_config,
-        )
-        fused_writer_source = _generate_fused_writer_source(
-            phase_kernels,
-            self.phases,
-            writer_ct_offsets,
-            self._barrier_config,
-        )
-        fused_compute_source = _generate_fused_compute_source(
-            phase_kernels,
-            self.phases,
-            compute_ct_offsets,
-            sweep_cb_indices,
-            self._barrier_config,
-        )
-
-        # DEBUG: dump generated sources to /tmp for inspection
-        for name, src in [
-            ("reader", fused_reader_source),
-            ("writer", fused_writer_source),
-            ("compute", fused_compute_source),
-        ]:
-            if src:
-                with open(f"/tmp/fused_{name}_debug.cpp", "w") as f:
-                    f.write(src)
-
-        # Concatenate runtime args and append barrier addresses
-        reader_rt_args = _concatenate_runtime_args(phase_kernels, "reader")
-        writer_rt_args = _concatenate_runtime_args(phase_kernels, "writer")
-        compute_rt_args = _concatenate_runtime_args(phase_kernels, "compute")
-
         bc = self._barrier_config
-
-        # Reader gets 4 barrier addresses
-        reader_barrier_addrs = [
-            bc.compute_done_addr,
-            bc.writer_done_addr,
-            bc.global_arrive_addr,
-            bc.global_release_addr,
-        ]
-        reader_rt_args, reader_barrier_offset = _append_barrier_runtime_args(
-            reader_rt_args,
-            reader_barrier_addrs,
-        )
-
-        # Writer gets 2 barrier addresses (writer_done, global_release)
-        writer_barrier_addrs = [bc.writer_done_addr, bc.global_release_addr]
-        writer_rt_args, writer_barrier_offset = _append_barrier_runtime_args(
-            writer_rt_args,
-            writer_barrier_addrs,
-        )
-
-        # Compute gets 2 barrier addresses (compute_done, global_release)
-        compute_barrier_addrs = [bc.compute_done_addr, bc.global_release_addr]
-        compute_rt_args, compute_barrier_offset = _append_barrier_runtime_args(
-            compute_rt_args,
-            compute_barrier_addrs,
-        )
-
-        # Build fused kernel descriptors
         fused_kernels = []
 
-        # Fused reader
-        if fused_reader_source is not None:
-            reader_desc = ttnn.KernelDescriptor()
-            reader_desc.kernel_source = fused_reader_source
-            reader_desc.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-            reader_desc.core_ranges = core_ranges
-            reader_desc.compile_time_args = reader_ct_args
-            reader_desc.named_compile_time_args = _merge_named_compile_time_args(
-                phase_kernels,
-                "reader",
-                reader_rt_offsets,
-                barrier_rt_offset=reader_barrier_offset,
-                barrier_config=self._barrier_config,
-            )
-            reader_desc.defines = _merge_defines(phase_kernels, "reader")
-            reader_desc.runtime_args = reader_rt_args
-            reader_desc.common_runtime_args = _concatenate_common_runtime_args(phase_kernels, "reader")
-            reader_desc.config = phase_kernels[0]["reader"].config
-            fused_kernels.append(reader_desc)
+        # For each discovered role: generate fused source, merge args, build descriptor
+        for role_key in role_keys:
+            risc_type, core_key = role_key
 
-        # Fused writer
-        if fused_writer_source is not None:
-            writer_desc = ttnn.KernelDescriptor()
-            writer_desc.kernel_source = fused_writer_source
-            writer_desc.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-            writer_desc.core_ranges = core_ranges
-            writer_desc.compile_time_args = writer_ct_args
-            writer_desc.named_compile_time_args = _merge_named_compile_time_args(
-                phase_kernels,
-                "writer",
-                writer_rt_offsets,
-                barrier_rt_offset=writer_barrier_offset,
-            )
-            writer_desc.defines = _merge_defines(phase_kernels, "writer")
-            writer_desc.runtime_args = writer_rt_args
-            writer_desc.common_runtime_args = _concatenate_common_runtime_args(phase_kernels, "writer")
-            # Use first available writer config
+            # Get role-specific core_ranges from first available phase
+            role_core_ranges = None
             for pk in phase_kernels:
-                if pk["writer"] is not None:
-                    writer_desc.config = pk["writer"].config
+                kernel = pk.get(role_key)
+                if kernel is not None:
+                    role_core_ranges = kernel.core_ranges
                     break
-            fused_kernels.append(writer_desc)
 
-        # Fused compute
-        if fused_compute_source is not None:
-            compute_desc = ttnn.KernelDescriptor()
-            compute_desc.kernel_source = fused_compute_source
-            compute_desc.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-            compute_desc.core_ranges = core_ranges
-            compute_desc.compile_time_args = compute_ct_args
-            compute_desc.named_compile_time_args = _merge_named_compile_time_args(
+            if role_core_ranges is None:
+                continue
+
+            # Merge compile-time args and compute offsets
+            ct_args, ct_offsets = _merge_compile_time_args(phase_kernels, role_key)
+            rt_offsets = _compute_runtime_arg_offsets(phase_kernels, role_key)
+
+            # Generate fused source and determine barrier addresses per RISC type
+            # IMPORTANT: riscv_0 must use the GLOBAL barrier config (bc) so that
+            # ALL riscv_0 cores across ALL roles synchronize via a single barrier.
+            # Per-role barriers would cause sender/receiver readers to proceed
+            # independently, leading to data races between phases.
+            if risc_type == "riscv_0":
+                fused_source = _generate_fused_riscv0_source(
+                    phase_kernels,
+                    role_key,
+                    self.phases,
+                    ct_offsets,
+                    sweep_cb_indices,
+                    bc,
+                    rebind_info,
+                )
+                barrier_addrs = [
+                    bc.compute_done_addr,
+                    bc.writer_done_addr,
+                    bc.global_arrive_addr,
+                    bc.global_release_addr,
+                ]
+            elif risc_type == "riscv_1":
+                fused_source = _generate_fused_riscv1_source(
+                    phase_kernels,
+                    role_key,
+                    self.phases,
+                    ct_offsets,
+                    rebind_info,
+                    bc,
+                )
+                barrier_addrs = [bc.writer_done_addr, bc.global_release_addr]
+            elif risc_type == "compute":
+                fused_source = _generate_fused_compute_source(
+                    phase_kernels,
+                    role_key,
+                    self.phases,
+                    ct_offsets,
+                    sweep_cb_indices,
+                    bc,
+                    rebind_info,
+                )
+                barrier_addrs = [bc.compute_done_addr, bc.global_release_addr]
+            else:
+                continue
+
+            if fused_source is None:
+                continue
+
+            # Concatenate runtime args and append barrier addresses
+            rt_args = _concatenate_runtime_args(phase_kernels, role_key)
+            rt_args, barrier_offset = _append_barrier_runtime_args(rt_args, barrier_addrs)
+
+            # Merge named compile-time args (only riscv_0 gets full barrier config for global barrier)
+            # Use global bc (not per-role) so all riscv_0 roles share one unified barrier
+            barrier_cfg_for_named = bc if risc_type == "riscv_0" else None
+            named_ct_args = _merge_named_compile_time_args(
                 phase_kernels,
-                "compute",
-                compute_rt_offsets,
-                barrier_rt_offset=compute_barrier_offset,
+                role_key,
+                rt_offsets,
+                barrier_rt_offset=barrier_offset,
+                barrier_config=barrier_cfg_for_named,
             )
-            compute_desc.defines = _merge_defines(phase_kernels, "compute")
-            compute_desc.runtime_args = compute_rt_args
-            compute_desc.common_runtime_args = _concatenate_common_runtime_args(phase_kernels, "compute")
-            compute_desc.config = _validate_and_get_compute_config(phase_kernels)
-            fused_kernels.append(compute_desc)
+
+            # Add rebind named compile-time args (addr + size for each CB that changes)
+            for phase_idx, rebinds in rebind_info.items():
+                for cb_idx, addr, size in rebinds:
+                    prefix = f"phase{phase_idx}_cb{cb_idx}"
+                    named_ct_args.append((f"{prefix}_rebind_addr", addr))
+                    named_ct_args.append((f"{prefix}_rebind_size", size))
+
+            # Get config from first available kernel for this role
+            role_config = None
+            for pk in phase_kernels:
+                kernel = pk.get(role_key)
+                if kernel is not None:
+                    role_config = kernel.config
+                    break
+
+            # For compute roles, validate configs match across phases
+            if risc_type == "compute":
+                role_config = _validate_and_get_compute_config_for_role(phase_kernels, role_key)
+
+            # Build fused kernel descriptor
+            desc = ttnn.KernelDescriptor()
+            desc.kernel_source = fused_source
+            desc.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+            desc.core_ranges = role_core_ranges
+            desc.compile_time_args = ct_args
+            desc.named_compile_time_args = named_ct_args
+            desc.defines = _merge_defines(phase_kernels, role_key)
+            desc.runtime_args = rt_args
+            desc.common_runtime_args = _concatenate_common_runtime_args(phase_kernels, role_key)
+            desc.config = role_config
+            fused_kernels.append(desc)
 
         # Merge semaphores (dedup by ID)
         all_semaphores = []

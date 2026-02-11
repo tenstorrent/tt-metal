@@ -2186,3 +2186,1169 @@ class TestStressInfrastructure:
             assert passing, f"Chain {i} PCC: {pcc}"
 
         print(f"Matmul + 3 chains: mm={pcc_mm:.6f}")
+
+    # Multi-core stress tests
+    # =========================================================================
+
+    def test_two_phase_chain_on_multicore_range(self, device, test_tensors):
+        """LN->RMS chain on 4-core range (0,0)-(3,0)."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+
+        ln = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+        )
+        rms = rms_norm.rms_norm(
+            ln.output_tensors[0],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+
+        fused = chain_descriptors([ln, rms], device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        golden = torch_rms_norm(
+            torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"2-phase chain on 4-core range PCC: {pcc:.6f}")
+        assert passing, f"Multi-core 2-phase chain PCC: {pcc}"
+
+    def test_three_phase_chain_on_2x2_grid(self, device, test_tensors):
+        """LN->RMS->LN chain on 2x2 core grid (0,0)-(1,1)."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+
+        ln1 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        rms = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms.output_tensors[0],
+            core_range_set=cores,
+            weight=test_tensors["tt_weight3"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+
+        fused = chain_descriptors([ln1, rms, ln2], device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        temp = torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"])
+        temp = torch_rms_norm(temp, test_tensors["torch_weight2"])
+        golden = torch_layer_norm(temp, test_tensors["torch_weight3"], test_tensors["torch_bias2"])
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"3-phase chain on 2x2 grid PCC: {pcc:.6f}")
+        assert passing, f"2x2 grid 3-phase chain PCC: {pcc}"
+
+    def test_three_parallel_chains_on_nonoverlapping_multicore_ranges(self, device, test_tensors):
+        """3 independent LN->RMS chains on non-overlapping multi-core ranges."""
+        from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Chain 0: cores (0,0)-(1,0) - 2 cores
+        # Chain 1: cores (2,0)-(4,0) - 3 cores
+        # Chain 2: cores (5,0)-(6,0) - 2 cores
+        core_ranges = [
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(4, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0))}),
+        ]
+
+        torch_inputs = [torch.randn_like(test_tensors["torch_input"]) for _ in range(3)]
+        tt_inputs = [
+            ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            for t in torch_inputs
+        ]
+
+        chains = []
+        for i in range(3):
+            ln = layer_norm.layer_norm(
+                tt_inputs[i],
+                core_range_set=core_ranges[i],
+                weight=test_tensors["tt_weight1"],
+                epsilon=1e-5,
+            )
+            rms = rms_norm.rms_norm(
+                ln.output_tensors[0],
+                core_range_set=core_ranges[i],
+                weight=test_tensors["tt_weight2"],
+                epsilon=1e-5,
+                compute_kernel_config=ln_compute_config,
+            )
+            chains.append([ln, rms])
+
+        fused = create_parallel_chain_descriptors(chains, device)
+        outputs = composite.launch(fused)
+        assert len(outputs) == 3
+
+        for i in range(3):
+            golden = torch_rms_norm(
+                torch_layer_norm(torch_inputs[i], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+            )
+            out = ttnn.to_torch(outputs[i][0])
+            passing, pcc = comp_pcc(golden, out, pcc=0.98)
+            assert passing, f"Chain {i} PCC: {pcc}"
+            print(f"Chain {i} PCC: {pcc:.6f}")
+
+    def test_four_phase_rms_chain_on_multicore(self, device, test_tensors):
+        """4-phase all-RMS chain on 3-core range (2,0)-(4,0)."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(4, 0))})
+
+        torch_weight4 = torch.ones_like(test_tensors["torch_weight1"])
+        tt_weight4 = ttnn.from_torch(
+            torch_weight4,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        weights = [test_tensors["tt_weight1"], test_tensors["tt_weight2"], test_tensors["tt_weight3"], tt_weight4]
+        torch_weights = [
+            test_tensors["torch_weight1"],
+            test_tensors["torch_weight2"],
+            test_tensors["torch_weight3"],
+            torch_weight4,
+        ]
+
+        descs = []
+        prev_input = test_tensors["tt_input"]
+        for w in weights:
+            d = rms_norm.rms_norm(prev_input, core_range_set=cores, weight=w, epsilon=1e-5)
+            descs.append(d)
+            prev_input = d.output_tensors[0]
+
+        fused = chain_descriptors(descs, device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        golden = test_tensors["torch_input"]
+        for tw in torch_weights:
+            golden = torch_rms_norm(golden, tw)
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"4-phase RMS on 3-core range PCC: {pcc:.6f}")
+        assert passing, f"Multi-core 4-phase RMS PCC: {pcc}"
+
+    def test_mixed_single_and_multicore_parallel_chains(self, device, test_tensors):
+        """Mix of single-core and multi-core chains in parallel."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Chain A: single core (0,0)
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        torch_input_a = test_tensors["torch_input"]
+        tt_input_a = test_tensors["tt_input"]
+
+        # Chain B: 3 cores (1,0)-(3,0)
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0))})
+        torch_input_b = torch.randn_like(test_tensors["torch_input"])
+        tt_input_b = ttnn.from_torch(
+            torch_input_b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Chain C: 2 cores (4,0)-(5,0)
+        cores_c = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(5, 0))})
+        torch_input_c = torch.randn_like(test_tensors["torch_input"])
+        tt_input_c = ttnn.from_torch(
+            torch_input_c,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Build all chains
+        chains_data = [
+            (cores_a, tt_input_a, torch_input_a),
+            (cores_b, tt_input_b, torch_input_b),
+            (cores_c, tt_input_c, torch_input_c),
+        ]
+
+        fused_chains = []
+        for cores, tt_in, _ in chains_data:
+            ln = layer_norm.layer_norm(
+                tt_in,
+                core_range_set=cores,
+                weight=test_tensors["tt_weight1"],
+                epsilon=1e-5,
+            )
+            rms = rms_norm.rms_norm(
+                ln.output_tensors[0],
+                core_range_set=cores,
+                weight=test_tensors["tt_weight2"],
+                epsilon=1e-5,
+                compute_kernel_config=ln_compute_config,
+            )
+            fused_chains.append(chain_descriptors([ln, rms], device))
+
+        outputs = composite.launch(fused_chains)
+        assert len(outputs) == 3
+
+        # Verify all chains
+        for i, (_, _, torch_in) in enumerate(chains_data):
+            golden = torch_rms_norm(
+                torch_layer_norm(torch_in, test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+            )
+            out = ttnn.to_torch(outputs[i][0])
+            passing, pcc = comp_pcc(golden, out, pcc=0.98)
+            assert passing, f"Chain {i} PCC: {pcc}"
+            print(f"Chain {i} PCC: {pcc:.6f}")
+
+    def test_parallel_three_phase_chains_on_separate_multicore_ranges(self, device, test_tensors):
+        """2 independent 3-phase LN->RMS->LN chains on separate multi-core ranges."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Chain A: cores (0,0)-(2,0)
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})
+        torch_input_a = test_tensors["torch_input"]
+        tt_input_a = test_tensors["tt_input"]
+
+        # Chain B: cores (3,0)-(5,0)
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(5, 0))})
+        torch_input_b = torch.randn_like(test_tensors["torch_input"])
+        tt_input_b = ttnn.from_torch(
+            torch_input_b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        chains_data = [
+            (cores_a, tt_input_a, torch_input_a),
+            (cores_b, tt_input_b, torch_input_b),
+        ]
+
+        fused_chains = []
+        for cores, tt_in, _ in chains_data:
+            ln1 = layer_norm.layer_norm(
+                tt_in,
+                core_range_set=cores,
+                weight=test_tensors["tt_weight1"],
+                bias=test_tensors["tt_bias1"],
+                epsilon=1e-5,
+            )
+            rms = rms_norm.rms_norm(
+                ln1.output_tensors[0],
+                core_range_set=cores,
+                weight=test_tensors["tt_weight2"],
+                epsilon=1e-5,
+                compute_kernel_config=ln_compute_config,
+            )
+            ln2 = layer_norm.layer_norm(
+                rms.output_tensors[0],
+                core_range_set=cores,
+                weight=test_tensors["tt_weight3"],
+                bias=test_tensors["tt_bias2"],
+                epsilon=1e-5,
+            )
+            fused_chains.append(chain_descriptors([ln1, rms, ln2], device))
+
+        outputs = composite.launch(fused_chains)
+        assert len(outputs) == 2
+
+        # Verify both chains
+        for i, (_, _, torch_in) in enumerate(chains_data):
+            temp = torch_layer_norm(torch_in, test_tensors["torch_weight1"], test_tensors["torch_bias1"])
+            temp = torch_rms_norm(temp, test_tensors["torch_weight2"])
+            golden = torch_layer_norm(temp, test_tensors["torch_weight3"], test_tensors["torch_bias2"])
+            out = ttnn.to_torch(outputs[i][0])
+            passing, pcc = comp_pcc(golden, out, pcc=0.98)
+            assert passing, f"3-phase chain {i} PCC: {pcc}"
+            print(f"3-phase chain {i} PCC: {pcc:.6f}")
+
+    def test_matmul_plus_multicore_norm_chains(self, device, test_tensors, matmul_tensors):
+        """1 matmul + 2 multi-core fused norm chains in parallel."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Matmul on default core
+        mm = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
+
+        # Chain A on cores (2,0)-(3,0): LN->RMS
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        ln_a = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores_a,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+        )
+        rms_a = rms_norm.rms_norm(
+            ln_a.output_tensors[0],
+            core_range_set=cores_a,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        fused_a = chain_descriptors([ln_a, rms_a], device)
+
+        # Chain B on cores (4,0)-(6,0): RMS->LN
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(6, 0))})
+        torch_input_b = torch.randn_like(test_tensors["torch_input"])
+        tt_input_b = ttnn.from_torch(
+            torch_input_b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        rms_b = rms_norm.rms_norm(
+            tt_input_b,
+            core_range_set=cores_b,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        ln_b = layer_norm.layer_norm(
+            rms_b.output_tensors[0],
+            core_range_set=cores_b,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+        )
+        fused_b = chain_descriptors([rms_b, ln_b], device)
+
+        # Launch all 3 in parallel
+        outputs = composite.launch([mm, fused_a, fused_b])
+        assert len(outputs) == 3
+
+        # Verify matmul
+        golden_mm = matmul_tensors["torch_a"] @ matmul_tensors["torch_b"]
+        passing_mm, pcc_mm = comp_pcc(golden_mm, ttnn.to_torch(outputs[0][0]), pcc=0.99)
+        assert passing_mm, f"Matmul PCC: {pcc_mm}"
+
+        # Verify chain A (LN->RMS)
+        golden_a = torch_rms_norm(
+            torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+        passing_a, pcc_a = comp_pcc(golden_a, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing_a, f"Multi-core chain A PCC: {pcc_a}"
+
+        # Verify chain B (RMS->LN)
+        golden_b = torch_layer_norm(
+            torch_rms_norm(torch_input_b, test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+        passing_b, pcc_b = comp_pcc(golden_b, ttnn.to_torch(outputs[2][0]), pcc=0.98)
+        assert passing_b, f"Multi-core chain B PCC: {pcc_b}"
+
+        print(f"Matmul PCC: {pcc_mm:.6f}, Chain A PCC: {pcc_a:.6f}, Chain B PCC: {pcc_b:.6f}")
+
+    def test_four_parallel_multicore_chains_stress(self, device, test_tensors):
+        """4 independent 2-phase chains on different multi-core ranges - maximum stress."""
+        from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # 4 chains with varying core counts
+        # Chain 0: 2 cores (0,0)-(1,0)
+        # Chain 1: 1 core  (2,0)-(2,0)
+        # Chain 2: 3 cores (3,0)-(5,0)
+        # Chain 3: 2 cores (6,0)-(7,0)
+        core_ranges = [
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(7, 0))}),
+        ]
+
+        torch_inputs = [torch.randn_like(test_tensors["torch_input"]) for _ in range(4)]
+        tt_inputs = [
+            ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            for t in torch_inputs
+        ]
+
+        chains = []
+        for i in range(4):
+            ln = layer_norm.layer_norm(
+                tt_inputs[i],
+                core_range_set=core_ranges[i],
+                weight=test_tensors["tt_weight1"],
+                epsilon=1e-5,
+            )
+            rms = rms_norm.rms_norm(
+                ln.output_tensors[0],
+                core_range_set=core_ranges[i],
+                weight=test_tensors["tt_weight2"],
+                epsilon=1e-5,
+                compute_kernel_config=ln_compute_config,
+            )
+            chains.append([ln, rms])
+
+        fused = create_parallel_chain_descriptors(chains, device)
+        outputs = composite.launch(fused)
+        assert len(outputs) == 4
+
+        for i in range(4):
+            golden = torch_rms_norm(
+                torch_layer_norm(torch_inputs[i], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+            )
+            out = ttnn.to_torch(outputs[i][0])
+            passing, pcc = comp_pcc(golden, out, pcc=0.98)
+            assert passing, f"Multi-core chain {i} PCC: {pcc}"
+            print(f"Multi-core chain {i} PCC: {pcc:.6f}")
+
+
+# =============================================================================
+# Sharded Fusion Tests
+# =============================================================================
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+class TestShardedSequentialFusion:
+    """Tests for sequential fusion with sharded layernorm and rms_norm operations."""
+
+    def test_two_phase_ln_rms_block_sharded(self, device):
+        """LN->RMS chain with BLOCK_SHARDED input."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+        from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+            create_sharded_mem_config,
+            torch_layer_norm,
+            rms_norm_golden,
+        )
+
+        # Setup: 8x10 tiles = (256, 320), 2x5 cores, single-stage (block sharded)
+        h, w = 32 * 8, 32 * 10
+        num_cores_h, num_cores_w = 2, 5
+        block_ht, block_wt = 4, 2
+        two_stage = False
+
+        torch.manual_seed(12345)
+        torch_input = torch.randn((h, w), dtype=torch.bfloat16)
+        torch_weight_ln = torch.ones((w,), dtype=torch.bfloat16)
+        torch_weight_rms = torch.ones((w,), dtype=torch.bfloat16)
+
+        # Create sharded input
+        sharded_mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+        )
+        tt_weight_ln = ttnn.from_torch(torch_weight_ln, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_weight_rms = ttnn.from_torch(torch_weight_rms, layout=ttnn.TILE_LAYOUT, device=device)
+
+        # Create compute config
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # Create program config for sharded operations
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=block_ht,
+            block_w=block_wt,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        # Build chain
+        ln_desc = layer_norm.layer_norm(
+            tt_input,
+            weight=tt_weight_ln,
+            epsilon=1e-5,
+            compute_kernel_config=compute_config,
+            program_config=program_config,
+        )
+        rms_desc = rms_norm.rms_norm(
+            ln_desc.output_tensors[0],
+            weight=tt_weight_rms,
+            epsilon=1e-5,
+            compute_kernel_config=compute_config,
+            program_config=program_config,
+        )
+
+        fused = chain_descriptors([ln_desc, rms_desc], device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        # Golden
+        temp = torch_layer_norm(torch_input, weight=torch_weight_ln)
+        golden = rms_norm_golden(temp, torch_weight_rms)
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"Sharded LN->RMS chain PCC: {pcc:.6f}")
+        assert passing, f"Sharded LN->RMS PCC: {pcc}"
+
+    def test_two_phase_rms_ln_width_sharded(self, device):
+        """RMS->LN chain with WIDTH_SHARDED input (two-stage reduction)."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+        from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+            create_sharded_mem_config,
+            torch_layer_norm,
+            rms_norm_golden,
+        )
+
+        # Setup: 8x16 tiles = (256, 512), 2x4 cores, two-stage (width sharded)
+        h, w = 32 * 8, 32 * 16
+        num_cores_h, num_cores_w = 2, 4
+        block_ht, block_wt = 8, 2
+        two_stage = True
+
+        torch.manual_seed(12346)
+        torch_input = torch.randn((h, w), dtype=torch.bfloat16)
+        torch_weight_rms = torch.ones((w,), dtype=torch.bfloat16)
+        torch_weight_ln = torch.ones((w,), dtype=torch.bfloat16)
+
+        # Create width-sharded input
+        sharded_mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+        )
+        tt_weight_rms = ttnn.from_torch(torch_weight_rms, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_weight_ln = ttnn.from_torch(torch_weight_ln, layout=ttnn.TILE_LAYOUT, device=device)
+
+        # Create compute config
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # Create program config for sharded operations
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=block_ht,
+            block_w=block_wt,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        # Build chain
+        rms_desc = rms_norm.rms_norm(
+            tt_input,
+            weight=tt_weight_rms,
+            epsilon=1e-5,
+            compute_kernel_config=compute_config,
+            program_config=program_config,
+        )
+        ln_desc = layer_norm.layer_norm(
+            rms_desc.output_tensors[0],
+            weight=tt_weight_ln,
+            epsilon=1e-5,
+            compute_kernel_config=compute_config,
+            program_config=program_config,
+        )
+
+        fused = chain_descriptors([rms_desc, ln_desc], device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        # Golden
+        temp = rms_norm_golden(torch_input, torch_weight_rms)
+        golden = torch_layer_norm(temp, weight=torch_weight_ln)
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"Sharded RMS->LN chain PCC: {pcc:.6f}")
+        assert passing, f"Sharded RMS->LN PCC: {pcc}"
+
+    def test_three_phase_sharded_chain(self, device):
+        """LN->RMS->LN chain with BLOCK_SHARDED input."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+        from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+            create_sharded_mem_config,
+            torch_layer_norm,
+            rms_norm_golden,
+        )
+
+        # Setup: 4x8 tiles = (128, 256), 4x4 cores, single-stage
+        h, w = 32 * 4, 32 * 8
+        num_cores_h, num_cores_w = 4, 4
+        block_ht, block_wt = 1, 2
+        two_stage = False
+
+        torch.manual_seed(12347)
+        torch_input = torch.randn((h, w), dtype=torch.bfloat16)
+        torch_weight1 = torch.ones((w,), dtype=torch.bfloat16)
+        torch_weight2 = torch.ones((w,), dtype=torch.bfloat16)
+        torch_weight3 = torch.ones((w,), dtype=torch.bfloat16)
+
+        # Create sharded input
+        sharded_mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+        )
+        tt_weight1 = ttnn.from_torch(torch_weight1, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_weight2 = ttnn.from_torch(torch_weight2, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_weight3 = ttnn.from_torch(torch_weight3, layout=ttnn.TILE_LAYOUT, device=device)
+
+        # Create compute config
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # Create program config
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=block_ht,
+            block_w=block_wt,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        # Build 3-phase chain
+        ln1 = layer_norm.layer_norm(
+            tt_input,
+            weight=tt_weight1,
+            epsilon=1e-5,
+            compute_kernel_config=compute_config,
+            program_config=program_config,
+        )
+        rms = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            weight=tt_weight2,
+            epsilon=1e-5,
+            compute_kernel_config=compute_config,
+            program_config=program_config,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms.output_tensors[0],
+            weight=tt_weight3,
+            epsilon=1e-5,
+            compute_kernel_config=compute_config,
+            program_config=program_config,
+        )
+
+        fused = chain_descriptors([ln1, rms, ln2], device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        # Golden
+        temp = torch_layer_norm(torch_input, weight=torch_weight1)
+        temp = rms_norm_golden(temp, torch_weight2)
+        golden = torch_layer_norm(temp, weight=torch_weight3)
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"Sharded 3-phase chain PCC: {pcc:.6f}")
+        assert passing, f"Sharded 3-phase chain PCC: {pcc}"
+
+    def test_parallel_sharded_chains_nonoverlapping_grids(self, device):
+        """2 independent LN->RMS chains on non-overlapping sharded grids."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+        from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+            torch_layer_norm,
+            rms_norm_golden,
+        )
+
+        # Chain A: cores (0,0)-(1,1) - 2x2 grid, block sharded
+        # Chain B: cores (2,0)-(3,1) - 2x2 grid, block sharded
+        h, w = 32 * 4, 32 * 8
+        num_cores_h, num_cores_w = 2, 2
+
+        torch.manual_seed(12348)
+        torch_input_a = torch.randn((h, w), dtype=torch.bfloat16)
+        torch_input_b = torch.randn((h, w), dtype=torch.bfloat16)
+        torch_weight_ln = torch.ones((w,), dtype=torch.bfloat16)
+        torch_weight_rms = torch.ones((w,), dtype=torch.bfloat16)
+
+        # Create sharded configs for non-overlapping grids
+        shard_height = h // num_cores_h
+        shard_width = w // num_cores_w
+
+        # Chain A: cores (0,0)-(1,1)
+        shard_spec_a = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [shard_height, shard_width],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mem_config_a = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=shard_spec_a,
+        )
+
+        # Chain B: cores (2,0)-(3,1)
+        shard_spec_b = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 1))}),
+            [shard_height, shard_width],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mem_config_b = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=shard_spec_b,
+        )
+
+        tt_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config_a)
+        tt_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config_b)
+        tt_weight_ln = ttnn.from_torch(torch_weight_ln, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_weight_rms = ttnn.from_torch(torch_weight_rms, layout=ttnn.TILE_LAYOUT, device=device)
+
+        # Create compute config
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # Create program configs
+        block_ht, block_wt = 2, 4
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=block_ht,
+            block_w=block_wt,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        # Build chains
+        chains_fused = []
+        for tt_in in [tt_input_a, tt_input_b]:
+            ln = layer_norm.layer_norm(
+                tt_in,
+                weight=tt_weight_ln,
+                epsilon=1e-5,
+                compute_kernel_config=compute_config,
+                program_config=program_config,
+            )
+            rms = rms_norm.rms_norm(
+                ln.output_tensors[0],
+                weight=tt_weight_rms,
+                epsilon=1e-5,
+                compute_kernel_config=compute_config,
+                program_config=program_config,
+            )
+            chains_fused.append(chain_descriptors([ln, rms], device))
+
+        outputs = composite.launch(chains_fused)
+        assert len(outputs) == 2
+
+        # Verify both chains
+        for i, torch_in in enumerate([torch_input_a, torch_input_b]):
+            temp = torch_layer_norm(torch_in, weight=torch_weight_ln)
+            golden = rms_norm_golden(temp, torch_weight_rms)
+            result = ttnn.to_torch(outputs[i][0])
+            passing, pcc = comp_pcc(golden, result, pcc=0.98)
+            assert passing, f"Sharded chain {i} PCC: {pcc}"
+            print(f"Sharded chain {i} PCC: {pcc:.6f}")
+
+    def test_four_phase_all_rms_sharded(self, device):
+        """4-phase all-RMS chain with BLOCK_SHARDED input."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+        from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+            create_sharded_mem_config,
+            rms_norm_golden,
+        )
+
+        # Setup: 8x8 tiles = (256, 256), 4x4 cores, single-stage
+        h, w = 32 * 8, 32 * 8
+        num_cores_h, num_cores_w = 4, 4
+        block_ht, block_wt = 2, 2
+        two_stage = False
+
+        torch.manual_seed(12349)
+        torch_input = torch.randn((h, w), dtype=torch.bfloat16)
+        torch_weights = [torch.ones((w,), dtype=torch.bfloat16) for _ in range(4)]
+
+        # Create sharded input
+        sharded_mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+        )
+        tt_weights = [ttnn.from_torch(w, layout=ttnn.TILE_LAYOUT, device=device) for w in torch_weights]
+
+        # Create compute config
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # Create program config
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=block_ht,
+            block_w=block_wt,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        # Build 4-phase chain
+        descs = []
+        prev_input = tt_input
+        for tt_w in tt_weights:
+            d = rms_norm.rms_norm(
+                prev_input,
+                weight=tt_w,
+                epsilon=1e-5,
+                compute_kernel_config=compute_config,
+                program_config=program_config,
+            )
+            descs.append(d)
+            prev_input = d.output_tensors[0]
+
+        fused = chain_descriptors(descs, device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        # Golden
+        golden = torch_input
+        for tw in torch_weights:
+            golden = rms_norm_golden(golden, tw)
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"Sharded 4-phase RMS chain PCC: {pcc:.6f}")
+        assert passing, f"Sharded 4-phase RMS PCC: {pcc}"
+
+    @pytest.mark.parametrize("two_stage", [False, True])
+    def test_sharded_with_bias_and_residual(self, device, two_stage):
+        """LN->RMS chain with bias and residual using sharded tensors."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+        from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+            create_sharded_mem_config,
+            torch_layer_norm,
+            rms_norm_golden,
+        )
+
+        # Setup
+        h, w = 32 * 4, 32 * 8
+        num_cores_h, num_cores_w = 2, 4
+        # Single-stage: shard_ht = h/nch/32 = 128/2/32 = 2 tile rows, so block_ht must be <= 2
+        block_ht = 2 if not two_stage else 4
+        block_wt = 2 if not two_stage else 1
+
+        torch.manual_seed(12350)
+        torch_input = torch.randn((h, w), dtype=torch.bfloat16)
+        torch_residual = torch.randn((h, w), dtype=torch.bfloat16)
+        torch_weight_ln = torch.ones((w,), dtype=torch.bfloat16)
+        torch_bias_ln = torch.zeros((w,), dtype=torch.bfloat16)
+        torch_weight_rms = torch.ones((w,), dtype=torch.bfloat16)
+
+        # Create sharded tensors
+        sharded_mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+        tt_input = ttnn.from_torch(
+            torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+        )
+        tt_residual = ttnn.from_torch(
+            torch_residual, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+        )
+        tt_weight_ln = ttnn.from_torch(torch_weight_ln, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_bias_ln = ttnn.from_torch(torch_bias_ln, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_weight_rms = ttnn.from_torch(torch_weight_rms, layout=ttnn.TILE_LAYOUT, device=device)
+
+        # Create compute config
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # Create program config
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=block_ht,
+            block_w=block_wt,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        # Build chain with residual and bias
+        ln = layer_norm.layer_norm(
+            tt_input,
+            weight=tt_weight_ln,
+            bias=tt_bias_ln,
+            residual_input_tensor=tt_residual,
+            epsilon=1e-5,
+            compute_kernel_config=compute_config,
+            program_config=program_config,
+        )
+        rms = rms_norm.rms_norm(
+            ln.output_tensors[0],
+            weight=tt_weight_rms,
+            epsilon=1e-5,
+            compute_kernel_config=compute_config,
+            program_config=program_config,
+        )
+
+        fused = chain_descriptors([ln, rms], device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        # Golden
+        temp = torch_layer_norm(torch_input, residual=torch_residual, weight=torch_weight_ln, bias=torch_bias_ln)
+        golden = rms_norm_golden(temp, torch_weight_rms)
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        stage_name = "two-stage" if two_stage else "single-stage"
+        print(f"Sharded {stage_name} with bias/residual PCC: {pcc:.6f}")
+        assert passing, f"Sharded {stage_name} with bias/residual PCC: {pcc}"
+
+    def test_sharded_stress_varied_grid_sizes(self, device):
+        """Stress test: 3 parallel chains with different sharded grid sizes."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+        from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+            torch_layer_norm,
+            rms_norm_golden,
+        )
+
+        torch.manual_seed(12351)
+        torch_weight_ln = torch.ones((32 * 8,), dtype=torch.bfloat16)
+        torch_weight_rms = torch.ones((32 * 8,), dtype=torch.bfloat16)
+
+        tt_weight_ln = ttnn.from_torch(torch_weight_ln, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_weight_rms = ttnn.from_torch(torch_weight_rms, layout=ttnn.TILE_LAYOUT, device=device)
+
+        # Create compute config
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # Chain A: 2x2 grid on cores (0,0)-(1,1)
+        h_a, w_a = 32 * 4, 32 * 8
+        torch_input_a = torch.randn((h_a, w_a), dtype=torch.bfloat16)
+        shard_spec_a = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [h_a // 2, w_a // 2],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mem_config_a = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec_a
+        )
+        tt_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config_a)
+        prog_config_a = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=2,
+            block_w=4,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        # Chain B: 4x4 grid on cores (2,0)-(5,3)
+        h_b, w_b = 32 * 8, 32 * 8
+        torch_input_b = torch.randn((h_b, w_b), dtype=torch.bfloat16)
+        shard_spec_b = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(5, 3))}),
+            [h_b // 4, w_b // 4],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mem_config_b = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec_b
+        )
+        tt_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config_b)
+        prog_config_b = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=2,
+            block_w=2,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        # Chain C: 2x4 grid on cores (6,0)-(7,3) — 2 cols (x:6-7), 4 rows (y:0-3)
+        # Use COL_MAJOR so 4 rows map to width shards (4 <= 4 rows) and 2 cols map to height (2 <= 2 cols)
+        h_c, w_c = 32 * 4, 32 * 8
+        torch_input_c = torch.randn((h_c, w_c), dtype=torch.bfloat16)
+        shard_spec_c = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(7, 3))}),
+            [h_c // 2, w_c // 4],
+            ttnn.ShardOrientation.COL_MAJOR,
+        )
+        mem_config_c = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec_c
+        )
+        tt_input_c = ttnn.from_torch(torch_input_c, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config_c)
+        prog_config_c = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=2,
+            block_w=2,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        # Build all chains
+        chains_data = [
+            (tt_input_a, torch_input_a, prog_config_a),
+            (tt_input_b, torch_input_b, prog_config_b),
+            (tt_input_c, torch_input_c, prog_config_c),
+        ]
+
+        chains_fused = []
+        for tt_in, _, prog_cfg in chains_data:
+            ln = layer_norm.layer_norm(
+                tt_in,
+                weight=tt_weight_ln,
+                epsilon=1e-5,
+                compute_kernel_config=compute_config,
+                program_config=prog_cfg,
+            )
+            rms = rms_norm.rms_norm(
+                ln.output_tensors[0],
+                weight=tt_weight_rms,
+                epsilon=1e-5,
+                compute_kernel_config=compute_config,
+                program_config=prog_cfg,
+            )
+            chains_fused.append(chain_descriptors([ln, rms], device))
+
+        outputs = composite.launch(chains_fused)
+        assert len(outputs) == 3
+
+        # Verify all chains
+        for i, (_, torch_in, _) in enumerate(chains_data):
+            temp = torch_layer_norm(torch_in, weight=torch_weight_ln)
+            golden = rms_norm_golden(temp, torch_weight_rms)
+            result = ttnn.to_torch(outputs[i][0])
+            passing, pcc = comp_pcc(golden, result, pcc=0.98)
+            assert passing, f"Sharded stress chain {i} PCC: {pcc}"
+            print(f"Sharded stress chain {i} PCC: {pcc:.6f}")
+
+    def test_block_ht_1_sharded_fusion(self, device):
+        """Regression test: block_ht=1 fused chains previously asserted in cb_pop_front.
+
+        When block_ht=1, gamma CB has capacity for 1 tile but compute pushes block_w
+        tiles without popping. The CB reset between phases must pop one tile at a time
+        to handle circular buffer wrapping correctly.
+        """
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+        from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import rms_norm_golden
+
+        h, w, nch, ncw = 64, 128, 2, 2
+        torch.manual_seed(12347)
+        torch_input = torch.randn((h, w), dtype=torch.bfloat16)
+        torch_w1 = torch.ones((w,), dtype=torch.bfloat16)
+        torch_w2 = torch.ones((w,), dtype=torch.bfloat16)
+
+        shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ncw - 1, nch - 1))}),
+            [h // nch, w // ncw],
+            ttnn.ShardOrientation.COL_MAJOR,
+        )
+        sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+        tt_in = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded)
+        tt_w1 = ttnn.from_torch(torch_w1, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_w2 = ttnn.from_torch(torch_w2, layout=ttnn.TILE_LAYOUT, device=device)
+
+        cc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            block_h=1,
+            block_w=2,
+            subblock_w=1,
+            use_welford=False,
+            inplace=False,
+        )
+
+        d1 = rms_norm.rms_norm(tt_in, weight=tt_w1, epsilon=1e-5, compute_kernel_config=cc, program_config=pc)
+        d2 = rms_norm.rms_norm(
+            d1.output_tensors[0], weight=tt_w2, epsilon=1e-5, compute_kernel_config=cc, program_config=pc
+        )
+        fused = chain_descriptors([d1, d2], device)
+
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        # Golden: RMS(RMS(input))
+        temp = rms_norm_golden(torch_input, torch_w1)
+        golden = rms_norm_golden(temp, torch_w2)
+
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        print(f"Block_ht=1 sharded RMS->RMS PCC: {pcc:.6f}")
+        assert passing, f"Block_ht=1 sharded RMS->RMS PCC: {pcc}"
