@@ -4,11 +4,13 @@
 
 #include "gtest/gtest.h"
 
+#include <chrono>
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_send_recv.hpp"
 #include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_forward.hpp"
+#include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_rate.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -182,6 +184,117 @@ TEST_F(SingleHostLoopbackPipelineFixture, SingleHostLoopbackPipeline) {
 
 TEST_F(SingleHostLoopbackPipelineFixture, SingleHostLoopbackPipelineWithCorrectnessCheck) {
     run_single_host_loopback_pipeline(get_mesh_device(), /*enable_correctness_check=*/true);
+}
+
+// ─── Rate (throughput) pipeline test ─────────────────────────────────────────
+// Linear pipeline (no loopback): sender -> fwd -> fwd -> receiver
+// Measures sustained pipeline throughput by pushing data one-way for many iterations.
+
+void run_single_host_rate_pipeline(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    uint32_t num_iterations,
+    bool enable_correctness_check) {
+    using namespace tt::tt_metal::distributed;
+
+    auto logical_coord = CoreCoord(0, 0);
+
+    constexpr uint32_t XFER_SIZE = 14 * 1024;
+    auto socket_fifo_size = XFER_SIZE * 16;
+
+    // Linear pipeline: (0,0) -> (1,0) -> (1,1) -> (0,1)
+    auto sender_device_coord = MeshCoordinate(0, 0);
+    auto fwd_device_coord_1 = MeshCoordinate(1, 0);
+    auto fwd_device_coord_2 = MeshCoordinate(1, 1);
+    auto recv_device_coord = MeshCoordinate(0, 1);
+
+    log_info(tt::LogTest, "Sender Device ID: {}", mesh_device->get_device(sender_device_coord)->id());
+    log_info(tt::LogTest, "Fwd 1 Device ID: {}", mesh_device->get_device(fwd_device_coord_1)->id());
+    log_info(tt::LogTest, "Fwd 2 Device ID: {}", mesh_device->get_device(fwd_device_coord_2)->id());
+    log_info(tt::LogTest, "Recv Device ID: {}", mesh_device->get_device(recv_device_coord)->id());
+
+    // Socket connections for linear pipeline
+    SocketConnection socket_connection_01 = SocketConnection(
+        MeshCoreCoord(sender_device_coord, logical_coord), MeshCoreCoord(fwd_device_coord_1, logical_coord));
+    SocketConnection socket_connection_12 = SocketConnection(
+        MeshCoreCoord(fwd_device_coord_1, logical_coord), MeshCoreCoord(fwd_device_coord_2, logical_coord));
+    SocketConnection socket_connection_23 = SocketConnection(
+        MeshCoreCoord(fwd_device_coord_2, logical_coord), MeshCoreCoord(recv_device_coord, logical_coord));
+
+    SocketMemoryConfig socket_mem_config = SocketMemoryConfig(BufferType::L1, socket_fifo_size);
+
+    SocketConfig socket_config_01 = SocketConfig({socket_connection_01}, socket_mem_config);
+    SocketConfig socket_config_12 = SocketConfig({socket_connection_12}, socket_mem_config);
+    SocketConfig socket_config_23 = SocketConfig({socket_connection_23}, socket_mem_config);
+
+    constexpr uint32_t num_elems = XFER_SIZE / sizeof(uint32_t);
+    constexpr uint32_t buffer_size = XFER_SIZE;
+
+    auto [send_socket_0, recv_socket_1] = MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_01);
+    auto [send_socket_1, recv_socket_2] = MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_12);
+    auto [send_socket_2, recv_socket_end] = MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_23);
+
+    // Create input buffer
+    DeviceLocalBufferConfig buffer_config = {
+        .page_size = buffer_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(std::nullopt, TensorMemoryLayout::INTERLEAVED),
+        .bottom_up = std::nullopt,
+        .sub_device_id = std::nullopt,
+    };
+    auto input_mesh_buffer =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device.get());
+
+    // Initialize buffer with data
+    std::vector<uint32_t> host_data(num_elems);
+    for (uint32_t j = 0; j < num_elems; j++) {
+        host_data[j] = j;
+    }
+    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
+    Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
+
+    // Host-side timing: record start time just before launching kernels
+    auto start_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                          std::chrono::high_resolution_clock::now().time_since_epoch())
+                          .count();
+
+    // Launch rate-mode kernels: sender -> fwd -> fwd -> receiver
+    tt::tt_metal::send_async_rate(
+        mesh_device.get(), input_buffer, tt::DataFormat::UInt32, send_socket_0, num_iterations);
+    tt::tt_metal::socket_forward_rate(
+        mesh_device.get(), recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t), num_iterations);
+    tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket_2, send_socket_2, XFER_SIZE, num_iterations);
+    tt::tt_metal::recv_async_rate(
+        mesh_device.get(), recv_socket_end, XFER_SIZE, num_iterations, enable_correctness_check);
+    Synchronize(mesh_device.get(), std::nullopt);
+
+    // Host-side timing: record end time after all kernels complete
+    auto end_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::high_resolution_clock::now().time_since_epoch())
+                        .count();
+
+    // Compute throughput from host-side wall-clock time
+    double elapsed_us = static_cast<double>(end_time - start_time);
+    double total_bytes = static_cast<double>(num_iterations) * XFER_SIZE;
+    double rate_gbps = (total_bytes * 8.0) / (elapsed_us * 1e3);
+
+    log_info(tt::LogTest, "Pipeline rate test: {} iterations, {} bytes/iter", num_iterations, XFER_SIZE);
+    log_info(
+        tt::LogTest,
+        "Host-side elapsed: {:.2f} us, total bytes: {:.2f} MB, {:.4f} Gbps ({:.2f} Mbps)",
+        elapsed_us,
+        total_bytes / (1024.0 * 1024.0),
+        rate_gbps,
+        rate_gbps * 1e3);
+}
+
+TEST_F(SingleHostLoopbackPipelineFixture, SingleHostRatePipeline) {
+    constexpr uint32_t NUM_ITERATIONS = 100000;
+    run_single_host_rate_pipeline(get_mesh_device(), NUM_ITERATIONS, /*enable_correctness_check=*/false);
+}
+
+TEST_F(SingleHostLoopbackPipelineFixture, SingleHostRatePipelineWithCorrectnessCheck) {
+    constexpr uint32_t NUM_ITERATIONS = 100;
+    run_single_host_rate_pipeline(get_mesh_device(), NUM_ITERATIONS, /*enable_correctness_check=*/true);
 }
 
 }  // namespace tt::tt_metal
