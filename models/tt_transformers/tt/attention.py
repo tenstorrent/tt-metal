@@ -853,6 +853,10 @@ class Attention(LightweightModule):
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+        if rot_mats[0].layout != ttnn.TILE_LAYOUT:
+            rot_mats[0] = ttnn.to_layout(rot_mats[0], ttnn.TILE_LAYOUT)
+        if rot_mats[1].layout != ttnn.TILE_LAYOUT:
+            rot_mats[1] = ttnn.to_layout(rot_mats[1], ttnn.TILE_LAYOUT)
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
