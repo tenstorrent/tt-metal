@@ -39,23 +39,21 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
 
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
-        tensor_args.input_tensor[0],
-        mesh_coordinate,
-        operation_attributes.cluster_axis.value_or(0) /*why is cluster axis optional?*/);
+        tensor_args.input_tensor[0], mesh_coordinate, operation_attributes.cluster_axis);
 
     std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input_tensor[0],
         mesh_coordinate,
         1,
         operation_attributes.topology,
-        operation_attributes.cluster_axis.value_or(0));
+        operation_attributes.cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input_tensor[0],
         mesh_coordinate,
         -1,
         operation_attributes.topology,
-        operation_attributes.cluster_axis.value_or(0));
+        operation_attributes.cluster_axis);
     auto
         [worker_sender_reader_forward_kernel_id,
          worker_sender_writer_forward_kernel_id,

@@ -110,23 +110,21 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     auto* mesh_device = input_tensor_q.device();
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
-        input_tensor_q,
-        coord,
-        args.all_gather_operation_attributes.cluster_axis.value_or(0) /*why is cluster axis optional?*/);
+        input_tensor_q, coord, args.all_gather_operation_attributes.cluster_axis);
 
     std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
         input_tensor_q,
         coord,
         1,
         args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.cluster_axis.value_or(0));
+        args.all_gather_operation_attributes.cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
         input_tensor_q,
         coord,
         -1,
         args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.cluster_axis.value_or(0));
+        args.all_gather_operation_attributes.cluster_axis);
 
     auto scale = args.scale;
     if (not scale.has_value()) {
