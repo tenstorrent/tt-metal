@@ -176,6 +176,7 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         embedding_dim: int,
         pooled_projection_dim: int,
         mesh_device: ttnn.MeshDevice | None = None,
+        bias: bool = True,
         with_guidance: bool = True,
     ) -> None:
         super().__init__()
@@ -183,13 +184,16 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         self.embedding_dim = embedding_dim
         self.pooled_projection_dim = pooled_projection_dim
         self.mesh_device = mesh_device
-        self.with_guidance = with_guidance
 
-        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
+        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, bias=bias, mesh_device=mesh_device)
         self.guidance_embedder = (
-            TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device) if with_guidance else None
+            TimestepEmbedding(256, embedding_dim, bias=bias, mesh_device=mesh_device) if with_guidance else None
         )
-        self.text_embedder = PixArtAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
+        self.text_embedder = (
+            PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, bias=bias, mesh_device=mesh_device)
+            if pooled_projection_dim != 0
+            else None
+        )
 
         self.time_proj_factor = self._create_time_proj_factor(256)
 
@@ -212,11 +216,10 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         *,
         timestep: ttnn.Tensor,
         guidance: ttnn.Tensor | None = None,
-        pooled_projection: ttnn.Tensor,
+        pooled_projection: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        batch_size = pooled_projection.shape[0]
+        batch_size = timestep.shape[0]
 
-        assert len(pooled_projection.shape) == 2
         assert timestep.shape == [batch_size, 1]
         assert timestep.dtype == ttnn.float32, "timesteps require float32 precision"
 
@@ -224,23 +227,26 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)
         timesteps_proj = ttnn.concat([c, s], dim=-1)
-        timesteps_emb = self.timestep_embedder(timesteps_proj)
+        output = self.timestep_embedder(timesteps_proj)
 
-        text_emb = self.text_embedder(pooled_projection)
+        if self.text_embedder is not None:
+            assert pooled_projection is not None
+            assert len(pooled_projection.shape) == 2
+            assert pooled_projection.shape[0] == batch_size
 
-        if not self.with_guidance:
-            return timesteps_emb + text_emb
+            output += self.text_embedder(pooled_projection)
 
-        assert guidance is not None
-        assert guidance.shape == [batch_size, 1]
+        if self.guidance_embedder is not None:
+            assert guidance is not None
+            assert guidance.shape == [batch_size, 1]
 
-        emb = guidance * self.time_proj_factor
-        c = ttnn.cos(emb)
-        s = ttnn.sin(emb)
-        guidances_proj = ttnn.concat([c, s], dim=-1)
-        guidance_emb = self.guidance_embedder(guidances_proj)
+            emb = guidance * self.time_proj_factor
+            c = ttnn.cos(emb)
+            s = ttnn.sin(emb)
+            guidances_proj = ttnn.concat([c, s], dim=-1)
+            output += self.guidance_embedder(guidances_proj)
 
-        return timesteps_emb + guidance_emb + text_emb
+        return output
 
 
 class PatchEmbed(Module):
