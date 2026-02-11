@@ -70,6 +70,10 @@ target_link_libraries(
     GTest::gmock_main
     ttml
 )
+
+# Reuse the ttml precompiled header for test compilation
+target_precompile_headers(ttml_tests REUSE_FROM ttml)
+
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
 # Define the target file location
