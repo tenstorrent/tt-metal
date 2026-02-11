@@ -429,12 +429,12 @@ int main(int argc, char** argv) {
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
-            benchmark::RegisterBenchmark("WriteSharded", BM_write_sharded, device)
-                ->ArgsProduct(benchmark_args)
-                ->UseRealTime()
-                ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
-                ->ComputeStatistics("min", compute_min)
-                ->ComputeStatistics("max", compute_max);
+        benchmark::RegisterBenchmark("WriteSharded", BM_write_sharded, device)
+            ->ArgsProduct(benchmark_args)
+            ->UseRealTime()
+            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+            ->ComputeStatistics("min", compute_min)
+            ->ComputeStatistics("max", compute_max);
         bool can_map_to_noc = experimental::GetMemoryPinningParameters(*devices[0]).can_map_to_noc;
 
         if (can_map_to_noc) {
