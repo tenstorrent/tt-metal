@@ -15,10 +15,6 @@ on:
       enabled-skus:
         required: true
         type: string
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
 
 jobs:
   load-test-matrix:
