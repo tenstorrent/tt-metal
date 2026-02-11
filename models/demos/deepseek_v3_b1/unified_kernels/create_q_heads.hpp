@@ -185,8 +185,6 @@ struct CreateQHeads {
                 uint64_t dst_data_noc_addr_0 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_0);
                 noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
                     src_addr, dst_data_noc_addr_0, half_qnope_data_size_bytes);
-                noc_async_writes_flushed();
-                noc_async_atomic_barrier();
                 noc_semaphore_inc(phase1_semaphore_noc_addr, 1);
 
                 // Second half: continues after first block
@@ -194,9 +192,8 @@ struct CreateQHeads {
                 uint64_t dst_data_noc_addr_1 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_1);
                 noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
                     src_addr + half_qnope_data_size_bytes, dst_data_noc_addr_1, half_qnope_data_size_bytes);
-                noc_async_writes_flushed();
-                noc_async_atomic_barrier();
                 noc_semaphore_inc(phase2_semaphore_noc_addr, 1);
+                noc_async_atomic_barrier();
             } else {
                 // QROPE core: Write 2 heads × 64 elements = 128 elements
                 // Memory layout: after all QNOPE data, QROPE is packed row-major [8, 64]
@@ -209,9 +206,8 @@ struct CreateQHeads {
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset);
                 noc_async_write<NOC_MAX_BURST_SIZE + 1, true, /*posted=*/true>(
                     src_addr, dst_data_noc_addr, args.qrope_head_size_bytes * 2);
-                noc_async_writes_flushed();
-                noc_async_atomic_barrier();
                 noc_semaphore_inc(rope_semaphore_noc_addr, 1);
+                noc_async_atomic_barrier();
             }
 
             // Pop source CB after sending
