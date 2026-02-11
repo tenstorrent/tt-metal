@@ -293,7 +293,7 @@ void MetalContext::initialize(
 
         // Wait for all async tasks to complete
         for (auto& fut : futures) {
-            fut.wait();
+            fut.get();
         }
     }
 
