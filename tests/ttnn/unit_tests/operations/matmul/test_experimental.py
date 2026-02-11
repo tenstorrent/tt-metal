@@ -7,12 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import (
-    is_wormhole_b0,
-    torch_random,
-    is_wormhole_b0,
-    is_blackhole,
-)
+from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = pytest.mark.use_module_device

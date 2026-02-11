@@ -43,6 +43,161 @@ struct PolarState {
 PolarState polar_state;
 }
 
+struct MuxSyncCoreArgs {
+    static constexpr uint16_t is_sync_core_arg_offset = 1;
+    static constexpr uint16_t termination_sync_address_arg_offset = 10;
+    static constexpr uint16_t termination_master_noc_x_arg_offset = 2;
+    static constexpr uint16_t termination_master_noc_y_arg_offset = 3;
+
+public:
+    const bool is_sync_core;
+    uint32_t termination_sync_address;
+    const uint32_t termination_master_noc_x;
+    const uint32_t termination_master_noc_y;
+
+    MuxSyncCoreArgs(const uint32_t arg_idx) :
+        is_sync_core(get_arg_val<uint32_t>(arg_idx + is_sync_core_arg_offset)),
+        termination_sync_address(get_semaphore(get_arg_val<uint32_t>(arg_idx + termination_sync_address_arg_offset))),
+        termination_master_noc_x(get_arg_val<uint32_t>(arg_idx + termination_master_noc_x_arg_offset)),
+        termination_master_noc_y(get_arg_val<uint32_t>(arg_idx + termination_master_noc_y_arg_offset)) {};
+};
+
+struct MuxConnectionBaseArgs {
+private:
+    static constexpr uint16_t fabric_mux_x_arg_offset = 2;
+    static constexpr uint16_t fabric_mux_y_arg_offset = 3;
+
+protected:
+    // 17 RT args per active mux sender from ttnn::ccl::fabric_mux_connection_rt_args
+    static constexpr uint32_t all_rt_arg_count = 17;
+
+public:
+    const uint8_t fabric_mux_x;
+    const uint8_t fabric_mux_y;
+
+    MuxConnectionBaseArgs(const uint32_t arg_idx) :
+        fabric_mux_x(get_arg_val<uint32_t>(arg_idx + fabric_mux_x_arg_offset)),
+        fabric_mux_y(get_arg_val<uint32_t>(arg_idx + fabric_mux_y_arg_offset)) {};
+
+    static void increment(uint32_t& arg_idx) { arg_idx += all_rt_arg_count; };
+};
+
+template <size_t MuxStatusAddress>
+struct MuxConnectionStatusArgs : MuxConnectionBaseArgs {
+private:
+    // rt arg offsets from ttnn::ccl::fabric_mux_connection_rt_args
+    static constexpr uint16_t local_fabric_mux_status_address_arg_offset = 11;
+
+public:
+    static constexpr size_t fabric_mux_status_address = MuxStatusAddress;
+    uint32_t local_fabric_mux_status_address;
+
+    MuxConnectionStatusArgs(const uint32_t arg_idx) :
+        MuxConnectionBaseArgs(arg_idx),
+        local_fabric_mux_status_address(
+            get_semaphore(get_arg_val<uint32_t>(arg_idx + local_fabric_mux_status_address_arg_offset))) {};
+};
+
+template <uint8_t MuxNumBuffersPerChannel, size_t MuxChannelBufferSize, size_t MuxStatusAddress>
+struct MuxConnectionArgs : MuxConnectionStatusArgs<MuxStatusAddress> {
+private:
+    // rt arg offsets from ttnn::ccl::fabric_mux_connection_rt_args
+    static constexpr uint32_t fabric_mux_channel_id_arg_offset = 9;
+    static constexpr uint32_t fabric_mux_channel_base_address_arg_offset = 4;
+    static constexpr uint32_t fabric_mux_connection_info_address_arg_offset = 5;
+    static constexpr uint32_t fabric_mux_connection_handshake_address_arg_offset = 6;
+    static constexpr uint32_t fabric_mux_flow_control_address_arg_offset = 7;
+    static constexpr uint32_t fabric_mux_buffer_index_address_arg_offset = 8;
+    static constexpr uint32_t local_flow_control_address_arg_offset = 12;
+    static constexpr uint32_t local_teardown_address_arg_offset = 13;
+    static constexpr uint32_t local_buffer_index_address_arg_offset = 14;
+
+public:
+    const uint8_t fabric_mux_channel_id;
+    static constexpr uint8_t fabric_mux_num_buffers_per_channel = MuxNumBuffersPerChannel;
+    static constexpr size_t fabric_mux_channel_buffer_size_bytes = MuxChannelBufferSize;
+    const size_t fabric_mux_channel_base_address;
+    const size_t fabric_mux_connection_info_address;
+    const size_t fabric_mux_connection_handshake_address;
+    const size_t fabric_mux_flow_control_address;
+    const size_t fabric_mux_buffer_index_address;
+    uint32_t local_flow_control_address;
+    uint32_t local_teardown_address;
+    uint32_t local_buffer_index_address;
+
+    MuxConnectionArgs(const uint32_t arg_idx) :
+        MuxConnectionStatusArgs<MuxStatusAddress>(arg_idx),
+        fabric_mux_channel_id(get_arg_val<uint32_t>(arg_idx + fabric_mux_channel_id_arg_offset)),
+        fabric_mux_channel_base_address(get_arg_val<uint32_t>(arg_idx + fabric_mux_channel_base_address_arg_offset)),
+        fabric_mux_connection_info_address(
+            get_arg_val<uint32_t>(arg_idx + fabric_mux_connection_info_address_arg_offset)),
+        fabric_mux_connection_handshake_address(
+            get_arg_val<uint32_t>(arg_idx + fabric_mux_connection_handshake_address_arg_offset)),
+        fabric_mux_flow_control_address(get_arg_val<uint32_t>(arg_idx + fabric_mux_flow_control_address_arg_offset)),
+        fabric_mux_buffer_index_address(get_arg_val<uint32_t>(arg_idx + fabric_mux_buffer_index_address_arg_offset)),
+        local_flow_control_address(
+            get_semaphore(get_arg_val<uint32_t>(arg_idx + local_flow_control_address_arg_offset))),
+        local_teardown_address(get_semaphore(get_arg_val<uint32_t>(arg_idx + local_teardown_address_arg_offset))),
+        local_buffer_index_address(
+            get_semaphore(get_arg_val<uint32_t>(arg_idx + local_buffer_index_address_arg_offset))) {};
+};
+
+template <size_t TerminationSignalAddress>
+struct MuxTerminationArgs : MuxConnectionBaseArgs {
+    static constexpr size_t fabric_mux_termination_signal_address = TerminationSignalAddress;
+
+    MuxTerminationArgs(const uint32_t arg_idx) : MuxConnectionBaseArgs(arg_idx) {};
+};
+
+template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t MuxChannelBufferSize, size_t MuxStatusAddress>
+inline void open_direction_connections_async(
+    const std::array<bool, Size>& directions,
+    std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
+    uint32_t rt_args_idx) {
+    for (uint32_t i = 0; i < Size; i++) {
+        if (directions[i]) {
+            MuxConnectionArgs<MuxNumBuffersPerChannel, MuxChannelBufferSize, MuxStatusAddress> args(rt_args_idx);
+
+            connections[i] = tt::tt_fabric::build_connection_to_fabric_endpoint<MuxNumBuffersPerChannel>(
+                args.fabric_mux_x,
+                args.fabric_mux_y,
+                args.fabric_mux_channel_id,
+                args.fabric_mux_num_buffers_per_channel,
+                args.fabric_mux_channel_buffer_size_bytes,
+                args.fabric_mux_channel_base_address,
+                args.fabric_mux_connection_info_address,
+                args.fabric_mux_connection_handshake_address,
+                args.fabric_mux_flow_control_address,
+                args.fabric_mux_buffer_index_address,
+                args.local_flow_control_address,
+                args.local_teardown_address,
+                args.local_buffer_index_address);
+
+            args.increment(rt_args_idx);
+        }
+    }
+}
+
+template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t MuxStatusAddress>
+inline void open_direction_connections_barrier(
+    const std::array<bool, Size>& directions,
+    std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
+    uint32_t rt_args_idx) {
+    for (uint32_t i = 0; i < Size; ++i) {
+        if (directions[i]) {
+            MuxConnectionStatusArgs<MuxStatusAddress> args(rt_args_idx);
+
+            tt::tt_fabric::wait_for_fabric_endpoint_ready(
+                args.fabric_mux_x,
+                args.fabric_mux_y,
+                args.fabric_mux_status_address,
+                args.local_fabric_mux_status_address);
+            tt::tt_fabric::fabric_client_connect(connections[i]);
+            args.increment(rt_args_idx);
+        }
+    }
+}
+
 template <size_t Size>
 inline void open_direction_connections(
     const std::array<bool, Size>& directions,
@@ -87,6 +242,32 @@ inline void close_direction_connections(
     for (size_t i = 0; i < Size; ++i) {
         if (directions[i]) {
             connections[i].close();
+        }
+    }
+}
+
+template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t TerminationSignalAddress>
+inline void close_direction_connections(
+    const std::array<bool, Size>& directions,
+    std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
+    bool is_sync_core,
+    uint32_t arg_idx = 0) {
+    for (uint32_t i = 0; i < Size; ++i) {
+        if (directions[i]) {
+            tt::tt_fabric::fabric_client_disconnect(connections[i]);
+        }
+    }
+
+    if (is_sync_core) {
+        for (uint32_t i = 0; i < Size; ++i) {
+            if (directions[i]) {
+                MuxTerminationArgs<TerminationSignalAddress> args(arg_idx);
+
+                tt::tt_fabric::fabric_endpoint_terminate(
+                    args.fabric_mux_x, args.fabric_mux_y, args.fabric_mux_termination_signal_address);
+
+                args.increment(arg_idx);
+            }
         }
     }
 }
@@ -196,10 +377,10 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
     }
 }
 
-template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType>
+template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType, class SenderType>
 inline void fabric_send_noc_unicast(
     AddrGenType addrgen,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    SenderType& fabric_connection,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t payload_l1_address,
     uint64_t noc_page,
@@ -211,7 +392,7 @@ inline void fabric_send_noc_unicast(
 
         tt::tt_fabric::linear::to_noc_unicast_write(
             align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
-        perform_payload_send<true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        perform_payload_send<true, SenderType>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
 
         payload_l1_address += curr_packet_size;
         offset += curr_packet_size;
@@ -232,10 +413,11 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes,
-    typename AddrGenType>
+    typename AddrGenType,
+    typename SenderType>
 inline void fabric_send_chip_unicast_noc_unicast(
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<SenderType, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t dest_chip_id,
     const uint32_t dest_mesh_id,
@@ -324,9 +506,9 @@ inline void fabric_send_noc_unicast_with_semaphore(
                 addrgen,
                 offset);
         } else {
-            // Fill header for fused unicast + atomic increment command when it is not the last packet
+            // Fill header for unicast write command when it is not the last packet
             tt::tt_fabric::linear::to_noc_unicast_write(
-                align(curr_packet_size, alignment), packet_header, payload_page_id, addrgen);
+                align(curr_packet_size, alignment), packet_header, payload_page_id, addrgen, offset);
         }
 
         // Send payload followed by header over the fabric.
@@ -410,9 +592,9 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
 }
 
 // Fabric send for NOC unicast semaphore increment only (no payload)
-template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols>
+template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols, typename SenderType>
 inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<SenderType, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t dest_chip_id,
     uint32_t dest_mesh_id,
@@ -440,10 +622,11 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes,
-    typename AddrGenType>
+    typename AddrGenType,
+    typename SenderType>
 inline void fabric_send_chip_unicast_noc_unicast_1d(
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<SenderType, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t linearized_dest_mesh_coord,
     uint32_t payload_l1_address,
@@ -542,9 +725,14 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
 }
 
 // Fabric send for NOC unicast semaphore increment only in 1D topology (no payload)
-template <uint32_t LinearizedSrcMeshCoord, tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    typename SenderType>
 inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<SenderType, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t linearized_dest_mesh_coord,
     uint64_t noc_remote_semaphore_address,
@@ -593,9 +781,10 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     ReplicateGroup Axis,
-    uint32_t NumDevices>
+    uint32_t NumDevices,
+    typename SenderType>
 inline void send_init_semaphore_to_configured_targets(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<SenderType, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint8_t dest_chip_ids[NumDevices],
     const uint8_t dest_mesh_ids[NumDevices],
@@ -645,11 +834,11 @@ inline void send_init_semaphore_to_configured_targets(
 // 0 --> 1 --> 2 --> 3 --> 4 --- 5
 //      [X]               [X]
 // We would set a hop mask of 0b01001 and set direction to eth_chan_directions::EAST.
-template <int32_t FabricMaxPacketSzBytes, typename AddrGenType>
+template <int32_t FabricMaxPacketSzBytes, typename AddrGenType, typename FabricConnectionsArrayType>
 inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
     // Fabric parameters
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsArrayType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint16_t fabric_mcast_hop_mask,
     uint32_t fabric_direction,  // eth_chan_directions index
@@ -747,11 +936,12 @@ template <
     uint32_t MeshCols,
     uint32_t FabricMaxNumDestinations,
     int32_t FabricMaxPacketSzBytes,
-    typename AddrGenType>
+    typename AddrGenType,
+    typename FabricConnectionsArrayType>
 inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
     // Fabric parameters
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsArrayType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t linearized_dest_mesh_coords[FabricMaxNumDestinations],
     uint32_t NumDestinations,
@@ -772,7 +962,7 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
         FabricMaxNumDestinations>(linearized_dest_mesh_coords, NumDestinations);
 
     // Send the packet
-    fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSzBytes, AddrGenType>(
+    fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSzBytes>(
         addrgen,
         fabric_connections,
         packet_header,

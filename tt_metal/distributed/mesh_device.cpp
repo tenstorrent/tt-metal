@@ -986,6 +986,8 @@ uint32_t MeshDeviceImpl::num_worker_cores(HalProgrammableCoreType core_type, Sub
 // Bank and memory management methods
 int MeshDeviceImpl::num_dram_channels() const { return reference_device()->num_dram_channels(); }
 
+int MeshDeviceImpl::get_clock_rate_mhz() const { return reference_device()->get_clock_rate_mhz(); }
+
 CoreCoord MeshDeviceImpl::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(this->get_devices(), [dram_channel](const auto* device) {
         return device->logical_core_from_dram_channel(dram_channel);
@@ -1190,10 +1192,6 @@ void MeshDeviceImpl::configure_fabric() {
     TT_THROW("configure_fabric() is not supported on MeshDevice - use individual devices instead");
     reference_device()->configure_fabric();
 }
-void MeshDeviceImpl::init_fabric() {
-    TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_fabric();
-}
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDeviceImpl::get_programmable_core_type(CoreCoord virtual_core) const {
@@ -1325,6 +1323,7 @@ bool MeshDevice::is_initialized() const { return pimpl_->is_initialized(); }
 int MeshDevice::num_dram_channels() const { return pimpl_->num_dram_channels(); }
 uint32_t MeshDevice::l1_size_per_core() const { return pimpl_->l1_size_per_core(); }
 uint32_t MeshDevice::dram_size_per_channel() const { return pimpl_->dram_size_per_channel(); }
+int MeshDevice::get_clock_rate_mhz() const { return pimpl_->get_clock_rate_mhz(); }
 CoreCoord MeshDevice::grid_size() const { return pimpl_->grid_size(); }
 CoreCoord MeshDevice::logical_grid_size() const { return pimpl_->logical_grid_size(); }
 CoreCoord MeshDevice::dram_grid_size() const { return pimpl_->dram_grid_size(); }
@@ -1442,7 +1441,6 @@ void MeshDevice::init_command_queue_host() { pimpl_->init_command_queue_host(); 
 void MeshDevice::init_command_queue_device() { pimpl_->init_command_queue_device(); }
 bool MeshDevice::compile_fabric() { return pimpl_->compile_fabric(); }
 void MeshDevice::configure_fabric() { pimpl_->configure_fabric(); }
-void MeshDevice::init_fabric() { pimpl_->init_fabric(); }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }

@@ -7,7 +7,6 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import is_grayskull, is_wormhole_b0, is_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 
 LLAMA_INPUT_SHAPES = [(2304, 1536), (1536, 2304), (2304, 3840), (2304, 3840), (3840, 2304)]
@@ -16,7 +15,6 @@ QWEN_INPUT_SHAPES = [(1536, 1536), (1536, 1536), (1536, 3840), (1536, 3840), (38
 QWEN_INPUT_DTYPES = [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b]
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS not supported")
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [

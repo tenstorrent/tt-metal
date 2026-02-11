@@ -770,6 +770,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          hang-detection-timeout: 10.0
       - name: ttnn nightly data_movement tests
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}

@@ -14,7 +14,7 @@
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_fabric_test_traffic.hpp"
-#include "tt_fabric_test_results.hpp"
+#include "tt_fabric_test_bandwidth_results.hpp"
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_fabric_test_constants.hpp"
 

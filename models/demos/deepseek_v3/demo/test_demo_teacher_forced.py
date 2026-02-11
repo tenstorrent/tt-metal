@@ -128,6 +128,7 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
         token_accuracy=True,
         reference_file=REFERENCE_FILE,
         tf_prompt_len=tf_prompt_len,
+        enable_trace=True,
     )
 
     # Check results

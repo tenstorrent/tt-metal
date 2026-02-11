@@ -56,6 +56,7 @@
   timeout: 75
   model-name: stable_diffusion_35_large
   model-type: DiT
+  save-perf-data: true
 
 - name: t3k_DiT_Mochi_model_perf_tests
   cmd: run_t3000_mochi_tests
@@ -65,6 +66,7 @@
   timeout: 75
   model-name: mochi
   model-type: DiT
+  save-perf-data: true
 
 - name: t3k_DiT_Wan2.2_model_perf_tests
   cmd: run_t3000_wan22_tests
@@ -74,6 +76,7 @@
   timeout: 45
   model-name: wan22
   model-type: DiT
+  save-perf-data: true
 
 - name: t3k_DiT_Flux.1-dev_model_perf_tests
   cmd: run_t3000_flux1_tests
@@ -83,6 +86,7 @@
   timeout: 50
   model-name: flux1-dev
   model-type: DiT
+  save-perf-data: true
 
 - name: t3k_DiT_Motif_model_perf_tests
   cmd: run_t3000_motif_tests
@@ -92,6 +96,7 @@
   timeout: 15
   model-name: motif
   model-type: DiT
+  save-perf-data: true
 
 - name: t3k_DiT_QwenImage_model_perf_tests
   cmd: run_t3000_qwenimage_tests
@@ -101,6 +106,7 @@
   timeout: 25
   model-name: qwenimage
   model-type: DiT
+  save-perf-data: true
 
 - name: t3k_ViT_Gemma3_perf_tests
   cmd: run_t3000_gemma3_tests
