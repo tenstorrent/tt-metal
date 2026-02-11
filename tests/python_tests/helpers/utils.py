@@ -196,9 +196,13 @@ def passed_test(
                 num_tiles = (res_tensor.size()[0]) // 1024
                 tile_shape = (32, 32)
 
-                GREEN = "\033[42m"
-                YELLOW = "\033[43m"
-                RED = "\033[41m"
+                def bg(r, g, b):
+                    return f"\033[48;2;{r};{g};{b}m"
+
+                BLUE = bg(0, 0, 100)
+                RED = bg(160, 0, 0)
+                PURPLE = bg(50, 0, 50)
+
                 RESET = "\033[0m"
 
                 def format_tile(
@@ -208,7 +212,7 @@ def passed_test(
                         return []
 
                     label = "Golden tile" if golden else "Result tile"
-                    background = YELLOW if golden else GREEN
+                    background = PURPLE if golden else BLUE
                     tile_lines = [f"Row\t === {label} {tile_no+1} ==="]
                     for row in range(32):
                         row_values = []
