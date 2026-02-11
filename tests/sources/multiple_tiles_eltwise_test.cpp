@@ -44,18 +44,20 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MATH_FIDELITY>(4, 0);
 
+    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (int i = 0; i < params->TILE_CNT; i++)
     {
-        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        LLK_ASSERT(
+            (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
         _llk_math_eltwise_binary_<
             ELTWISE_BINARY_OP,
             BroadcastType::NONE,
             DstSync::SyncHalf,
             is_fp32_dest_acc_en,
             MATH_FIDELITY,
-            EltwiseBinaryReuseDestType::NONE>(4, 0, false);
-        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            EltwiseBinaryReuseDestType::NONE>(4, i, false);
     }
+    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif
@@ -79,15 +81,17 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
 #endif
 
+    _llk_packer_wait_for_math_done_();
     for (int i = 0; i < params->TILE_CNT; i++)
     {
-        _llk_packer_wait_for_math_done_();
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(buffer_Res[i]));
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        LLK_ASSERT(
+            (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(buffer_Res[i]));
     }
+    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif

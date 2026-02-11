@@ -56,6 +56,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 {
     const bool is_int_fpu_en = false;
 
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 // copy srca to dest
 #ifdef ARCH_BLACKHOLE
     // set tilize flag to true
@@ -64,10 +65,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(4, formats.math);
 #endif
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (int i = 0; i < params->TILE_CNT; ++i)
     {
-        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        LLK_ASSERT(
+            (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             i, formats.math, formats.math);
     }
@@ -99,6 +101,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_packer_wait_for_math_done_();
     for (int i = 0; i < params->TILE_CNT; ++i)
     {
+        LLK_ASSERT(
+            (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(i, L1_ADDRESS(buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

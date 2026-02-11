@@ -178,6 +178,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
                         // Otherwise, data is immediately ready in destination register.
                         if constexpr (!unpack_to_dest)
                         {
+                            LLK_ASSERT(
+                                (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "block_tile exceeds max dest tiles");
                             _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                                 block_tile, formats.math, formats.math);
                         }
@@ -202,6 +205,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
                     // Copy from srcA to dest
                     for (int block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
+                        LLK_ASSERT(
+                            (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "block_tile exceeds max dest tiles");
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             block_tile, formats.math, formats.math);
 
@@ -257,6 +263,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
                     for (int block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
+                        LLK_ASSERT(
+                            (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
                 }
@@ -273,6 +282,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
                     _llk_packer_wait_for_math_done_();
                     for (int block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
+                        LLK_ASSERT(
+                            (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
                     _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();

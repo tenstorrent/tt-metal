@@ -186,6 +186,9 @@ void run_kernel(const volatile struct RuntimeParams *params)
                         {
                             num_units = (remaining_tiles - 3) / unit_dim;
                             _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units);
+                            LLK_ASSERT(
+                                (remaining_tiles - 3 < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "remaining_tiles - 3 exceeds max dest tiles");
                             _llk_math_fast_tilize_block_(remaining_tiles - 3, formats.math, 3, 1);
                         }
                         packed_tiles += remaining_tiles;
@@ -267,6 +270,9 @@ void run_kernel(const volatile struct RuntimeParams *params)
                         {
                             num_units = (remaining_tiles - 3) / unit_dim;
                             _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units);
+                            LLK_ASSERT(
+                                (remaining_tiles - 3 < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "remaining_tiles - 3 exceeds max dest tiles");
                             _llk_pack_fast_tilize_block_(remaining_tiles - 3, L1_ADDRESS(buffer_Res[tile_index + remaining_tiles - 3]), 3, 1);
                         }
                         packed_tiles += remaining_tiles;

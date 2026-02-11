@@ -27,17 +27,6 @@ using namespace ckernel;
 namespace ckernel::math
 {
 
-constexpr std::uint32_t DstTileSize[3] = {
-    64, // 32x32 tile shape
-    32, // 32x16, 16x32 tile shape
-    16  // 16x16 tile shape
-};
-constexpr std::uint32_t DstTileSizeLog2[3] = {
-    6, // 32x32 tile shape
-    5, // 32x16, 16x32 tile shape
-    4  // 16x16 tile shape
-};
-
 constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
                                                 // first 16 for sfpu, next 16 for fpu
 
@@ -153,6 +142,15 @@ inline void math_unpack_to_dest_tile_ready()
 template <DstTileShape tile_shape, UnpackDestination unpack_destination>
 inline void set_dst_write_addr(std::uint32_t tile_index)
 {
+    static_assert(
+        tile_shape == DstTileShape::Tile32x32 || tile_shape == DstTileShape::Tile32x16 || tile_shape == DstTileShape::Tile16x16, "Invalid tile shape");
+    static_assert(DstTileShape::Tile32x32 == 0, "DstTileShape::Tile32x32 must equal 0");
+    static_assert(DstTileShape::Tile32x16 == 1, "DstTileShape::Tile32x16 must equal 1");
+    static_assert(DstTileShape::Tile16x16 == 2, "DstTileShape::Tile16x16 must equal 2");
+    static_assert(DstTileSizeLog2[DstTileShape::Tile32x32] == 6, "DstTileSizeLog2[Tile32x32] must equal 6");
+    static_assert(DstTileSizeLog2[DstTileShape::Tile32x16] == 5, "DstTileSizeLog2[Tile32x16] must equal 5");
+    static_assert(DstTileSizeLog2[DstTileShape::Tile16x16] == 4, "DstTileSizeLog2[Tile16x16] must equal 4");
+
     std::uint32_t dst_index = tile_index << DstTileSizeLog2[tile_shape];
     dst_index               = dst_index + get_dest_buffer_base();
     if constexpr (unpack_destination == UnpackDestination::DestReg)
@@ -239,6 +237,23 @@ inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)
 inline constexpr int get_math_fidelity_increment(const int math_fidelity_desc)
 {
     return ((math_fidelity_desc >> 3) & 0x1) + 1;
+}
+
+/**
+ * @brief Calculates the maximum destination index for a matmul operation.
+ *
+ * Given the starting destination index and the dimensions ct_dim and rt_dim,
+ * this function computes the maximum destination index accessed by the matmul kernel.
+ * The addressing pattern always results in a maximum offset of ct_dim * rt_dim - 1.
+ *
+ * @param dst_index  Starting destination index
+ * @param ct_dim     Column tile dimension (default 1)
+ * @param rt_dim     Row tile dimension (default 1)
+ * @return           Maximum destination index accessed (dst_index + ct_dim * rt_dim - 1)
+ */
+inline std::uint32_t get_dest_max_matmul_tiles(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
+{
+    return dst_index + ct_dim * rt_dim - 1;
 }
 
 } // namespace ckernel::math

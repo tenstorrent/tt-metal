@@ -683,4 +683,34 @@ inline void apply_sign_magnitude_conversion(std::uint32_t src, std::uint32_t dst
     TTI_SFPSETSGN(0 /* imm */, dst /*lreg_c*/, src /*ldest*/, 0 /*imod*/);
 }
 
+constexpr std::uint32_t DstTileSizeLog2[3] = {
+    6, // 32x32 tile shape
+    5, // 32x16, 16x32 tile shape
+    4  // 16x16 tile shape
+};
+
+/**
+ * @brief Calculates the maximum number of destination tiles that can fit in the destination register.
+ *
+ * @tparam SYNC_MODE   Destination synchronization mode (SyncHalf or SyncFull)
+ * @tparam ACCUM_MODE Accumulation mode: true for 32-bit (FP32), false for 16-bit
+ * @tparam TILE_SHAPE      Tile shape enum value (e.g., 32x32, 16x16, etc.)
+ * @return constexpr std::uint32_t   Maximum number of destination tiles
+ *
+ * The calculation is based on the destination register size and the tile shape.
+ *
+ * Formula:
+ *   DEST_REGISTER_SIZE >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)]
+ *
+ * Where DEST_REGISTER_SIZE is selected based on SYNC_MODE and ACCUM_MODE.
+ */
+template <DstSync SYNC_MODE, bool ACCUM_MODE, DstTileShape TILE_SHAPE>
+constexpr std::uint32_t get_dest_max_tiles()
+{
+    constexpr std::uint32_t DEST_REGISTER_SIZE = SYNC_MODE == DstSync::SyncHalf ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                                                : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+
+    return DEST_REGISTER_SIZE >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
+}
+
 } // namespace ckernel

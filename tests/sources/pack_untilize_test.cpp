@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 
 // Globals
@@ -95,6 +96,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
             _llk_math_wait_for_dest_available_<dest_sync>();
             for (std::uint32_t tile_index_within_block = 0; tile_index_within_block < BLOCK_CT_DIM; ++tile_index_within_block) // Loop over tiles in the block
             {
+                LLK_ASSERT(
+                    (tile_index_within_block < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                    "Block tile index exceeds maximum destination tiles");
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                     tile_index_within_block, formats.math, formats.math);
             }

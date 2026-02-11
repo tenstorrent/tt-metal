@@ -104,6 +104,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
             _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
             for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
+                LLK_ASSERT(
+                    (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
 #ifdef ARCH_BLACKHOLE
                 _llk_math_transpose_dest_<is_fp32_dest_acc_en, MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>(block_tile);
 #else
@@ -144,6 +146,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
             _llk_packer_wait_for_math_done_();
             for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
+                LLK_ASSERT(
+                    (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
                 _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
             }
             _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

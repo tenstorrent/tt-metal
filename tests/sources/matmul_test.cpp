@@ -65,6 +65,12 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_math_matmul_init_<MATH_FIDELITY>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, params->CT_DIM, params->RT_DIM);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+    LLK_ASSERT(
+        (get_dest_max_matmul_tiles(0 /* DST_INDEX */, params->CT_DIM, params->RT_DIM) <
+         get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "Block tile index exceeds maximum destination tiles for matmul");
+
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (std::uint32_t j = 0; j < params->KT_DIM; j++)
     {
@@ -95,6 +101,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_packer_wait_for_math_done_();
     for (int i = 0; i < params->TILE_CNT; i++)
     {
+        LLK_ASSERT((i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "i exceeds max dest tiles");
         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

@@ -667,4 +667,5 @@ inline std::array<pack_counters_t, NUM_PACKERS> read_pack_counters()
 
     return config_vec;
 }
+
 } // namespace ckernel::packer

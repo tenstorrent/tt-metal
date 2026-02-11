@@ -74,6 +74,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
         _llk_math_wait_for_dest_available_<dest_sync>();
         for (int tile = 0; tile < num_tiles_in_block; tile++)
         {
+            LLK_ASSERT(
+                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
             _llk_math_eltwise_binary_<EltwiseBinaryType::ELWSUB, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi>(
                 num_faces, tile /* dst_index */, false /* clear_fp32_dst_acc */);
         }
@@ -119,6 +121,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
         for (int tile = 0; tile < num_tiles_in_block; tile++)
         {
             int res_tile_idx = (block * num_tiles_in_block) + tile;
+            LLK_ASSERT(
+                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
             _llk_pack_<dest_sync, is_fp32_dest_acc_en, false /* untilize */>(tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
         }
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
