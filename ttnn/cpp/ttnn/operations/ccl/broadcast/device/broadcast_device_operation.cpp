@@ -10,11 +10,6 @@
 
 namespace ttnn::prim {
 
-BroadcastDeviceOperation::program_factory_t BroadcastDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return BroadcastProgramFactory{};
-}
-
 void BroadcastDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);
@@ -71,9 +66,6 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<BroadcastDeviceOperation>(
         operation_attributes.sender_coord,
         operation_attributes.num_links,
@@ -83,7 +75,7 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
         operation_attributes.cluster_axis,
         subdevice_core_range_set,
         tensor_args,
-        program_factory.index());
+        0);
 }
 
 Tensor broadcast(

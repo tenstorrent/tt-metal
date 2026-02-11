@@ -12,13 +12,10 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce {
 
 DeepseekMinimalAllReduceDeviceOperation::program_factory_t
-DeepseekMinimalAllReduceDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::DeepseekMinimalAllReduceProgramFactory{};
-}
 
-void DeepseekMinimalAllReduceDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    void
+    DeepseekMinimalAllReduceDeviceOperation::validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
@@ -93,8 +90,6 @@ Tensor DeepseekMinimalAllReduceDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t DeepseekMinimalAllReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return operation::hash_operation<DeepseekMinimalAllReduceDeviceOperation>(
         operation_attributes.num_links,
         operation_attributes.ring_size,
@@ -103,7 +98,7 @@ tt::stl::hash::hash_t DeepseekMinimalAllReduceDeviceOperation::compute_program_h
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.device()->id(),
-        program_factory.index());
+        0);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce

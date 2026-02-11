@@ -15,10 +15,6 @@
 
 namespace ttnn::operations::pool {
 
-Pool2D::program_factory_t Pool2D::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-    return MultiCore{};
-}
-
 void validate_pool2d(
     const Tensor& input,
     const Pool2DType pool_type,

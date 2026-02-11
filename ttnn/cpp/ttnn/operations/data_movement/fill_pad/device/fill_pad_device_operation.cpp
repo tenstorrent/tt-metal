@@ -12,11 +12,6 @@ namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
-FillPadDeviceOperation::program_factory_t FillPadDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return FillPadProgramFactory{};
-}
-
 void FillPadDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);

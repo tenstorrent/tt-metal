@@ -16,11 +16,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-RingDistributedSdpaDeviceOperation::program_factory_t RingDistributedSdpaDeviceOperation::select_program_factory(
-    const RingDistributedSDPAParams&, const RingDistributedSDPAInputs&) {
-    return RingDistributedSdpaMeshWorkloadFactory{};
-}
-
 void RingDistributedSdpaDeviceOperation::validate_on_program_cache_hit(
     const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);

@@ -10,11 +10,6 @@
 
 namespace ttnn::prim {
 
-AccumulationDeviceOperation::program_factory_t AccumulationDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return AccumulationProgramFactory{};
-}
-
 void AccumulationDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor{tensor_args.input_tensor};
@@ -98,7 +93,7 @@ AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::
 operation::Hash AccumulationDeviceOperation::compute_program_hash(
     const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
     return operation::hash_operation<AccumulationDeviceOperation>(
-        select_program_factory(op_args, tensor_args).index(),
+        0,
         op_args.dim,
         op_args.output_memory_config,
         op_args.flip,

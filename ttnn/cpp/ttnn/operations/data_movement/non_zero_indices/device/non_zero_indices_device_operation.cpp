@@ -12,11 +12,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-NonZeroIndicesDeviceOperation::program_factory_t NonZeroIndicesDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return NonZeroIndicesProgramFactory{};
-}
-
 void NonZeroIndicesDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);

@@ -15,11 +15,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-Matmul_RS::program_factory_t Matmul_RS::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return Matmul_RS_PF{};
-}
-
 void Matmul_RS::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.second_weight_tensor.has_value()) {
@@ -91,8 +86,6 @@ Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
 
 tt::stl::hash::hash_t Matmul_RS::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<Matmul_RS>(
         operation_attributes.rs_op.dim,
         operation_attributes.rs_op.cluster_axis,
@@ -103,7 +96,7 @@ tt::stl::hash::hash_t Matmul_RS::compute_program_hash(
         tensor_args.rs.input_tensor.dtype(),
         tensor_args.rs.input_tensor.memory_config(),
         tensor_args.rs.input_tensor.device()->id(),
-        program_factory.index());
+        0);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -16,11 +16,6 @@
 
 namespace ttnn::experimental::prim {
 
-SliceReshardAsyncDeviceOperation::program_factory_t SliceReshardAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return SliceReshardAsyncProgramFactory{};
-}
-
 void SliceReshardAsyncDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
@@ -58,9 +53,6 @@ Tensor SliceReshardAsyncDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SliceReshardAsyncDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<SliceReshardAsyncDeviceOperation>(
         args.dim,
         args.output_dim_offset,
@@ -71,7 +63,7 @@ tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
         args.topology,
         args.ring_size,
         tensor_args,
-        program_factory.index());
+        0);
 }
 
 }  // namespace ttnn::experimental::prim

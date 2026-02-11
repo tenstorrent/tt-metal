@@ -10,10 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
-IsInDeviceOperation::program_factory_t IsInDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return IsInProgramFactory{};
-}
 
 void IsInDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {

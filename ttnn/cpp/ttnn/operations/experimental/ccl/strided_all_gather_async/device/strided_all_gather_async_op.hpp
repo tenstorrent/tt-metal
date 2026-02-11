@@ -34,9 +34,6 @@ struct StridedAllGatherAsync {
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<StridedAllGatherAsyncProgramFactory>;
-
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

@@ -13,13 +13,10 @@ using namespace tt::tt_metal;
 namespace ttnn::experimental::prim {
 
 DeepseekMinimalBroadcastDeviceOperation::program_factory_t
-DeepseekMinimalBroadcastDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return DeepseekMinimalBroadcastProgramFactory{};
-}
 
-void DeepseekMinimalBroadcastDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    void
+    DeepseekMinimalBroadcastDeviceOperation::validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
@@ -103,9 +100,6 @@ tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_h
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return operation::hash_operation<DeepseekMinimalBroadcastDeviceOperation>(
         operation_attributes.sender_coord,
         operation_attributes.num_links,
@@ -117,7 +111,7 @@ tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_h
         operation_attributes.using_persistent_buffers,
         subdevice_core_range_set,
         tensor_args,
-        program_factory.index());
+        0);
 }
 
 }  // namespace ttnn::experimental::prim

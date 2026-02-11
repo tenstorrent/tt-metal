@@ -13,11 +13,6 @@ using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceO
 
 namespace ttnn::experimental::prim {
 
-StridedAllGatherMinimalMatmulAsync::program_factory_t StridedAllGatherMinimalMatmulAsync::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return StridedAllGatherMinimalMatmulAsyncProgramFactory{};
-}
-
 void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(attributes, tensor_args);
@@ -63,9 +58,6 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
 tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "StridedAllGatherMinimalMatmulAsync::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
         attributes.strided_all_gather_async_struct.dim,
         attributes.strided_all_gather_async_struct.num_links,
@@ -84,7 +76,7 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         attributes.read_local_slice_from_input,
         attributes.ag_op,
         tensor_args,
-        program_factory.index());
+        0);
 }
 
 }  // namespace ttnn::experimental::prim

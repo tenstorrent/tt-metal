@@ -66,7 +66,6 @@ struct DeepseekGroupedGateDeviceOperation {
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 
     // Select the program factory based on the operation attributes and tensor args
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::experimental::reduction

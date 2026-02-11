@@ -12,11 +12,6 @@
 
 namespace ttnn::experimental::prim {
 
-SendAsyncDeviceOperation::program_factory_t SendAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return SendAsyncMeshWorkloadFactory{};
-}
-
 void SendAsyncDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
@@ -48,11 +43,7 @@ tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SendAsyncDeviceOperation::compute_program_hash is called");
     const ttnn::Tensor& input_tensor = tensor_args;
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(
-        args.mesh_socket, input_tensor, program_factory.index());
+    return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(args.mesh_socket, input_tensor, 0);
 }
 
 }  // namespace ttnn::experimental::prim

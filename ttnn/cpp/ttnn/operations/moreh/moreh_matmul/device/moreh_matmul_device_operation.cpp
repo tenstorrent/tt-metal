@@ -111,11 +111,6 @@ MorehMatmulOperation::tensor_return_value_t MorehMatmulOperation::create_output_
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 };
 
-MorehMatmulOperation::program_factory_t MorehMatmulOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return MultiCoreProgramFactory{};
-}
-
 MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_shape = tensor_args.input.padded_shape();

@@ -19,11 +19,7 @@ void MorehClipGradNormStep2Operation::validate_inputs(
         check_tensor(tensor_args.total_norm, "moreh_clip_grad_norm_step2", "total_norm");
     }
 };
-
-MorehClipGradNormStep2Operation::program_factory_t MorehClipGradNormStep2Operation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-};
+;
 
 void MorehClipGradNormStep2Operation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

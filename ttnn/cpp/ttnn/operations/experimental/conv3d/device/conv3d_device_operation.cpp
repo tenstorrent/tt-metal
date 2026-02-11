@@ -34,11 +34,6 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 }
 }  // namespace detail
 
-Conv3dDeviceOperation::program_factory_t Conv3dDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return Conv3dProgramFactory{};
-}
-
 void Conv3dDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
@@ -194,9 +189,8 @@ tt::stl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.padded_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
+        args, 0, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }

@@ -9,11 +9,6 @@
 
 namespace ttnn::prim {
 
-ProdAllDeviceOperation::program_factory_t ProdAllDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return ProdAllProgramFactory{};
-}
-
 void ProdAllDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);

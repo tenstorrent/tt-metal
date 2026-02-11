@@ -24,11 +24,6 @@ namespace ttnn::prim {
 
 using namespace experimental::ccl;
 
-RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::select_program_factory(
-    const RingJointSDPAParams& /*args*/, const RingJointSDPAInputs& /*tensor_args*/) {
-    return RingJointSDPAProgramFactory{};
-}
-
 void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);

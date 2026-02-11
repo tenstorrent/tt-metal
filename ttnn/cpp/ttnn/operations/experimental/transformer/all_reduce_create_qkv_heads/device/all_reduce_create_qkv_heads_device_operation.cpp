@@ -17,13 +17,10 @@ namespace ttnn::experimental::prim {
 constexpr int MAX_HEAD = 32;
 
 AllReduceCreateQkvHeadsDeviceOperation::program_factory_t
-AllReduceCreateQkvHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return AllReduceCreateQkvHeadsMeshWorkloadFactory{};
-}
 
-void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    void
+    AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
@@ -291,9 +288,6 @@ tt::stl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_ha
     auto input_memory_layout = input_tensor.layout();
     auto input_dtype = input_tensor.dtype();
     auto input_memory_config = input_tensor.memory_config();
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     // Hash individual fields to avoid hashing non-hashable types like GlobalSemaphore
     return tt::tt_metal::operation::hash_operation<AllReduceCreateQkvHeadsDeviceOperation>(
         operation_attributes.num_links,
@@ -301,7 +295,7 @@ tt::stl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_ha
         operation_attributes.all_reduce_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
-        program_factory.index(),
+        0,
         input_shape,
         input_memory_layout,
         input_dtype,

@@ -14,10 +14,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-SDPAOperation::program_factory_t SDPAOperation::select_program_factory(const SDPAParams&, const SDPAInputs&) {
-    return SDPAProgramFactory{};
-}
 void SDPAOperation::validate_on_program_cache_hit(const SDPAParams& attrs, const SDPAInputs& tensors) {
     validate_on_program_cache_miss(attrs, tensors);
 }

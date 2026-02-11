@@ -9,11 +9,6 @@
 
 namespace ttnn::experimental::prim {
 
-NlpKVCacheLoadSliceDeviceOperation::program_factory_t NlpKVCacheLoadSliceDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return NlpKVCacheLoadSliceProgramFactory{};
-}
-
 void NlpKVCacheLoadSliceDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);

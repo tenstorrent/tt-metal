@@ -13,11 +13,6 @@
 
 namespace ttnn::experimental::prim {
 
-StridedAllGatherAsync::program_factory_t StridedAllGatherAsync::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return StridedAllGatherAsyncProgramFactory{};
-}
-
 void StridedAllGatherAsync::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(attributes, tensor_args);
@@ -47,9 +42,6 @@ StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_outpu
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "StridedAllGatherAsync::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<StridedAllGatherAsync>(
         attributes.dim,
         attributes.num_links,
@@ -64,7 +56,7 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         attributes.mm_block_ht,
         attributes.mm_block_wt,
         tensor_args,
-        program_factory.index());
+        0);
 }
 
 }  // namespace ttnn::experimental::prim
