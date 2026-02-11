@@ -430,22 +430,22 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
     # Compute output shard shape (adjust for concat dimension): same grid and layout as inputs,
     # output shard shape = sum of input shard shapes along concat_dim (mirrors device op logic).
     # TODO:Z ? should we calculate output_shard_shape in the python - or should force it in C++ code?
-    input_mem_config = ttnn_tensors[0].memory_config()
-    input_nd_spec = input_mem_config.nd_shard_spec
-    output_shard_shape = list(input_nd_spec.shard_shape)
-    output_shard_shape[concat_dim] = 0
-    for tt_t in ttnn_tensors:
-        output_shard_shape[concat_dim] += tt_t.memory_config().nd_shard_spec.shard_shape[concat_dim]
-    output_nd_shard_spec = ttnn.NdShardSpec(
-        output_shard_shape,
-        input_nd_spec.grid,
-        orientation=input_nd_spec.orientation,
-        shard_distribution_strategy=input_nd_spec.shard_distribution_strategy,
-    )
-    output_memory_config = ttnn.MemoryConfig(input_mem_config.buffer_type, output_nd_shard_spec)
+    # input_mem_config = ttnn_tensors[0].memory_config()
+    # input_nd_spec = input_mem_config.nd_shard_spec
+    # output_shard_shape = list(input_nd_spec.shard_shape)
+    # output_shard_shape[concat_dim] = 0
+    # for tt_t in ttnn_tensors:
+    #     output_shard_shape[concat_dim] += tt_t.memory_config().nd_shard_spec.shard_shape[concat_dim]
+    # output_nd_shard_spec = ttnn.NdShardSpec(
+    #     output_shard_shape,
+    #     input_nd_spec.grid,
+    #     orientation=input_nd_spec.orientation,
+    #     shard_distribution_strategy=input_nd_spec.shard_distribution_strategy,
+    # )
+    # output_memory_config = ttnn.MemoryConfig(input_mem_config.buffer_type, output_nd_shard_spec)
 
     print("\nright before concat\n")
-    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim, memory_config=output_memory_config)
+    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim)  # , memory_config=output_memory_config)
 
     # Convert back to torch and compare
     actual_output = ttnn.to_torch(ttnn_output)
