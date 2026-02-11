@@ -709,10 +709,10 @@ void py_module(nb::module_& mod) {
                   - Height Sharded (DRAM)
                 * - MatmulMultiCoreReuseMultiCastProgramConfig
                   - Interleaved (L1/DRAM), Block Sharded (L1)
-                  - Interleaved (L1/DRAM)
+                  - Interleaved (L1/DRAM), Width Sharded (DRAM)
                 * - MatmulMultiCoreReuseMultiCastProgramConfig (only for row major orientation without transpose multicast)
                   - Interleaved (L1/DRAM), Height Sharded (L1)
-                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1/DRAM), Height Sharded (DRAM)
                 * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False)
                   - Interleaved (L1/DRAM), Width Sharded (L1)
                   - Interleaved (L1/DRAM), Width Sharded (L1)

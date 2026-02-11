@@ -940,7 +940,7 @@ def test_matmul_seq_len_sweep_dram_interleaved(device, test_case, seq_len):
         "wkv_b2_8banks",
     ],
 )
-@pytest.mark.parametrize("seq_len", [128])  # 1024, 4096, 8192])# 32768, 131072])
+@pytest.mark.parametrize("seq_len", [128, 1024, 4096, 8192])  # 32768, 131072])
 @skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
 def test_matmul_seq_len_sweep_dram_sharded(device, test_case, seq_len):
     """
