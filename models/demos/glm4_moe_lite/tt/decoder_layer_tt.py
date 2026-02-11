@@ -848,6 +848,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     tokens = int(x.shape[2])
     experts_impl = os.environ.get("GLM4_MOE_LITE_MOE_EXPERTS_IMPL", "sparse").strip().lower()
     use_dense_decode = experts_impl in {"dense_decode", "dense-decode"} and tokens == 1
+    moe_decode_mc = getattr(moe_runtime, "decode_memory_config", ttnn.DRAM_MEMORY_CONFIG)
 
     # Pad tokens dim for sparse expert kernels (decode tokens are often 1).
     # Use the minimum legal multiple for the current dispatch width to avoid
@@ -874,7 +875,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     x_ff_shared = gate_shared * up_shared
     ttnn.deallocate(gate_shared, force=False)
     ttnn.deallocate(up_shared, force=False)
-    shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down)
+    shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down, memory_config=moe_decode_mc)
     ttnn.deallocate(x_ff_shared, force=False)
     if tp_enabled:
         shared_out_reduced = ttnn.all_reduce(
@@ -911,7 +912,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             topk_expert_weights=topk_weights,  # consumed
             moe_w=w.moe,
             hparams=hparams,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=moe_decode_mc,
             compute_kernel_config=mlp_compute_kernel_config,
         )
     else:
@@ -922,12 +923,12 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             topk_expert_weights=topk_weights,  # consumed
             moe_w=w.moe,
             rt=moe_runtime,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=moe_decode_mc,
         )
     _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     t0 = time.perf_counter() if profile is not None else 0.0
-    mlp_out = shared_out + routed_out
+    mlp_out = ttnn.add(shared_out, routed_out, memory_config=moe_decode_mc)
     ttnn.deallocate(shared_out, force=False)
     ttnn.deallocate(routed_out, force=False)
 
@@ -936,7 +937,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         # `slice` may return a view that aliases `mlp_out` (no refcounting).
         # Materialize before freeing the padded tensor to avoid decode corruption.
         mlp_out_view = ttnn.slice(mlp_out, [0, 0, 0, 0], [1, 1, tokens, int(hparams.hidden_size)])
-        mlp_out_sliced = ttnn.clone(mlp_out_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mlp_out_sliced = ttnn.clone(mlp_out_view, memory_config=moe_decode_mc)
         ttnn.deallocate(mlp_out, force=False)
         mlp_out = mlp_out_sliced
 
