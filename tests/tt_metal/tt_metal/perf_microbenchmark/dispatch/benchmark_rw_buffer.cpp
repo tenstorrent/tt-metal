@@ -161,6 +161,92 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
+static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
+    auto page_size = state.range(0);
+    auto transfer_size = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+    [[maybe_unused]] auto device_id = state.range(3);
+
+    log_debug(
+        LogTest,
+        "Running WritePinnedMemorySharded Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: "
+        "{}",
+        page_size,
+        transfer_size,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        device_id);
+
+    // Compute sharding parameters
+    CoreCoord core_grid_size = mesh_device->compute_with_storage_grid_size();
+    uint64_t total_pages = transfer_size / page_size;
+    uint64_t num_cores = core_grid_size.x * core_grid_size.y;
+    uint64_t pages_per_core = total_pages / num_cores;
+
+    // Skip if transfer size is too small for the grid
+    if (pages_per_core == 0) {
+        state.SkipWithError("Transfer size too small for the compute grid");
+        return;
+    }
+
+    // Compute actual buffer size based on pages_per_core
+    uint64_t actual_buf_size = pages_per_core * num_cores * page_size;
+
+    // Create ShardSpecBuffer for HEIGHT_SHARDED layout
+    CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
+    std::array<uint32_t, 2> shard_shape = {static_cast<uint32_t>(pages_per_core), static_cast<uint32_t>(page_size)};
+    std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
+    std::array<uint32_t, 2> tensor2d_shape_in_pages = {static_cast<uint32_t>(total_pages), 1};
+
+    ShardSpecBuffer shard_spec(
+        core_sets, shard_shape, ShardOrientation::ROW_MAJOR, page_shape_array, tensor2d_shape_in_pages);
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = page_size,
+        .buffer_type = buffer_type,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false};
+
+    ReplicatedBufferConfig global_buffer_config{.size = actual_buf_size};
+
+    auto device_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
+
+    // Allocate source host buffer with 64-byte alignment
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{64};
+    TT_ASSERT(
+        device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0,
+        "Source vector alignment {} must be divisible by PCIE read alignment {}",
+        device_read_align,
+        hal.get_read_alignment(HalMemType::HOST));
+
+    auto src_storage = std::make_shared<std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>>(
+        static_cast<std::size_t>(actual_buf_size));
+
+    // Create HostBuffer on top of aligned memory
+    HostBuffer host_buffer(
+        tt::stl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(actual_buf_size)),
+        MemoryPin(src_storage));
+
+    // Pin the aligned host memory region for the shard
+    auto coord = MeshCoordinate(0, 0);
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+
+    // Create DistributedHostBuffer and emplace the shard
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device->shape());
+    distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+    auto write_transfer = distributed::ShardDataTransfer(coord)
+                              .host_data(src_storage->data())
+                              .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));
+
+    for (auto _ : state) {
+        bool blocking = true;
+        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, blocking);
+        //mesh_device->mesh_command_queue().enqueue_write(device_buffer, distributed_host_buffer, blocking);
+    }
+
+    state.SetBytesProcessed(actual_buf_size * state.iterations());
+}
+
 static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
@@ -199,7 +285,7 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
 
     // Create ShardSpecBuffer for HEIGHT_SHARDED layout
     CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
-    std::array<uint32_t, 2> shard_shape = {static_cast<uint32_t>(pages_per_core), 1};
+    std::array<uint32_t, 2> shard_shape = {static_cast<uint32_t>(pages_per_core), static_cast<uint32_t>(page_size)};
     std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
     std::array<uint32_t, 2> tensor2d_shape_in_pages = {static_cast<uint32_t>(total_pages), 1};
 
@@ -364,6 +450,12 @@ int main(int argc, char** argv) {
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
+            benchmark::RegisterBenchmark("WriteSharded", BM_write_sharded, device)
+                ->ArgsProduct(benchmark_args)
+                ->UseRealTime()
+                ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+                ->ComputeStatistics("min", compute_min)
+                ->ComputeStatistics("max", compute_max);
         bool can_map_to_noc = experimental::GetMemoryPinningParameters(*devices[0]).can_map_to_noc;
 
         if (can_map_to_noc) {
