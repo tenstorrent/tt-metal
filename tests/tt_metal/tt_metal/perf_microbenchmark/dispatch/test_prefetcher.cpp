@@ -1361,7 +1361,7 @@ public:
     std::vector<HostMemDeviceCommand> generate_prefetch_relay_linear_packed_h_commands(
         const uint32_t l1_base,
         const uint32_t l1_alignment,
-        Common::DeviceData& mmio_device_data,
+        Common::DeviceData& /*mmio_device_data */,
         Common::DeviceData& remote_device_data) {
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 

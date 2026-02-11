@@ -1936,8 +1936,6 @@ uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstrea
     uint32_t amt = sub_cmds_length / sizeof(uint32_t);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
         (volatile uint32_t tt_l1_ptr*)(data_ptr), amt, l1_cache);
-    // Store a sentinel non 0 value at the end to save a test/branch in read path
-    ((CQPrefetchRelayLinearPackedSubCmd*)&l1_cache[amt])->length = 1;
 
     // Setup scratch buffer for relay
     uint32_t scratch_read_addr = scratch_db_top[0];
