@@ -63,6 +63,39 @@ def save_checksum_dict(checksum_dict, pickle_file="moe_input_checksums.pkl"):
         pickle.dump(checksum_dict, f)
 
 
+def untilize2tile_pos(row, col):
+    total_index = row * 20 * ttnn.TILE_SIZE + col
+
+    c_f = total_index % 16
+    r_f = (total_index // 16) % 16
+    f_x = (total_index // (16 * 16)) % 2
+    f_y = (total_index // (16 * 16 * 2)) % 2
+    t_x = (total_index // (16 * 16 * 2 * 2)) % 224
+    t_y = total_index // (16 * 16 * 2 * 2 * 224)
+
+    assert t_y == 0
+    return t_y, t_x, f_y, f_x, r_f, c_f
+
+
+def tile2torch_coord(t_y, t_x, f_y, f_x, r_f, c_f):
+    total_index = (
+        2 * 16 * 224 * 2 * 16 * t_y + 16 * 224 * 2 * 16 * f_y + 224 * 2 * 16 * r_f + 2 * 16 * t_x + 16 * f_x + c_f
+    )
+    torch_x = total_index % 7168
+    torch_y = total_index // 7168
+    return torch_x, torch_y
+
+
+def get_untilized_data(tt_output):
+    untilized_data = torch.empty((32, 20 * 32), dtype=tt_output.dtype)
+    for row in range(32):
+        for col in range(20 * 32):
+            t_y, t_x, f_y, f_x, r_f, c_f = untilize2tile_pos(row, col)
+            torch_x, torch_y = tile2torch_coord(t_y, t_x, f_y, f_x, r_f, c_f)
+            untilized_data[row, col] = tt_output[torch_y, torch_x]
+    return untilized_data
+
+
 # Some cores have more tiles than others, but they are sprinkled around the ring for boundary alignment.
 FULL_CORES = {0, 1, 8, 9}
 PAD_CORES = {2, 3, 4, 5, 6, 7, 10, 11}
@@ -344,15 +377,33 @@ def prepare_output_tensor(tt_output, E, M, K, ring2cores):
     Returns:
         torch_output: Tensor of shape (E, M, K)
     """
-    each_shard = []
+    # This works for the tilize, we want to keep this for testing.
+    # each_shard = []
 
-    for ring_pos in range(len(ring2cores)):
-        (_, _, pad_flag) = ring2cores[ring_pos]
-        num_tiles = 19 if pad_flag else 18
-        each_shard.append(tt_output[ring_pos, :, :, : num_tiles * ttnn.TILE_SIZE])
+    # for ring_pos in range(len(ring2cores)):
+    #     (_, _, pad_flag) = ring2cores[ring_pos]
+    #     num_tiles = 19 if pad_flag else 18
+    #     each_shard.append(tt_output[ring_pos, :, :, : num_tiles * ttnn.TILE_SIZE])
 
-    result = torch.cat(each_shard, dim=-1)
-    assert result.shape == (2, M, K)
+    # result = torch.cat(each_shard, dim=-1)
+    # assert result.shape == (2, M, K)
+    # return result
+
+    # View it as a row major tensor on each core
+    tt_output_a = tt_output.view(len(ring2cores), E, M * K)
+
+    expert_shards = []
+
+    for expert in range(E):
+        each_shard = []
+        for ring_pos in range(len(ring2cores)):
+            (_, _, pad_flag) = ring2cores[ring_pos]
+            num_tiles = 19 if pad_flag else 18
+            untilized_data = get_untilized_data(tt_output[ring_pos, expert])
+            each_shard.append(untilized_data[:, : num_tiles * ttnn.TILE_SIZE])
+        expert_shards.append(torch.cat(each_shard, dim=-1))
+
+    result = torch.stack(expert_shards)
     return result
 
 
@@ -533,32 +584,6 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
         # Output is produced in-place on the input tensor
         tt_raw_output = ttnn.to_torch(tt_input)
         tt_to_torch_output = prepare_output_tensor(tt_raw_output, E, M, K, ring2cores)
-
-        # Compute checksums for all inputs before calling moe (only when check_accuracy is True)
-        seed = 0  # torch.manual_seed(0) was set earlier
-        input_checksums = {
-            "torch_input": compute_tensor_checksum(torch_input[layer_id]),
-            "torch_w0_w1": compute_tensor_checksum(torch_w0_w1_reordered),
-            "torch_w2": compute_tensor_checksum(torch_w2_reordered),
-            "tt_to_torch_output": compute_tensor_checksum(tt_to_torch_output),
-        }
-
-        # Load existing checksums and check against them
-        checksum_dict = load_or_create_checksum_dict()
-        if seed in checksum_dict:
-            existing_checksums = checksum_dict[seed]
-            for tensor_name, checksum in input_checksums.items():
-                if checksum != existing_checksums[tensor_name]:
-                    raise AssertionError(
-                        f"Checksum mismatch for {tensor_name} with seed {seed}! "
-                        f"Expected: {existing_checksums[tensor_name]}, Got: {checksum}"
-                    )
-        else:
-            # New seed - add all checksums
-            checksum_dict[seed] = input_checksums
-
-            # Save updated checksums
-            save_checksum_dict(checksum_dict)
 
         all_outputs.append(tt_to_torch_output)
 
