@@ -13,8 +13,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
 
-# ([1, 32, 512], [64, 256], ttnn.CoreGrid(x=4, y=2), [], ttnn.CoreGrid(x=4, y=2))
-
 
 @pytest.mark.parametrize(
     "input_shape, output_shape",
@@ -77,6 +75,9 @@ def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_sha
     [
         ([1, 1, 1024, 1], [1, 1, 1024, 32], ttnn.CoreGrid(x=1, y=8), [1, 1024], [32, 1024], ttnn.CoreGrid(x=8, y=1)),
         ([1, 1024, 1], [1, 1024, 32], ttnn.CoreGrid(x=1, y=8), [1, 1024], [32, 1024], ttnn.CoreGrid(x=8, y=1)),
+        # ([1, 1, 1024], [1, 32, 1024], ttnn.CoreGrid(x=8, y=1), [1024, 1], [1024, 32], ttnn.CoreGrid(x=1, y=8)), (passes)
+        # ([1, 32, 512], [1, 32, 128], ttnn.CoreGrid(x=4, y=1), [512, 32], [128, 32], ttnn.CoreGrid(x=1, y=4)),
+        ([1, 128, 64], [1, 1, 128, 64], ttnn.CoreGrid(x=1, y=1), [64, 128], [64, 128], ttnn.CoreGrid(x=1, y=1)),
     ],
 )
 def test_reshape_block_shard(
