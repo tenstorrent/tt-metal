@@ -712,7 +712,7 @@ void py_module(nb::module_& mod) {
                   - Interleaved (L1/DRAM), Width Sharded (DRAM)
                 * - MatmulMultiCoreReuseMultiCastProgramConfig (only for row major orientation without transpose multicast)
                   - Interleaved (L1/DRAM), Height Sharded (L1)
-                  - Interleaved (L1/DRAM), Width Sharded (L1/DRAM), Height Sharded (DRAM)
+                  - Interleaved (L1/DRAM), Width Sharded (L1/DRAM), Height Sharded (DRAM, batch-sharded only: fuse_batch=false, each bank holds complete [K,N] matrices for B/num_banks batches)
                 * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False)
                   - Interleaved (L1/DRAM), Width Sharded (L1)
                   - Interleaved (L1/DRAM), Width Sharded (L1)
