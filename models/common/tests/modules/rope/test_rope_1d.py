@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -238,6 +238,43 @@ def test_rope_1d_init_and_api(
     assert len(rot_mats_2) == 2
     assert isinstance(rot_idxs_2, ttnn.Tensor)
 
+    # PCC check: compare cos/sin against torch reference cos/sin lookup
+    cos_torch_ref, sin_torch_ref = _compute_cos_sin_matrices(
+        head_dim=head_dim,
+        max_seq_len=max_seq_len,
+        rope_theta=rope_theta,
+        rope_scaling=rope_scaling,
+    )
+    # Gather the cos/sin for the specific position indices
+    # position_idxs = [0, 1, ..., batch_size-1]
+    # cos_torch_ref shape: [1, 1, max_seq_len, head_dim]
+    # After embedding lookup, cos shape per device: [1, batch, 1, head_dim] (sharded)
+    cos_tt = to_torch_auto_compose(rot_mats[0])  # composed back from sharded
+    sin_tt = to_torch_auto_compose(rot_mats[1])
+
+    # Build expected cos/sin from torch reference for positions 0..batch_size-1
+    effective_batch = batch_size * 2 if use_qk_fused else batch_size
+    expected_cos = cos_torch_ref[:, :, :effective_batch, :]  # [1, 1, batch, head_dim]
+    expected_sin = sin_torch_ref[:, :, :effective_batch, :]
+
+    # Reshape TT output to match: TT is [1, batch, TILE_SIZE, head_dim] after transpose+shard
+    # Flatten to [1, 1, batch*TILE_SIZE, head_dim] for comparison on relevant rows
+    cos_tt_flat = cos_tt.reshape(1, 1, -1, head_dim)
+    sin_tt_flat = sin_tt.reshape(1, 1, -1, head_dim)
+
+    # Compare first effective_batch rows (rest is padding from tile alignment)
+    cos_tt_trimmed = cos_tt_flat[:, :, :effective_batch, :]
+    sin_tt_trimmed = sin_tt_flat[:, :, :effective_batch, :]
+
+    pcc_cos, msg_cos = comp_pcc(expected_cos.to(torch.bfloat16), cos_tt_trimmed.to(torch.bfloat16), 0.999)
+    pcc_sin, msg_sin = comp_pcc(expected_sin.to(torch.bfloat16), sin_tt_trimmed.to(torch.bfloat16), 0.999)
+
+    logger.info(f"cos PCC: {msg_cos}")
+    logger.info(f"sin PCC: {msg_sin}")
+
+    assert pcc_cos, f"cos PCC failed: {msg_cos}"
+    assert pcc_sin, f"sin PCC failed: {msg_sin}"
+
     logger.info(
         f"RotarySetup1D: PASSED for mesh={mesh_shape}, batch={batch_size}, "
         f"head_dim={head_dim}, max_seq_len={max_seq_len}, rope_theta={rope_theta}, "
@@ -355,11 +392,11 @@ def test_rope_1d_cos_sin_vs_reference(
 )
 def test_rope_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice):
     """
-    Test that RotarySetup1D.from_model_args produces valid rotation matrices.
-
-    Uses HF_MODEL env var or defaults to Llama-3.1-8B-Instruct.
+    Test that RotarySetup1D.from_model_args produces numerically identical
+    rotation matrices compared to TTTv1 RotarySetup built with the same args.
     """
     from models.tt_transformers.tt.model_config import ModelArgs
+    from models.tt_transformers.tt.rope import RotarySetup as TTTv1RotarySetup
 
     model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
     model_args.n_layers = 1
@@ -367,21 +404,61 @@ def test_rope_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice)
     if model_args.is_galaxy:
         pytest.skip("RotarySetup1D test only runs on non-TG devices")
 
-    rope = RotarySetup1D.from_model_args(
+    # Build TTTv2 via from_model_args
+    rope_v2 = RotarySetup1D.from_model_args(
         device=ttnn_mesh_device,
         args=model_args,
         model_name=model_args.model_name,
     )
 
-    # Verify all APIs work
-    trans_mats = rope.get_both_trans_mats()
-    assert "decode" in trans_mats and "prefill" in trans_mats
+    # Build TTTv1 reference with same params
+    from models.tt_transformers.tt.common import rope_scaling_model_factory
 
-    position_idxs = torch.arange(1)  # batch_size=1
-    rot_idxs = rope.get_rot_idxs(position_idxs, on_host=True)
-    assert isinstance(rot_idxs, ttnn.Tensor)
+    rope_scaling = None
+    if hasattr(model_args, "rope_scaling_params") and model_args.rope_scaling_params is not None:
+        rope_scaling = rope_scaling_model_factory(
+            model_args.rope_scaling_params, getattr(model_args, "original_max_context_len", None)
+        )
 
-    rot_mats = rope.get_rot_mats(position_idxs)
-    assert len(rot_mats) == 2
+    rope_v1 = TTTv1RotarySetup(
+        device=ttnn_mesh_device,
+        batch_size=model_args.max_batch_size,
+        head_dim=model_args.head_dim,
+        max_seq_len=model_args.max_seq_len,
+        rope_theta=model_args.rope_theta,
+        rope_scaling=rope_scaling,
+        use_qk_fused=getattr(model_args, "use_qk_fused", False),
+        datatype=ttnn.bfloat16,
+    )
 
-    logger.info(f"RotarySetup1D.from_model_args: PASSED for {model_args.model_name}")
+    # PCC check: get_rot_mats
+    position_idxs = torch.arange(model_args.max_batch_size)
+    v2_cos_sin = rope_v2.get_rot_mats(position_idxs)
+    v1_cos_sin = rope_v1.get_rot_mats(position_idxs)
+
+    v2_cos_torch = to_torch_auto_compose(v2_cos_sin[0])
+    v1_cos_torch = to_torch_auto_compose(v1_cos_sin[0])
+    v2_sin_torch = to_torch_auto_compose(v2_cos_sin[1])
+    v1_sin_torch = to_torch_auto_compose(v1_cos_sin[1])
+
+    pcc_cos, msg_cos = comp_pcc(v1_cos_torch, v2_cos_torch, 0.9999)
+    pcc_sin, msg_sin = comp_pcc(v1_sin_torch, v2_sin_torch, 0.9999)
+
+    logger.info(f"from_model_args cos PCC: {msg_cos}")
+    logger.info(f"from_model_args sin PCC: {msg_sin}")
+
+    assert pcc_cos, f"from_model_args cos mismatch: {msg_cos}"
+    assert pcc_sin, f"from_model_args sin mismatch: {msg_sin}"
+
+    # PCC check: transformation matrices
+    v2_trans = rope_v2.get_both_trans_mats()
+    v1_trans = rope_v1.get_both_trans_mats()
+
+    for key in ["decode", "prefill"]:
+        v2_t = to_torch_auto_compose(v2_trans[key])
+        v1_t = to_torch_auto_compose(v1_trans[key])
+        pcc_ok, msg = comp_pcc(v1_t, v2_t, 0.9999)
+        logger.info(f"from_model_args trans_mat[{key}] PCC: {msg}")
+        assert pcc_ok, f"from_model_args trans_mat[{key}] mismatch: {msg}"
+
+    logger.info(f"RotarySetup1D.from_model_args vs TTTv1: PASSED for {model_args.model_name}")
