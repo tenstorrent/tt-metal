@@ -323,7 +323,7 @@ Below is a sketch of a Dual Pod (SP2) system with 2 meshes and 4 hosts per mesh 
     Mesh 0 (mesh_id=0)              Mesh 1 (mesh_id=1)
     ┌─────────┬─────────┐            ┌─────────┬─────────┐
     │ (0,0)   │ (0,1)   │            │ (1,0)   │ (1,1)   │
-    │ rank 0  │ rank 1  │  ═══════►   │ rank 4  │ rank 5  │
+    │ rank 0  │ rank 1  │  ═══════►  │ rank 4  │ rank 5  │
     ├─────────┼─────────┤   link     ├─────────┼─────────┤
     │ (0,2)   │ (0,3)   │            │ (1,2)   │ (1,3)   │
     │ rank 2  │ rank 3  │            │ rank 6  │ rank 7  │
