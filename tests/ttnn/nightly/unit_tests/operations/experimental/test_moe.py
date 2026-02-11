@@ -64,8 +64,11 @@ def save_checksum_dict(checksum_dict, pickle_file="moe_input_checksums.pkl"):
 
 
 # Some cores have more tiles than others, but they are sprinkled around the ring for boundary alignment.
-FULL_CORES = {0, 1, 8, 9}
-PAD_CORES = {2, 3, 4, 5, 6, 7, 10, 11}
+FULL_CORES_A = {0, 1, 8, 9}
+PAD_CORES_A = {2, 3, 4, 5, 6, 7, 10, 11}
+
+FULL_CORES_B = {0, 3, 6, 9}
+PAD_CORES_B = {1, 2, 4, 5, 7, 8, 10, 11}
 
 TOTAL_TOKENS = 512
 
@@ -502,7 +505,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     ring2cores = {}
     for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
         # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in PAD_CORES else 0)
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in PAD_CORES_B else 0)
 
     in0_core_range = [ttnn.CoreRange(ring2cores[i][0], ring2cores[i][0]) for i in range(in0_num_cores)]
     in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)

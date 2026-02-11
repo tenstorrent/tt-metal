@@ -69,8 +69,8 @@ void kernel_main() {
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
     constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
 
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -84,7 +84,7 @@ void kernel_main() {
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
         4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
     constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_A / 2;  // 32 * 3 = 96
+        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_B / 2;  // 32 * 3 = 96
     // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
 
     // W2 reading constants

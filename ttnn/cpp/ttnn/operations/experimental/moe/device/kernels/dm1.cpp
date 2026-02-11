@@ -77,8 +77,7 @@ void kernel_main() {
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
     constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
-
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
+    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
@@ -93,14 +92,14 @@ void kernel_main() {
     // Ring setup
     //-------------------------------------------------------------------------
     // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_A;
+    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_B;
 
     // The number of steps to take in the all2all is the number of cores
     constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
 
     // The number of tiles to send in each step
     // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
-    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_A;  // max(num_w0_w1_tiles_w)
+    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_B;  // max(num_w0_w1_tiles_w)
 
     //-------------------------------------------------------------------------
     // Ring NoC setup
@@ -255,8 +254,6 @@ void kernel_main() {
                 width_tiles_to_send -= width_transfer_tiles;
             }
             noc_async_posted_writes_flushed(1);
-
-            noc_async_posted_atomic_barrier(1);
             cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
 
             source_buffer_iter = !source_buffer_iter;
