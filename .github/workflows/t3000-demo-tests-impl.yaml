@@ -19,10 +19,6 @@ on:
         required: false
         type: string
         default: "all"
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
       mlperf-read-only:
         required: false
         type: boolean
