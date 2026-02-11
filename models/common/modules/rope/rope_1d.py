@@ -8,18 +8,19 @@ RotarySetup1D takes pre-computed cos/sin rotation matrices (as LazyWeight) and
 provides efficient position-based lookup at runtime.
 
 Core API:
-  - forward(rot_idxs): Look up cos/sin rotation matrices from ttnn.Tensor indices
+  - decode_forward(rot_idxs): Look up cos/sin rotation matrices from ttnn.Tensor indices
+  - prefill_forward(start_pos, seq_len): Slice cos/sin matrices for prefill
   - get_both_trans_mats(): Decode + prefill transformation matrices (read-only)
 
 Backward-compatible API (will retire with TTTv1):
   - get_rot_idxs(position_idxs): Convert torch position indices to ttnn tensor
-  - get_rot_mats(position_idxs): Combined get_rot_idxs + forward
+  - get_rot_mats(position_idxs): Combined get_rot_idxs + decode_forward
 
 Helper:
   - prepare_rot_idxs(config, position_idxs, on_host): Standalone torch→ttnn index conversion
 
 Note: torch is used at construction time for building transformation matrices.
-      The forward() method uses only ttnn ops.
+      The decode_forward() and prefill_forward() methods use only ttnn ops.
 """
 
 from dataclasses import dataclass, replace
@@ -92,7 +93,8 @@ class RotarySetup1D(LightweightModule):
     Simple API:
         rope = RotarySetup1D(cos_lw, sin_lw, max_batch_size=32)
         rot_idxs = prepare_rot_idxs(rope.config, position_idxs)
-        [cos, sin] = rope.forward(rot_idxs)
+        [cos, sin] = rope.decode_forward(rot_idxs)
+        [cos, sin] = rope.prefill_forward(start_pos=0, seq_len=128)
 
     Power API:
         config = Rope1DConfig(cos_lw, sin_lw, max_batch_size=32, use_qk_fused=True)
@@ -151,8 +153,8 @@ class RotarySetup1D(LightweightModule):
 
     # ---- Core API ----
 
-    def forward(self, rot_idxs: ttnn.Tensor) -> List[ttnn.Tensor]:
-        """Look up cos/sin rotation matrices for given position indices.
+    def decode_forward(self, rot_idxs: ttnn.Tensor) -> List[ttnn.Tensor]:
+        """Look up cos/sin rotation matrices for given position indices (decode mode).
 
         Args:
             rot_idxs: ttnn.Tensor of shape [1, batch], dtype uint32.
@@ -190,6 +192,55 @@ class RotarySetup1D(LightweightModule):
 
         return [cos, sin]
 
+    def prefill_forward(self, start_pos: int, seq_len: int, pad_to: int | None = None) -> List[ttnn.Tensor]:
+        """Slice cos/sin matrices for prefill mode.
+
+        This replaces the duplicated cos/sin slicing logic found in every model's
+        prepare_inputs_prefill(). Models no longer need to reach into
+        rope_setup.cos_matrix / sin_matrix directly.
+
+        Args:
+            start_pos: Starting position in the sequence.
+            seq_len: Number of positions to slice (typically the padded input length S).
+            pad_to: If set, zero-pad the sequence dim to this length (for SDPA alignment).
+                    Ignored when pad_to <= seq_len.
+
+        Returns:
+            [cos_slice, sin_slice] — interleaved DRAM tensors,
+            shape [1, 1, seq_len (or pad_to), head_dim].
+        """
+        self.load_device_weights()
+
+        mat_len = self.cos_matrix.shape[2]
+        end_pos = start_pos + seq_len
+        assert mat_len >= end_pos, f"Requested range [{start_pos}:{end_pos}) exceeds cos/sin table length {mat_len}"
+
+        cos_slice = self.cos_matrix[:, :, start_pos:end_pos, :]
+        sin_slice = self.sin_matrix[:, :, start_pos:end_pos, :]
+
+        if pad_to is not None and pad_to > seq_len:
+            pad_len = pad_to - seq_len
+            padding = [(0, 0)] * 4
+            padding[2] = (0, pad_len)
+            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
+            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
+
+        return [cos_slice, sin_slice]
+
+    def forward(self, mode: str, **kwargs) -> List[ttnn.Tensor]:
+        """Dispatch to decode_forward or prefill_forward based on mode.
+
+        Args:
+            mode: "decode" or "prefill".
+            **kwargs: Forwarded to the underlying method.
+                decode:  rot_idxs (ttnn.Tensor)
+                prefill: start_pos (int), seq_len (int), pad_to (int | None)
+        """
+        if mode == "decode":
+            return self.decode_forward(**kwargs)
+        else:
+            return self.prefill_forward(**kwargs)
+
     def get_both_trans_mats(self) -> Dict[str, ttnn.Tensor]:
         """Return both decode and prefill transformation matrices."""
         self.load_device_weights()
@@ -208,7 +259,7 @@ class RotarySetup1D(LightweightModule):
     ) -> "Union[List[ttnn.Tensor], Tuple[List[ttnn.Tensor], ttnn.Tensor]]":
         """Look up cos/sin from torch or ttnn position indices.
 
-        For new code, prefer: rot_idxs = prepare_rot_idxs(...); rope.forward(rot_idxs)
+        For new code, prefer: rot_idxs = prepare_rot_idxs(...); rope.decode_forward(rot_idxs)
         """
         import torch
 
@@ -217,7 +268,7 @@ class RotarySetup1D(LightweightModule):
         else:
             rot_idxs = position_idxs
 
-        cos_sin = self.forward(rot_idxs)
+        cos_sin = self.decode_forward(rot_idxs)
 
         if return_rot_idxs:
             return cos_sin, rot_idxs

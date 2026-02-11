@@ -309,7 +309,7 @@ def test_rope_1d_vs_reference(
     2. get_both_trans_mats() returns valid tensors with correct PCC
     3. get_rot_idxs() produces correct shape
     4. get_rot_mats() produces cos/sin with correct shapes and PCC vs reference
-    5. forward() with ttnn.Tensor input matches torch-input path
+    5. decode_forward() with ttnn.Tensor input matches torch-input path
     """
     scaling = Llama3Scaling() if rope_scaling_str == "llama3" else None
 
@@ -361,7 +361,7 @@ def test_rope_1d_vs_reference(
 
     # TTTv2 API: prepare_rot_idxs → forward
     rot_idxs = prepare_rot_idxs(rope.config, pcc_position_idxs, on_host=True)
-    pcc_rot_mats = rope.forward(rot_idxs)
+    pcc_rot_mats = rope.decode_forward(rot_idxs)
     assert len(pcc_rot_mats) == 2
 
     cos_torch_ref, sin_torch_ref = _rope_cos_sin(
@@ -453,8 +453,8 @@ def test_prepare_rot_idxs(
     rot_idxs_host = prepare_rot_idxs(rope.config, position_idxs, on_host=True)
     assert isinstance(rot_idxs_host, ttnn.Tensor)
 
-    # Both paths should produce usable tensors for forward()
-    cos_sin_device = rope.forward(rot_idxs)
+    # Both paths should produce usable tensors for decode_forward()
+    cos_sin_device = rope.decode_forward(rot_idxs)
     assert len(cos_sin_device) == 2
 
     cos_sin_host = rope.get_rot_mats(rot_idxs_host)
@@ -465,6 +465,191 @@ def test_prepare_rot_idxs(
     cos_h = to_torch_auto_compose(cos_sin_host[0])
     pcc_ok, msg = comp_pcc(cos_d, cos_h, 0.9999)
     assert pcc_ok, f"on-device vs on-host cos mismatch: {msg}"
+
+
+# ============================================================================
+# forward() dispatcher tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(1, 1)],
+    ids=["1x1"],
+    indirect=True,
+)
+def test_forward_dispatch_decode(ttnn_mesh_device: ttnn.MeshDevice):
+    """Test that forward(mode='decode', ...) delegates to decode_forward."""
+    cos_torch, sin_torch = _rope_cos_sin(head_dim=128, max_seq_len=8192, theta=500000.0, scaling=Llama3Scaling())
+    cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device)
+    sin_lw = LazyWeight(source=sin_torch, device=ttnn_mesh_device)
+
+    rope = RotarySetup1D(cos_lw, sin_lw, max_batch_size=1)
+
+    position_idxs = torch.tensor([42])
+    rot_idxs = prepare_rot_idxs(rope.config, position_idxs)
+
+    via_forward = rope.forward(mode="decode", rot_idxs=rot_idxs)
+    via_direct = rope.decode_forward(rot_idxs)
+
+    cos_fwd = to_torch_auto_compose(via_forward[0])
+    cos_dir = to_torch_auto_compose(via_direct[0])
+    pcc_ok, msg = comp_pcc(cos_fwd, cos_dir, 0.9999)
+    assert pcc_ok, f"forward(decode) vs decode_forward mismatch: {msg}"
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(1, 1)],
+    ids=["1x1"],
+    indirect=True,
+)
+def test_forward_dispatch_prefill(ttnn_mesh_device: ttnn.MeshDevice):
+    """Test that forward(mode='prefill', ...) delegates to prefill_forward."""
+    cos_torch, sin_torch = _rope_cos_sin(head_dim=128, max_seq_len=8192, theta=500000.0, scaling=Llama3Scaling())
+    cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device)
+    sin_lw = LazyWeight(source=sin_torch, device=ttnn_mesh_device)
+
+    rope = RotarySetup1D(cos_lw, sin_lw, max_batch_size=1)
+
+    via_forward = rope.forward(mode="prefill", start_pos=0, seq_len=128)
+    via_direct = rope.prefill_forward(start_pos=0, seq_len=128)
+
+    cos_fwd = to_torch_auto_compose(via_forward[0])
+    cos_dir = to_torch_auto_compose(via_direct[0])
+    pcc_ok, msg = comp_pcc(cos_fwd, cos_dir, 0.9999)
+    assert pcc_ok, f"forward(prefill) vs prefill_forward mismatch: {msg}"
+
+
+# ============================================================================
+# prefill_forward tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(1, 1), (1, 2)],
+    ids=["1x1", "1x2"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "head_dim,max_seq_len,rope_theta,rope_scaling_str,start_pos,prefill_seq_len,pad_to",
+    [
+        # Basic: slice from beginning, no padding
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 128, None, id="hd128-start0-seq128"),
+        # Slice with start_pos offset
+        pytest.param(128, 8192, 500000.0, "llama3", 64, 128, None, id="hd128-start64-seq128"),
+        # Slice with padding (SDPA alignment)
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 100, 128, id="hd128-start0-seq100-pad128"),
+        # head_dim=64
+        pytest.param(64, 8192, 500000.0, "llama3", 0, 64, None, id="hd64-start0-seq64"),
+        # No scaling (Mistral-style)
+        pytest.param(128, 8192, 1000000.0, "none", 0, 256, None, id="hd128-none-start0-seq256"),
+        # Padding where pad_to > seq_len
+        pytest.param(128, 8192, 500000.0, "llama3", 32, 64, 128, id="hd128-start32-seq64-pad128"),
+        # pad_to == seq_len (no-op padding)
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 128, 128, id="hd128-start0-seq128-pad128-noop"),
+        # Large start_pos
+        pytest.param(128, 8192, 500000.0, "llama3", 4000, 128, None, id="hd128-start4000-seq128"),
+    ],
+)
+def test_prefill_forward(
+    ttnn_mesh_device: ttnn.MeshDevice,
+    head_dim,
+    max_seq_len,
+    rope_theta,
+    rope_scaling_str,
+    start_pos,
+    prefill_seq_len,
+    pad_to,
+):
+    """
+    Test RotarySetup1D.prefill_forward() returns correct cos/sin slices
+    by comparing against the torch reference tables.
+    """
+    scaling = Llama3Scaling() if rope_scaling_str == "llama3" else None
+
+    cos_torch, sin_torch = _rope_cos_sin(head_dim=head_dim, max_seq_len=max_seq_len, theta=rope_theta, scaling=scaling)
+    scaling_tag = "llama3" if scaling else "none"
+    tag = f"theta{rope_theta}_{scaling_tag}"
+    cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/rope_1d"))
+    cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"cos_{tag}"))
+    sin_lw = LazyWeight(source=sin_torch, device=ttnn_mesh_device, cache_dir_weight_name=(cache_dir, f"sin_{tag}"))
+
+    rope = RotarySetup1D(cos_lw, sin_lw, max_batch_size=1)
+
+    # Call prefill_forward
+    cos_sin = rope.prefill_forward(start_pos=start_pos, seq_len=prefill_seq_len, pad_to=pad_to)
+    assert len(cos_sin) == 2
+
+    cos_tt = to_torch_auto_compose(cos_sin[0])
+    sin_tt = to_torch_auto_compose(cos_sin[1])
+
+    # Expected output shape
+    expected_seq_dim = pad_to if (pad_to is not None and pad_to > prefill_seq_len) else prefill_seq_len
+    assert cos_tt.shape[2] >= expected_seq_dim, f"cos seq dim {cos_tt.shape[2]} < expected {expected_seq_dim}"
+    assert sin_tt.shape[2] >= expected_seq_dim, f"sin seq dim {sin_tt.shape[2]} < expected {expected_seq_dim}"
+
+    # PCC: compare the non-padded region against torch reference
+    end_pos = start_pos + prefill_seq_len
+    expected_cos = cos_torch[:, :, start_pos:end_pos, :]
+    expected_sin = sin_torch[:, :, start_pos:end_pos, :]
+
+    # Trim TT output to the non-padded region for comparison
+    cos_tt_trimmed = cos_tt[:1, :1, :prefill_seq_len, :head_dim]
+    sin_tt_trimmed = sin_tt[:1, :1, :prefill_seq_len, :head_dim]
+
+    pcc_cos, msg_cos = comp_pcc(expected_cos.to(torch.bfloat16), cos_tt_trimmed.to(torch.bfloat16), 0.999)
+    pcc_sin, msg_sin = comp_pcc(expected_sin.to(torch.bfloat16), sin_tt_trimmed.to(torch.bfloat16), 0.999)
+
+    logger.info(f"prefill_forward cos PCC: {msg_cos}")
+    logger.info(f"prefill_forward sin PCC: {msg_sin}")
+
+    assert pcc_cos, f"prefill cos PCC failed: {msg_cos}"
+    assert pcc_sin, f"prefill sin PCC failed: {msg_sin}"
+
+    # If padded, verify the padded region is zeros
+    if pad_to is not None and pad_to > prefill_seq_len:
+        cos_pad_region = (
+            cos_tt_trimmed[:1, :1, prefill_seq_len:pad_to, :head_dim] if cos_tt.shape[2] >= pad_to else None
+        )
+        if cos_pad_region is not None:
+            # Padded region is from the full output
+            cos_full_pad = cos_tt[:1, :1, prefill_seq_len:pad_to, :head_dim]
+            sin_full_pad = sin_tt[:1, :1, prefill_seq_len:pad_to, :head_dim]
+            assert torch.allclose(cos_full_pad, torch.zeros_like(cos_full_pad), atol=1e-3), "cos pad region not zero"
+            assert torch.allclose(sin_full_pad, torch.zeros_like(sin_full_pad), atol=1e-3), "sin pad region not zero"
+
+    logger.info(
+        f"prefill_forward: PASSED for head_dim={head_dim}, start_pos={start_pos}, "
+        f"seq_len={prefill_seq_len}, pad_to={pad_to}"
+    )
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(1, 1)],
+    ids=["1x1"],
+    indirect=True,
+)
+def test_prefill_forward_bounds_check(ttnn_mesh_device: ttnn.MeshDevice):
+    """Test that prefill_forward raises when the requested range exceeds the table."""
+    cos_torch, sin_torch = _rope_cos_sin(head_dim=128, max_seq_len=256, theta=500000.0)
+    cos_lw = LazyWeight(source=cos_torch, device=ttnn_mesh_device)
+    sin_lw = LazyWeight(source=sin_torch, device=ttnn_mesh_device)
+
+    rope = RotarySetup1D(cos_lw, sin_lw, max_batch_size=1)
+
+    # Should work: exactly at the boundary
+    cos_sin = rope.prefill_forward(start_pos=0, seq_len=256)
+    assert len(cos_sin) == 2
+
+    # Should fail: exceeds table
+    with pytest.raises(AssertionError, match="exceeds cos/sin table length"):
+        rope.prefill_forward(start_pos=0, seq_len=257)
+
+    with pytest.raises(AssertionError, match="exceeds cos/sin table length"):
+        rope.prefill_forward(start_pos=200, seq_len=128)
 
 
 # ============================================================================
