@@ -8,17 +8,29 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
 
 ### How It Works
 
-1. **Tool images are built once** and pushed to GHCR by `build-docker-artifact.yaml`
+1. **Tool images are built once** and pushed to GHCR by `build-docker-tools.yaml`
 2. **The main Dockerfile pulls** these pre-built tool images instead of building from scratch
 3. **Tool images are versioned** by `<version>-<script_hash>` to ensure cache invalidation when needed
 
 ### Layer Types
 
-1. **Pre-built Tool Images** (`ccache-layer`, `mold-layer`, `doxygen-layer`, `cba-layer`, `gdb-layer`)
+1. **Pre-built Tool Images** (9 tools)
    - Built by `Dockerfile.tools` and pushed to GHCR
    - Pulled via `FROM ${TOOL_*_IMAGE}` ARG pattern
    - Tagged as `ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>`
    - Third-party endpoints only hit once per tool version
+
+   | Tool | Purpose |
+   |------|---------|
+   | ccache | Compiler cache for faster rebuilds |
+   | mold | Fast linker |
+   | doxygen | Documentation generator |
+   | cba | ClangBuildAnalyzer for build profiling |
+   | gdb | GNU Debugger |
+   | cmake | Build system generator |
+   | yq | YAML processor |
+   | sfpi | SFPI compiler tools |
+   | openmpi | MPI implementation for distributed computing |
 
 2. **Official Image Layers** (`uv-layer`)
    - Uses `COPY --from=` with SHA256-pinned official images
@@ -35,8 +47,15 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
 
 ### Building Tool Images
 
-Tool images are automatically built and pushed by `build-docker-artifact.yaml` when they don't exist in GHCR. To manually build tool images:
+Tool images are automatically built and pushed by `build-docker-tools.yaml` when they don't exist in GHCR.
 
+**Using build-local.sh (recommended):**
+```bash
+# Build dev image - automatically builds any missing tool images first
+./dockerfile/build-local.sh dev
+```
+
+**Manual build:**
 ```bash
 # Build individual tool images
 docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
@@ -44,6 +63,10 @@ docker build -f dockerfile/Dockerfile.tools --target mold -t tool-mold:local .
 docker build -f dockerfile/Dockerfile.tools --target doxygen -t tool-doxygen:local .
 docker build -f dockerfile/Dockerfile.tools --target cba -t tool-cba:local .
 docker build -f dockerfile/Dockerfile.tools --target gdb -t tool-gdb:local .
+docker build -f dockerfile/Dockerfile.tools --target cmake -t tool-cmake:local .
+docker build -f dockerfile/Dockerfile.tools --target yq -t tool-yq:local .
+docker build -f dockerfile/Dockerfile.tools --target sfpi -t tool-sfpi:local .
+docker build -f dockerfile/Dockerfile.tools --target openmpi -t tool-openmpi:local .
 
 # Build main image with local tool images
 docker build \
@@ -52,6 +75,10 @@ docker build \
   --build-arg TOOL_DOXYGEN_IMAGE=tool-doxygen:local \
   --build-arg TOOL_CBA_IMAGE=tool-cba:local \
   --build-arg TOOL_GDB_IMAGE=tool-gdb:local \
+  --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local \
+  --build-arg TOOL_YQ_IMAGE=tool-yq:local \
+  --build-arg TOOL_SFPI_IMAGE=tool-sfpi:local \
+  --build-arg TOOL_OPENMPI_IMAGE=tool-openmpi:local \
   -f dockerfile/Dockerfile --target dev .
 ```
 
@@ -60,10 +87,14 @@ docker build \
 | Script | Purpose |
 |--------|---------|
 | `install-ccache.sh` | Install ccache binary release |
-| `install-mold.sh` | Install mold linker binary release |
-| `install-doxygen.sh` | Build and install doxygen |
+| `install-cmake.sh` | Install CMake binary release |
 | `install-clangbuildanalyzer.sh` | Build and install ClangBuildAnalyzer |
+| `install-doxygen.sh` | Build and install doxygen from source |
 | `install-gdb.sh` | Build and install GDB from source |
+| `install-mold.sh` | Install mold linker binary release |
+| `install-openmpi.sh` | Build and install OpenMPI with ULFM support |
+| `install-sfpi.sh` | Install SFPI compiler tools |
+| `install-yq.sh` | Install yq binary release |
 | `compute-hashes.sh` | Utility to compute SHA256 hashes for updates |
 
 ## Updating Tool Versions
@@ -101,12 +132,18 @@ CCACHE_VERSION=4.11.0 ./dockerfile/scripts/compute-hashes.sh
 
 ## Hash Verification Sources
 
-- **uv**: GitHub Container Registry page (SHA256 digest shown for each version)
-- **ccache**: GPG signatures available at release page
-- **mold**: GitHub release page
-- **doxygen**: SourceForge release page
-- **ClangBuildAnalyzer**: GitHub release (compute from download)
-- **GDB**: GNU announcement mailing list or FTP .sig files
+| Tool | Source |
+|------|--------|
+| uv | GitHub Container Registry page (SHA256 digest shown for each version) |
+| ccache | GPG signatures available at release page |
+| cmake | Official CMake download page checksums |
+| mold | GitHub release page |
+| doxygen | SourceForge release page |
+| cba | GitHub release (compute from download) |
+| gdb | GNU announcement mailing list or FTP .sig files |
+| yq | GitHub release checksums file |
+| sfpi | Internal release artifacts |
+| openmpi | OpenMPI download page checksums |
 
 ## Standalone Script Usage
 

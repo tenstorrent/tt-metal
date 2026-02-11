@@ -171,7 +171,14 @@ The `.github/actions/setup-tool-buildargs` action extracts individual tool tags 
 - **CI (GitHub Actions)**: The `build-docker-artifact.yaml` workflow builds tool images, Python venv images, and main images automatically. Used by merge-gate, pr-gate, and build-artifact.
 - **Local development**: Use `build-local.sh` when you need to build or rebuild images on your machine. It builds missing tool and venv images first, then the main image.
 
-## Quick Start
+## Local Builds with build-local.sh
+
+The `build-local.sh` script automates building Docker images locally by:
+1. Building any missing tool images (from `Dockerfile.tools`)
+2. Building any missing Python venv images (from `Dockerfile.python`)
+3. Building the main image with all dependencies
+
+### Quick Start
 
 ```bash
 # Build the development image (default)
@@ -185,6 +192,40 @@ The `.github/actions/setup-tool-buildargs` action extracts individual tool tags 
 
 # Show all options
 ./dockerfile/build-local.sh --help
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--ubuntu VERSION` | Ubuntu version (default: 22.04) |
+| `--tag TAG` | Output image tag (default: `tt-metalium-<target>:local`) |
+| `--rebuild-tools` | Force rebuild of tool images even if they exist |
+| `--rebuild-venvs` | Force rebuild of venv images even if they exist |
+| `--rebuild-all` | Force rebuild of everything |
+| `--no-cache` | Build without Docker cache |
+
+### Targets
+
+| Target | Description |
+|--------|-------------|
+| `dev` | Development image (default) |
+| `ci-build` | CI build image |
+| `ci-test` | CI test image |
+| `release` | Release image |
+| `release-models` | Release models image |
+
+### Examples
+
+```bash
+# Rebuild all tool images and dev image
+./dockerfile/build-local.sh --rebuild-tools dev
+
+# Build ci-test for Ubuntu 24.04 with custom tag
+./dockerfile/build-local.sh --ubuntu 24.04 --tag my-ci-test:v1 ci-test
+
+# Fresh build with no cache
+./dockerfile/build-local.sh --rebuild-all --no-cache dev
 ```
 
 ## Dockerfiles
