@@ -36,6 +36,10 @@ class TransformerBlock(Module):
         add_attention_to_output: bool = True,
         context_head_scaling: bool = False,
         ff_activation_fn: str = "gelu",
+        ff_mult: int = 4,
+        ff_bias: bool = True,
+        attention_proj_bias: bool = True,
+        time_norm_affine: bool = True,
         mesh_device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
@@ -62,14 +66,18 @@ class TransformerBlock(Module):
         # FSDP: shard weights on sequence parallel axis to reduce memory
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        self.norm1_linear = ColParallelLinear(
-            modulation_dim,
-            6 * dim,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            fsdp_mesh_axis=fsdp_mesh_axis,
-            ccl_manager=ccl_manager,
+        self.norm1_linear = (
+            ColParallelLinear(
+                modulation_dim,
+                6 * dim,
+                bias=True,
+                mesh_device=mesh_device,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+            if time_norm_affine
+            else None
         )
 
         self.norm1_norm = DistributedLayerNorm(
@@ -83,14 +91,18 @@ class TransformerBlock(Module):
         )
 
         context_norm_dim = 6 * dim if not context_pre_only else 2 * dim
-        self.norm1_context_linear = ColParallelLinear(
-            modulation_dim,
-            context_norm_dim,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            fsdp_mesh_axis=fsdp_mesh_axis,
-            ccl_manager=ccl_manager,
+        self.norm1_context_linear = (
+            ColParallelLinear(
+                modulation_dim,
+                context_norm_dim,
+                bias=True,
+                mesh_device=mesh_device,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+            if time_norm_affine
+            else None
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
@@ -110,6 +122,7 @@ class TransformerBlock(Module):
             added_kv_proj_dim=dim,
             context_pre_only=context_pre_only,
             context_head_scaling=context_head_scaling,
+            proj_bias=attention_proj_bias,
             eps=1e-6,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
@@ -133,6 +146,8 @@ class TransformerBlock(Module):
         self.ff = ParallelFeedForward(
             dim=dim,
             dim_out=dim,
+            mult=ff_mult,
+            bias=ff_bias,
             activation_fn=ff_activation_fn,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -156,6 +171,8 @@ class TransformerBlock(Module):
             self.ff_context = ParallelFeedForward(
                 dim=dim,
                 dim_out=dim,
+                mult=ff_mult,
+                bias=ff_bias,
                 activation_fn=ff_activation_fn,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -198,6 +215,8 @@ class TransformerBlock(Module):
         *,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        temb_mod_params_img: tuple[ttnn.Tensor, ...] | None = None,
+        temb_mod_params_txt: tuple[ttnn.Tensor, ...] | None = None,
         skip_time_embed_activation_fn: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run the model forward.
@@ -217,8 +236,20 @@ class TransformerBlock(Module):
         if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        spatial_time = self.norm1_linear(time_embed)
-        prompt_time = self.norm1_context_linear(time_embed)
+        if self.norm1_linear is not None:
+            assert temb_mod_params_img is None
+
+            spatial_time = self.norm1_linear(time_embed)
+            temb_mod_params_img = _chunk_time3d(spatial_time, 6)
+
+        if self.norm1_context_linear is not None:
+            assert temb_mod_params_txt is None
+
+            prompt_time = self.norm1_context_linear(time_embed)
+            temb_mod_params_txt = _chunk_time3d(prompt_time, 2 if self.context_pre_only else 6)
+
+        assert temb_mod_params_img is not None
+        assert temb_mod_params_txt is not None
 
         (
             spatial_shift_attn,
@@ -227,7 +258,7 @@ class TransformerBlock(Module):
             spatial_shift_ff,
             spatial_scale_ff,
             spatial_gate_ff,
-        ) = _chunk_time3d(spatial_time, 6)
+        ) = temb_mod_params_img
 
         spatial_normed = ttnn.squeeze(
             self.norm1_norm(
@@ -239,7 +270,7 @@ class TransformerBlock(Module):
         )
 
         if self.context_pre_only:
-            prompt_scale_attn, prompt_shift_attn = _chunk_time3d(prompt_time, 2)
+            prompt_scale_attn, prompt_shift_attn = temb_mod_params_txt
             prompt_gate_attn = None
             prompt_shift_ff = None
             prompt_scale_ff = None
@@ -252,7 +283,7 @@ class TransformerBlock(Module):
                 prompt_shift_ff,
                 prompt_scale_ff,
                 prompt_gate_ff,
-            ) = _chunk_time3d(prompt_time, 6)
+            ) = temb_mod_params_txt
 
         prompt_normed = ttnn.squeeze(
             self.norm1_context_norm(
@@ -331,6 +362,6 @@ class TransformerBlock(Module):
         return spatial, prompt
 
 
-def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
+def _chunk_time3d(t: ttnn.Tensor, count: int) -> tuple[ttnn.Tensor]:
     size = t.shape[-1] // count
-    return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
+    return tuple(t[:, :, i * size : (i + 1) * size] for i in range(count))
