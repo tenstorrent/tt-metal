@@ -117,7 +117,6 @@ tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
         tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_b.storage()));
     return operation::hash_operation<AttnMatmulDeviceOperation>(
         args,
-        0,
         args.transpose_hw,
         args.output_mem_config,
         args.output_dtype,

@@ -256,7 +256,7 @@ ttsl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
     const auto& key_tensor = tensor_args.key;
     const auto& key_logical_shape = key_tensor.logical_shape();
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SDPAForwardDeviceOperation>(
-        args, 0, query_tensor.dtype(), query_logical_shape, key_logical_shape);
+        args, query_tensor.dtype(), query_logical_shape, key_logical_shape);
 
     return hash;
 }

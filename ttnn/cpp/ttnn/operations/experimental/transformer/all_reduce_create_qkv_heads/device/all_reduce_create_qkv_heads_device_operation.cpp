@@ -289,7 +289,6 @@ tt::stl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_ha
         operation_attributes.all_reduce_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
-        0,
         input_shape,
         input_memory_layout,
         input_dtype,

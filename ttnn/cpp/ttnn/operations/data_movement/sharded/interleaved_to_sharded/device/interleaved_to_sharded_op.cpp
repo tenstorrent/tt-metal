@@ -86,7 +86,6 @@ tt::stl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         operation_attributes.keep_l1_aligned,
-        0,
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.layout(),

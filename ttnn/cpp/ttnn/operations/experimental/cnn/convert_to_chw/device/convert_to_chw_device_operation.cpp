@@ -62,7 +62,7 @@ tt::stl::hash::hash_t ConvertToCHWDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args;
     const auto& input_shape = input_tensor.padded_shape();
     operation::Hash hash = operation::hash_operation<ConvertToCHWDeviceOperation>(
-        args, 0, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
+        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }

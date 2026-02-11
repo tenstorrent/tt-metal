@@ -72,8 +72,7 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         attributes.all_gather_core_grid_offset,
         attributes.read_local_slice_from_input,
         attributes.ag_op,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

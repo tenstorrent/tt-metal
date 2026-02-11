@@ -102,7 +102,6 @@ tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
         tt::stl::get_active_type_name_in_variant(args.false_value_tensor.storage()));
     return operation::hash_operation<WhereDeviceOperation>(
         attributes,
-        0,
         args.condition_tensor.memory_config(),
         args.condition_tensor.dtype(),
         args.true_value_tensor.memory_config(),

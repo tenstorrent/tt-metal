@@ -138,8 +138,7 @@ tt::tt_metal::operation::Hash LlamaReduceScatterCreateHeadsDeviceOperation::comp
         attributes.use_optimal_ccl_for_llama,
         tensor_args.input_tensor.dtype(),
         tensor_args.input_tensor.memory_config(),
-        tensor_args.input_tensor.device()->id(),
-        0);
+        tensor_args.input_tensor.device()->id());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

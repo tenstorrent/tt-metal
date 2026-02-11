@@ -101,7 +101,6 @@ ttsl::hash::hash_t SwiGLUForwardDeviceOperation::compute_program_hash(
     const auto& w3_logical_shape = w3.logical_shape();
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SwiGLUForwardDeviceOperation>(
         args,
-        0,
         input.dtype(),
         input_logical_shape,
         w1.dtype(),

@@ -112,7 +112,6 @@ tt::stl::hash::hash_t GeluBackwardDeviceOperation::compute_program_hash(
     const auto& input_shape = input_tensor.padded_shape();
     operation::Hash hash = operation::hash_operation<GeluBackwardDeviceOperation>(
         args,
-        0,
         input_tensor.dtype(),
         input_tensor.memory_config(),
         grad_output.dtype(),

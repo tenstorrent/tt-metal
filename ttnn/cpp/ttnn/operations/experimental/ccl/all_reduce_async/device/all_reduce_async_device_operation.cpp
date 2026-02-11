@@ -107,8 +107,7 @@ tt::stl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
         args.use_optimal_ccl_for_llama,
         args.cluster_axis,
         subdevice_core_range_set,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

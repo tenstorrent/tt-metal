@@ -422,7 +422,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         "Unexpected type {}",
         tt::stl::get_active_type_name_in_variant(input_a.storage()));
     tt::stl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
-        args, 0, input_a.dtype(), input_a.memory_config(), a_shape.volume());
+        args, input_a.dtype(), input_a.memory_config(), a_shape.volume());
 
     if (variant == TernaryVariant::TTT) {
         TT_ASSERT(
@@ -442,7 +442,6 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
-            0,
             input_a.dtype(),
             input_a.memory_config(),
             input_b.value().dtype(),
@@ -463,7 +462,6 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
-            0,
             input_a.dtype(),
             input_a.memory_config(),
             input_b.value().dtype(),
@@ -481,7 +479,6 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
-            0,
             input_a.dtype(),
             input_a.memory_config(),
             input_c.value().dtype(),

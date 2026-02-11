@@ -187,7 +187,7 @@ tt::stl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.padded_shape();
     operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
-        args, 0, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
+        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }

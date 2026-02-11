@@ -95,7 +95,7 @@ ttsl::hash::hash_t CrossEntropyForwardDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
     auto hash = tt::tt_metal::operation::hash_operation<CrossEntropyForwardDeviceOperation>(
-        args, 0, input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.dtype(), input_logical_shape);
 
     return hash;
 }

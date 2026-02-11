@@ -157,7 +157,7 @@ ttsl::hash::hash_t LayerNormForwardDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<LayerNormForwardDeviceOperation>(
-        args.epsilon, args.return_mean_rstd, 0, input_tensor.dtype(), input_logical_shape);
+        args.epsilon, args.return_mean_rstd, input_tensor.dtype(), input_logical_shape);
 
     return hash;
 }

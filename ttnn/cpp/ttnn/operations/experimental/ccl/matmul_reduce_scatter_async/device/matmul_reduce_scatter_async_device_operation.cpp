@@ -115,8 +115,7 @@ tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_h
         weight_tensor,
         bias_tensor,
         persistent_intermediate_tensor,
-        persistent_output_tensor,
-        0);
+        persistent_output_tensor);
 }
 
 }  // namespace ttnn::experimental::prim

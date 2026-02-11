@@ -104,8 +104,7 @@ tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_h
         operation_attributes.secondary_cluster_axis,
         operation_attributes.using_persistent_buffers,
         subdevice_core_range_set,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

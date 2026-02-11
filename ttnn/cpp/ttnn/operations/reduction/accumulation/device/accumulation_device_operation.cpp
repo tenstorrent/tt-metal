@@ -88,7 +88,6 @@ AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::
 operation::Hash AccumulationDeviceOperation::compute_program_hash(
     const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
     return operation::hash_operation<AccumulationDeviceOperation>(
-        0,
         op_args.dim,
         op_args.output_memory_config,
         op_args.flip,

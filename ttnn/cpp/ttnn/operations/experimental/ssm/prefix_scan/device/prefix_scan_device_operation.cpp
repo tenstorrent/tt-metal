@@ -69,7 +69,7 @@ tt::stl::hash::hash_t PrefixScanDeviceOperation::compute_program_hash(
     const auto& a = tensor_args.a;
     const auto& a_shape = a.padded_shape();
     operation::Hash hash = operation::hash_operation<PrefixScanDeviceOperation>(
-        args.math_fidelity, 0, a.dtype(), a.memory_config(), a_shape.volume());
+        args.math_fidelity, a.dtype(), a.memory_config(), a_shape.volume());
 
     return hash;
 }

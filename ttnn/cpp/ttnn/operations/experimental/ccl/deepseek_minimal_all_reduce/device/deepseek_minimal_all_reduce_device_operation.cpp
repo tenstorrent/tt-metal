@@ -91,8 +91,7 @@ tt::stl::hash::hash_t DeepseekMinimalAllReduceDeviceOperation::compute_program_h
         operation_attributes.cluster_axis,
         input_tensor.dtype(),
         input_tensor.memory_config(),
-        input_tensor.device()->id(),
-        0);
+        input_tensor.device()->id());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce

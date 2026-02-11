@@ -95,7 +95,7 @@ ttsl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
     return tt::tt_metal::operation::hash_operation<CrossEntropyBackwardDeviceOperation>(
-        args, 0, input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.dtype(), input_logical_shape);
 }
 
 }  // namespace ttml::metal::ops::cross_entropy_bw::device

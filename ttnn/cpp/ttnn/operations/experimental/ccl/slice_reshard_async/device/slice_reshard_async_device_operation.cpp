@@ -59,8 +59,7 @@ tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
         args.output_mem_config,
         args.topology,
         args.ring_size,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

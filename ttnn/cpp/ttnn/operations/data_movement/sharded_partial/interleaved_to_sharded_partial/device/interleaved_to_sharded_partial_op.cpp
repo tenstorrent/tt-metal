@@ -85,7 +85,6 @@ tt::stl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_progra
         operation_attributes.slice_index,
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
-        0,
         input_tensor.dtype(),
         input_tensor.layout());
 }

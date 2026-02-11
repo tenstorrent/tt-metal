@@ -189,8 +189,7 @@ tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         subdevice_core_range_set,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 Tensor all_to_all_async(

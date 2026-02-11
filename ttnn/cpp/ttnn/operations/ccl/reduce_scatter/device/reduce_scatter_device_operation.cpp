@@ -113,8 +113,7 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         subdevice_core_range_set,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 }  // namespace ttnn::operations::ccl

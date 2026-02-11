@@ -71,8 +71,7 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
         operation_attributes.topology,
         operation_attributes.cluster_axis,
         subdevice_core_range_set,
-        tensor_args,
-        0);
+        tensor_args);
 }
 
 Tensor broadcast(
