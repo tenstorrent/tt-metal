@@ -61,7 +61,7 @@ struct RouterStaticSizedChannelWriterAdapter {
     RouterStaticSizedChannelWriterAdapter() = default;
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
-    FORCE_INLINE void init(
+    __attribute__((noinline)) void init(
         bool connected_to_persistent_fabric,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
