@@ -109,13 +109,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
 
     std::vector<uint32_t> l1_addrs;
     std::vector<CoreCoord> core_list = corerange_to_cores(test_config.cores);
+    constexpr uint32_t barrier_scratch_bytes = 2u * sizeof(uint32_t);
+    const uint32_t required_l1_bytes = per_core_size_bytes + barrier_scratch_bytes;
     for (auto& core : core_list) {
         auto [l1_addr, l1_size] = get_l1_address_and_size(mesh_device, core);
         TT_FATAL(
-            l1_size >= per_core_size_bytes,
-            "L1 size {} must be >= per_core_size_bytes {}",
+            l1_size >= required_l1_bytes,
+            "L1 size {} must be >= per_core_size_bytes {} + barrier scratch {} (total {})",
             l1_size,
-            per_core_size_bytes);
+            per_core_size_bytes,
+            barrier_scratch_bytes,
+            required_l1_bytes);
         l1_addrs.push_back(l1_addr);
     }
 
