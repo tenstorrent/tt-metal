@@ -621,7 +621,7 @@ target_sources(
             inc/api/compute/quantization.h
             inc/api/compute/reconfig_data_format.h
             inc/api/compute/reduce.h
-            inc/api/compute/reduce_custom.h
+            inc/api/compute/experimental/reduce_custom.h
             inc/api/compute/reg_api.h
             inc/api/compute/remainder_int32.h
             inc/api/compute/reshuffle.h
