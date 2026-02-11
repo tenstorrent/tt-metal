@@ -27,6 +27,8 @@ inline void llk_pop_tiles(const std::int32_t cb_id, const std::int32_t num_tiles
     // Wait until selected unpackers are reading from L1
     TT_POP_TILES(UNPACK_SEL, num_tiles, cb_id);
 
+    // Independent software tracking and tile tracking is used
+    // Not the right approach; it will be fixed when moving to DFBs
     // Update the CB buffer information
     const std::uint32_t num_words = num_tiles * get_local_cb_interface(cb_id).fifo_page_size;
 

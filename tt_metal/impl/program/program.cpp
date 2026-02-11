@@ -1468,16 +1468,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 [kernel, device, this, &build_env] {
                     JitBuildOptions build_options(build_env.build_env);
                     kernel->set_build_options(build_options);
-
-                    // en_implied_math_format is only supported for Quasar, set to false for other architectures
-                    if (build_options.en_implied_math_format && device->arch() != tt::ARCH::QUASAR) {
-                        log_warning(
-                            tt::LogMetal,
-                            "en_implied_math_format is only supported on Quasar, ignoring setting for other "
-                            "architectures");
-                        build_options.en_implied_math_format = false;
-                    }
-
                     if (this->compiled_.empty()) {
                         this->set_remote_circular_buffer_init(kernel);
                     }
