@@ -12,7 +12,7 @@ skus:
       - in-service
 
   wh_llmbox_perf:
-    runs-on:
+    runs_on:
       - arch-wormhole_b0
       - config-t3000
       - pipeline-perf
