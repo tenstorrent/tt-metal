@@ -781,6 +781,11 @@ def moe_sparse_experts_forward_tt(
     # Chunking is safe because MoE is token-wise (no cross-token dependencies).
     # We chunk based on *global* token count (local tokens * dispatch devices).
     chunk_total_tokens = int(os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_CHUNK_TOKENS", "4096").strip() or "0")
+    # sparse_matmul program configs use per_core_M=1 → at most 1 sparsity block
+    # (= sparsity_block_size tokens).  When total_tokens exceeds this (prefill),
+    # force chunking so each recursive call processes exactly 1 block.
+    if not use_all_to_all and total_tokens > int(rt.sparsity_block_size):
+        chunk_total_tokens = int(rt.sparsity_block_size)
     if chunk_total_tokens > 0 and total_tokens > chunk_total_tokens:
         if debug:
             print(

@@ -379,19 +379,35 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+    else:
+        # LoFi + packer_l1_acc for speed (matches DeepSeek V3 pattern).
+        # Fidelity can be overridden via GLM4_MOE_LITE_MLP_FIDELITY env var.
+        mlp_fidelity = _parse_math_fidelity(
+            os.environ.get("GLM4_MOE_LITE_MLP_FIDELITY", ""),
+            default=ttnn.MathFidelity.LoFi,
+        )
+        mlp_approx = os.environ.get("GLM4_MOE_LITE_MLP_APPROX", "1").strip() != "0"
+        mlp_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=mlp_fidelity,
+            math_approx_mode=mlp_approx,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+    # Use L1 for decode intermediate activations when enabled (reduces DRAM round-trips).
+    decode_act_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("GLM4_MOE_LITE_DECODE_L1_ACT", "").strip() == "1" else None
 
     def _mlp_linear(a: ttnn.Tensor, b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None) -> ttnn.Tensor:
         kwargs: dict[str, object] = {}
-        if memory_config is not None:
-            kwargs["memory_config"] = memory_config
+        mc = memory_config if memory_config is not None else decode_act_mc
+        if mc is not None:
+            kwargs["memory_config"] = mc
         if mlp_compute_kernel_config is not None:
             kwargs["compute_kernel_config"] = mlp_compute_kernel_config
         return ttnn.linear(a, b, **kwargs)
 
     tp_axis = _tp_cluster_axis(device)
     tp_enabled = tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1"
-    mesh_rows, mesh_cols = _mesh_shape(device)
-    tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
     mesh_rows, mesh_cols = _mesh_shape(device)
     tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
 
@@ -415,6 +431,88 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         ttnn.deallocate(out, force=False)
         return out_reduced
 
+    # ---- DRAM-sharded matmul for attention projections (decode-only perf optimization) ----
+    # When enabled, attention weights are stored in DRAM WIDTH_SHARDED format (across all
+    # DRAM banks), and matmuls use a DRAM-sharded program config that reads weights with
+    # full DRAM bandwidth. This is the key optimization from DeepSeek V3 for M=1 decode.
+    dram_sharded_enabled = _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS")
+
+    if dram_sharded_enabled:
+        from models.demos.deepseek_v3.utils.config_helpers import (
+            get_activation_sharding_core_counts_for_dram_matmul,
+            get_dram_sharded_matmul_config,
+        )
+
+        _ds_grid = device.compute_with_storage_grid_size()
+        _ds_max_cores = _ds_grid.x * _ds_grid.y
+        _DS_BATCH = 32  # padded batch size for decode (TILE_SIZE)
+
+        _ds_ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+        def _dram_sharded_linear(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+            """DRAM-sharded matmul for decode. Weight b must be in DRAM WIDTH_SHARDED format."""
+            K = int(b.shape[2])
+            N = int(b.shape[3])
+            input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(K, _ds_max_cores))
+            output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(N, _ds_max_cores))
+
+            act_mc = ttnn.create_sharded_memory_config_(
+                shape=(_DS_BATCH, K // input_cores),
+                core_grid=ttnn.num_cores_to_corerangeset(
+                    input_cores,
+                    ttnn.CoreCoord(_ds_grid.x, _ds_grid.y),
+                    row_wise=True,
+                ),
+                strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                tile_layout=True,
+                use_height_and_width_as_shard_shape=True,
+            )
+            a_sharded = ttnn.to_memory_config(a, act_mc)
+
+            prog_cfg = get_dram_sharded_matmul_config(
+                m=_DS_BATCH, k=K, n=N,
+                input_num_shards=input_cores,
+                output_num_shards=output_cores,
+            )
+
+            result = ttnn.linear(
+                a_sharded, b,
+                program_config=prog_cfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=_ds_ckc,
+            )
+            ttnn.deallocate(a_sharded, force=False)
+            result_dram = ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(result, force=False)
+            return result_dram
+
+    def _attn_linear(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+        """Attention projection linear (2D weights only). Uses DRAM-sharded when enabled."""
+        if dram_sharded_enabled:
+            if tp_enabled:
+                a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
+                out = _dram_sharded_linear(a_tp, b)
+                ttnn.deallocate(a_tp, force=False)
+                out_reduced = ttnn.all_reduce(
+                    out, num_links=1, topology=ttnn.Topology.Linear,
+                    cluster_axis=tp_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(out, force=False)
+                return out_reduced
+            else:
+                return _dram_sharded_linear(a, b)
+        else:
+            if tp_enabled:
+                return _tp_row_parallel_linear_from_replicated(a, b)
+            else:
+                return _mlp_linear(a, b)
+
     residual = x_embed_tok
     t0 = time.perf_counter() if profile is not None else 0.0
     x = w.input_layernorm(x_embed_tok, mode="decode")  # [1,1,B,hidden]
@@ -429,10 +527,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         qkv = None
         w_q_kv_a = getattr(w, "w_q_kv_a", None)
         if w_q_kv_a is not None:
-            if tp_enabled:
-                qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
-            else:
-                qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
+            qkv = _attn_linear(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
 
             # `slice` may return a view that aliases the `qkv` buffer (no refcounting).
             # Materialize slices before freeing `qkv` to avoid intermittent corruption.
@@ -448,10 +543,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             ttnn.deallocate(qkv, force=False)
             qkv = None
         else:
-            if tp_enabled:
-                kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
-            else:
-                kv = _mlp_linear(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
+            kv = _attn_linear(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
 
         # `slice` may alias `kv`. Clone slices before freeing `kv`.
         kv_nope_view = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
@@ -528,15 +620,9 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # ---- Q path ----
     t0 = time.perf_counter() if profile is not None else 0.0
     if q_a is None:
-        if tp_enabled:
-            q_a = _tp_row_parallel_linear_from_replicated(x, w.w_q_a)  # [1,1,B,q_lora_rank]
-        else:
-            q_a = _mlp_linear(x, w.w_q_a)  # [1,1,B,q_lora_rank]
+        q_a = _attn_linear(x, w.w_q_a)  # [1,1,B,q_lora_rank]
     q_a = w.q_a_layernorm(q_a, mode="decode")
-    if tp_enabled:
-        q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
-    else:
-        q = _mlp_linear(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
+    q = _attn_linear(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
     ttnn.deallocate(q_a, force=False)
 
     q = ttnn.reshape(q, (1, batch, int(hparams.num_attention_heads), int(hparams.qk_head_dim)))
@@ -784,10 +870,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     v = ttnn.reshape(v, (1, batch, 1, int(hparams.num_attention_heads * hparams.v_head_dim)))
     v = ttnn.permute(v, (0, 2, 1, 3))  # [1,1,B,H*v_head_dim]
 
-    if tp_enabled:
-        attn_out = _tp_row_parallel_linear_from_replicated(v, w.w_o)  # [1,1,B,hidden]
-    else:
-        attn_out = _mlp_linear(v, w.w_o)  # [1,1,B,hidden]
+    attn_out = _attn_linear(v, w.w_o)  # [1,1,B,hidden]
     ttnn.deallocate(v, force=False)
 
     x_attn_out = residual + attn_out
@@ -809,14 +892,21 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     use_moe = moe_runtime is not None and getattr(w, "moe", None) is not None
     if not use_moe:
         t0 = time.perf_counter() if profile is not None else 0.0
-        gate = _mlp_linear(x, w.w_mlp_gate)
-        up = _mlp_linear(x, w.w_mlp_up)
+        if dram_sharded_enabled:
+            gate = _dram_sharded_linear(x, w.w_mlp_gate)
+            up = _dram_sharded_linear(x, w.w_mlp_up)
+        else:
+            gate = _mlp_linear(x, w.w_mlp_gate)
+            up = _mlp_linear(x, w.w_mlp_up)
         ttnn.deallocate(x, force=False)
         gate = ttnn.silu(gate)
         x_ff = gate * up
         ttnn.deallocate(gate, force=False)
         ttnn.deallocate(up, force=False)
-        mlp_out = _mlp_linear(x_ff, w.w_mlp_down)
+        if dram_sharded_enabled:
+            mlp_out = _dram_sharded_linear(x_ff, w.w_mlp_down)
+        else:
+            mlp_out = _mlp_linear(x_ff, w.w_mlp_down)
         ttnn.deallocate(x_ff, force=False)
         if tp_enabled:
             mlp_out_reduced = ttnn.all_reduce(
@@ -869,13 +959,21 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
 
     # Shared expert (dense MLP).
     t0 = time.perf_counter() if profile is not None else 0.0
-    gate_shared = _mlp_linear(x, w.w_mlp_gate)
-    up_shared = _mlp_linear(x, w.w_mlp_up)
+    _use_dram_mlp = dram_sharded_enabled and int(x.shape[2]) == _DS_BATCH
+    if _use_dram_mlp:
+        gate_shared = _dram_sharded_linear(x, w.w_mlp_gate)
+        up_shared = _dram_sharded_linear(x, w.w_mlp_up)
+    else:
+        gate_shared = _mlp_linear(x, w.w_mlp_gate)
+        up_shared = _mlp_linear(x, w.w_mlp_up)
     gate_shared = ttnn.silu(gate_shared)
     x_ff_shared = gate_shared * up_shared
     ttnn.deallocate(gate_shared, force=False)
     ttnn.deallocate(up_shared, force=False)
-    shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down, memory_config=moe_decode_mc)
+    if _use_dram_mlp:
+        shared_out = _dram_sharded_linear(x_ff_shared, w.w_mlp_down)
+    else:
+        shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down, memory_config=moe_decode_mc)
     ttnn.deallocate(x_ff_shared, force=False)
     if tp_enabled:
         shared_out_reduced = ttnn.all_reduce(
@@ -1002,6 +1100,8 @@ def run_decoder_layer_prefill_update_cache_tt(
 
     tp_axis = _tp_cluster_axis(device)
     tp_enabled = tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1"
+    mesh_rows, mesh_cols = _mesh_shape(device)
+    tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
 
     def _tp_row_parallel_linear_from_replicated(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
         a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)

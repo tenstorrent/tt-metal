@@ -97,6 +97,26 @@ def _env_dense_dtype() -> ttnn.DataType:
     raise ValueError(f"Invalid GLM4_MOE_LITE_DENSE_TT_DTYPE={override!r}")
 
 
+def _env_dram_sharded_weights() -> bool:
+    return os.environ.get("GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS", "").strip() == "1"
+
+
+def _maybe_dram_shard_linear_weight(weight: ttnn.Tensor, device) -> ttnn.Tensor:
+    """Convert a [1,1,K,N] linear weight to DRAM-sharded format for decode perf.
+
+    DRAM-sharded storage distributes the weight's N dimension across all DRAM banks,
+    giving full DRAM bandwidth utilization for M=1 decode matmuls.
+    """
+    if not _env_dram_sharded_weights():
+        return weight
+    from models.demos.deepseek_v3.utils.config_helpers import dram_sharded_weight_config
+
+    K = int(weight.shape[2])
+    N = int(weight.shape[3])
+    dram_mc = dram_sharded_weight_config(K, N, device.dram_grid_size())
+    return ttnn.to_memory_config(weight, dram_mc)
+
+
 def _linear_weight_tt(
     *,
     device,
@@ -398,6 +418,7 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=attn_row_mapper,
     )
+    w_q_a = _maybe_dram_shard_linear_weight(w_q_a, device)
     w_q_b = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_b_proj.weight"],
@@ -405,6 +426,7 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=attn_row_mapper,
     )
+    w_q_b = _maybe_dram_shard_linear_weight(w_q_b, device)
     w_kv_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight"],
@@ -412,6 +434,7 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=attn_row_mapper,
     )
+    w_kv_a = _maybe_dram_shard_linear_weight(w_kv_a, device)
     w_q_kv_a: Optional[ttnn.Tensor] = None
     if _env_fuse_qkv_a():
         q_a_torch = state[f"model.layers.{layer_idx}.self_attn.q_a_proj.weight"]
@@ -433,6 +456,7 @@ def convert_decoder_layer_weights(
             dtype=dense_dtype,
             mesh_mapper=attn_row_mapper,
         )
+        w_q_kv_a = _maybe_dram_shard_linear_weight(w_q_kv_a, device)
 
     kv_b = state[f"model.layers.{layer_idx}.self_attn.kv_b_proj.weight"]  # [num_heads*(qk_nope+v), kv_lora]
     kv_b = kv_b.view(hparams.num_attention_heads, hparams.qk_nope_head_dim + hparams.v_head_dim, hparams.kv_lora_rank)
@@ -473,6 +497,7 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=attn_row_mapper,
     )
+    w_o = _maybe_dram_shard_linear_weight(w_o, device)
 
     # ---- MLP (dense or shared expert as dense) ----
     dense_layer = layer_idx < int(hparams.first_k_dense_replace)
@@ -512,6 +537,7 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=mlp_gate_mapper,
     )
+    w_mlp_gate = _maybe_dram_shard_linear_weight(w_mlp_gate, device)
     w_mlp_up = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}up_proj.weight"],
@@ -519,6 +545,7 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=mlp_gate_mapper,
     )
+    w_mlp_up = _maybe_dram_shard_linear_weight(w_mlp_up, device)
     w_mlp_down = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}down_proj.weight"],
@@ -526,6 +553,7 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=mlp_down_mapper,
     )
+    w_mlp_down = _maybe_dram_shard_linear_weight(w_mlp_down, device)
 
     # ---- Routed MoE (layers >= first_k_dense_replace) ----
     moe: Optional[MoELayerTTWeights] = None

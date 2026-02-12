@@ -381,6 +381,27 @@ class Glm4MoeLiteDenseOnlyTT:
         - Runs full-sequence FlashMLA prefill for each layer.
         - Writes KVPE to the paged KV cache using `paged_fill_cache`.
         """
+        # Release any active decode trace before prefill. The trace reserves
+        # device memory that conflicts with prefill's dynamic allocations.
+        # The trace will be lazily re-captured on the next decode call
+        # (via _decode_trace_sampling → _capture_decode_trace_sampling).
+        # Trace INPUT tensors are preserved for fast re-capture.
+        if self._decode_trace_id_sampling is not None:
+            ttnn.synchronize_device(self.device)
+            ttnn.release_trace(self.device, self._decode_trace_id_sampling)
+            self._decode_trace_id_sampling = None
+            # Deallocate trace OUTPUT tensors (allocated inside the trace region).
+            for t in (self._trace_logits_tt, self._trace_top1_values_tt, self._trace_top1_indices_tt):
+                if t is not None:
+                    try:
+                        ttnn.deallocate(t, force=True)
+                    except Exception:
+                        pass
+            self._trace_logits_tt = None
+            self._trace_top1_values_tt = None
+            self._trace_top1_indices_tt = None
+            ttnn.synchronize_device(self.device)
+
         if tokens.ndim != 2:
             raise ValueError(f"expected tokens [B,S], got {tuple(tokens.shape)}")
         if page_table.ndim != 2:
