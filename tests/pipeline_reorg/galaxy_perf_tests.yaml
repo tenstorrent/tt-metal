@@ -17,7 +17,7 @@
   model: sd35
   skus:
     wh_galaxy:
-      timeout: 50
+      timeout: 15
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
   arch: wormhole_b0
@@ -29,7 +29,7 @@
   model: flux1-dev
   skus:
     wh_galaxy:
-      timeout: 50
+      timeout: 15
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   arch: wormhole_b0
@@ -55,7 +55,7 @@
   model: wan2-2
   skus:
     wh_galaxy:
-      timeout: 35
+      timeout: 25
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
   arch: wormhole_b0
@@ -70,7 +70,7 @@
   model: mochi
   skus:
     wh_galaxy:
-      timeout: 50
+      timeout: 20
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   arch: wormhole_b0
@@ -104,3 +104,14 @@
   arch: wormhole_b0
   save-perf-data: false
   model-type: sentence_bert
+
+- name: Galaxy GPT-OSS model perf tests
+  cmd: uv pip install -r models/demos/gpt_oss/requirements.txt && export HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ && pytest --timeout 600 models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_all_fused_ops_device_perf.py::test_all_fused_ops_device_perf -k "decode and 1"
+  model: gpt-oss
+  sku: wh_galaxy
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  timeout: 15
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: GPT-OSS

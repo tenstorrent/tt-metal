@@ -21,6 +21,7 @@ on:
           - wan2-2
           - mochi
           - qwenimage
+          - gpt-oss
       build-type:
         required: false
         type: choice
