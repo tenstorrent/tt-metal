@@ -120,12 +120,14 @@
             "Too many DPRINT calls, exceeds limit");                                                                   \
         header.info_id = dprint_info_index;                                                                            \
         auto header_value = header.value;                                                                              \
+        /* Get write pointer in dprint buffer */                                                                       \
+        auto write_position = dprint_buffer->aux.wpos;                                                                 \
+        auto dprint_buffer_ptr = &(dprint_buffer->data[0]) + write_position;                                           \
         /* Serialize message */                                                                                        \
-        auto dprint_buffer_ptr = &(dprint_buffer->data[0]) + dprint_buffer->aux.wpos;                                  \
         dprint_detail::formatting::dprint_type<decltype(header_value)>::serialize(dprint_buffer_ptr, 0, header_value); \
         dprint_detail::serialization::serialize_arguments(dprint_buffer_ptr, __VA_ARGS__);                             \
         /* Move write pointer in dprint buffer */                                                                      \
-        dprint_buffer->aux.wpos += message_size;                                                                       \
+        dprint_buffer->aux.wpos = write_position + message_size;                                                       \
         /* Release buffer lock */                                                                                      \
         dprint_detail::locking::release_lock();                                                                        \
     }
