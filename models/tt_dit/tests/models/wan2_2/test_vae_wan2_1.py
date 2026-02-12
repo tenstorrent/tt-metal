@@ -211,7 +211,7 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
     state_dict = torch_model.state_dict()
     state_dict["weight"] = state_dict["gamma"].squeeze()  # remove broadcasting dimensions
     del state_dict["gamma"]
-    tt_model.load_state_dict(state_dict)
+    tt_model.load_torch_state_dict(state_dict)
 
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
@@ -293,7 +293,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
         ccl_manager=ccl_manager,
         dtype=dtype,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
@@ -402,7 +402,7 @@ def test_wan_conv3d(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn(B, C_in, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
@@ -626,7 +626,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         parallel_config=parallel_config,
         dtype=dtype,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
@@ -777,7 +777,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         parallel_config=parallel_config,
         dtype=dtype,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     num_convs = count_convs(tt_model)
 
@@ -929,7 +929,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     num_convs = count_convs(tt_model)
 
@@ -1085,7 +1085,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         parallel_config=parallel_config,
         dtype=dtype,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     num_convs = count_convs(tt_model)
 
@@ -1277,7 +1277,7 @@ def test_wan_decoder3d(
         parallel_config=parallel_config,
         dtype=dtype,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     num_convs = count_convs(tt_model)
 
@@ -1496,7 +1496,7 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         parallel_config=parallel_config,
         dtype=dtype,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)

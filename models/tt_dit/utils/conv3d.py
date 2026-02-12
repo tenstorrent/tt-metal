@@ -10,6 +10,8 @@ from loguru import logger
 
 import ttnn
 
+from ..layers.module import Module
+
 ALIGNMENT = 32
 
 
@@ -59,62 +61,19 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
     )
 
 
-def count_convs(obj):
+def count_convs(module: Module) -> int:
     """
     Recursively count the total number of WanCausalConv3d instances in a class and its attributes.
 
     Args:
-        obj: The object/class to search through
+        module: The `Module` to search through
 
     Returns:
         int: Total count of WanCausalConv3d instances found
     """
-    count = 0
-    visited = set()
-
-    def _count_recursive(current_obj):
-        nonlocal count, visited
-
-        # Avoid infinite recursion by tracking visited objects
-        obj_id = id(current_obj)
-        if obj_id in visited:
-            return
-        visited.add(obj_id)
-
-        # Check if current object is a WanCausalConv3d instance
-        if hasattr(current_obj, "__class__") and current_obj.__class__.__name__ == "WanCausalConv3d":
-            count += 1
-            return
-
-        # Handle different types of objects
-        if hasattr(current_obj, "__dict__"):
-            # For objects with attributes, check each attribute
-            for attr_name in dir(current_obj):
-                # Skip private/magic methods and properties that might cause issues
-                if attr_name.startswith("_") or attr_name in ["training", "device"]:
-                    continue
-
-                try:
-                    attr_value = getattr(current_obj, attr_name)
-                    # Skip methods and functions
-                    if callable(attr_value) and not hasattr(attr_value, "__dict__"):
-                        continue
-                    _count_recursive(attr_value)
-                except (AttributeError, RuntimeError, TypeError):
-                    # Skip attributes that can't be accessed safely
-                    continue
-
-        elif isinstance(current_obj, (list, tuple)):
-            # Handle lists and tuples
-            for item in current_obj:
-                _count_recursive(item)
-
-        elif isinstance(current_obj, dict):
-            # Handle dictionaries
-            for value in current_obj.values():
-                _count_recursive(value)
-
-    _count_recursive(obj)
+    count = 1 if module.__class__.__name__ == "WanCausalConv3d" else 0
+    for _, child in module.named_children():
+        count += count_convs(child)
     return count
 
 
@@ -160,7 +119,7 @@ def aligned_channels(channels):
     return channels
 
 
-def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALIGNMENT, dtype=ttnn.DataType.BFLOAT16):
+def prepare_conv3d_weights(weight, bias, conv_config):
     """Prepare weights and bias for TTNN."""
     C_in = weight.shape[1]
     w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
@@ -183,26 +142,4 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALI
     w = w.permute(3, 0, 1, 2, 4, 5)
     w = w.reshape(-1, out_channels)
 
-    tt_weight = ttnn.from_torch(
-        w,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-        pad_value=0,
-    )
-
-    if bias is not None:
-        tt_bias = ttnn.from_torch(
-            bias.reshape(1, -1),
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            pad_value=0,
-        )
-    else:
-        tt_bias = None
-    return tt_weight, tt_bias
+    return w, bias.reshape(1, -1)

@@ -62,10 +62,15 @@ struct BufferWriteDispatchParams {
     uint32_t pinned_src_noc_xy = 0;
     uint64_t pinned_src_addr = 0;
     bool use_pinned_transfer = false;
+    bool remote_chip = false;
 
     BufferWriteDispatchParams() = default;
-    BufferWriteDispatchParams(uint32_t src_noc_xy, uint64_t src_addr, bool src_pinned = false) :
-        pinned_src_noc_xy{src_noc_xy}, pinned_src_addr{src_addr}, use_pinned_transfer{src_pinned} {}
+    BufferWriteDispatchParams(
+        uint32_t src_noc_xy, uint64_t src_addr, bool src_pinned = false, bool remote_chip = false) :
+        pinned_src_noc_xy{src_noc_xy},
+        pinned_src_addr{src_addr},
+        use_pinned_transfer{src_pinned},
+        remote_chip{remote_chip} {}
 
     void calculate_issue_wait() {
         this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer
@@ -76,6 +81,8 @@ struct BufferWriteDispatchParams {
 class InterleavedBufferWriteDispatchParams : public BufferWriteDispatchParams {
 public:
     uint32_t dst_page_index = 0;
+    // Number of bytes to copy on the CPU at the start of the write to align the write to the host memory alignment.
+    size_t alignment_prefix_bytes = 0;
 
     InterleavedBufferWriteDispatchParams(
         const Buffer& buffer,
@@ -85,8 +92,9 @@ public:
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         uint32_t src_noc_xy,
         uint64_t src_addr,
-        bool src_pinned) :
-        BufferWriteDispatchParams(src_noc_xy, src_addr, src_pinned), dst_page_index(dst_page_index) {
+        bool src_pinned,
+        bool remote_chip) :
+        BufferWriteDispatchParams(src_noc_xy, src_addr, src_pinned, remote_chip), dst_page_index(dst_page_index) {
         this->num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
         this->address = buffer.address();
 
@@ -96,9 +104,21 @@ public:
         this->device = buffer.device();
         this->cq_id = cq_id;
         this->expected_num_workers_completed = expected_num_workers_completed;
+        if (src_pinned) {
+            const uint64_t relay_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+            const uint64_t alignment_offset = src_addr % relay_alignment;
+            if (alignment_offset != 0) {
+                this->alignment_prefix_bytes = relay_alignment - alignment_offset;
+            }
+        }
     }
 
     virtual ~InterleavedBufferWriteDispatchParams() = default;
+
+    InterleavedBufferWriteDispatchParams(const InterleavedBufferWriteDispatchParams& other) = default;
+    InterleavedBufferWriteDispatchParams& operator=(const InterleavedBufferWriteDispatchParams& other) = default;
+    InterleavedBufferWriteDispatchParams(InterleavedBufferWriteDispatchParams&& other) = default;
+    InterleavedBufferWriteDispatchParams& operator=(InterleavedBufferWriteDispatchParams&& other) = default;
 
     virtual void calculate_num_pages_for_write_transaction(uint32_t num_pages_available_in_cq) {
         this->pages_per_txn = std::min(this->total_pages_to_write, num_pages_available_in_cq);
@@ -147,7 +167,8 @@ public:
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         uint32_t src_noc_xy,
         uint64_t src_addr,
-        bool src_pinned) :
+        bool src_pinned,
+        bool remote_chip) :
         InterleavedBufferWriteDispatchParams(
             buffer,
             dst_page_index,
@@ -156,7 +177,8 @@ public:
             expected_num_workers_completed,
             src_noc_xy,
             src_addr,
-            src_pinned),
+            src_pinned,
+            remote_chip),
         buffer(buffer),
         curr_full_pages_start_address(buffer.address()),
         size_of_partial_page(partial_page_spec.partial_page_size),
@@ -284,8 +306,9 @@ public:
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         uint32_t pinned_noc_xy,
         uint64_t pinned_addr,
-        bool is_pinned) :
-        BufferWriteDispatchParams(pinned_noc_xy, pinned_addr, is_pinned),
+        bool is_pinned,
+        bool remote_chip) :
+        BufferWriteDispatchParams(pinned_noc_xy, pinned_addr, is_pinned, remote_chip),
         buffer_page_mapping(buffer->get_buffer_page_mapping()),
         buffer(buffer),
         are_pages_large(
@@ -459,7 +482,8 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     uint32_t pinned_src_noc_xy,
     uint64_t pinned_src_addr,
-    bool use_pinned_transfer) {
+    bool use_pinned_transfer,
+    bool remote_chip) {
     InterleavedBufferWriteDispatchParamsVariant dispatch_params;
 
     uint32_t total_pages_to_write = region.size / buffer.page_size();
@@ -479,7 +503,8 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
             expected_num_workers_completed,
             pinned_src_noc_xy,
             pinned_src_addr,
-            use_pinned_transfer);
+            use_pinned_transfer,
+            remote_chip);
     } else {
         dispatch_params.emplace<InterleavedBufferWriteDispatchParams>(
             buffer,
@@ -489,7 +514,8 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
             expected_num_workers_completed,
             pinned_src_noc_xy,
             pinned_src_addr,
-            use_pinned_transfer);
+            use_pinned_transfer,
+            remote_chip);
     }
     return dispatch_params;
 }
@@ -507,17 +533,34 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     const uint16_t start_page = uint16_t(dispatch_params.dst_page_index & CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX);
 
     bool use_pinned_transfer = dispatch_params.use_pinned_transfer;
+
     // If we're not using pinned transfer the data will be inline with the dispatch write in a single prefetch command
     // so we need to flush the prefetch. With pinned memory the data will come in a separate command and we shouldn't
     // flush between them.
     const bool flush_prefetch = !use_pinned_transfer;
-    command_sequence.add_dispatch_write_paged(
-        flush_prefetch,
-        is_dram,
-        start_page,
-        dispatch_params.address,
-        dispatch_params.page_size_to_write,
-        use_pinned_transfer ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn);
+
+    if (dispatch_params.alignment_prefix_bytes > 0) {
+        // Pass the unaligned prefix bytes inline to reach alignment
+        TT_ASSERT(dispatch_params.alignment_prefix_bytes < buffer.page_size(), "Alignment prefix exceeds page size");
+
+        command_sequence.add_dispatch_write_paged_with_custom_inline_size(
+            flush_prefetch,
+            is_dram,
+            start_page,
+            dispatch_params.address,
+            dispatch_params.page_size_to_write,
+            dispatch_params.total_pages_to_write,
+            dispatch_params.alignment_prefix_bytes,
+            static_cast<const char*>(src));
+    } else {
+        command_sequence.add_dispatch_write_paged(
+            flush_prefetch,
+            is_dram,
+            start_page,
+            dispatch_params.address,
+            dispatch_params.page_size_to_write,
+            use_pinned_transfer ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn);
+    }
 
     if (not use_pinned_transfer) {
         const uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
@@ -652,7 +695,12 @@ void issue_buffer_dispatch_command_sequence(
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
         calculator.add_dispatch_write_linear<true, false>(data_size_bytes);
     } else {
-        calculator.add_dispatch_write_paged<false>(0, 0);  // arguments are don't care for <false>
+        if (dispatch_params.alignment_prefix_bytes > 0) {
+            // Use custom inline size variant to account for alignment prefix bytes
+            calculator.add_dispatch_write_paged_with_custom_inline_size(0, 0, dispatch_params.alignment_prefix_bytes);
+        } else {
+            calculator.add_dispatch_write_paged<false>(0, 0);  // arguments are don't care for <false>
+        }
     }
     if (use_pinned_memory) {
         // What follows is a command (which must be aligned), not data.
@@ -696,17 +744,36 @@ void issue_buffer_dispatch_command_sequence(
         // Send CQ_PREFETCH_CMD_RELAY_LINEAR command in a separate fetch Q entry to ensure it will be processed in
         // prefetch_h for remote device. If we don't do this, prefetch_h will "fetch" it along with the
         // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH command and send it to prefetch_d
+
+        // Adjust address and length if we sent alignment prefix bytes inline
+        uint64_t relay_src_addr = dispatch_params.pinned_src_addr;
+        uint64_t relay_data_size = (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
+        if constexpr (std::is_same_v<T, InterleavedBufferWriteDispatchParams>) {
+            TT_ASSERT(
+                dispatch_params.alignment_prefix_bytes % MetalContext::instance().hal().get_alignment(HalMemType::L1) ==
+                    0,
+                "Alignment prefix is not aligned to L1");
+            relay_src_addr += dispatch_params.alignment_prefix_bytes;
+            relay_data_size -= dispatch_params.alignment_prefix_bytes;
+        }
+
         calculator.clear();
-        calculator.add_prefetch_relay_linear();
+        if (dispatch_params.remote_chip) {
+            calculator.add_prefetch_relay_linear_h();
+        } else {
+            calculator.add_prefetch_relay_linear();
+        }
         const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
         void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
         HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
-        const uint64_t data_size_bytes =
-            (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
-        command_sequence.add_prefetch_relay_linear(
-            dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr);
-
+        if (dispatch_params.remote_chip) {
+            command_sequence.add_prefetch_relay_linear_h(
+                dispatch_params.pinned_src_noc_xy, relay_data_size, relay_src_addr);
+        } else {
+            command_sequence.add_prefetch_relay_linear(
+                dispatch_params.pinned_src_noc_xy, relay_data_size, relay_src_addr);
+        }
         sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
         sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
@@ -810,7 +877,7 @@ void write_sharded_buffer_to_core(
 }
 
 // Main API to write buffer data
-void write_to_device_buffer(
+bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
     uint32_t cq_id,
@@ -822,7 +889,7 @@ void write_to_device_buffer(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
-        return;
+        return false;
     }
 
     const BufferDispatchConstants buf_dispatch_constants =
@@ -835,10 +902,12 @@ void write_to_device_buffer(
     uint32_t pinned_src_noc_xy = 0;
     uint64_t pinned_src_addr = 0;
     bool use_pinned_transfer = false;
+    bool remote_chip = false;
     if (has_pinned_inputs && is_unpadded && !is_sharded(buffer.buffer_layout())) {
         auto device_id = buffer.device()->id();
         auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
-        if (noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == device_id) {
+        if (noc_addr_pair_opt.has_value()) {
+            remote_chip = noc_addr_pair_opt->device_id != device_id;
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
             const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
@@ -846,7 +915,8 @@ void write_to_device_buffer(
             auto region = buffer.root_buffer_region();
             const uint8_t* src_region_start = src_ptr + region.offset;
             const uint8_t* src_region_end = src_region_start + region.size;
-            if (reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::HOST) != 0) {
+            // Check against L1 alignment because we need the copy from the prefetcher to the dispatcher to be aligned.
+            if (reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::L1) != 0) {
                 log_info(
                     tt::LogMetal,
                     "Pinned source memory start address {:#x} must be aligned {} B",
@@ -878,7 +948,8 @@ void write_to_device_buffer(
             sub_device_ids,
             pinned_src_noc_xy,
             pinned_src_addr,
-            use_pinned_transfer);
+            use_pinned_transfer,
+            remote_chip);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
@@ -908,7 +979,8 @@ void write_to_device_buffer(
                 sub_device_ids,
                 pinned_src_noc_xy,
                 pinned_src_addr,
-                use_pinned_transfer);
+                use_pinned_transfer,
+                remote_chip);
 
         InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
             ttsl::overloaded{
@@ -921,7 +993,9 @@ void write_to_device_buffer(
 
         write_interleaved_buffer_to_device(
             src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
+        return use_pinned_transfer;
     }
+    return use_pinned_transfer;
 }
 
 // ====== Utility Functions for Reads ======

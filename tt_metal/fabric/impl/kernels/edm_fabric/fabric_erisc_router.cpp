@@ -2688,6 +2688,11 @@ void initialize_fabric_telemetry() {
     fabric_telemetry->static_info.version = FABRIC_TELEMETRY_VERSION;
     fabric_telemetry->static_info.fabric_config = 0;  // Reserved for future use
 
+    // Initialize neighbor info to sentinel values (will be populated during handshake)
+    // Using 0xFFFF/0xFF as sentinel to distinguish "not yet set" from valid value 0
+    fabric_telemetry->static_info.neighbor_mesh_id = 0xFFFF;
+    fabric_telemetry->static_info.neighbor_device_id = 0xFF;
+
     // Set supported_stats bitmask to enable all telemetry features
     fabric_telemetry->static_info.supported_stats = static_cast<DynamicStatistics>(
         DynamicStatistics::BANDWIDTH | DynamicStatistics::ROUTER_STATE | DynamicStatistics::HEARTBEAT_TX |
@@ -3248,10 +3253,27 @@ void kernel_main() {
     if constexpr (enable_ethernet_handshake) {
         if constexpr (is_handshake_sender) {
             erisc::datamover::handshake::sender_side_handshake(
-                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+                handshake_addr,
+                routing_table_l1->my_mesh_id,
+                routing_table_l1->my_device_id,
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
             erisc::datamover::handshake::receiver_side_handshake(
-                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+                handshake_addr,
+                routing_table_l1->my_mesh_id,
+                routing_table_l1->my_device_id,
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+        }
+
+        // After handshake completes, extract neighbor info and populate telemetry
+        {
+            volatile tt_l1_ptr auto* handshake_info =
+                reinterpret_cast<volatile tt_l1_ptr erisc::datamover::handshake::handshake_info_t*>(handshake_addr);
+            volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
+                reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(
+                    eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+            fabric_telemetry->static_info.neighbor_mesh_id = handshake_info->neighbor_mesh_id;
+            fabric_telemetry->static_info.neighbor_device_id = handshake_info->neighbor_device_id;
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;

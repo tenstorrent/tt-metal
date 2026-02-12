@@ -2,22 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import torch
 from loguru import logger
 
 import ttnn
 
 from ...layers.linear import Linear
+from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
+from ...parallel.config import VaeHWParallelConfig
+from ...parallel.manager import CCLManager
 from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
-from ...utils.substate import indexed_substates, substate
+from ...utils.substate import pop_substate, rename_substate
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 CACHE_T = 2
-
-
-# helpers
-def rename_norm_state(state):
-    return {"weight": state["gamma"].squeeze()}
 
 
 def conv3d_to_linear_weight(state):
@@ -35,15 +40,18 @@ def conv3d_to_linear_weight(state):
     return state
 
 
-class WanAttentionBlock:
+class WanAttentionBlock(Module):
     def __init__(
         self,
-        dim,
-        mesh_device,
-        parallel_config,
-        ccl_manager,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
+        *,
+        dim: int,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+    ) -> None:
+        super().__init__()
+
         self.dim = dim
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
@@ -99,33 +107,23 @@ class WanAttentionBlock:
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def load_state_dict(self, state_dict):
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def permute_conv2d_weights(weight):
             out_c, in_c, kh, kw = weight.shape
             assert kh == kw == 1
             weight = weight.permute(0, 2, 3, 1).reshape(out_c, in_c)
             return weight
 
-        self.to_qkv.load_torch_state_dict(
-            {
-                "weight": permute_conv2d_weights(state_dict["to_qkv.weight"]),
-                "bias": state_dict["to_qkv.bias"],
-            }
-        )
-        self.proj.load_torch_state_dict(
-            {
-                "weight": permute_conv2d_weights(state_dict["proj.weight"]),
-                "bias": state_dict["proj.bias"],
-            }
-        )
+        if "to_qkv.weight" in state:
+            state["to_qkv.weight"] = permute_conv2d_weights(state["to_qkv.weight"])
 
-        self.norm.load_torch_state_dict(
-            {
-                "weight": state_dict["norm.gamma"].squeeze(),
-            }
-        )
+        if "proj.weight" in state:
+            state["proj.weight"] = permute_conv2d_weights(state["proj.weight"])
 
-    def __call__(self, x_BTHWC, logical_h):
+        if "norm.gamma" in state:
+            state["norm.weight"] = state.pop("norm.gamma").squeeze()
+
+    def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         """
         x_BTHWC: (B, T, H, W, C) fractured on H and W
 
@@ -233,20 +231,22 @@ class WanAttentionBlock:
         return result_BTHWC
 
 
-class WanCausalConv3d:
+class WanCausalConv3d(Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        mesh_device,
-        stride=1,
-        padding=0,
-        ccl_manager=None,
-        parallel_config=None,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
-        self.dtype = dtype
+        in_channels: int,
+        out_channels: int,
+        *,
+        kernel_size: Sequence[int] | int,
+        stride: Sequence[int] | int = 1,
+        padding: Sequence[int] | int = 0,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+    ) -> None:
+        super().__init__()
+
         self.unpadded_in_channels = in_channels
         self.unpadded_out_channels = out_channels
         self.TILE_WIDTH = 32
@@ -295,9 +295,13 @@ class WanCausalConv3d:
             packer_l1_acc=False,
         )
 
+        d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+
         self.mask_cache = {}
 
-    def load_state_dict(self, state_dict):
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def maybe_pad_out_channels(weight, bias):
             if self.out_channels != self.unpadded_out_channels:
                 weight = torch.nn.functional.pad(
@@ -306,15 +310,9 @@ class WanCausalConv3d:
                 bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
             return weight, bias
 
-        padded_weight, padded_bias = maybe_pad_out_channels(state_dict["weight"], state_dict["bias"])
-
-        self.conv_weight, self.conv_bias = prepare_conv3d_weights(
-            self.mesh_device,
-            padded_weight,
-            padded_bias,
-            self.conv_config,
-            dtype=self.dtype,
-        )
+        if "weight" in state and "bias" in state:
+            weight, bias = maybe_pad_out_channels(state["weight"], state["bias"])
+            state["weight"], state["bias"] = prepare_conv3d_weights(weight, bias, self.conv_config)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -339,7 +337,12 @@ class WanCausalConv3d:
             self.mask_cache[key] = mask
         return self.mask_cache[key]
 
-    def __call__(self, x_BTHWC, logical_h, cache_x_BTHWC=None):
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        cache_x_BTHWC: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
         """
         x_BTHWC: (B, T, H, W, C) fractured on H and W
         cache_x_BTHWC: (B, T1, H, W, C) fractured on H and W
@@ -414,8 +417,8 @@ class WanCausalConv3d:
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
-            weight_tensor=self.conv_weight,
-            bias_tensor=self.conv_bias,
+            weight_tensor=self.weight.data,
+            bias_tensor=self.bias.data,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -435,16 +438,19 @@ class WanCausalConv3d:
         return x_BTHWC
 
 
-class WanResidualBlock:
+class WanResidualBlock(Module):
     def __init__(
         self,
-        in_dim,
-        out_dim,
-        mesh_device,
-        ccl_manager=None,
-        parallel_config=None,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
+        *,
+        in_dim: int,
+        out_dim: int,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+    ) -> None:
+        super().__init__()
+
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.mesh_device = mesh_device
@@ -506,11 +512,12 @@ class WanResidualBlock:
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def load_state_dict(self, state_dict):
-        self.norm1.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm1")))
-        self.norm2.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm2")))
-        self.conv1.load_state_dict(substate(state_dict, "conv1"))
-        self.conv2.load_state_dict(substate(state_dict, "conv2"))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "norm1.gamma" in state:
+            state["norm1.weight"] = state.pop("norm1.gamma").squeeze()
+
+        if "norm2.gamma" in state:
+            state["norm2.weight"] = state.pop("norm2.gamma").squeeze()
 
         def conv_1d_to_matmul_weight(weight):
             out_c, in_c, kt, kh, kw = weight.shape
@@ -518,15 +525,16 @@ class WanResidualBlock:
             weight = weight.reshape(out_c, in_c)
             return weight
 
-        if self.conv_shortcut is not None:
-            self.conv_shortcut.load_torch_state_dict(
-                {
-                    "weight": conv_1d_to_matmul_weight(state_dict["conv_shortcut.weight"]),
-                    "bias": state_dict["conv_shortcut.bias"],
-                }
-            )
+        if "conv_shortcut.weight" in state:
+            state["conv_shortcut.weight"] = conv_1d_to_matmul_weight(state["conv_shortcut.weight"])
 
-    def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+    ) -> ttnn.Tensor:
         x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
         h_tile_BTHWC = (
             self.conv_shortcut(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
@@ -583,21 +591,18 @@ class WanResidualBlock:
         return x_BTHWC
 
 
-class WanMidBlock:
+class WanMidBlock(Module):
     def __init__(
         self,
-        dim,
-        mesh_device,
-        ccl_manager=None,
-        parallel_config=None,
-        num_layers=1,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
-        self.dim = dim
-        self.mesh_device = mesh_device
-        self.parallel_config = parallel_config
-        resnets = []
-        attentions = []
+        *,
+        dim: int,
+        num_layers: int = 1,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+    ) -> None:
+        super().__init__()
 
         resnets.append(
             WanResidualBlock(
@@ -634,13 +639,13 @@ class WanMidBlock:
         self.resnets = resnets
         self.attentions = attentions
 
-    def load_state_dict(self, state_dict):
-        for i in range(len(self.resnets)):
-            self.resnets[i].load_state_dict(substate(state_dict, f"resnets.{i}"))
-        for i in range(len(self.attentions)):
-            self.attentions[i].load_state_dict(substate(state_dict, f"attentions.{i}"))
-
-    def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+    ) -> ttnn.Tensor:
         x_res_BTHWC = self.resnets[0](x_BTHWC, logical_h, feat_cache, feat_idx)
         x_BTHWC = x_res_BTHWC
         for i in range(len(self.attentions)):
@@ -649,24 +654,26 @@ class WanMidBlock:
         return x_BTHWC
 
 
-class WanConv2d:
+class WanConv2d(Module):
     """
     A conv2d implemented with conv3d.
     """
 
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        mesh_device,
-        ccl_manager=None,
-        parallel_config=None,
-        stride=1,
-        padding=0,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
-        self.dtype = dtype
+        in_channels: int,
+        out_channels: int,
+        *,
+        kernel_size: Sequence[int] | int,
+        stride: Sequence[int] | int = 1,
+        padding: Sequence[int] | int = 0,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+    ) -> None:
+        super().__init__()
+
         self.in_channels = in_channels
         self.unpadded_out_channels = out_channels
         self.TILE_WIDTH = 32
@@ -713,22 +720,17 @@ class WanConv2d:
             packer_l1_acc=False,
         )
 
+        d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+
         self.mask_cache = {}
 
-    def load_state_dict(self, state_dict):
-        def conv2d_to_conv3d_weight(weight):
-            weight = weight.unsqueeze(2)
-            return weight
-
-        reshaped_weight = conv2d_to_conv3d_weight(state_dict["weight"])
-
-        self.conv_weight, self.conv_bias = prepare_conv3d_weights(
-            self.mesh_device,
-            reshaped_weight,
-            state_dict["bias"],
-            self.conv_config,
-            dtype=self.dtype,
-        )
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "weight" in state and "bias" in state:
+            state["weight"], state["bias"] = prepare_conv3d_weights(
+                state["weight"].unsqueeze(2), state["bias"], self.conv_config
+            )
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -753,7 +755,7 @@ class WanConv2d:
             self.mask_cache[key] = mask
         return self.mask_cache[key]
 
-    def __call__(self, x_BTHWC, logical_h):
+    def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
@@ -809,8 +811,8 @@ class WanConv2d:
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
-            weight_tensor=self.conv_weight,
-            bias_tensor=self.conv_bias,
+            weight_tensor=self.weight.data,
+            bias_tensor=self.bias.data,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -830,17 +832,20 @@ class WanConv2d:
         return x_BTHWC
 
 
-class WanResample:
+class WanResample(Module):
     def __init__(
         self,
-        dim,
-        mode,
-        mesh_device,
-        ccl_manager=None,
-        parallel_config=None,
-        resample_out_dim=None,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
+        *,
+        dim: int,
+        mode: str,
+        resample_out_dim: int | None = None,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+    ) -> None:
+        super().__init__()
+
         self.dim = dim
         self.mode = mode
         self.mesh_device = mesh_device
@@ -875,13 +880,16 @@ class WanResample:
                 dtype=dtype,
             )
 
-    def load_state_dict(self, state_dict):
-        self.conv.load_state_dict(substate(state_dict, "resample.1"))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "resample.1", "conv")
 
-        if self.is_3d:
-            self.time_conv.load_state_dict(substate(state_dict, "time_conv"))
-
-    def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
+    def forward(
+        self,
+        x_BTHWC,
+        logical_h,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+    ) -> tuple[ttnn.Tensor, int]:
         B, T, H, W, C = x_BTHWC.shape
         if self.is_3d and self.is_upsample:  # upsample3d
             if feat_cache is not None:
@@ -955,18 +963,21 @@ class WanResample:
         return x_conv_BTHWC, logical_h
 
 
-class WanUpBlock:
+class WanUpBlock(Module):
     def __init__(
         self,
-        in_dim,
-        out_dim,
-        num_res_blocks,
-        mesh_device,
-        ccl_manager=None,
-        parallel_config=None,
-        upsample_mode=None,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
+        *,
+        in_dim: int,
+        out_dim: int,
+        num_res_blocks: int,
+        upsample_mode: str | None = None,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+    ) -> None:
+        super().__init__()
+
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.num_res_blocks = num_res_blocks
@@ -977,7 +988,7 @@ class WanUpBlock:
 
         assert upsample_mode in ["upsample2d", "upsample3d"] or upsample_mode is None
 
-        resnets = []
+        resnets = ModuleList()
         current_dim = in_dim
         for _ in range(num_res_blocks + 1):
             resnets.append(
@@ -1004,13 +1015,16 @@ class WanUpBlock:
                 dtype=dtype,
             )
 
-    def load_state_dict(self, state_dict):
-        for i in range(len(self.resnets)):
-            self.resnets[i].load_state_dict(substate(state_dict, f"resnets.{i}"))
-        if self.upsamplers is not None:
-            self.upsamplers.load_state_dict(substate(state_dict, "upsamplers.0"))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "upsamplers.0", "upsamplers")
 
-    def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+    ) -> tuple[ttnn.Tensor, int]:
         for resnet in self.resnets:
             x_res_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx)
             x_BTHWC = x_res_BTHWC
@@ -1020,22 +1034,25 @@ class WanUpBlock:
         return x_BTHWC, logical_h
 
 
-class WanDecoder3d:
+class WanDecoder3d(Module):
     def __init__(
         self,
-        dim=128,
-        z_dim=4,
-        dim_mult=[1, 2, 4, 4],
-        num_res_blocks=2,
-        attn_scales=[],
-        temperal_upsample=[False, True, True],
+        *,
+        dim: int = 128,
+        z_dim: int = 4,
+        dim_mult: Sequence[int] = (1, 2, 4, 4),
+        num_res_blocks: int = 2,
+        attn_scales=(),
+        temperal_upsample: Sequence[bool] = (False, True, True),
         out_channels: int = 3,
         is_residual: bool = False,
-        mesh_device=None,
-        ccl_manager=None,
-        parallel_config=None,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+    ) -> None:
+        super().__init__()
+
         assert not is_residual, "is_residual is not supported"
         self.dim = dim
         self.z_dim = z_dim
@@ -1064,7 +1081,7 @@ class WanDecoder3d:
 
         # middle blocks
         self.mid_block = WanMidBlock(
-            dims[0],
+            dim=dims[0],
             num_layers=1,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
@@ -1073,7 +1090,7 @@ class WanDecoder3d:
         )
 
         # upsample blocks
-        self.up_blocks = []
+        self.up_blocks = ModuleList()
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
             # residual (+attention) blocks
             if i > 0 and not is_residual:
@@ -1122,16 +1139,18 @@ class WanDecoder3d:
             dtype=dtype,
         )
 
-    def load_state_dict(self, state_dict):
-        self.conv_in.load_state_dict(substate(state_dict, "conv_in"))
-        self.mid_block.load_state_dict(substate(state_dict, "mid_block"))
-        for i, state in enumerate(indexed_substates(state_dict, "up_blocks")):
-            self.up_blocks[i].load_state_dict(state)
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "norm_out.gamma" in state:
+            state["norm_out.weight"] = state.pop("norm_out.gamma").squeeze()
 
-        self.norm_out.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
-        self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
-
-    def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0], first_chunk=False):
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+        first_chunk: bool = False,
+    ) -> tuple[ttnn.Tensor, int]:
         # NOTE: first_chunk is not used. It would be needed for WanResidualUpBlock.
         ## conv1
         if feat_cache is not None:
@@ -1175,17 +1194,18 @@ class WanDecoder3d:
         return x_BTHWC, logical_h
 
 
-class WanDecoder:
+class WanDecoder(Module):
     def __init__(
         self,
-        base_dim=96,
-        decoder_base_dim=None,
-        z_dim=16,
-        dim_mult=[1, 2, 4, 4],
-        num_res_blocks=2,
-        attn_scales=[],
-        temperal_downsample=[False, True, True],
-        latents_mean=[
+        *,
+        base_dim: int = 96,
+        decoder_base_dim: int | None = None,
+        z_dim: int = 16,
+        dim_mult: Sequence[int] = (1, 2, 4, 4),
+        num_res_blocks: int = 2,
+        attn_scales=(),
+        temperal_downsample: Sequence[bool] = (False, True, True),
+        latents_mean: Sequence[float] = (
             -0.7571,
             -0.7089,
             -0.9113,
@@ -1202,8 +1222,8 @@ class WanDecoder:
             -0.9497,
             0.2503,
             -0.2921,
-        ],
-        latents_std=[
+        ),
+        latents_std: Sequence[float] = (
             2.8184,
             1.4541,
             2.3275,
@@ -1220,15 +1240,17 @@ class WanDecoder:
             1.1253,
             2.8251,
             1.9160,
-        ],
-        is_residual=False,
-        in_channels=3,
-        out_channels=3,
-        mesh_device=None,
-        ccl_manager=None,
-        parallel_config=None,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
+        ),
+        is_residual: bool = False,
+        in_channels: int = 3,
+        out_channels: int = 3,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
+    ) -> None:
+        super().__init__()
+
         assert not is_residual, "is_residual is not supported"
         self.z_dim = z_dim
         self.temperal_upsample = temperal_downsample[::-1]
@@ -1264,15 +1286,20 @@ class WanDecoder:
 
         self.cached_conv_count = count_convs(self.decoder)
 
-    def load_state_dict(self, state_dict):
-        self.post_quant_conv.load_torch_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
-        self.decoder.load_state_dict(substate(state_dict, "decoder"))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "post_quant_conv.weight" in state and "post_quant_conv.bias" in state:
+            state_sub = conv3d_to_linear_weight(pop_substate(state, "post_quant_conv"))
+            state["post_quant_conv.weight"] = state_sub["weight"]
+            state["post_quant_conv.bias"] = state_sub["bias"]
+
+        pop_substate(state, "encoder")
+        pop_substate(state, "quant_conv")
 
     def clear_cache(self):
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
 
-    def __call__(self, z_BTHWC, logical_h):
+    def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
         B, T, H, W, C = z_BTHWC.shape
 
         self.clear_cache()
@@ -1303,7 +1330,7 @@ class WanDecoder:
         return (output_BCTHW, new_logical_h)
 
 
-class WanEncoder3D:
+class WanEncoder3D(Module):
     def __init__(
         self,
         in_channels: int = 3,
@@ -1317,8 +1344,9 @@ class WanEncoder3D:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
+    ) -> None:
+        super().__init__()
+
         assert not is_residual, "is_residual is not supported"
         self.dim = dim
         self.z_dim = z_dim
@@ -1347,7 +1375,7 @@ class WanEncoder3D:
         )
 
         # downsample blocks.
-        self.down_blocks = []
+        self.down_blocks = ModuleList()
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
             for _ in range(num_res_blocks):
                 self.down_blocks.append(
@@ -1417,16 +1445,17 @@ class WanEncoder3D:
             dtype=dtype,
         )
 
-    def load_state_dict(self, state_dict):
-        self.conv_in.load_state_dict(substate(state_dict, "conv_in"))
-        self.mid_block.load_state_dict(substate(state_dict, "mid_block"))
-        for i, state in enumerate(indexed_substates(state_dict, "down_blocks")):
-            self.down_blocks[i].load_state_dict(state)
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "norm_out.gamma" in state:
+            state["norm_out.weight"] = state.pop("norm_out.gamma").squeeze()
 
-        self.norm_out.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
-        self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
-
-    def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+    ) -> tuple[ttnn.Tensor, int]:
         ## conv1
         if feat_cache is not None:
             idx = feat_idx[0]
@@ -1476,7 +1505,7 @@ class WanEncoder3D:
         return x_BTHWC, logical_h
 
 
-class WanEncoder:
+class WanEncoder(Module):
     def __init__(
         self,
         base_dim=96,
@@ -1490,8 +1519,9 @@ class WanEncoder:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        dtype=ttnn.DataType.FLOAT32,
-    ):
+    ) -> None:
+        super().__init__()
+
         self.z_dim = z_dim
         self.out_channels = z_dim * 2  # Mean and logvar
         self.encoder = WanEncoder3D(
@@ -1517,15 +1547,20 @@ class WanEncoder:
         )
         self.cached_conv_count = count_convs(self.encoder)
 
-    def load_state_dict(self, state_dict):
-        self.encoder.load_state_dict(substate(state_dict, "encoder"))
-        self.quant_conv.load_torch_state_dict(conv3d_to_linear_weight(substate(state_dict, "quant_conv")))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "quant_conv.weight" in state and "quant_conv.bias" in state:
+            state_sub = conv3d_to_linear_weight(pop_substate(state, "quant_conv"))
+            state["quant_conv.weight"] = state_sub["weight"]
+            state["quant_conv.bias"] = state_sub["bias"]
+
+        pop_substate(state, "decoder")
+        pop_substate(state, "post_quant_conv")
 
     def clear_cache(self):
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
 
-    def __call__(self, x_BTHWC, logical_h):
+    def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
         B, T, H, W, C = x_BTHWC.shape
 
         self.clear_cache()

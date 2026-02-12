@@ -64,11 +64,6 @@ ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_f
     return ArgMaxSingleCoreProgramFactory{};
 }
 
-void ArgMaxDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;

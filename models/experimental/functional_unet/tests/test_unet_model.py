@@ -7,6 +7,7 @@ import ttnn
 
 from ttnn.device import is_wormhole_b0
 
+from models.common.utility_functions import skip_with_watcher
 from models.experimental.functional_unet.tt.model_preprocessing import (
     create_unet_input_tensors,
     create_unet_model_parameters,
@@ -64,6 +65,7 @@ def run_unet_model(batch, groups, device, iterations=1):
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
+@skip_with_watcher("Skipping test with watcher enabled. See github issue #37097")
 def test_unet_model(batch, groups, device, reset_seeds):
     if not is_wormhole_b0(device) and (
         device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110

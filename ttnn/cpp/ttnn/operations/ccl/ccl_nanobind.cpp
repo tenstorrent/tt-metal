@@ -28,7 +28,9 @@ namespace {
 void bind_common(nb::module_& mod) {
     nb::enum_<ttnn::ccl::Topology>(mod, "Topology")
         .value("Ring", ttnn::ccl::Topology::Ring)
-        .value("Linear", ttnn::ccl::Topology::Linear);
+        .value("Linear", ttnn::ccl::Topology::Linear)
+        .value("Mesh", ttnn::ccl::Topology::Mesh)
+        .value("Torus", ttnn::ccl::Topology::Torus);
 }
 }  // namespace
 
