@@ -3,9 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device management utilities for TTNN modules."""
+from __future__ import annotations
+
 import time
+from typing import TYPE_CHECKING
 
 from torch import nn
+
+if TYPE_CHECKING:
+    from models.experimental.tt_symbiote.core.module import TTNNModule
 
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, DistributedConfig
 
@@ -33,7 +39,7 @@ class DeviceInit:
 def _initialize_module_on_device(module: "TTNNModule", device, device_init=DeviceInit):
     """Initialize a TTNN module on the specified device."""
     module.to_device(device)
-    if device.get_num_devices() > 1:
+    if getattr(device, "get_num_devices", lambda: 1)() > 1 and hasattr(module, "set_device_state"):
         module.set_device_state(device_init.init_state(device))
 
 

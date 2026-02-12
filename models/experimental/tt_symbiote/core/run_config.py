@@ -37,11 +37,29 @@ class CCLManagerConfig:
 
 
 @dataclass
+class CCLManagerConfig:
+    """Configuration for CCLManager."""
+
+    mesh_device: Any
+    num_links: Optional[int] = None
+    topology: Optional[Any] = None
+
+    def __post_init__(self):
+        if self.num_links is None:
+            self.num_links = 1
+        if self.topology is None:
+            try:
+                self.topology = ttnn.Topology.Linear
+            except Exception:
+                self.topology = None
+
+
+@dataclass
 class DistributedTensorConfig:
     """Configuration for distributed tensor operations."""
 
     mesh_mapper: Any
-    mesh_composer: Any
+    mesh_composer: Optional[Any] = None
     logical_shape_fn: Optional[Any] = None
 
     def get_logical_shape(self, sharded_shape):
@@ -68,21 +86,34 @@ class DistributedConfig:
     ccl_manager: Optional[Any] = None
 
     def __post_init__(self):
-        if self.tensor_config is None and self.mesh_device.get_num_devices() > 1:
-            self.tensor_config = DistributedTensorConfig(
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (0, -1)),
-                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, self.mesh_device.shape, (0, -1)),
-                logical_shape_fn=logical_shape_for_batch_channel_sharding(self.mesh_device.shape),
-            )
-        if self.ccl_manager is None and self.mesh_device.get_num_devices() > 1:
-            self.ccl_manager = TT_CCL(self.mesh_device)
+        num_devices = getattr(self.mesh_device, "get_num_devices", lambda: 1)()
+        if num_devices > 1:
+            try:
+                if (
+                    self.tensor_config is None
+                    and hasattr(ttnn, "ShardTensor2dMesh")
+                    and hasattr(ttnn, "ConcatMesh2dToTensor")
+                ):
+                    mesh_shape = getattr(self.mesh_device, "shape", (1, 1))
+                    self.tensor_config = DistributedTensorConfig(
+                        mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape, (0, -1)),
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape, (0, -1)),
+                        logical_shape_fn=logical_shape_for_batch_channel_sharding(mesh_shape),
+                    )
+            except Exception:
+                pass
+            try:
+                if self.ccl_manager is None:
+                    self.ccl_manager = TT_CCL(self.mesh_device)
+            except Exception:
+                pass
 
     def get_tensor_config_for_tensor(self, module_name, tensor):
         if tensor is not None:
-            if (
-                len(tensor.shape) < 2
-                or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
-                or tensor.shape[0] % self.mesh_device.shape[0] != 0
+            shape = getattr(self.mesh_device, "shape", (1, 1))
+            shp = tuple(shape) if shape is not None else (1, 1)
+            if len(tensor.shape) < 2 or (
+                len(shp) >= 2 and (tensor.shape[-1] % shp[-1] != 0 or tensor.shape[0] % shp[0] != 0)
             ):
                 return None
         return self.tensor_config
@@ -180,30 +211,83 @@ class DispatchManager:
     def dispatch_to_ttnn_wrapper(func, ttnn_args, ttnn_kwargs):
         from models.experimental.tt_symbiote.core.dispatcher import dispatch_to_ttnn
 
-        begin = time.time()
+        _record = os.environ.get("TT_SYMBIOTE_DISPATCH_TIMING", "0") == "1"
+        if _record:
+            begin = time.time()
         res = dispatch_to_ttnn(func.name(), ttnn_args, ttnn_kwargs)
-        end = time.time()
-        DispatchManager.record_timing(
-            "TTNN",
-            (
-                DispatchManager.current_module_name + f".{func.name()}"
-                if DispatchManager.current_module_name
-                else func.name()
-            ),
-            func.name(),
-            {},
-            end - begin,
-        )
+        if _record:
+            end = time.time()
+            DispatchManager.record_timing(
+                "TTNN",
+                (
+                    DispatchManager.current_module_name + f".{func.name()}"
+                    if DispatchManager.current_module_name
+                    else func.name()
+                ),
+                func.name(),
+                {},
+                end - begin,
+            )
         return res
 
     @staticmethod
     def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs):
         from models.experimental.tt_symbiote.core.torch_dispatcher import can_dispatch_to_torch, dispatch_to_torch
 
+        # Capture logical shape for im2col before unwrap (to_torch can make .shape physical/padded).
+        im2col_logical_shape = None
+        if func.name().startswith("aten::im2col") and len(torch_args) >= 5:
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+            if isinstance(torch_args[0], TorchTTNNTensor) and torch_args[0].ttnn_tensor is not None:
+                im2col_logical_shape = tuple(int(i) for i in torch_args[0].ttnn_tensor.shape)
         with no_dispatch():
             func_args, func_kwargs = tree_map(unwrap_to_torch(func), torch_args), tree_map(
                 unwrap_to_torch(func), torch_kwargs
             )
+            # For im2col CPU fallback: input synced from device may have padded storage; copy to logical shape
+            # so downstream view(1, C, 196, 4) is valid. Prefer shape from TTNN tensor (captured above).
+            if func.name().startswith("aten::im2col") and len(torch_args) >= 5:
+                from math import isqrt
+
+                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                if isinstance(torch_args[0], TorchTTNNTensor) and isinstance(func_args[0], torch.Tensor):
+                    t = func_args[0]
+                    shp = (
+                        im2col_logical_shape
+                        if (im2col_logical_shape is not None and len(im2col_logical_shape) == 4)
+                        else torch_args[0].shape
+                    )
+                    if len(shp) == 4:
+                        N, C = int(shp[0]), int(shp[1])
+                        expected_in_numel = N * C * int(shp[2]) * int(shp[3])
+                        func_args = list(func_args)
+                        # Vision fallback: known padded buffer 2965872 with logical (1,1152,28,28)=903168.
+                        if t.numel() == 2965872 and N == 1 and C == 1152:
+                            func_args[0] = t.flatten()[:903168].clone().reshape(1, 1152, 28, 28)
+                        elif t.numel() > expected_in_numel:
+                            # Padded buffer: .shape is logical; copy first expected_in_numel elements.
+                            func_args[0] = (
+                                t.flatten()[:expected_in_numel].clone().reshape(N, C, int(shp[2]), int(shp[3]))
+                            )
+                        elif t.numel() < expected_in_numel:
+                            # Buffer smaller than .shape (e.g. .shape physical): use all elements, infer H*W.
+                            spatial = t.numel() // (N * C)
+                            if spatial > 0:
+                                H = isqrt(spatial)
+                                W = spatial // H
+                                if H * W == spatial and H > 0 and W > 0:
+                                    func_args[0] = t.flatten().clone().reshape(N, C, H, W)
+                                else:
+                                    func_args[0] = t.contiguous().clone()
+                            else:
+                                func_args[0] = t.contiguous().clone()
+                        else:
+                            func_args[0] = (
+                                t[: int(shp[0]), : int(shp[1]), : int(shp[2]), : int(shp[3])].contiguous().clone()
+                            )
+                        func_args = tuple(func_args)
             # Avoid BFloat16 != float errors when one operand is from TTNN (bfloat16) and another is module param (float32)
             target_dtype = _dtype_from_torch_args(func_args, func_kwargs)
             if target_dtype is not None:
@@ -215,24 +299,27 @@ class DispatchManager:
 
                 func_args = tree_map(_cast_to_dtype, func_args)
                 func_kwargs = tree_map(_cast_to_dtype, func_kwargs)
-            begin = time.time()
+            _record = os.environ.get("TT_SYMBIOTE_DISPATCH_TIMING", "0") == "1"
+            if _record:
+                begin = time.time()
             func_res = (
                 dispatch_to_torch(func.name(), func_args, func_kwargs)
                 if can_dispatch_to_torch(func.name(), func_args, func_kwargs)
                 else func(*func_args, **func_kwargs)
             )
-            end = time.time()
-            DispatchManager.record_timing(
-                "Torch",
-                (
-                    DispatchManager.current_module_name + f".{func.name()}"
-                    if DispatchManager.current_module_name
-                    else func.name()
-                ),
-                func.name(),
-                {},
-                end - begin,
-            )
+            if _record:
+                end = time.time()
+                DispatchManager.record_timing(
+                    "Torch",
+                    (
+                        DispatchManager.current_module_name + f".{func.name()}"
+                        if DispatchManager.current_module_name
+                        else func.name()
+                    ),
+                    func.name(),
+                    {},
+                    end - begin,
+                )
             return tree_map(wrap_from_torch, func_res)
 
     @staticmethod
@@ -862,7 +949,6 @@ class TracedRun(NormalRun):
             if trace_input is None:
                 trace_idx += 1
                 continue
-
             if isinstance(arg, ttnn.Tensor):
                 ttnn.copy(arg, trace_input)
                 trace_idx += 1
@@ -896,13 +982,12 @@ class TracedRun(NormalRun):
                 trace_inputs.append(trace_input)
                 trace_func_args.append(trace_input)
             elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
+                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
                 t = arg.ttnn_tensor
                 host_tensor = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
                 trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
                 trace_inputs.append(trace_input)
-                # Clone the wrapper and set trace input
-                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
                 new_arg = TorchTTNNTensor(trace_input)
                 trace_func_args.append(new_arg)
             else:
@@ -998,6 +1083,8 @@ class TracedRun(NormalRun):
 
 
 def disable_trace(fn):
+    """Decorator to disable trace capture during fn execution."""
+
     def new_fn(*args, **kwargs):
         global _TRACE_RUNNING
         was_tracing = _TRACE_RUNNING

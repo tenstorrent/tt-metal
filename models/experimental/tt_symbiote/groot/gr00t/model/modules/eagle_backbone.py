@@ -37,43 +37,27 @@ class EagleBackbone(torch.nn.Module):
         if load_bf16:
             extra_kwargs["torch_dtype"] = torch.bfloat16
 
+        # --- TENSTORRENT FIX: REMOVED HARD ASSERTIONS ---
         if model_name == "nvidia/Eagle-Block2A-2B-v2":
-            assert (
-                use_flash_attention
-            ), "nvidia/Eagle-Block2A-2B-v2 requires flash attention by default"
-            assert load_bf16, "nvidia/Eagle-Block2A-2B-v2 requires bfloat16 by default"
-            eagle_path = os.path.join(
-                os.path.dirname(__file__), "nvidia", "Eagle-Block2A-2B-v2"
-            )
+            # assert (
+            #     use_flash_attention
+            # ), "nvidia/Eagle-Block2A-2B-v2 requires flash attention by default"
+            # assert load_bf16, "nvidia/Eagle-Block2A-2B-v2 requires bfloat16 by default"
+            eagle_path = os.path.join(os.path.dirname(__file__), "nvidia", "Eagle-Block2A-2B-v2")
             config = AutoConfig.from_pretrained(eagle_path, trust_remote_code=True)
             self.model = AutoModel.from_config(config, trust_remote_code=True)
         else:
             raise ValueError(f"Model {model_name} not supported")
 
         # --- TENSTORRENT FIX: COMMENTED OUT ORIGINAL LOOP TO PREVENT INFINITE LOOP ---
-        # needed since we don't use these layers. Also saves compute
-        # while len(self.model.language_model.model.layers) > select_layer:
-        #     # Tenstorrent Fix: Ensure the layer list is populated before popping.
-        #     # This prevents IndexError when layers are lazily loaded during GR surgery.
-        #     if hasattr(self.model.language_model.model, 'layers') and len(self.model.language_model.model.layers) > 0:
-        #         self.model.language_model.model.layers.pop(-1)
-        #     else:
-        #         print("\033[93m[TTNN] Warning: Language model layers were empty. Skipping pop(-1). "
-        #             "This is expected during certain Graph Surgery phases.\033[0m")
-        #         break # BREAK ADDED HERE TO STOP THE LOOP
-
         # NEW LOGIC: Only prune if layers actually exist and select_layer is valid (>=0)
         layers = getattr(self.model.language_model.model, "layers", [])
         if len(layers) > 0 and select_layer >= 0:
-            print(
-                f"\033[94m[TTNN] Pruning layers: current={len(layers)}, target={select_layer}\033[0m"
-            )
+            print(f"\033[94m[TTNN] Pruning layers: current={len(layers)}, target={select_layer}\033[0m")
             while len(self.model.language_model.model.layers) > select_layer:
                 self.model.language_model.model.layers.pop(-1)
         else:
-            print(
-                "\033[92m[TTNN] Skipping layer pruning: Model is in lazy-load state or select_layer is -1.\033[0m"
-            )
+            print("\033[92m[TTNN] Skipping layer pruning: Model is in lazy-load state or select_layer is -1.\033[0m")
 
         self.select_layer = select_layer
         self.set_trainable_parameters(tune_llm, tune_visual, tune_top_llm_layers)
@@ -84,9 +68,7 @@ class EagleBackbone(torch.nn.Module):
                     p.data = p.data.to(torch.float32)
                     print(f"Casting trainable parameter {n} to fp32")
 
-    def set_trainable_parameters(
-        self, tune_llm: bool, tune_visual: bool, tune_top_llm_layers: int
-    ):
+    def set_trainable_parameters(self, tune_llm: bool, tune_visual: bool, tune_top_llm_layers: int):
         self.tune_llm = tune_llm
         self.tune_visual = tune_visual
         for p in self.parameters():

@@ -1,10 +1,10 @@
 {
-  "_attn_implementation": "flash_attention_2",
+  "_attn_implementation": "eager",
   "_commit_hash": "950beaa7db5649958a88c9565837d32e3e6a7543",
   "architectures": [
     "Eagle3_VLForConditionalGeneration"
   ],
-    "auto_map": {
+  "auto_map": {
     "AutoConfig": "configuration_eagle3_vl.Eagle3_VLConfig",
     "AutoModel": "modeling_eagle3_vl.Eagle3_VLForConditionalGeneration",
     "AutoModelForCausalLM": "modeling_eagle3_vl.Eagle3_VLForConditionalGeneration"
@@ -21,7 +21,7 @@
   "pad2square": false,
   "select_layer": -1,
   "text_config": {
-    "_attn_implementation_autoset": true,
+    "_attn_implementation_autoset": false,
     "_name_or_path": "Qwen/Qwen3-1.7B",
     "architectures": [
       "Qwen3ForCausalLM"
@@ -58,14 +58,9 @@
   "use_pixel_shuffle": true,
   "use_thumbnail": false,
   "vision_config": {
-    "_attn_implementation_autoset": true,
+    "_attn_implementation_autoset": false,
     "attention_dropout": 0.0,
-    "full_attention_indexes": [
-      7,
-      14,
-      21,
-      26
-    ],
+    "full_attention_indexes": [7, 14, 21, 26],
     "hidden_act": "gelu_pytorch_tanh",
     "hidden_size": 1152,
     "intermediate_size": 4304,

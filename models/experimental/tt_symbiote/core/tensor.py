@@ -29,6 +29,31 @@ class TorchTTNNTensor(torch.Tensor):
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         return get_tensor_run_implementation().torch_dispatch(cls, func, types, args, kwargs)
 
+    @classmethod
+    def __torch_function__(cls, func, types, args, kwargs=None):
+        """
+        Intercept torch.* functional API calls. Most ops use __torch_dispatch__;
+        torch.split() uses __torch_function__ only, so we handle it here to route
+        to TTNN when possible instead of passing TorchTTNNTensor into PyTorch C++.
+        """
+        if kwargs is None:
+            kwargs = {}
+        if func is torch.split:
+            func_name = (
+                "aten::split_with_sizes"
+                if (len(args) >= 2 and isinstance(args[1], (list, tuple)))
+                else "aten::split.Tensor"
+            )
+            from models.experimental.tt_symbiote.core.dispatcher import (
+                can_dispatch_to_ttnn,
+                dispatch_to_ttnn,
+            )
+
+            if can_dispatch_to_ttnn(func_name, args, kwargs):
+                return dispatch_to_ttnn(func_name, args, kwargs)
+            return super().__torch_function__(func, types, args, kwargs)
+        return super().__torch_function__(func, types, args, kwargs)
+
     @property
     def shape(self):
         if self.ttnn_distributed_tensor_config is not None and self.ttnn_tensor is not None:
