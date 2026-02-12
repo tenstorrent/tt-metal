@@ -672,11 +672,21 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
 
+    num_devices = ttnn.get_num_devices()
+    if num_devices == 32:
+        # On Galaxy (4x8), open full mesh - tests create submeshes for rings
+        mesh_shape = ttnn.MeshShape(4, 8)
+    elif num_devices == 8:
+        # On Loudbox (2x4), open full mesh
+        mesh_shape = ttnn.MeshShape(2, 4)
+    else:
+        mesh_shape = ttnn.MeshShape(num_devices, 1)
+
     mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
+        mesh_shape=mesh_shape,
         **updated_device_params,
     )
-    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    logger.info(f"multidevice with {mesh_device.get_num_devices()} devices is created, mesh shape: {mesh_shape}")
     yield mesh_device
 
     for submesh in mesh_device.get_submeshes():
