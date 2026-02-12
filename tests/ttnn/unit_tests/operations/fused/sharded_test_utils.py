@@ -130,6 +130,12 @@ def ttnn_layer_norm_sharded(
     # Create output memory config (same sharding as input)
     output_memory_config = ttnn.get_memory_config(tt_input_tensor)
 
+    # Create reciprocal tensor for Welford algorithm if needed
+    recip_tensor = None
+    if use_welford:
+        shard_spec = tt_input_tensor.memory_config().shard_spec
+        recip_tensor = ttnn.create_layer_norm_reciprocals(device, shard_spec.grid, shard_spec.shape[1])
+
     # Run layernorm
     output_ttnn = ttnn.layer_norm(
         tt_input_tensor,
@@ -145,6 +151,7 @@ def ttnn_layer_norm_sharded(
             use_welford=use_welford,
             inplace=False,
         ),
+        recip_tensor=recip_tensor,
     )
 
     output_ttnn = ttnn.from_device(output_ttnn)
@@ -314,7 +321,9 @@ def do_test_main(
     if op_name == "layer_norm":
         ref_output_tensor = torch_layer_norm(torch_input_tensor, residual=residual, weight=weight, bias=bias)
     elif op_name == "rms_norm":
-        ref_output_tensor = rms_norm_golden(torch_input_tensor, weight)
+        ref_output_tensor = rms_norm_golden(
+            torch_input_tensor + residual if residual is not None else torch_input_tensor, weight
+        )
 
     # Generate the tt tensor based on the inputs
     sharded_mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
