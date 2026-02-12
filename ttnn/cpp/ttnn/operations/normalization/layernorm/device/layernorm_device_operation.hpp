@@ -53,6 +53,7 @@ Tensor layer_norm(
     const std::optional<DataType>& dtype = std::nullopt,
     LayerNormType norm_type = LayerNormType::LAYERNORM,
     DistributedLayerNormStage distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,
-    const std::optional<const Tensor>& stats = std::nullopt);
+    const std::optional<const Tensor>& stats = std::nullopt,
+    const std::optional<const Tensor>& recip_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

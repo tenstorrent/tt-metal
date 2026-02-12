@@ -12,27 +12,29 @@ on:
       docker-image:
         required: true
         type: string
+      enabled-skus:
+        required: true
+        type: string
       model:
         required: false
         type: string
         default: "all"
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_perf_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
@@ -43,38 +45,23 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
             "perf"
-      - name: Load test matrix
-        id: load-test-matrix
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
         run: |
-          set -e
-          # Install yq
-          YQ_VERSION="v4.44.1"
-          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
-          chmod +x /usr/local/bin/yq
-          # Check if the file exists
-          if [ ! -f "$TESTS_YAML_PATH" ]; then
-            echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
-            exit 1
-          fi
-          # Sanitize line endings
-          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
-          # Convert to JSON
-          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
-          # Filter by model if specified
-          echo "[INFO] Selected model: ${{ inputs.model }}"
-          if [ "${{ inputs.model }}" = "all" ]; then
-            filtered_output="$json_output"
-            echo "[INFO] Loading all tests from YAML"
-          else
-            # Filter tests by model-name field
-            # Include tests where model-name matches OR model-name doesn't exist (always-run tests)
-            filtered_output=$(echo "$json_output" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
-            echo "[INFO] Filtered tests by model: ${{ inputs.model }}"
-          fi
-          # Print the JSON output
-          echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
-          echo "${filtered_output}"
-          echo "matrix=${filtered_output}" >> $GITHUB_OUTPUT
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Filter test matrix by model
+        id: filter-matrix
+        if: inputs.model != 'all'
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+        run: |
+          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$filtered" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
   t3000-perf-tests:
     needs: load-test-matrix
@@ -83,11 +70,7 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
-    runs-on:
-      - arch-wormhole_b0
-      - config-t3000
-      - pipeline-perf
-      - ${{ inputs.extra-tag }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:

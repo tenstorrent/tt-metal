@@ -8,10 +8,10 @@ import ttnn
 
 from ...layers.embeddings import PatchEmbed, SD35CombinedTimestepTextProjEmbeddings
 from ...layers.feedforward import ParallelFeedForward
-from ...layers.linear import ColParallelLinear, Linear
-from ...layers.module import Module
+from ...layers.linear import ColParallelLinear, Linear, prepare_chunked_linear_output
+from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm, LayerNorm
-from ...utils.substate import substate
+from ...utils.substate import rename_substate
 from .attention_sd35 import SD35JointAttention
 
 
@@ -137,116 +137,26 @@ class SD35TransformerBlock(Module):
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def to_cached_state_dict(self, path_prefix):
-        cache_dict = {}
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "norm1.linear", "norm1_linear")
+        rename_substate(state, "norm1_context.linear", "norm1_context_linear")
+        rename_substate(state, "ff.net.0.proj", "ff.ff1")
+        rename_substate(state, "ff.net.2", "ff.ff2")
+        rename_substate(state, "ff_context.net.0.proj", "ff_context.ff1")
+        rename_substate(state, "ff_context.net.2", "ff_context.ff2")
 
-        # Cache linear layers
-        norm1_linear_cache = self.norm1_linear.to_cached_state_dict(path_prefix + "norm1_linear.")
-        norm1_context_linear_cache = self.norm1_context_linear.to_cached_state_dict(
-            path_prefix + "norm1_context_linear."
+        prepare_chunked_linear_output(
+            state,
+            prefix="norm1_linear",
+            device_count=self.parallel_config.tensor_parallel.factor,
+            chunks=6,
         )
-
-        # Add prefixes for linear layers
-        for key, value in norm1_linear_cache.items():
-            cache_dict[f"norm1_linear.{key}"] = value
-        for key, value in norm1_context_linear_cache.items():
-            cache_dict[f"norm1_context_linear.{key}"] = value
-
-        # Cache normalization layers
-        norm1_norm_cache = self.norm1_norm.to_cached_state_dict(path_prefix + "norm1_norm.")
-        norm1_context_norm_cache = self.norm1_context_norm.to_cached_state_dict(path_prefix + "norm1_context_norm.")
-        norm2_cache = self.norm2.to_cached_state_dict(path_prefix + "norm2.")
-
-        # Add prefixes for norm layers
-        for key, value in norm1_norm_cache.items():
-            cache_dict[f"norm1_norm.{key}"] = value
-        for key, value in norm1_context_norm_cache.items():
-            cache_dict[f"norm1_context_norm.{key}"] = value
-        for key, value in norm2_cache.items():
-            cache_dict[f"norm2.{key}"] = value
-
-        # Cache attention layer
-        attn_cache = self.attn.to_cached_state_dict(path_prefix + "attn.")
-        for key, value in attn_cache.items():
-            cache_dict[f"attn.{key}"] = value
-
-        # Cache feedforward layer
-        ff_cache = self.ff.to_cached_state_dict(path_prefix + "ff.")
-        for key, value in ff_cache.items():
-            cache_dict[f"ff.{key}"] = value
-
-        # Cache optional context layers
-        if not self.context_pre_only:
-            norm2_context_cache = self.norm2_context.to_cached_state_dict(path_prefix + "norm2_context.")
-            ff_context_cache = self.ff_context.to_cached_state_dict(path_prefix + "ff_context.")
-
-            for key, value in norm2_context_cache.items():
-                cache_dict[f"norm2_context.{key}"] = value
-            for key, value in ff_context_cache.items():
-                cache_dict[f"ff_context.{key}"] = value
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.norm1_linear.from_cached_state_dict(substate(cache_dict, "norm1_linear"))
-        self.norm1_context_linear.from_cached_state_dict(substate(cache_dict, "norm1_context_linear"))
-
-        self.norm1_norm.from_cached_state_dict(substate(cache_dict, "norm1_norm"))
-        self.norm1_context_norm.from_cached_state_dict(substate(cache_dict, "norm1_context_norm"))
-        self.norm2.from_cached_state_dict(substate(cache_dict, "norm2"))
-
-        self.attn.from_cached_state_dict(substate(cache_dict, "attn"))
-        self.ff.from_cached_state_dict(substate(cache_dict, "ff"))
-
-        if not self.context_pre_only:
-            self.norm2_context.from_cached_state_dict(substate(cache_dict, "norm2_context"))
-            self.ff_context.from_cached_state_dict(substate(cache_dict, "ff_context"))
-
-    def load_torch_state_dict(self, state_dict):
-        def _shuffle_ada_norm_linear(linear_state):
-            # Rearrange QKV projections such column-fracturing shards the heads
-            def _shuffle(x, in_dim):
-                ndev = self.parallel_config.tensor_parallel.factor
-                x = x.T
-                cur_in_dim = x.shape[0]  # in_dim for weight, 1 for bias
-                expansions = x.shape[-1] // in_dim
-                x = x.reshape(-1, expansions, ndev, in_dim // ndev)
-                x = x.permute(0, 2, 1, 3)
-                x = x.reshape(cur_in_dim, -1)
-                assert x.shape[1] == in_dim * expansions
-                x = x.T
-                return x
-
-            in_dim = linear_state["weight"].shape[1]
-            weight = _shuffle(linear_state["weight"], in_dim)
-            out_state = {"weight": weight}
-            if "bias" in linear_state:
-                bias = _shuffle(linear_state["bias"].reshape(-1, 1), in_dim)
-                bias = bias.squeeze()
-                out_state["bias"] = bias
-            return out_state
-
-        def rename_ff_state(state):
-            out_state = {
-                f"{replacement}{k[len(prefix):]}": v
-                for k, v in state.items()
-                for prefix, replacement in [("net.0.proj", "ff1"), ("net.2", "ff2")]
-                if prefix in k
-            }
-            return out_state
-
-        self.norm1_linear.load_torch_state_dict(_shuffle_ada_norm_linear(substate(state_dict, "norm1.linear")))
-        self.norm1_norm.load_torch_state_dict(substate(state_dict, "norm1.norm"))
-        self.norm1_context_linear.load_torch_state_dict(
-            _shuffle_ada_norm_linear(substate(state_dict, "norm1_context.linear"))
+        prepare_chunked_linear_output(
+            state,
+            prefix="norm1_context_linear",
+            device_count=self.parallel_config.tensor_parallel.factor,
+            chunks=2 if self.context_pre_only else 6,
         )
-        self.norm1_context_norm.load_torch_state_dict(substate(state_dict, "norm1_context.norm"))
-        self.attn.load_state_dict(substate(state_dict, "attn"))
-        self.norm2.load_torch_state_dict(substate(state_dict, "norm2"))
-        self.ff.load_torch_state_dict(rename_ff_state(substate(state_dict, "ff")))
-        if not self.context_pre_only:
-            self.norm2_context.load_torch_state_dict(substate(state_dict, "norm2_context"))
-            self.ff_context.load_torch_state_dict(rename_ff_state(substate(state_dict, "ff_context")))
 
     def forward(self, spatial_1BND, prompt_1BLD, time_embed_11BE, N, L):
         """
@@ -462,7 +372,7 @@ class SD35Transformer2DModel(Module):
         )
 
         # Transformer blocks
-        self.transformer_blocks = []
+        self.transformer_blocks = ModuleList()
         for i in range(num_layers):
             block = SD35TransformerBlock(
                 dim=self.inner_dim,
@@ -495,64 +405,8 @@ class SD35Transformer2DModel(Module):
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def to_cached_state_dict(self, path_prefix):
-        cache_dict = {}
-
-        # Cache embeddings
-        pos_embed_cache = self.pos_embed.to_cached_state_dict(path_prefix + "pos_embed.")
-        time_text_embed_cache = self.time_text_embed.to_cached_state_dict(path_prefix + "time_text_embed.")
-        context_embedder_cache = self.context_embedder.to_cached_state_dict(path_prefix + "context_embedder.")
-
-        for key, value in pos_embed_cache.items():
-            cache_dict[f"pos_embed.{key}"] = value
-        for key, value in time_text_embed_cache.items():
-            cache_dict[f"time_text_embed.{key}"] = value
-        for key, value in context_embedder_cache.items():
-            cache_dict[f"context_embedder.{key}"] = value
-
-        # Cache transformer blocks
-        for i, block in enumerate(self.transformer_blocks):
-            block_cache = block.to_cached_state_dict(path_prefix + f"transformer_blocks.{i}.")
-            for key, value in block_cache.items():
-                cache_dict[f"transformer_blocks.{i}.{key}"] = value
-
-        # Cache output layers
-        norm_out_linear_cache = self.norm_out_linear.to_cached_state_dict(path_prefix + "norm_out_linear.")
-        norm_out_norm_cache = self.norm_out_norm.to_cached_state_dict(path_prefix + "norm_out_norm.")
-        proj_out_cache = self.proj_out.to_cached_state_dict(path_prefix + "proj_out.")
-
-        for key, value in norm_out_linear_cache.items():
-            cache_dict[f"norm_out_linear.{key}"] = value
-        for key, value in norm_out_norm_cache.items():
-            cache_dict[f"norm_out_norm.{key}"] = value
-        for key, value in proj_out_cache.items():
-            cache_dict[f"proj_out.{key}"] = value
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.pos_embed.from_cached_state_dict(substate(cache_dict, "pos_embed"))
-        self.time_text_embed.from_cached_state_dict(substate(cache_dict, "time_text_embed"))
-        self.context_embedder.from_cached_state_dict(substate(cache_dict, "context_embedder"))
-
-        for i, block in enumerate(self.transformer_blocks):
-            block.from_cached_state_dict(substate(cache_dict, f"transformer_blocks.{i}"))
-
-        self.norm_out_linear.from_cached_state_dict(substate(cache_dict, "norm_out_linear"))
-        self.norm_out_norm.from_cached_state_dict(substate(cache_dict, "norm_out_norm"))
-        self.proj_out.from_cached_state_dict(substate(cache_dict, "proj_out"))
-
-    def load_torch_state_dict(self, state_dict):
-        self.pos_embed.load_torch_state_dict(substate(state_dict, "pos_embed"))
-        self.time_text_embed.load_torch_state_dict(substate(state_dict, "time_text_embed"))
-        self.context_embedder.load_torch_state_dict(substate(state_dict, "context_embedder"))
-
-        for i, block in enumerate(self.transformer_blocks):
-            block.load_torch_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
-
-        self.norm_out_linear.load_torch_state_dict(substate(state_dict, "norm_out.linear"))
-        self.norm_out_norm.load_torch_state_dict(substate(state_dict, "norm_out.norm"))
-        self.proj_out.load_torch_state_dict(substate(state_dict, "proj_out"))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "norm_out.linear", "norm_out_linear")
 
     def forward(self, spatial, prompt_embed, pooled_projections, timestep, N, L):
         """
