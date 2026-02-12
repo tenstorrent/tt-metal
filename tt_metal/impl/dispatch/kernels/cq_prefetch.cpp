@@ -1533,8 +1533,7 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
         noc_index, noc_xy_addr, 0, 0, 0);
 
     // Total amount to read into the scratch db half from all sub-commands (that fit)
-    uint32_t amt_to_read_to_scratch_db =
-        (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
+    uint32_t amt_to_read_to_scratch_db = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
 
     uint32_t amt_read = amt_to_read_to_scratch_db;
 
