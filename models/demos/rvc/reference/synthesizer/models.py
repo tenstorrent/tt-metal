@@ -6,8 +6,8 @@ from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn import functional as F
 from torch.nn.utils.parametrizations import weight_norm
 
-from rvc.synthesizer import attentions, modules
-from rvc.synthesizer.commons import sequence_mask
+from models.demos.rvc.reference.synthesizer import attentions, modules
+from models.demos.rvc.reference.synthesizer.commons import sequence_mask
 
 
 class TextEncoder(nn.Module):
@@ -344,9 +344,9 @@ class GeneratorNSF(nn.Module):
 
         self.lrelu_slope = modules.LRELU_SLOPE
 
-        assert len(self.resblocks) == self.num_kernels * self.num_upsamples, (
-            "num of resblocks should be num_kernels * num_upsamples"
-        )
+        assert (
+            len(self.resblocks) == self.num_kernels * self.num_upsamples
+        ), "num of resblocks should be num_kernels * num_upsamples"
 
     def forward(self, x, f0, g: torch.Tensor | None = None):
         har_source = self.m_source(f0, self.upp)

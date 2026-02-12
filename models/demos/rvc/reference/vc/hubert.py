@@ -267,10 +267,14 @@ class HubertConfig:
         default=0.65,
         metadata={"help": "probability of replacing a token with mask"},
     )
-    mask_selection: MASKING_DISTRIBUTION_CHOICES = field(default="static", metadata={"help": "how to choose mask length"})
+    mask_selection: MASKING_DISTRIBUTION_CHOICES = field(
+        default="static", metadata={"help": "how to choose mask length"}
+    )
     mask_other: float = field(
         default=0,
-        metadata={"help": "secondary mask argument (used for more complex distributions), see help in compute_mask_indicesh"},
+        metadata={
+            "help": "secondary mask argument (used for more complex distributions), see help in compute_mask_indicesh"
+        },
     )
     no_mask_overlap: bool = field(default=False, metadata={"help": "whether to allow masks to overlap"})
     mask_min_space: int = field(
@@ -293,7 +297,9 @@ class HubertConfig:
     )
     mask_channel_other: float = field(
         default=0,
-        metadata={"help": "secondary mask argument (used for more complex distributions), see help in compute_mask_indicesh"},
+        metadata={
+            "help": "secondary mask argument (used for more complex distributions), see help in compute_mask_indicesh"
+        },
     )
     no_mask_channel_overlap: bool = field(
         default=False,
@@ -379,7 +385,9 @@ class Wav2Vec2Config:
 
     final_dim: int = field(
         default=0,
-        metadata={"help": "project final representations and targets to this many dimensions.set to encoder_embed_dim is <= 0"},
+        metadata={
+            "help": "project final representations and targets to this many dimensions.set to encoder_embed_dim is <= 0"
+        },
     )
     layer_norm_first: bool = field(default=False, metadata={"help": "apply layernorm first in the transformer"})
     conv_feature_layers: str = field(
@@ -403,16 +411,22 @@ class Wav2Vec2Config:
     )
     latent_dim: int = field(
         default=0,
-        metadata={"help": "if > 0, uses this dimensionality for latent variables. otherwise uses final_dim / latent_groups"},
+        metadata={
+            "help": "if > 0, uses this dimensionality for latent variables. otherwise uses final_dim / latent_groups"
+        },
     )
 
     # masking
     mask_length: int = field(default=10, metadata={"help": "mask length"})
     mask_prob: float = field(default=0.65, metadata={"help": "probability of replacing a token with mask"})
-    mask_selection: MASKING_DISTRIBUTION_CHOICES = field(default="static", metadata={"help": "how to choose mask length"})
+    mask_selection: MASKING_DISTRIBUTION_CHOICES = field(
+        default="static", metadata={"help": "how to choose mask length"}
+    )
     mask_other: float = field(
         default=0,
-        metadata={"help": "secondary mask argument (used for more complex distributions), see help in compute_mask_indices"},
+        metadata={
+            "help": "secondary mask argument (used for more complex distributions), see help in compute_mask_indices"
+        },
     )
     no_mask_overlap: bool = field(default=False, metadata={"help": "whether to allow masks to overlap"})
     mask_min_space: int = field(
@@ -438,7 +452,9 @@ class Wav2Vec2Config:
     )
     mask_channel_other: float = field(
         default=0,
-        metadata={"help": "secondary mask argument (used for more complex distributions), see help in compute_mask_indicesh"},
+        metadata={
+            "help": "secondary mask argument (used for more complex distributions), see help in compute_mask_indicesh"
+        },
     )
     no_mask_channel_overlap: bool = field(default=False, metadata={"help": "whether to allow channel masks to overlap"})
     mask_channel_min_space: int = field(
@@ -489,7 +505,9 @@ class Wav2Vec2Config:
     )
     crop_seq_to_multiple: int = field(
         default=1,
-        metadata={"help": "crop convolutional feature extractor output such that the sequence length is divisible by multiple"},
+        metadata={
+            "help": "crop convolutional feature extractor output such that the sequence length is divisible by multiple"
+        },
     )
 
     # Conformer
