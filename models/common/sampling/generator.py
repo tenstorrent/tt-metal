@@ -294,7 +294,8 @@ def format_sampling_params(sampling_params, max_batch_size):
         "seed": random.randint(0, 1000000),  # set to random seed to have variability while using tensor manual_seed
     }
     target_len = max_batch_size
-    assert target_len == 32, "Sampling only support batch_size=32"
+    assert target_len % 32 == 0, f"Sampling batch size must be a multiple of 32, got {target_len}"
+
     for name, tensor in zip(
         ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
     ):

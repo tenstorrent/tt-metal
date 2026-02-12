@@ -187,6 +187,8 @@ class Model:
         sampling_splits = mesh_device.shape[1]
         self._supports_on_device_sampling = self.vocab_size // sampling_splits <= 64 * 1024
         self._prefill_sampling_active = False
+        # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
+        self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
         if self._supports_on_device_sampling:
             # tt_ccl=None makes TTSampling fall back to ttnn.all_gather() which works on [4,8] meshes
             self.sampling = SamplingGenerator(
@@ -217,14 +219,19 @@ class Model:
         args = _SamplingArgs()
         args.vocab_size = hf_config.vocab_size
         num_tp = mesh_device.shape[1]
-        # padded_vocab_size must match lm_head column-parallel output per device exactly
-        per_device_vocab = (args.vocab_size + num_tp - 1) // num_tp
+        # padded_vocab_size: per-device vocab must be tile-aligned (multiple of 32)
+        # for TTPenalties scatter operations
+        per_device_vocab = ((args.vocab_size + num_tp - 1) // num_tp + 31) // 32 * 32
         args.padded_vocab_size = per_device_vocab * num_tp
+        self._sampling_vocab_pad = per_device_vocab - (args.vocab_size + num_tp - 1) // num_tp
         args.cluster_shape = tuple(mesh_device.shape)
         args.sampling_all_gather_axis = 1
         args.num_devices = mesh_device.get_num_devices()
         args.is_galaxy = mesh_device.shape[0] > 1
         args.model_config = {}  # No SAMPLING_AG_CONFIG → regular sampling path always used
+        # sampling_dp: number of independent sampling groups (one per mesh row)
+        # Only use row-sharded sampling when users_row_sharded is active
+        args.sampling_dp = self.sampling_dp
         return args
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -346,6 +353,9 @@ class Model:
             )
             logits.deallocate(True)
             logits = logits_gathered
+        elif skip_gather and getattr(self, "_sampling_vocab_pad", 0) > 0:
+            # Pad per-device logits to tile-aligned vocab size for TTPenalties
+            logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 0), (0, self._sampling_vocab_pad)], value=0.0)
 
         return logits
 
