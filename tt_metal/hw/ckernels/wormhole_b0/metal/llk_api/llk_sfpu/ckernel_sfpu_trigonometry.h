@@ -21,6 +21,59 @@ static const float PI_2 = 1.5707964f;
 static const float PI_4 = 0.7853982f;
 static const float FRAC_1_PI = 0.31830987f;
 
+// Computes v + pi/2, reduced to the interval [-pi/2, pi/2].
+sfpi_inline sfpi::vFloat reduce_pi_shifted(sfpi::vFloat v, sfpi::vInt& i) {
+    // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
+    const float P0 = -0x1.92p+0f;       // representable as bf16
+    const float P1 = -0x1.fbp-12f;      // representable as fp16
+    const float P2 = -0x1.51p-22f;      // requires fp32
+    const float P3 = -0x1.0b4612p-34f;  // requires fp32
+
+    const float ROUNDING_BIAS = 12582912.0f;
+    const float NEG_ROUNDING_BIAS = -12582912.0f;
+
+    sfpi::vFloat j;
+    sfpi::vFloat inv_pi = FRAC_1_PI;
+
+    // j = round(v / PI + 0.5)
+
+    // First, j = v * INV_PI + 0.5.
+    {
+        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+        sfpi::vFloat half;
+        half.get() = __builtin_rvtt_sfpxloadi(0, 0x3f00);
+        j.get() = __builtin_rvtt_wh_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    }
+
+    // j += 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
+    j += ROUNDING_BIAS;
+
+    // We need the LSB of the integer later, to determine the sign of the result.
+    i = sfpi::reinterpret<sfpi::vInt>(j);
+
+    // Shift mantissa bits back; j is now round(v / PI + 0.5) in fp32.
+    j += NEG_ROUNDING_BIAS;
+
+    // j = 2.0 * j - 1.0
+    {
+        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+        vFloat two;
+        __rvtt_vec_t neg_one = __builtin_rvtt_sfpreadlreg(sfpi::vConstNeg1.get());
+        two.get() = __builtin_rvtt_sfpxloadi(0, 0x4000);  // 2.0
+        j.get() = __builtin_rvtt_wh_sfpmad(j.get(), two.get(), neg_one, SFPMAD_MOD1_OFFSET_NONE);
+    }
+
+    // Four-stage Cody-Waite reduction; a = v - j * (PI/2).
+    // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
+    sfpi::vFloat a = v + j * P0;
+    // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
+    a = a + j * P1;
+    a = a + j * P2;
+    a = a + j * P3;
+
+    return a;
+}
+
 sfpi_inline sfpi::vFloat reduce_pi(sfpi::vFloat v, sfpi::vInt& i) {
     // Constants for four-stage Cody-Waite reduction with -PI = P0 + P1 + P2 + P3
     const float P0 = -0x1.92p+1f;       // representable as bf16
@@ -28,13 +81,14 @@ sfpi_inline sfpi::vFloat reduce_pi(sfpi::vFloat v, sfpi::vInt& i) {
     const float P2 = -0x1.51p-21f;      // requires fp32
     const float P3 = -0x1.0b4612p-33f;  // requires fp32
 
-    // Compute j = round(v / PI).
-    // First, j = v * INV_PI + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
-    // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
     sfpi::vFloat rounding_bias;
-    rounding_bias.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
-    sfpi::vFloat inv_pi = FRAC_1_PI;
     sfpi::vFloat j;
+    sfpi::vFloat inv_pi = FRAC_1_PI;
+
+    // j = round(v / PI)
+    // j = v * INV_PI + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
+    // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+    rounding_bias.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
     j.get() = __builtin_rvtt_wh_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // We need the LSB of the integer later, to determine the sign of the result.
@@ -160,9 +214,9 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_cosine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0] * FRAC_1_PI + 0.5f;
-        sfpi::vInt whole_v = float_to_int16(v, 0);
-        v -= int32_to_float(whole_v, 0);
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vInt whole_v;
+        v = reduce_pi_shifted(v, whole_v);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v * FRAC_1_PI);
 
         v = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(v) ^ (whole_v << 31));
