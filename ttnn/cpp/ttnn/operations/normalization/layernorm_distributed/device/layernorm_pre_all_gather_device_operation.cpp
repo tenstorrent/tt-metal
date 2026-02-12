@@ -33,11 +33,6 @@ LayerNormPreAllGatherDeviceOperation::program_factory_t LayerNormPreAllGatherDev
     return LayerNormPreAllGatherProgramFactory{};
 }
 
-void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& tensor = tensor_args;
