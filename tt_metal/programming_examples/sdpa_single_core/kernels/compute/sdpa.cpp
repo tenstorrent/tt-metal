@@ -279,8 +279,8 @@ void exp_tile_first_column(uint32_t idst) {
 // Set 2: QKT@V + SALAD phase (matmul, pack, rescale steps)
 // Enable sets independently; Tracy has a ~250 marker limit per run.
 
-// #define SDPA_PROFILING_SET_1
-// #define SDPA_PROFILING_SET_2
+#define SDPA_PROFILING_SET_1
+#define SDPA_PROFILING_SET_2
 
 #ifdef SDPA_PROFILING_SET_1
 #define SDPA_DeviceZoneScopedN_1(name) DeviceZoneScopedN(name)
@@ -615,6 +615,63 @@ void reduce_c_row_group(uint32_t out_cb, uint32_t prev_cb, uint32_t row_group_in
     tile_regs_release();
 }
 
+/**
+ * Initializes matmul HW, performs a blocked matmul of a subblock, and packs the result tiles to an output CB.
+ *
+ * Init: configures unpacker/math for the matmul dimensions (always called to ensure correct HW state).
+ * Matmul phase: accumulates in0[row] @ in1[col] over the inner dimension into DST.
+ * Pack phase: writes DST tiles to out_cb at row-major positions.
+ *
+ * @tparam TRANSPOSE   Whether to transpose in1 tiles during matmul
+ * @tparam SUBBLOCK_W  Output subblock width in tiles (columns per subblock)
+ * @tparam SUBBLOCK_H  Output subblock height in tiles (rows per subblock)
+ * @tparam INNER_DIM   Inner (accumulation) dimension in tiles
+ * @tparam IN1_STRIDE  Stride for in1 index per inner-dim step
+ * @tparam OUT_NUM_COLS Total columns in the output matrix (for row offset calculation)
+ */
+template <
+    bool TRANSPOSE,
+    uint32_t SUBBLOCK_W,
+    uint32_t SUBBLOCK_H,
+    uint32_t INNER_DIM,
+    uint32_t IN1_STRIDE,
+    uint32_t OUT_NUM_COLS>
+void blocked_matmul_and_pack(
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t out_cb,
+    uint32_t in0_index_start,
+    uint32_t in1_index_start,
+    uint32_t q_subblock,
+    uint32_t out_col_offset) {
+    // --- Init: ensure HW is configured for this matmul ---
+    mm_block_init_short(in0_cb, in1_cb, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+
+    // --- Matmul phase ---
+    tile_regs_acquire();
+    uint32_t dst_index = 0;
+    uint32_t in0_index = in0_index_start;
+    uint32_t in1_index = in1_index_start;
+    for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        in0_index++;
+        in1_index += IN1_STRIDE;
+    }
+    tile_regs_commit();
+
+    // --- Pack phase ---
+    tile_regs_wait();
+    uint32_t dst_idx = 0;
+    for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
+        uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
+        for (uint32_t c = 0; c < SUBBLOCK_W; c++) {
+            pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+            dst_idx++;
+        }
+    }
+    tile_regs_release();
+}
+
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
@@ -692,60 +749,15 @@ void sdpa_inner_loop(
                 }
 
                 {
-                    {
-                        mm_block_init_short(
-                            cb_q_in,
-                            cb_kt_in,
-                            true /*transpose*/,
-                            qkt_subblock_w /*ct_dim*/,
-                            sbh /*rt_dim*/,
-                            in0_block_w /*kt_dim*/);
-                    }
-                    MATH(DPRINT << "Matmul for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
-
-                    {
-                        SDPA_DeviceZoneScopedN_1("matmul_blocks");
-
-                        tile_regs_acquire();
-                        uint32_t dst_index = 0;
-                        uint32_t q_index = q_index_offset;
-                        uint32_t kt_index = kt_index_offset;
-                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                            matmul_block(
-                                cb_q_in,
-                                cb_kt_in,
-                                q_index,
-                                kt_index,
-                                dst_index,
-                                true /*transpose*/,
-                                qkt_subblock_w,
-                                sbh,
-                                in0_block_w);
-                            q_index++;
-                            kt_index += Sk_chunk_t;
-                        }
-                        // tensix_sync();
-                        tile_regs_commit();
-                    }
-                }
-                {
-                    SDPA_DeviceZoneScopedN_1("Pack MM");
-                    // Pack the subblock
-                    tile_regs_wait();
-                    PACK(DPRINT << "Pack for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
-                    uint32_t dst_idx = 0;
-                    uint32_t out_col_offset = kt_subblock * qkt_subblock_w;
-                    for (uint32_t r = 0; r < sbh; r++) {
-                        uint32_t out_row_offset = (r + q_subblock * sbh) * Sk_chunk_t;
-                        for (uint32_t c = 0; c < qkt_subblock_w; c++) {
-                            pack_tile<true>(dst_idx, cb_qkt_im, out_row_offset + out_col_offset + c);
-                            dst_idx++;
-                        }
-                    }
-                    tile_regs_release();
-                    MATH(
-                        DPRINT << "Packing " << sbh * qkt_subblock_w << " tiles to cb_qkt_im for Q[" << q_subblock
-                               << "] Kt[" << kt_subblock << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_1("Q@KT MM+Pack");
+                    blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_qkt_im,
+                        q_index_offset,
+                        kt_index_offset,
+                        q_subblock,
+                        kt_subblock * qkt_subblock_w);
                 }
                 kt_index_offset += qkt_subblock_w;
             }
@@ -816,63 +828,25 @@ void sdpa_inner_loop(
                     cb_push_back(alias_cur_sum, Sq_chunk_t);
                 }
 
-                {
-                    mm_block_init_short(
-                        cb_qkt_im,
-                        cb_v_in,
-                        false /*transpose*/,
-                        qktv_subblock_w /*ct_dim*/,
-                        qktv_subblock_h /*rt_dim*/,
-                        qktv_in0_block_w /*kt_dim*/);
-                }
-
                 uint32_t v_index_offset = 0;
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    MATH(DPRINT << "QKT@V Matmul for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
                     {
-                        SDPA_DeviceZoneScopedN_2("QKT@V matmul");
-                        tile_regs_acquire();
-
-                        uint32_t dst_index = 0;
-                        uint32_t in0_index = qktv_in0_index_offset;
-                        uint32_t in1_index = v_index_offset;
-
-                        for (uint32_t inner = 0; inner < qktv_in0_block_w; ++inner) {
-                            matmul_block(
-                                cb_qkt_im,
-                                cb_v_in,
-                                in0_index,
-                                in1_index,
-                                dst_index,
-                                false /*transpose*/,
-                                qktv_subblock_w,
-                                qktv_subblock_h,
-                                qktv_in0_block_w);
-                            in0_index++;
-                            in1_index += head_dim_t;
-                        }
-                        tile_regs_commit();
+                        SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
+                        blocked_matmul_and_pack<
+                            false,
+                            qktv_subblock_w,
+                            qktv_subblock_h,
+                            qktv_in0_block_w,
+                            head_dim_t,
+                            head_dim_t>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            alias_cur_out,
+                            qktv_in0_index_offset,
+                            v_index_offset,
+                            q_subblock,
+                            v_subblock * qktv_subblock_w);
                     }
-
-                    {
-                        SDPA_DeviceZoneScopedN_2("QKT@V pack");
-                        tile_regs_wait();
-                        PACK(DPRINT << "QKT@V Pack for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
-                        uint32_t dst_idx = 0;
-                        uint32_t out_col_offset = v_subblock * qktv_subblock_w;
-                        for (uint32_t r = 0; r < qktv_subblock_h; r++) {
-                            uint32_t out_row_offset = (r + q_subblock * qktv_subblock_h) * head_dim_t;
-                            for (uint32_t c = 0; c < qktv_subblock_w; c++) {
-                                pack_tile<true>(dst_idx, alias_cur_out, out_row_offset + out_col_offset + c);
-                                dst_idx++;
-                            }
-                        }
-                        tile_regs_release();
-                        MATH(
-                            DPRINT << "Packed " << qktv_subblock_h * qktv_subblock_w << " tiles to alias_cur_out for Q["
-                                   << q_subblock << "] V[" << v_subblock << "]" << ENDL());
-                    }
-
                     v_index_offset += qktv_subblock_w;
                 }
 
