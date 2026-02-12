@@ -5,6 +5,7 @@
 #include "firmware_capability.hpp"
 
 #include <tt-logger/tt-logger.hpp>
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_metal {
 
@@ -34,9 +35,9 @@ void compare_requested_and_actual_capabilities(
             break;
         }
         case tt::ARCH::WORMHOLE_B0:
-        case tt::ARCH::QUASAR:
+        case tt::ARCH::QUASAR: break;
         case tt::ARCH::Invalid:
-        default: break;
+        default: TT_THROW("Unsupported arch {} for firmware capability check", arch);
     }
 }
 
