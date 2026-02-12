@@ -605,7 +605,6 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     }
 }
 
-bool logged_writes = false;
 void populate_sharded_buffer_write_dispatch_cmds(
     const void* src,
     HugepageDeviceCommand& command_sequence,
