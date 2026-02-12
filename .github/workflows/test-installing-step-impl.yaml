@@ -64,21 +64,32 @@ jobs:
             --reboot-option=never \
             --mode-non-interactive
 
+      - name: Download Falcon 7B weights from LFC
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
+          # Download into current dir so tt-metalium-models container can see it (CWD mounted by default)
+          mkdir -p falcon7b_lfc
+          wget -r -nH -x --cut-dirs=4 -np --progress=dot:giga -R "index.html*" -P falcon7b_lfc "${LFC_BASE}/tiiuae/falcon-7b-instruct/"
+
       - name: Run Falcon7b Demo via tt-metalium-models
         shell: bash
         timeout-minutes: 60
         run: |
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
+          # Weights in ./falcon7b_lfc (workspace); conftest uses TT_MODEL_CACHE_PATH so demo finds them in container
           tt-metalium-models \
-            -c "pytest --timeout=1200 --disable-warnings -q -s \
+            -c "export TT_MODEL_CACHE_PATH=\$PWD/falcon7b_lfc && pytest --timeout=1200 --disable-warnings -q -s \
               --input-method=json \
               --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"
 
-  install-and-run-llama70b:
-    name: TT-Installer and run Llama 70B Demo
-    runs-on: ["topology-6u", "in-service", "bare-metal"]
+  install-and-run-llama70b-t3k:
+    name: TT-Installer and run T3K Llama 70B Demo
+    runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "bare-metal"]
     timeout-minutes: 120
     steps:
       - name: Prepare system
@@ -101,14 +112,12 @@ jobs:
             --reboot-option=never \
             --mode-non-interactive
 
-      - name: Run Llama 70B Demo via tt-metalium-models
+      - name: Run T3K Llama 70B Demo via tt-metalium-models
         shell: bash
         timeout-minutes: 90
         run: |
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
-          LLAMA_DIR_HOST=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-          # Mount host MLPerf model weights into container (Galaxy runners have this path)
+          # tt-metalium-models has no -v flag; T3K demo expects TT_CACHE_PATH/HF_MODEL. If runner has /mnt/MLPerf, ensure script mounts it or run without container.
           tt-metalium-models \
-            -v "$LLAMA_DIR_HOST:$LLAMA_DIR_HOST" \
-            -c "export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ && export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache && pytest --timeout=1000 --disable-warnings -q -s models/demos/llama3_70b_galaxy/demo/demo_decode.py -k full"
+            -c "export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache && export HF_MODEL=meta-llama/Llama-3.1-70B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py -k 'not performance-ci-stress-1'"
