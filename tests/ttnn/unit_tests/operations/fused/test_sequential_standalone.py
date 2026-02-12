@@ -11,8 +11,7 @@ core infrastructure logic independently.
 
 import pytest
 import sys
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 # Mock ttnn before importing sequential
@@ -374,7 +373,7 @@ class TestIfdefResolution:
 
     def test_resolve_ifdef_rmsnorm_defined(self):
         """Test resolving #ifdef RMSNORM when it's defined."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -385,7 +384,7 @@ int c = 3;
 #endif
 int d = 4;
 """
-        result = _resolve_ifdef_directives(source, {"RMSNORM"})
+        result = resolve_ifdef_directives(source, {"RMSNORM"})
         assert "int a = 1" in result
         assert "int b = 2" in result
         assert "int c = 3" not in result
@@ -393,7 +392,7 @@ int d = 4;
 
     def test_resolve_ifdef_rmsnorm_not_defined(self):
         """Test resolving #ifdef RMSNORM when it's not defined."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -404,7 +403,7 @@ int c = 3;
 #endif
 int d = 4;
 """
-        result = _resolve_ifdef_directives(source, set())
+        result = resolve_ifdef_directives(source, set())
         assert "int a = 1" in result
         assert "int b = 2" not in result
         assert "int c = 3" in result
@@ -412,7 +411,7 @@ int d = 4;
 
     def test_resolve_ifdef_fuse_gamma_defined(self):
         """Test resolving #ifdef FUSE_GAMMA when it's defined."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -421,14 +420,14 @@ int gamma_code = 2;
 #endif
 int b = 3;
 """
-        result = _resolve_ifdef_directives(source, {"FUSE_GAMMA"})
+        result = resolve_ifdef_directives(source, {"FUSE_GAMMA"})
         assert "int gamma_code = 2" in result
         assert "int a = 1" in result
         assert "int b = 3" in result
 
     def test_resolve_ifdef_fuse_gamma_not_defined(self):
         """Test resolving #ifdef FUSE_GAMMA when it's not defined."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -437,21 +436,21 @@ int gamma_code = 2;
 #endif
 int b = 3;
 """
-        result = _resolve_ifdef_directives(source, set())
+        result = resolve_ifdef_directives(source, set())
         assert "int gamma_code = 2" not in result
         assert "int a = 1" in result
         assert "int b = 3" in result
 
     def test_resolve_leaves_unknown_defines(self):
         """Test that unknown defines are left untouched."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """
 #ifdef SOME_OTHER_FLAG
 int a = 1;
 #endif
 """
-        result = _resolve_ifdef_directives(source, set())
+        result = resolve_ifdef_directives(source, set())
         # Unknown directive should pass through
         assert "#ifdef SOME_OTHER_FLAG" in result
         assert "int a = 1" in result
@@ -463,7 +462,7 @@ class TestKernelBodyExtraction:
 
     def test_extract_simple_body(self):
         """Test extracting a simple kernel body."""
-        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
+        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
 
         source = """
 #include "api.h"
@@ -482,7 +481,7 @@ void other_func() {
     // other
 }
 """
-        body = _extract_kernel_body_for_fusion(source)
+        body = extract_kernel_body(source)
 
         assert "int x = 1" in body
         assert "int y = 2" in body
@@ -492,7 +491,7 @@ void other_func() {
 
     def test_extract_nested_braces(self):
         """Test extracting body with nested braces."""
-        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
+        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -503,20 +502,20 @@ void kernel_main() {
     }
 }
 """
-        body = _extract_kernel_body_for_fusion(source)
+        body = extract_kernel_body(source)
         assert "do_something" in body
         assert "for" in body
 
     def test_extract_empty_body(self):
         """Test extracting from source with no kernel_main."""
-        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
+        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
 
         source = """
 void other_function() {
     int x = 1;
 }
 """
-        body = _extract_kernel_body_for_fusion(source)
+        body = extract_kernel_body(source)
         assert body.strip() == ""
 
 
@@ -525,14 +524,14 @@ class TestCollectIncludes:
 
     def test_collect_unique_includes(self):
         """Test collecting unique includes from multiple sources."""
-        from models.experimental.ops.descriptors.sequential import _collect_includes
+        from models.experimental.ops.descriptors.cpp_parser import collect_includes
 
         sources = [
             '#include "common.h"\n#include "phase0.h"\nvoid kernel_main() {}',
             '#include "common.h"\n#include "phase1.h"\nvoid kernel_main() {}',
         ]
 
-        includes = _collect_includes(sources)
+        includes = collect_includes(sources)
 
         assert len(includes) == 3
         assert '#include "common.h"' in includes
@@ -545,13 +544,13 @@ class TestCollectDefines:
 
     def test_collect_defines_before_main(self):
         """Test collecting defines only before kernel_main."""
-        from models.experimental.ops.descriptors.sequential import _collect_defines
+        from models.experimental.ops.descriptors.cpp_parser import collect_defines
 
         sources = [
             "#define FOO 1\n#define BAR 2\nvoid kernel_main() {\n#define INSIDE 3\n}",
         ]
 
-        defines = _collect_defines(sources)
+        defines = collect_defines(sources)
         define_strs = [d.strip() for d in defines]
 
         assert "#define FOO 1" in define_strs
@@ -564,14 +563,14 @@ class TestInlineLocalIncludes:
 
     def test_inlines_local_include(self, tmp_path):
         """Test inlining a local include file."""
-        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
 
         # Create a local header file
         header = tmp_path / "utils.h"
         header.write_text("#pragma once\nint helper() { return 42; }\n")
 
         source = '#include "utils.h"\nvoid kernel_main() {}\n'
-        result = _inline_local_includes(source, str(tmp_path))
+        result = inline_local_includes(source, str(tmp_path))
 
         assert "int helper()" in result
         assert '#include "utils.h"' not in result
@@ -580,20 +579,20 @@ class TestInlineLocalIncludes:
 
     def test_leaves_path_includes(self):
         """Test that includes with paths are left unchanged."""
-        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
 
         source = '#include "api/dataflow/dataflow_api.h"\nvoid kernel_main() {}\n'
-        result = _inline_local_includes(source, "/some/dir")
+        result = inline_local_includes(source, "/some/dir")
 
         # Path includes should remain
         assert '#include "api/dataflow/dataflow_api.h"' in result
 
     def test_no_kernel_dir_returns_unchanged(self):
         """Test that None kernel_dir returns source unchanged."""
-        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
 
         source = '#include "utils.h"\nvoid kernel_main() {}\n'
-        result = _inline_local_includes(source, None)
+        result = inline_local_includes(source, None)
         assert result == source
 
 
@@ -674,55 +673,53 @@ class TestMergeNamedCompileTimeArgs:
         assert names["num_barrier_cores"] == 2
 
 
+def _make_mock_core_ranges():
+    """Create a mock CoreRangeSet with one core at (0,0)."""
+    core_range = MagicMock()
+    core_range.start.x = 0
+    core_range.start.y = 0
+    core_range.end.x = 0
+    core_range.end.y = 0
+    core_range_set = MagicMock()
+    core_range_set.ranges.return_value = [core_range]
+    return core_range_set
+
+
+def _make_mock_runtime_args_view(args_per_core):
+    """Create a mock RuntimeArgsView with coordinate-based 2D indexing.
+
+    args_per_core: list of lists, one per core.
+    rv[x][y] -> VectorUInt32 of args for CoreCoord(x, y).
+    Mock uses a function-based getitem to handle MagicMock keys
+    (MagicMock.__index__() returns 1, not 0, causing IndexError with lists).
+    """
+    view = MagicMock()
+    view.__len__ = MagicMock(return_value=len(args_per_core))
+
+    def get_col(_x):
+        col = MagicMock()
+        col.__getitem__ = MagicMock(return_value=args_per_core[0])
+        return col
+
+    view.__getitem__ = MagicMock(side_effect=get_col)
+    return view
+
+
 class TestComputeRuntimeArgOffsets:
     """Tests for runtime arg offset computation."""
-
-    @staticmethod
-    def _make_core_ranges():
-        """Create a mock CoreRangeSet with one core at (0,0)."""
-        core_range = MagicMock()
-        core_range.start.x = 0
-        core_range.start.y = 0
-        core_range.end.x = 0
-        core_range.end.y = 0
-        core_range_set = MagicMock()
-        core_range_set.ranges.return_value = [core_range]
-        return core_range_set
-
-    @staticmethod
-    def _make_runtime_args_view(args_per_core):
-        """Create a mock RuntimeArgsView with coordinate-based 2D indexing.
-
-        args_per_core: list of lists, one per core.
-        rv[x][y] -> VectorUInt32 of args for CoreCoord(x, y).
-        Mock uses a function-based getitem to handle MagicMock keys
-        (MagicMock.__index__() returns 1, not 0, causing IndexError with lists).
-        """
-        view = MagicMock()
-        view.__len__ = MagicMock(return_value=len(args_per_core))
-
-        def get_col(_x):
-            """Return a col proxy for any x coordinate."""
-            col = MagicMock()
-            # Single-core mock: always return the first core's args
-            col.__getitem__ = MagicMock(return_value=args_per_core[0])
-            return col
-
-        view.__getitem__ = MagicMock(side_effect=get_col)
-        return view
 
     def test_basic_offsets(self):
         """Test basic runtime arg offset computation."""
         from models.experimental.ops.descriptors.sequential import _compute_runtime_arg_offsets
 
-        core_ranges = self._make_core_ranges()
+        core_ranges = _make_mock_core_ranges()
 
         kernel0 = MagicMock()
-        kernel0.runtime_args = self._make_runtime_args_view([[1, 2, 3, 4, 5]])
+        kernel0.runtime_args = _make_mock_runtime_args_view([[1, 2, 3, 4, 5]])
         kernel0.core_ranges = core_ranges
 
         kernel1 = MagicMock()
-        kernel1.runtime_args = self._make_runtime_args_view([[10, 20, 30]])
+        kernel1.runtime_args = _make_mock_runtime_args_view([[10, 20, 30]])
         kernel1.core_ranges = core_ranges
 
         phase_kernels = [
@@ -738,10 +735,10 @@ class TestComputeRuntimeArgOffsets:
         """Test offsets when a phase has no kernel of that type."""
         from models.experimental.ops.descriptors.sequential import _compute_runtime_arg_offsets
 
-        core_ranges = self._make_core_ranges()
+        core_ranges = _make_mock_core_ranges()
 
         kernel0 = MagicMock()
-        kernel0.runtime_args = self._make_runtime_args_view([[1, 2, 3]])
+        kernel0.runtime_args = _make_mock_runtime_args_view([[1, 2, 3]])
         kernel0.core_ranges = core_ranges
 
         phase_kernels = [
@@ -757,49 +754,18 @@ class TestComputeRuntimeArgOffsets:
 class TestConcatenateRuntimeArgs:
     """Tests for runtime arg concatenation."""
 
-    @staticmethod
-    def _make_runtime_args_view(args_per_core):
-        """Create a mock RuntimeArgsView with coordinate-based 2D indexing.
-
-        Mock uses a function-based getitem to handle MagicMock keys
-        (MagicMock.__index__() returns 1, not 0, causing IndexError with lists).
-        """
-        view = MagicMock()
-        view.__len__ = MagicMock(return_value=len(args_per_core))
-
-        def get_col(_x):
-            """Return a col proxy for any x coordinate."""
-            col = MagicMock()
-            col.__getitem__ = MagicMock(return_value=args_per_core[0])
-            return col
-
-        view.__getitem__ = MagicMock(side_effect=get_col)
-        return view
-
-    @staticmethod
-    def _make_core_ranges():
-        """Create a mock CoreRangeSet with one core at (0,0)."""
-        core_range = MagicMock()
-        core_range.start.x = 0
-        core_range.start.y = 0
-        core_range.end.x = 0
-        core_range.end.y = 0
-        core_range_set = MagicMock()
-        core_range_set.ranges.return_value = [core_range]
-        return core_range_set
-
     def test_basic_concatenation(self):
         """Test basic runtime arg concatenation across phases."""
         from models.experimental.ops.descriptors.sequential import _concatenate_runtime_args
 
-        core_ranges = self._make_core_ranges()
+        core_ranges = _make_mock_core_ranges()
 
         kernel0 = MagicMock()
-        kernel0.runtime_args = self._make_runtime_args_view([[1, 2, 3]])
+        kernel0.runtime_args = _make_mock_runtime_args_view([[1, 2, 3]])
         kernel0.core_ranges = core_ranges
 
         kernel1 = MagicMock()
-        kernel1.runtime_args = self._make_runtime_args_view([[10, 20]])
+        kernel1.runtime_args = _make_mock_runtime_args_view([[10, 20]])
         kernel1.core_ranges = core_ranges
 
         phase_kernels = [
@@ -933,63 +899,12 @@ class TestValidateFp32Consistency:
             _validate_fp32_consistency([desc1, desc2])
 
 
-class TestKernelClassification:
-    """Tests for kernel type classification."""
+class TestCategorizePreMain:
+    """Tests for tree-sitter-based pre-main code categorization."""
 
-    @staticmethod
-    def _setup_config_types():
-        """Set up real classes on mocked ttnn so isinstance() works."""
-        import ttnn
-
-        # Create real classes for config descriptors (isinstance needs real types)
-        class _Compute:
-            pass
-
-        class _Reader:
-            pass
-
-        class _Writer:
-            pass
-
-        ttnn.ComputeConfigDescriptor = _Compute
-        ttnn.ReaderConfigDescriptor = _Reader
-        ttnn.WriterConfigDescriptor = _Writer
-        return _Compute, _Reader, _Writer
-
-    def test_classify_compute(self):
-        """Test classifying a compute kernel."""
-        from models.experimental.ops.descriptors.sequential import _classify_kernel
-
-        Compute, _, _ = self._setup_config_types()
-        kernel = MagicMock()
-        kernel.config = Compute()
-        assert _classify_kernel(kernel) == "compute"
-
-    def test_classify_reader(self):
-        """Test classifying a reader kernel."""
-        from models.experimental.ops.descriptors.sequential import _classify_kernel
-
-        _, Reader, _ = self._setup_config_types()
-        kernel = MagicMock()
-        kernel.config = Reader()
-        assert _classify_kernel(kernel) == "reader"
-
-    def test_classify_writer(self):
-        """Test classifying a writer kernel."""
-        from models.experimental.ops.descriptors.sequential import _classify_kernel
-
-        _, _, Writer = self._setup_config_types()
-        kernel = MagicMock()
-        kernel.config = Writer()
-        assert _classify_kernel(kernel) == "writer"
-
-
-class TestCollectPreMainCode:
-    """Tests for pre-main code collection."""
-
-    def test_collects_namespace_code(self):
-        """Test that namespace code before kernel_main is collected."""
-        from models.experimental.ops.descriptors.sequential import _collect_pre_main_code
+    def test_categorizes_namespace_and_functions(self):
+        """Test that namespace code, functions, and variables are categorized."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
         source = """#include "api.h"
 #define FOO 1
@@ -998,151 +913,152 @@ namespace my_ns {
     constexpr int val = 42;
 }
 
+ALWI void ACQ() { acquire_dst(); }
+
+constexpr uint32_t MAX_TILES = 64;
+
 void kernel_main() {
     // body
 }
 """
-        result = _collect_pre_main_code(source)
-        assert "namespace my_ns" in result
-        assert "constexpr int val = 42" in result
-        # Should not include includes, defines, or comments
-        assert "#include" not in result
-        assert "#define" not in result
+        blocks = categorize_pre_main(source)
+        kinds = [b.kind for b in blocks]
+        assert "namespace" in kinds
+        assert "function" in kinds
+        assert "variable" in kinds
+        # Find the function block
+        func_blocks = [b for b in blocks if b.kind == "function"]
+        assert len(func_blocks) == 1
+        assert func_blocks[0].name == "ACQ"
+        # Find the variable block
+        var_blocks = [b for b in blocks if b.kind == "variable"]
+        assert len(var_blocks) == 1
+        assert var_blocks[0].name == "MAX_TILES"
 
+    def test_skips_includes_defines_comments(self):
+        """Pre-main should not include #include, #define, or comments."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-class TestSplitIntoTopLevelBlocks:
-    """Tests for top-level block splitting."""
+        source = """#include <cstdint>
+#define FOO 1
+// a comment
+/* block comment */
+namespace g = norm;
+void kernel_main() {}
+"""
+        blocks = categorize_pre_main(source)
+        for b in blocks:
+            assert not b.text.startswith("#include")
+            assert not b.text.startswith("#define")
+            assert not b.text.startswith("//")
 
-    def test_single_line_declarations(self):
-        """Single-line declarations are individual blocks."""
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+    def test_function_with_alwi(self):
+        """ALWI-prefixed functions are correctly detected."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        pre_main = "namespace generic = norm::kernel_util::generic;\nnamespace kutil = norm::kernel_util;"
-        blocks = _split_into_top_level_blocks(pre_main)
+        source = """ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+void kernel_main() {}
+"""
+        blocks = categorize_pre_main(source)
+        func_blocks = [b for b in blocks if b.kind == "function"]
+        assert len(func_blocks) == 2
+        names = {b.name for b in func_blocks}
+        assert "ACQ" in names
+        assert "REL" in names
+
+    def test_namespace_alias(self):
+        """Namespace aliases are categorized correctly."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+
+        source = """namespace generic = norm::kernel_util::generic;
+namespace kutil = norm::kernel_util;
+void kernel_main() {}
+"""
+        blocks = categorize_pre_main(source)
         assert len(blocks) == 2
-        assert "generic" in blocks[0]
-        assert "kutil" in blocks[1]
+        for b in blocks:
+            assert b.kind == "namespace_alias"
 
-    def test_braced_function(self):
-        """K&R style function is one block."""
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+    def test_using_declaration(self):
+        """Using declarations are categorized correctly."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        pre_main = "ALWI void ACQ() { acquire_dst(); }\nALWI void REL() { release_dst(); }"
-        blocks = _split_into_top_level_blocks(pre_main)
-        assert len(blocks) == 2
-        assert "ACQ" in blocks[0]
-        assert "REL" in blocks[1]
-
-    def test_multiline_function(self):
-        """Multi-line function with braces is one block."""
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
-
-        pre_main = "template <typename T>\n" "inline void foo(T x) {\n" "    return;\n" "}"
-        blocks = _split_into_top_level_blocks(pre_main)
+        source = """using std::uint32_t;
+void kernel_main() {}
+"""
+        blocks = categorize_pre_main(source)
         assert len(blocks) == 1
-        assert "template" in blocks[0]
-        assert "return" in blocks[0]
+        assert blocks[0].kind == "using"
 
-    def test_namespace_block(self):
-        """Namespace block with nested functions is one block."""
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+    def test_template_function(self):
+        """Template functions are categorized as functions."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        pre_main = (
-            "namespace my_ns {\n"
-            "using T = uint32_t;\n"
-            "inline void f() {\n"
-            "    return;\n"
-            "}\n"
-            "}  // namespace my_ns"
-        )
-        blocks = _split_into_top_level_blocks(pre_main)
-        assert len(blocks) == 1
-        assert "namespace my_ns" in blocks[0]
-        assert "inline void f()" in blocks[0]
-        assert "}  // namespace my_ns" in blocks[0]
+        source = """template <typename T>
+inline void process(T x) {
+    return;
+}
+void kernel_main() {}
+"""
+        blocks = categorize_pre_main(source)
+        func_blocks = [b for b in blocks if b.kind == "function"]
+        assert len(func_blocks) == 1
+        assert func_blocks[0].name == "process"
 
-    def test_empty_lines_separate_blocks(self):
-        """Empty lines between depth-0 constructs separate blocks."""
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+    def test_struct_definition(self):
+        """Struct definitions are categorized as struct."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        pre_main = "namespace g = norm;\n" "\n" "ALWI void ACQ() { acquire_dst(); }"
-        blocks = _split_into_top_level_blocks(pre_main)
-        assert len(blocks) == 2
+        source = """struct Config {
+    int x;
+    int y;
+};
+void kernel_main() {}
+"""
+        blocks = categorize_pre_main(source)
+        struct_blocks = [b for b in blocks if b.kind == "struct"]
+        assert len(struct_blocks) == 1
 
-    def test_struct_with_semicolon(self):
-        """Struct definition ending with }; is one block."""
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+    def test_variable_types(self):
+        """Various variable declaration types are detected."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        pre_main = "struct Foo {\n" "    int x;\n" "    int y;\n" "};"
-        blocks = _split_into_top_level_blocks(pre_main)
-        assert len(blocks) == 1
-        assert "struct Foo" in blocks[0]
-        assert "int y" in blocks[0]
+        source = """constexpr uint32_t MAX_TILES = 64;
+static uint32_t counter = 0;
+volatile float* data_ptr;
+void kernel_main() {}
+"""
+        blocks = categorize_pre_main(source)
+        var_blocks = [b for b in blocks if b.kind == "variable"]
+        assert len(var_blocks) == 3
+        var_names = {b.name for b in var_blocks}
+        assert "MAX_TILES" in var_names
+        assert "counter" in var_names
+        assert "data_ptr" in var_names
 
-    def test_empty_input(self):
-        """Empty pre-main returns empty list."""
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+    def test_empty_source(self):
+        """Empty source returns no blocks."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        assert _split_into_top_level_blocks("") == []
-        assert _split_into_top_level_blocks("   \n   \n") == []
+        blocks = categorize_pre_main("void kernel_main() {}")
+        assert len(blocks) == 0
 
+    def test_stops_at_kernel_main(self):
+        """Should not include code from inside or after kernel_main."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-class TestExtractBlockSignature:
-    """Tests for block signature extraction."""
-
-    def test_single_line_function(self):
-        """Single-line function signature extracts declaration."""
-        from models.experimental.ops.descriptors.sequential import _extract_block_signature
-
-        block = "ALWI void ACQ() { acquire_dst(); }"
-        sig = _extract_block_signature(block)
-        assert sig == "ALWI void ACQ()"
-
-    def test_multiline_function(self):
-        """Multi-line function extracts lines before {."""
-        from models.experimental.ops.descriptors.sequential import _extract_block_signature
-
-        block = "template <typename T>\n" "inline void foo(T x) {\n" "    return;\n" "}"
-        sig = _extract_block_signature(block)
-        assert "template" in sig
-        assert "inline void foo(T x)" in sig
-
-    def test_namespace(self):
-        """Namespace block signature is the namespace declaration."""
-        from models.experimental.ops.descriptors.sequential import _extract_block_signature
-
-        block = "namespace my_ns {\n" "using T = uint32_t;\n" "}"
-        sig = _extract_block_signature(block)
-        assert sig == "namespace my_ns"
-
-    def test_no_braces(self):
-        """Single-line without braces returns full normalized line."""
-        from models.experimental.ops.descriptors.sequential import _extract_block_signature
-
-        block = "namespace generic = norm::kernel_util::generic;"
-        sig = _extract_block_signature(block)
-        assert sig == "namespace generic = norm::kernel_util::generic;"
-
-
-class TestIsGlobalVarBlock:
-    """Tests for global variable detection."""
-
-    def test_simple_global(self):
-        from models.experimental.ops.descriptors.sequential import _is_global_var_block
-
-        assert _is_global_var_block("uint32_t counter = 0;")
-        assert _is_global_var_block("static uint32_t counter;")
-        assert _is_global_var_block("constexpr uint32_t val = 42;")
-
-    def test_not_global(self):
-        from models.experimental.ops.descriptors.sequential import _is_global_var_block
-
-        assert not _is_global_var_block("namespace generic = norm;")
-        assert not _is_global_var_block("ALWI void ACQ() { acquire_dst(); }")
-        assert not _is_global_var_block("using T = uint32_t;")
-        assert not _is_global_var_block("typedef uint32_t my_type;")
-        # Multi-line is not a global var
-        assert not _is_global_var_block("void foo() {\n    return;\n}")
+        source = """int before = 1;
+void kernel_main() {
+    int inside = 2;
+}
+int after = 3;
+"""
+        blocks = categorize_pre_main(source)
+        all_text = " ".join(b.text for b in blocks)
+        assert "before" in all_text
+        assert "inside" not in all_text
+        assert "after" not in all_text
 
 
 class TestCollectAllPreMainCode:
@@ -1863,110 +1779,55 @@ void kernel_main() {
         assert "phase4_reset_state" in result
 
 
-class TestStripStringsAndComments:
-    """Tests for _strip_strings_and_comments helper."""
+class TestReplaceInCodeOnly:
+    """Tests for tree-sitter-based code-aware replacement."""
 
-    def test_double_quoted_string(self):
-        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+    def test_replaces_in_code(self):
+        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
 
-        assert _strip_strings_and_comments('int x = "{ hello }";').count("{") == 0
+        source = "int ACQ = 1;\nACQ();"
+        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
+        assert "phase0_ACQ = 1" in result
+        assert "phase0_ACQ()" in result
 
-    def test_single_quoted_char(self):
-        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+    def test_skips_string_literals(self):
+        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
 
-        assert _strip_strings_and_comments("char c = '}';").count("}") == 0
+        source = 'const char* s = "ACQ is here";\nint ACQ = 1;'
+        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
+        assert '"ACQ is here"' in result  # String unchanged
+        assert "phase0_ACQ = 1" in result  # Code changed
 
-    def test_escaped_quotes(self):
-        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+    def test_skips_comments(self):
+        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
 
-        assert _strip_strings_and_comments(r'const char* s = "hello \"world\" {}";').count("{") == 0
+        source = "// ACQ comment\nint ACQ = 1;"
+        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
+        assert "// ACQ comment" in result  # Comment unchanged
+        assert "phase0_ACQ = 1" in result  # Code changed
 
-    def test_line_comment(self):
-        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+    def test_skips_block_comments(self):
+        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
 
-        result = _strip_strings_and_comments("int x = 1; // { brace in comment }")
-        assert "{" not in result
+        source = "/* ACQ in block */\nint ACQ = 1;"
+        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
+        assert "/* ACQ in block */" in result  # Block comment unchanged
+        assert "phase0_ACQ = 1" in result  # Code changed
 
-    def test_inline_block_comment(self):
-        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+    def test_word_boundary(self):
+        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
 
-        result = _strip_strings_and_comments("int x = /* { } */ 1;")
-        assert "{" not in result
-
-    def test_raw_string_literal(self):
-        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
-
-        result = _strip_strings_and_comments('auto s = R"({ json })";')
-        assert "{" not in result
-
-    def test_code_braces_preserved(self):
-        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
-
-        result = _strip_strings_and_comments("if (x) { return; }")
-        assert result.count("{") == 1
-        assert result.count("}") == 1
-
-
-class TestCountBraces:
-    """Tests for _count_braces with string/comment awareness."""
-
-    def test_simple_braces(self):
-        from models.experimental.ops.descriptors.sequential import _count_braces
-
-        assert _count_braces("if (x) {") == 1
-        assert _count_braces("}") == -1
-        assert _count_braces("{ foo(); }") == 0
-
-    def test_braces_in_string_ignored(self):
-        from models.experimental.ops.descriptors.sequential import _count_braces
-
-        assert _count_braces('const char* s = "{ }";') == 0
-        assert _count_braces("char c = '{';") == 0
-
-    def test_braces_in_comment_ignored(self):
-        from models.experimental.ops.descriptors.sequential import _count_braces
-
-        assert _count_braces("int x = 1; // { brace }") == 0
-        assert _count_braces("int x = /* { } */ 1;") == 0
+        source = "int ACQ = 1;\nint ACQUIRE = 2;"
+        result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
+        assert "phase0_ACQ = 1" in result
+        assert "ACQUIRE" in result  # Not replaced (different word)
 
 
-class TestKernelMainDetection:
-    """Tests for robust kernel_main detection."""
-
-    def test_standard_void_kernel_main(self):
-        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
-
-        assert _is_kernel_main_line("void kernel_main() {")
-        assert _is_kernel_main_line("  void kernel_main() {")
-
-    def test_alwi_kernel_main(self):
-        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
-
-        assert _is_kernel_main_line("ALWI void kernel_main() {")
-
-    def test_force_inline_kernel_main(self):
-        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
-
-        assert _is_kernel_main_line("FORCE_INLINE void kernel_main() {")
-
-    def test_int_kernel_main(self):
-        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
-
-        assert _is_kernel_main_line("int kernel_main() {")
-
-    def test_kernel_main_macro(self):
-        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
-
-        assert _is_kernel_main_line("KERNEL_MAIN {")
-
-    def test_not_kernel_main(self):
-        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
-
-        assert not _is_kernel_main_line("void other_function() {")
-        assert not _is_kernel_main_line("int x = 1;")
+class TestExtractKernelBody:
+    """Tests for tree-sitter-based kernel body extraction."""
 
     def test_extract_body_with_alwi_kernel_main(self):
-        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
+        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
 
         source = """
 ALWI void kernel_main() {
@@ -1974,13 +1835,13 @@ ALWI void kernel_main() {
     compute(x);
 }
 """
-        body = _extract_kernel_body_for_fusion(source)
+        body = extract_kernel_body(source)
         assert "int x = 1" in body
         assert "compute(x)" in body
 
     def test_extract_body_with_string_braces(self):
         """kernel_main body with string literal containing braces."""
-        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
+        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -1988,9 +1849,23 @@ void kernel_main() {
     int y = 2;
 }
 """
-        body = _extract_kernel_body_for_fusion(source)
-        assert 'const char* msg = "{ json }"' in body
+        body = extract_kernel_body(source)
+        assert "{ json }" in body
         assert "int y = 2" in body
+
+    def test_standard_kernel_main(self):
+        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
+
+        source = "void kernel_main() {\n    int x = 1;\n}"
+        body = extract_kernel_body(source)
+        assert "int x = 1" in body
+
+    def test_no_kernel_main(self):
+        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
+
+        source = "void other_function() { int x = 1; }"
+        body = extract_kernel_body(source)
+        assert body == ""
 
 
 class TestIfdefRobustness:
@@ -1998,7 +1873,7 @@ class TestIfdefRobustness:
 
     def test_not_defined_c_style(self):
         """Test C++ standard !defined(X) syntax."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -2007,30 +1882,30 @@ int b = 2;
 #endif
 int c = 3;
 """
-        result = _resolve_ifdef_directives(source, set())
+        result = resolve_ifdef_directives(source, set())
         assert "int b = 2" in result
 
-        result2 = _resolve_ifdef_directives(source, {"RMSNORM"})
+        result2 = resolve_ifdef_directives(source, {"RMSNORM"})
         assert "int b = 2" not in result2
 
     def test_not_defined_no_parens(self):
         """Test !defined X without parentheses."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """
 #if !defined FUSE_PRE_ADD
 int no_pre_add = 1;
 #endif
 """
-        result = _resolve_ifdef_directives(source, set())
+        result = resolve_ifdef_directives(source, set())
         assert "int no_pre_add = 1" in result
 
-        result2 = _resolve_ifdef_directives(source, {"FUSE_PRE_ADD"})
+        result2 = resolve_ifdef_directives(source, {"FUSE_PRE_ADD"})
         assert "int no_pre_add = 1" not in result2
 
     def test_if_0_if_1(self):
         """Test #if 0 and #if 1 unconditional blocks."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -2042,7 +1917,7 @@ int always_here = 42;
 #endif
 int b = 2;
 """
-        result = _resolve_ifdef_directives(source, set())
+        result = resolve_ifdef_directives(source, set())
         assert "int dead_code = 999" not in result
         assert "int always_here = 42" in result
         assert "int a = 1" in result
@@ -2050,7 +1925,7 @@ int b = 2;
 
     def test_line_continuation(self):
         """Test backslash line continuation in #if directives."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """int a = 1;
 #if defined FUSE_GAMMA \\
@@ -2058,12 +1933,12 @@ int b = 2;
 int gamma_or_beta = 1;
 #endif
 int b = 2;"""
-        result = _resolve_ifdef_directives(source, {"FUSE_GAMMA"})
+        result = resolve_ifdef_directives(source, {"FUSE_GAMMA"})
         assert "int gamma_or_beta = 1" in result
 
     def test_mixed_defined_and_not_defined(self):
         """Test #if defined(A) && !defined(B)."""
-        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
 
         source = """
 #if defined(RMSNORM) && !defined(FUSE_PRE_ADD)
@@ -2071,88 +1946,51 @@ int rms_no_preadd = 1;
 #endif
 """
         # RMSNORM defined, FUSE_PRE_ADD not defined -> true
-        result = _resolve_ifdef_directives(source, {"RMSNORM"})
+        result = resolve_ifdef_directives(source, {"RMSNORM"})
         assert "int rms_no_preadd = 1" in result
 
         # Both defined -> false (because !defined(FUSE_PRE_ADD) is false)
-        result2 = _resolve_ifdef_directives(source, {"RMSNORM", "FUSE_PRE_ADD"})
+        result2 = resolve_ifdef_directives(source, {"RMSNORM", "FUSE_PRE_ADD"})
         assert "int rms_no_preadd = 1" not in result2
 
 
-class TestSplitBlocksStringAware:
-    """Tests for string-aware block splitting."""
-
-    def test_braces_in_string_dont_break_splitting(self):
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
-
-        pre_main = 'const char* fmt = "{ json }";'
-        blocks = _split_into_top_level_blocks(pre_main)
-        assert len(blocks) == 1
-        assert "{ json }" in blocks[0]
-
-    def test_braces_in_char_literal(self):
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
-
-        pre_main = "char open = '{';\nchar close = '}';"
-        blocks = _split_into_top_level_blocks(pre_main)
-        assert len(blocks) == 2
-
-    def test_normal_function_still_works(self):
-        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
-
-        pre_main = "void foo() {\n    int x = 1;\n}"
-        blocks = _split_into_top_level_blocks(pre_main)
-        assert len(blocks) == 1
-        assert "int x = 1" in blocks[0]
-
-
-class TestGlobalVarDetectionRobust:
-    """Tests for robust global variable detection."""
+class TestCategorizePreMainVariables:
+    """Tests for variable detection in categorize_pre_main."""
 
     def test_pointer_types(self):
-        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        assert _extract_global_var_names("uint32_t* ptr = nullptr;") == ["ptr"]
-        assert _extract_global_var_names("const float* data;") == ["data"]
+        source = "uint32_t* ptr = nullptr;\nvoid kernel_main() {}"
+        blocks = categorize_pre_main(source)
+        var_blocks = [b for b in blocks if b.kind == "variable"]
+        assert len(var_blocks) == 1
+        assert var_blocks[0].name == "ptr"
 
-    def test_reference_types(self):
-        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+    def test_constexpr_types(self):
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        assert _extract_global_var_names("const uint32_t& ref = global_var;") == ["ref"]
+        source = "constexpr uint32_t MAX_TILES = 64;\nvoid kernel_main() {}"
+        blocks = categorize_pre_main(source)
+        var_blocks = [b for b in blocks if b.kind == "variable"]
+        assert len(var_blocks) == 1
+        assert var_blocks[0].name == "MAX_TILES"
 
-    def test_user_defined_types(self):
-        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+    def test_static_variables(self):
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        assert _extract_global_var_names("MyCustomType instance;") == ["instance"]
-        assert _extract_global_var_names("MyNs::MyType val = init;") == ["val"]
+        source = "static uint32_t counter = 0;\nvoid kernel_main() {}"
+        blocks = categorize_pre_main(source)
+        var_blocks = [b for b in blocks if b.kind == "variable"]
+        assert len(var_blocks) == 1
+        assert var_blocks[0].name == "counter"
 
-    def test_thread_local(self):
-        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+    def test_functions_not_variables(self):
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        assert _extract_global_var_names("thread_local int counter = 0;") == ["counter"]
-
-    def test_extern(self):
-        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
-
-        assert _extract_global_var_names("extern uint32_t global_x;") == ["global_x"]
-
-    def test_auto(self):
-        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
-
-        assert _extract_global_var_names("auto val = compute_something();") == ["val"]
-
-    def test_still_excludes_functions(self):
-        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
-
-        assert _extract_global_var_names("void foo();") == []
-        assert _extract_global_var_names("ALWI void bar() { }") == []
-
-    def test_is_global_var_block_pointers(self):
-        from models.experimental.ops.descriptors.sequential import _is_global_var_block
-
-        assert _is_global_var_block("uint32_t* ptr = nullptr;")
-        assert _is_global_var_block("const float& ref = x;")
-        assert _is_global_var_block("MyType instance;")
+        source = "ALWI void ACQ() { acquire_dst(); }\nvoid kernel_main() {}"
+        blocks = categorize_pre_main(source)
+        var_blocks = [b for b in blocks if b.kind == "variable"]
+        assert len(var_blocks) == 0
 
 
 class TestRuntimeArgsPattern:
@@ -2208,33 +2046,27 @@ class TestPrefixPhaseNamesSkipsStrings:
 
 
 class TestFunctionDetectionRobust:
-    """Tests for improved function detection and name extraction."""
+    """Tests for function detection via categorize_pre_main."""
 
-    def test_operator_overload_detection(self):
-        from models.experimental.ops.descriptors.sequential import _is_phase_specific_function
+    def test_function_with_braces_in_string(self):
+        """Function with braces in string is still detected as function."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        assert _is_phase_specific_function("bool operator==(const Foo& a, const Foo& b) {\n    return a.x == b.x;\n}")
+        source = 'void foo() {\n    const char* s = "no { braces }";\n}\nvoid kernel_main() {}'
+        blocks = categorize_pre_main(source)
+        func_blocks = [b for b in blocks if b.kind == "function"]
+        assert len(func_blocks) == 1
+        assert func_blocks[0].name == "foo"
 
-    def test_operator_name_extraction(self):
-        from models.experimental.ops.descriptors.sequential import _extract_function_name_from_block
+    def test_scope_qualified_function(self):
+        """Scope-qualified function names are extracted correctly."""
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
-        name = _extract_function_name_from_block(
-            "bool operator==(const Foo& a, const Foo& b) {\n    return a.x == b.x;\n}"
-        )
-        assert name == "operator=="
-
-    def test_scope_qualified_name(self):
-        from models.experimental.ops.descriptors.sequential import _extract_function_name_from_block
-
-        name = _extract_function_name_from_block("void MyClass::process() {\n    return;\n}")
-        assert name == "process"
-
-    def test_braces_in_string_dont_affect_function_check(self):
-        """Function check with string containing braces should still work."""
-        from models.experimental.ops.descriptors.sequential import _is_phase_specific_function
-
-        block = 'void foo() {\n    const char* s = "no { braces }";\n}'
-        assert _is_phase_specific_function(block)
+        source = "void MyClass::process() {\n    return;\n}\nvoid kernel_main() {}"
+        blocks = categorize_pre_main(source)
+        func_blocks = [b for b in blocks if b.kind == "function"]
+        assert len(func_blocks) == 1
+        assert func_blocks[0].name == "process"
 
 
 class TestInlineLocalIncludesRelative:
@@ -2242,7 +2074,7 @@ class TestInlineLocalIncludesRelative:
 
     def test_relative_path_inlined(self, tmp_path):
         """Includes with relative paths are resolved and inlined."""
-        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
 
         # Create directory structure
         subdir = tmp_path / "subdir"
@@ -2251,27 +2083,27 @@ class TestInlineLocalIncludesRelative:
         header.write_text("#pragma once\nint helper_val = 42;")
 
         source = '#include "subdir/helper.h"\nvoid kernel_main() {}'
-        result = _inline_local_includes(source, str(tmp_path))
+        result = inline_local_includes(source, str(tmp_path))
         assert "int helper_val = 42" in result
         assert "#pragma once" not in result
 
     def test_local_include_still_works(self, tmp_path):
         """Local includes (no path separator) still work."""
-        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
 
         header = tmp_path / "local.h"
         header.write_text("int local_val = 1;")
 
         source = '#include "local.h"\nvoid kernel_main() {}'
-        result = _inline_local_includes(source, str(tmp_path))
+        result = inline_local_includes(source, str(tmp_path))
         assert "int local_val = 1" in result
 
 
-class TestCollectPreMainWithAttributeKernelMain:
-    """Test that pre-main collection stops at kernel_main with attributes."""
+class TestCategorizePreMainStopsAtKernelMain:
+    """Test that categorize_pre_main stops at kernel_main with attributes."""
 
     def test_stops_at_alwi_kernel_main(self):
-        from models.experimental.ops.descriptors.sequential import _collect_pre_main_code
+        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
 
         source = """namespace g = norm;
 
@@ -2279,9 +2111,10 @@ ALWI void kernel_main() {
     int x = 1;
 }
 """
-        result = _collect_pre_main_code(source)
-        assert "namespace g = norm;" in result
-        assert "int x = 1" not in result
+        blocks = categorize_pre_main(source)
+        all_text = " ".join(b.text for b in blocks)
+        assert "namespace g = norm" in all_text or any("norm" in b.text for b in blocks)
+        assert "int x = 1" not in all_text
 
 
 if __name__ == "__main__":

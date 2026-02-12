@@ -35,6 +35,7 @@ import os
 import ttnn
 
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+from models.experimental.ops.descriptors import cpp_parser
 
 
 # =============================================================================
@@ -132,26 +133,6 @@ def extract_cb_names_from_kernel(kernel_desc: "ttnn.KernelDescriptor") -> Dict[s
 # =============================================================================
 
 
-def _classify_kernel(kernel_desc: "ttnn.KernelDescriptor") -> str:
-    """Classify a kernel as reader, writer, or compute based on its config.
-
-    DEPRECATED: Use _get_risc_type() + _get_role_key() instead.
-    """
-    config = kernel_desc.config
-    if isinstance(config, ttnn.ComputeConfigDescriptor):
-        return "compute"
-    elif isinstance(config, ttnn.ReaderConfigDescriptor):
-        return "reader"
-    elif isinstance(config, ttnn.WriterConfigDescriptor):
-        return "writer"
-    elif isinstance(config, ttnn.DataMovementConfigDescriptor):
-        if config.processor == ttnn.DataMovementProcessor.RISCV_0:
-            return "reader"
-        else:
-            return "writer"
-    return "unknown"
-
-
 def _get_risc_type(kernel_desc: "ttnn.KernelDescriptor") -> str:
     """Return the RISC processor type: 'riscv_0', 'riscv_1', or 'compute'."""
     config = kernel_desc.config
@@ -206,501 +187,6 @@ def _read_kernel_source(kernel_desc: "ttnn.KernelDescriptor") -> Tuple[str, Opti
     return "", None
 
 
-def _inline_local_includes(source: str, kernel_dir: Optional[str]) -> str:
-    """Inline local includes (same-directory headers) into source.
-
-    For generated SOURCE_CODE kernels, local includes won't resolve because
-    the compiler doesn't know the original directory.  We inline them directly
-    into the source.
-
-    Supports both local-only includes (no path separator) and relative path
-    includes (e.g. ``"subdir/header.h"``), resolving them relative to
-    *kernel_dir*.
-    """
-    if kernel_dir is None:
-        return source
-
-    lines = source.split("\n")
-    result = []
-    inlined: Set[str] = set()
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith('#include "'):
-            match = re.match(r'#include\s+"([^"]+)"', stripped)
-            if match:
-                inc_path = match.group(1)
-                if inc_path not in inlined:
-                    full_inc = os.path.normpath(os.path.join(kernel_dir, inc_path))
-                    if os.path.exists(full_inc):
-                        with open(full_inc, "r") as f:
-                            inc_content = f.read()
-                        inc_lines = inc_content.split("\n")
-                        for il in inc_lines:
-                            ils = il.strip()
-                            if ils.startswith("#pragma once"):
-                                continue
-                            # Skip nested local includes (single-level inlining)
-                            if ils.startswith('#include "'):
-                                nested_match = re.match(r'#include\s+"([^"]+)"', ils)
-                                if nested_match:
-                                    nested = nested_match.group(1)
-                                    nested_full = os.path.normpath(os.path.join(os.path.dirname(full_inc), nested))
-                                    if os.path.exists(nested_full):
-                                        continue
-                            result.append(il)
-                        inlined.add(inc_path)
-                        continue
-        result.append(line)
-
-    return "\n".join(result)
-
-
-# Defines that are resolved per-phase in source code (not passed to compiler)
-_SOURCE_LEVEL_DEFINES = {"RMSNORM", "FUSE_PRE_ADD", "FUSED_PRE_ADD", "FUSE_GAMMA", "FUSE_BETA"}
-
-
-def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
-    """Resolve preprocessor #ifdef/#ifndef/#if defined/#elif directives in source code.
-
-    Only resolves directives involving known source-level defines (RMSNORM,
-    FUSE_PRE_ADD, FUSED_PRE_ADD, FUSE_GAMMA, FUSE_BETA). Other directives
-    are left untouched.
-
-    Supports:
-      - ``#ifdef NAME``, ``#ifndef NAME``
-      - ``#if defined(NAME)`` / ``#if defined NAME``
-      - ``#if !defined(NAME)`` / ``#if !defined NAME``
-      - ``#if defined A || defined B``, ``#if defined A && !defined B``
-      - ``#if 0``, ``#if 1`` (unconditional)
-      - ``#elif`` with any of the above
-      - Line continuation with backslash (``\\``)
-      - ``#else``, ``#endif``
-
-    Stack entries are (current_branch_included, known, any_branch_taken) tuples.
-    ``any_branch_taken`` tracks whether any prior branch in a #if/#elif/#else
-    chain was included, so that #elif and #else can skip when a prior branch
-    was already selected.
-    """
-    # Join backslash-continued lines before processing
-    source = _join_continued_lines(source)
-    lines = source.split("\n")
-    result = []
-    # Stack of (current_included, known_directive, any_prior_branch_taken)
-    stack: List[Tuple[bool, bool, bool]] = []
-
-    for line in lines:
-        stripped = line.strip()
-        directive_handled = False
-
-        if stripped.startswith("#if ") and not stripped.startswith("#ifdef") and not stripped.startswith("#ifndef"):
-            # Handles: #if defined(...), #if !defined(...), #if 0, #if 1
-            known, result_val = _eval_if_directive(stripped, active_defines)
-            if known:
-                stack.append((result_val, True, result_val))
-                directive_handled = True
-            else:
-                stack.append((True, False, False))
-
-        elif stripped.startswith("#ifdef "):
-            name = stripped[7:].strip()
-            if name in _SOURCE_LEVEL_DEFINES:
-                result_val = name in active_defines
-                stack.append((result_val, True, result_val))
-                directive_handled = True
-            else:
-                stack.append((True, False, False))
-
-        elif stripped.startswith("#ifndef "):
-            name = stripped[8:].strip()
-            if name in _SOURCE_LEVEL_DEFINES:
-                result_val = name not in active_defines
-                stack.append((result_val, True, result_val))
-                directive_handled = True
-            else:
-                stack.append((True, False, False))
-
-        elif stripped.startswith("#elif"):
-            if stack and stack[-1][1]:
-                _, known, any_taken = stack[-1]
-                if any_taken:
-                    stack[-1] = (False, known, True)
-                else:
-                    known_elif, result_val = _eval_if_directive(stripped, active_defines)
-                    if known_elif:
-                        stack[-1] = (result_val, known, result_val)
-                    else:
-                        stack[-1] = (True, known, True)
-                directive_handled = True
-
-        elif stripped == "#else" or stripped.startswith("#else ") or stripped.startswith("#else\t"):
-            if stack and stack[-1][1]:
-                _, known, any_taken = stack[-1]
-                stack[-1] = (not any_taken, known, True)
-                directive_handled = True
-
-        elif (
-            stripped == "#endif"
-            or stripped.startswith("#endif ")
-            or stripped.startswith("#endif\t")
-            or stripped.startswith("#endif//")
-            or stripped.startswith("#endif /")
-        ):
-            if stack:
-                _, known, _ = stack[-1]
-                stack.pop()
-                if known:
-                    directive_handled = True
-
-        if directive_handled:
-            continue
-
-        include = True
-        for incl, known, _ in stack:
-            if known and not incl:
-                include = False
-                break
-
-        if include:
-            result.append(line)
-
-    return "\n".join(result)
-
-
-def _join_continued_lines(source: str) -> str:
-    """Join lines ending with backslash continuation into single lines."""
-    lines = source.split("\n")
-    joined = []
-    buf = ""
-    for line in lines:
-        if line.rstrip().endswith("\\"):
-            buf += line.rstrip()[:-1]
-        else:
-            if buf:
-                buf += line
-                joined.append(buf)
-                buf = ""
-            else:
-                joined.append(line)
-    if buf:
-        joined.append(buf)
-    return "\n".join(joined)
-
-
-def _eval_ifdef_branch(branch: str, active_defines: set) -> bool:
-    """Evaluate a single AND-branch of a #if defined expression.
-
-    Supports both ``not defined X`` and ``!defined(X)`` / ``!defined X``
-    negation syntax.
-    """
-    clauses = re.findall(r"(!|not\s+)?defined\s*\(?\s*(\w+)\s*\)?", branch)
-    if not clauses:
-        return True
-    result = True
-    for negation, name in clauses:
-        is_defined = name in active_defines
-        if negation:
-            result = result and (not is_defined)
-        else:
-            result = result and is_defined
-    return result
-
-
-def _eval_ifdef_expression(directive: str, active_defines: set) -> bool:
-    """Evaluate a #if defined expression with || and && support.
-
-    Splits on || first (lower precedence), then evaluates each branch
-    with AND semantics. E.g. ``#if defined FUSE_GAMMA || defined FUSE_BETA``
-    returns True if either is defined.
-    """
-    or_branches = re.split(r"\|\|", directive)
-    for branch in or_branches:
-        if _eval_ifdef_branch(branch.strip(), active_defines):
-            return True
-    return False
-
-
-def _eval_if_directive(stripped: str, active_defines: set) -> Tuple[bool, bool]:
-    """Evaluate a ``#if`` or ``#elif`` directive.
-
-    Returns (known, result) where *known* is True if the directive was
-    fully resolved, and *result* is the boolean evaluation.
-
-    Handles:
-      - ``#if 0`` / ``#if 1``
-      - ``#if defined(X)`` / ``#if !defined(X)``
-      - ``#elif defined(X) || !defined(Y)``
-      - Mixed expressions involving known source-level defines
-    """
-    # Strip the #if or #elif prefix
-    expr = re.sub(r"^#(?:el)?if\s+", "", stripped).strip()
-
-    # Unconditional: #if 0 / #if 1
-    if expr == "0":
-        return True, False
-    if expr == "1":
-        return True, True
-
-    # Check if any source-level defines are referenced
-    names_found = re.findall(r"defined\s*\(?\s*(\w+)\s*\)?", expr)
-    involved = [n for n in names_found if n in _SOURCE_LEVEL_DEFINES]
-    if not involved:
-        return False, True  # Unknown — conservatively include
-
-    return True, _eval_ifdef_expression(expr, active_defines)
-
-
-def _strip_strings_and_comments(line: str) -> str:
-    """Remove string literals, char literals, and comments from a C++ line.
-
-    Replaces their content with spaces so that brace counting and regex
-    matching operate only on actual code.  Handles:
-      - Double-quoted strings with escape sequences: ``"hello \\"world\\""``
-      - Single-quoted char literals: ``'}'``, ``'\\n'``
-      - C-style inline comments: ``/* ... */``
-      - C++ line comments: ``// ...``
-      - Raw string literals: ``R"delim(...)delim"`` (simplified)
-    """
-    result = []
-    i = 0
-    n = len(line)
-    while i < n:
-        c = line[i]
-        # Raw string literal: R"delim(...)delim"
-        if c == "R" and i + 1 < n and line[i + 1] == '"':
-            end_paren = line.find("(", i + 2)
-            if end_paren != -1:
-                delim = line[i + 2 : end_paren]
-                end_marker = f'){delim}"'
-                end_pos = line.find(end_marker, end_paren + 1)
-                if end_pos != -1:
-                    i = end_pos + len(end_marker)
-                    result.append(" ")
-                    continue
-            # Not a valid raw string — treat R as normal char
-            result.append(c)
-            i += 1
-        elif c == '"':
-            i += 1
-            while i < n:
-                if line[i] == "\\":
-                    i += 2
-                elif line[i] == '"':
-                    i += 1
-                    break
-                else:
-                    i += 1
-            result.append(" ")
-        elif c == "'":
-            i += 1
-            while i < n:
-                if line[i] == "\\":
-                    i += 2
-                elif line[i] == "'":
-                    i += 1
-                    break
-                else:
-                    i += 1
-            result.append(" ")
-        elif c == "/" and i + 1 < n and line[i + 1] == "/":
-            break  # Rest of line is comment
-        elif c == "/" and i + 1 < n and line[i + 1] == "*":
-            end = line.find("*/", i + 2)
-            if end != -1:
-                i = end + 2
-                result.append(" ")
-            else:
-                break  # Unclosed block comment spans to end of line
-        else:
-            result.append(c)
-            i += 1
-    return "".join(result)
-
-
-def _count_braces(line: str) -> int:
-    """Count net braces (open - close) in a C++ line, ignoring strings/comments."""
-    stripped = _strip_strings_and_comments(line)
-    return stripped.count("{") - stripped.count("}")
-
-
-# Regex for detecting kernel_main declarations, handling attributes (ALWI,
-# FORCE_INLINE, __attribute__), return types, and whitespace variants.
-_KERNEL_MAIN_RE = re.compile(
-    r"(?:ALWI|FORCE_INLINE|__attribute__\s*\(\(.*?\)\))?\s*" r"(?:void|int)\s+" r"kernel_main\s*\("
-)
-
-
-def _is_kernel_main_line(line: str) -> bool:
-    """Check if a source line contains a kernel_main declaration."""
-    stripped = line.strip()
-    if "KERNEL_MAIN" in stripped:
-        return True
-    return bool(_KERNEL_MAIN_RE.search(stripped))
-
-
-def _extract_kernel_body_for_fusion(source: str) -> str:
-    """Extract the body of kernel_main() for fusion.
-
-    Uses string-aware brace counting to handle braces inside string
-    literals, character literals, and comments.
-    """
-    lines = source.split("\n")
-    in_kernel_main = False
-    brace_depth = 0
-    body_lines = []
-
-    for line in lines:
-        stripped = line.strip()
-
-        if not in_kernel_main and _is_kernel_main_line(line):
-            in_kernel_main = True
-            brace_depth += _count_braces(stripped)
-            continue
-
-        if in_kernel_main:
-            delta = _count_braces(stripped)
-            new_brace_depth = brace_depth + delta
-
-            if new_brace_depth > 0 or (brace_depth > 0 and new_brace_depth > 0):
-                body_lines.append(line)
-            elif brace_depth > 0 and new_brace_depth == 0:
-                break
-
-            brace_depth = new_brace_depth
-            if brace_depth == 0:
-                break
-
-    return "\n".join(body_lines)
-
-
-def _collect_includes(sources: List[str]) -> List[str]:
-    """Collect unique #include lines from multiple source strings."""
-    includes = set()
-    for source in sources:
-        for line in source.split("\n"):
-            stripped = line.strip()
-            if stripped.startswith("#include"):
-                includes.add(stripped)
-    return sorted(includes)
-
-
-def _collect_defines(sources: List[str]) -> List[str]:
-    """Collect unique #define lines from multiple source strings (before kernel_main)."""
-    defines = []
-    seen = set()
-    for source in sources:
-        for line in source.split("\n"):
-            stripped = line.strip()
-            if _is_kernel_main_line(line):
-                break
-            if stripped.startswith("#define") and stripped not in seen:
-                defines.append(line)
-                seen.add(stripped)
-    return defines
-
-
-def _collect_pre_main_code(source: str) -> str:
-    """Extract code before kernel_main (namespaces, helpers, globals).
-
-    Strips all preprocessor directives (``#include``, ``#define``,
-    ``#pragma``, etc.), single-line comments (``//``), and block
-    comments (``/* ... */``).  Block comment stripping is important
-    for safe dedup across phases — without it, line-by-line dedup
-    can break a block comment by deduplicating the opening ``/*``
-    while keeping unique body lines (e.g. ``* @brief``), leaving
-    orphaned Doxygen lines as invalid C++.
-
-    Preprocessor directives are collected separately by
-    ``_collect_includes`` and ``_collect_defines``; any remaining
-    directives (``#pragma once``, resolved ``#if`` remnants) are
-    not needed in the generated fused kernel source.
-    """
-    lines = source.split("\n")
-    pre_main = []
-    in_block_comment = False
-    for line in lines:
-        if _is_kernel_main_line(line):
-            break
-        stripped = line.strip()
-
-        # Track block comments (/* ... */)
-        if in_block_comment:
-            if "*/" in stripped:
-                in_block_comment = False
-            continue
-        if stripped.startswith("/*"):
-            if "*/" not in stripped:
-                in_block_comment = True
-            continue
-
-        if stripped and not stripped.startswith("#") and not stripped.startswith("//"):
-            pre_main.append(line)
-    return "\n".join(pre_main)
-
-
-# Regex pattern matching C/C++ global/static variable declarations.
-# Captures variable name from declarations like:
-#   static constexpr uint32_t foo = 0;
-#   volatile float* bar;
-#   const MyType& baz = init;
-#   thread_local int qux;
-#   auto val = expr;
-# Excludes: functions (parens without prior =), namespaces, typedefs, using.
-_GLOBAL_VAR_QUALIFIERS = r"(?:(?:static|volatile|constexpr|const|thread_local|extern|inline)\s+)*"
-_GLOBAL_VAR_TYPE = (
-    r"(?:"
-    r"(?:unsigned\s+|signed\s+)?"  # optional sign
-    r"(?:long\s+long|long|short|int|char)\b"  # multi-word types
-    r"|u?int(?:8|16|32|64)_t\b"  # fixed-width types
-    r"|float\b|double\b|bool\b|uint\b|size_t\b|auto\b"  # common types
-    r"|tt_l1_ptr\s+\w+"  # TT-specific pointer type
-    r"|\w+(?:::\w+)*"  # user-defined types (possibly scoped)
-    r")"
-)
-_GLOBAL_VAR_RE = re.compile(
-    r"^"
-    + _GLOBAL_VAR_QUALIFIERS
-    + _GLOBAL_VAR_TYPE
-    + r"(?:\s*[*&]+)?"  # optional pointer/reference
-    + r"\s+(\w+)"  # variable name (capture group 1)
-    + r"\s*(?:=|;|\[)"  # followed by = or ; or [
-)
-
-
-def _extract_global_var_names(pre_main: str) -> List[str]:
-    """Find global/static variable names in pre-main code.
-
-    Returns variable names that should be prefixed per phase to avoid
-    collisions in fused kernels. Namespace aliases, functions,
-    and type definitions are excluded.
-    """
-    names = []
-    for line in pre_main.split("\n"):
-        stripped = line.strip()
-        # Skip namespace aliases, function definitions, typedefs
-        if any(
-            kw in stripped
-            for kw in [
-                "namespace ",
-                "ALWI ",
-                "FORCE_INLINE ",
-                "typedef ",
-                "using ",
-                "void ",
-                "template",
-            ]
-        ):
-            continue
-        # Skip lines that look like function declarations (contain parens
-        # without a prior =, i.e. not variable initialization with constructor)
-        if "(" in stripped and "=" not in stripped.split("(")[0]:
-            continue
-        m = _GLOBAL_VAR_RE.match(stripped)
-        if m:
-            names.append(m.group(1))
-    return names
-
-
 def _prefix_phase_names_in_source(source: str, phase_idx: int, names: List[str]) -> str:
     """Prefix phase-specific names (functions + globals) in source code.
 
@@ -715,299 +201,15 @@ def _prefix_phase_names_in_source(source: str, phase_idx: int, names: List[str])
     if not names:
         return source
     for name in names:
-        source = _replace_in_code_only(source, name, f"phase{phase_idx}_{name}")
+        source = cpp_parser.replace_in_code_only(source, name, f"phase{phase_idx}_{name}")
     return source
-
-
-def _replace_in_code_only(source: str, old_name: str, new_name: str) -> str:
-    """Replace word-boundary occurrences of *old_name* only in code context.
-
-    Skips replacements inside string literals (``"..."``, ``'...'``),
-    C++ line comments (``// ...``), and C-style block comments (``/* ... */``).
-    Processes line-by-line for simplicity and correctness.
-    """
-    pattern = re.compile(rf"\b{re.escape(old_name)}\b")
-    lines = source.split("\n")
-    result = []
-    in_block_comment = False
-
-    for line in lines:
-        if in_block_comment:
-            if "*/" in line:
-                # End of block comment — only replace in code after */
-                end_idx = line.index("*/") + 2
-                comment_part = line[:end_idx]
-                code_part = line[end_idx:]
-                result.append(comment_part + _replace_in_code_line(pattern, code_part, new_name))
-                in_block_comment = False
-            else:
-                result.append(line)
-            continue
-
-        if "/*" in _strip_strings_and_comments(line):
-            # This shouldn't happen after stripping, but handle edge case
-            pass
-
-        # Check for block comment start (not inside a string)
-        stripped_line = _strip_strings_and_comments(line)
-        if "/*" in stripped_line and "*/" not in stripped_line:
-            # Block comment starts on this line and doesn't end
-            bc_start = line.index("/*")
-            code_part = line[:bc_start]
-            comment_part = line[bc_start:]
-            result.append(_replace_in_code_line(pattern, code_part, new_name) + comment_part)
-            in_block_comment = True
-            continue
-
-        result.append(_replace_in_code_line(pattern, line, new_name))
-
-    return "\n".join(result)
-
-
-def _replace_in_code_line(pattern: re.Pattern, line: str, new_name: str) -> str:
-    """Replace pattern matches in a single line, skipping strings and comments."""
-    # Build a map of "code" vs "non-code" segments
-    segments = []
-    i = 0
-    n = len(line)
-
-    while i < n:
-        c = line[i]
-        # Raw string literal
-        if c == "R" and i + 1 < n and line[i + 1] == '"':
-            end_paren = line.find("(", i + 2)
-            if end_paren != -1:
-                delim = line[i + 2 : end_paren]
-                end_marker = f'){delim}"'
-                end_pos = line.find(end_marker, end_paren + 1)
-                if end_pos != -1:
-                    segments.append(("skip", line[i : end_pos + len(end_marker)]))
-                    i = end_pos + len(end_marker)
-                    continue
-            segments.append(("code", c))
-            i += 1
-        elif c == '"':
-            start = i
-            i += 1
-            while i < n:
-                if line[i] == "\\":
-                    i += 2
-                elif line[i] == '"':
-                    i += 1
-                    break
-                else:
-                    i += 1
-            segments.append(("skip", line[start:i]))
-        elif c == "'":
-            start = i
-            i += 1
-            while i < n:
-                if line[i] == "\\":
-                    i += 2
-                elif line[i] == "'":
-                    i += 1
-                    break
-                else:
-                    i += 1
-            segments.append(("skip", line[start:i]))
-        elif c == "/" and i + 1 < n and line[i + 1] == "/":
-            segments.append(("skip", line[i:]))
-            break
-        elif c == "/" and i + 1 < n and line[i + 1] == "*":
-            end = line.find("*/", i + 2)
-            if end != -1:
-                segments.append(("skip", line[i : end + 2]))
-                i = end + 2
-            else:
-                segments.append(("skip", line[i:]))
-                break
-        else:
-            # Accumulate code characters
-            start = i
-            while i < n:
-                if line[i] in ('"', "'") or (line[i] == "/" and i + 1 < n and line[i + 1] in ("/", "*")):
-                    break
-                if line[i] == "R" and i + 1 < n and line[i + 1] == '"':
-                    break
-                i += 1
-            segments.append(("code", line[start:i]))
-
-    # Apply replacements only in code segments
-    result = []
-    for kind, text in segments:
-        if kind == "code":
-            result.append(pattern.sub(new_name, text))
-        else:
-            result.append(text)
-    return "".join(result)
-
-
-def _split_into_top_level_blocks(pre_main: str) -> List[str]:
-    """Split pre-main code into top-level C++ declarations.
-
-    Uses string-aware brace counting to keep each top-level construct
-    (function, namespace, struct, class) as a single unit.  Single-line
-    declarations (namespace aliases, ``using``, ``typedef``) are individual
-    blocks.
-
-    Block boundaries are detected when brace depth returns to 0 at a
-    statement boundary (line ending with ``;``, ``}``, or ``};``), or
-    when an empty line appears between depth-0 constructs.
-    """
-    blocks: List[str] = []
-    current_lines: List[str] = []
-    brace_depth = 0
-
-    for line in pre_main.split("\n"):
-        stripped = line.strip()
-
-        # Empty lines separate top-level blocks at depth 0
-        if not stripped:
-            if current_lines and brace_depth == 0:
-                blocks.append("\n".join(current_lines))
-                current_lines = []
-            continue
-
-        current_lines.append(line)
-        brace_depth += _count_braces(stripped)
-        brace_depth = max(0, brace_depth)  # Defensive
-
-        # Emit block when brace depth returns to 0 at a statement boundary.
-        # Use string-stripped version for checking line ending.
-        if brace_depth == 0 and current_lines:
-            check = _strip_strings_and_comments(stripped).rstrip()
-            if check.endswith(";") or check.endswith("}") or check.endswith("};"):
-                blocks.append("\n".join(current_lines))
-                current_lines = []
-
-    # Flush any remaining lines
-    if current_lines:
-        blocks.append("\n".join(current_lines))
-
-    return blocks
-
-
-def _normalize_block(block: str) -> str:
-    """Normalize a code block for deduplication comparison.
-
-    Strips leading/trailing whitespace on each line, collapses
-    multiple spaces to single space, and removes empty lines.
-    """
-    lines = []
-    for line in block.split("\n"):
-        normalized = " ".join(line.split())
-        if normalized:
-            lines.append(normalized)
-    return "\n".join(lines)
-
-
-def _extract_block_signature(block: str) -> str:
-    """Extract the declaration signature of a top-level block.
-
-    For braced blocks (functions, namespaces, structs): returns the
-    declaration line(s) before the opening ``{``, normalized.
-    For single-line declarations: returns the full line, normalized.
-
-    Used for signature-based deduplication — blocks with the same
-    signature are considered the same declaration (first wins).
-    """
-    lines = block.strip().split("\n")
-    sig_parts: List[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if "{" in stripped:
-            before = stripped.split("{")[0].strip()
-            if before:
-                sig_parts.append(before)
-            break
-        sig_parts.append(stripped)
-
-    if not sig_parts:
-        return _normalize_block(block)
-
-    sig = " ".join(sig_parts)
-    return " ".join(sig.split())
-
-
-def _is_global_var_block(block: str) -> bool:
-    """Check if a top-level block is a global/static variable declaration."""
-    stripped = block.strip()
-    # Global variables are single-line declarations (no multi-line bodies)
-    if "\n" in stripped:
-        return False
-    # Exclude namespace aliases, function definitions, typedefs, etc.
-    if any(
-        kw in stripped
-        for kw in [
-            "namespace ",
-            "ALWI ",
-            "FORCE_INLINE ",
-            "typedef ",
-            "using ",
-            "void ",
-            "template",
-        ]
-    ):
-        return False
-    if "(" in stripped and "=" not in stripped.split("(")[0]:
-        return False
-    return bool(_GLOBAL_VAR_RE.match(stripped))
-
-
-def _is_phase_specific_function(block: str) -> bool:
-    """Check if a top-level block is a free function definition.
-
-    Returns True for file-scope function definitions (ALWI, FORCE_INLINE,
-    static, constexpr, inline, or plain return-type functions), including
-    operator overloads.
-    Returns False for namespace blocks, struct/class/enum definitions,
-    single-line declarations, and anything without braces.
-    """
-    stripped = block.strip()
-    # Must have braces (function body)
-    code = _strip_strings_and_comments(stripped)
-    if "{" not in code or "}" not in code:
-        return False
-    first_line = stripped.split("\n")[0].strip()
-    # Exclude namespace, struct, class, enum blocks
-    for kw in ("namespace ", "struct ", "class ", "enum ", "typedef "):
-        if first_line.startswith(kw):
-            return False
-    # Look for function pattern: identifier( or operator+( etc.
-    sig = _extract_block_signature(block)
-    return bool(re.search(r"(?:operator\s*\S+|\w+)\s*\(", sig))
-
-
-def _extract_function_name_from_block(block: str) -> Optional[str]:
-    """Extract the function name from a function definition block.
-
-    Finds the identifier immediately before the opening parenthesis in the
-    block's signature.  Handles operator overloads (``operator+``,
-    ``operator[]``, etc.) and scope-qualified names (``Ns::func``).
-    Returns None if no function name can be identified.
-    """
-    sig = _extract_block_signature(block)
-    # Try operator overload first
-    m = re.search(r"(operator\s*\S+)\s*\(", sig)
-    if m:
-        return m.group(1).replace(" ", "")
-    # Regular function name (possibly scope-qualified: Ns::func)
-    m = re.search(r"(\w+(?:::\w+)*)\s*\(", sig)
-    if m:
-        # Return just the final name (not the scope qualifier)
-        name = m.group(1)
-        if "::" in name:
-            return name.split("::")[-1]
-        return name
-    return None
 
 
 def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> Tuple[str, Dict[int, List[str]]]:
     """Merge pre-main code from all phases with per-phase name isolation.
 
-    Extracts pre-main from each phase, splits into top-level C++ blocks
-    (brace-balanced), and classifies each block as *shared* or
-    *phase-specific*:
+    Uses tree-sitter (via cpp_parser) to categorize top-level blocks
+    before kernel_main into *shared* or *phase-specific*:
 
     **Shared** (deduped across phases):
       - Namespace blocks: dedup by signature (first occurrence wins).
@@ -1028,7 +230,7 @@ def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> T
 
     Returns:
         A tuple of (pre_main_code, phase_names) where phase_names is a
-        dict mapping phase_idx → list of original names that were prefixed.
+        dict mapping phase_idx -> list of original names that were prefixed.
         Callers must apply the same prefixing to each phase's kernel body.
     """
     if not sources_with_indices:
@@ -1040,65 +242,52 @@ def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> T
     phase_names: Dict[int, List[str]] = {}
 
     for phase_idx, source in sources_with_indices:
-        pre_main = _collect_pre_main_code(source)
-        blocks = _split_into_top_level_blocks(pre_main)
+        blocks = cpp_parser.categorize_pre_main(source)
 
         for block in blocks:
-            normalized = _normalize_block(block)
+            normalized = cpp_parser.normalize_block(block.text)
             if not normalized:
                 continue
 
             # --- Phase-specific: global/static variables ---
-            if _is_global_var_block(block):
-                names = _extract_global_var_names(block)
-                prefixed = block
-                for name in names:
-                    prefixed = re.sub(
-                        rf"\b{re.escape(name)}\b",
-                        f"phase{phase_idx}_{name}",
-                        prefixed,
-                    )
-                    phase_names.setdefault(phase_idx, []).append(name)
-                prefixed_norm = _normalize_block(prefixed)
+            if block.kind == "variable" and block.name:
+                prefixed = re.sub(
+                    rf"\b{re.escape(block.name)}\b",
+                    f"phase{phase_idx}_{block.name}",
+                    block.text,
+                )
+                phase_names.setdefault(phase_idx, []).append(block.name)
+                prefixed_norm = cpp_parser.normalize_block(prefixed)
                 if prefixed_norm not in seen_content:
                     seen_content.add(prefixed_norm)
                     all_blocks.append(prefixed)
                 continue
 
             # --- Phase-specific: free function definitions ---
-            if _is_phase_specific_function(block):
-                func_name = _extract_function_name_from_block(block)
-                if func_name:
-                    prefixed = re.sub(
-                        rf"\b{re.escape(func_name)}\b",
-                        f"phase{phase_idx}_{func_name}",
-                        block,
-                    )
-                    phase_names.setdefault(phase_idx, []).append(func_name)
-                    prefixed_norm = _normalize_block(prefixed)
-                    if prefixed_norm not in seen_content:
-                        seen_content.add(prefixed_norm)
-                        all_blocks.append(prefixed)
-                else:
-                    # Fallback: can't extract name, dedup by signature
-                    sig = _extract_block_signature(block)
-                    if sig not in seen_signatures:
-                        seen_signatures.add(sig)
-                        all_blocks.append(block)
+            if block.kind == "function" and block.name:
+                prefixed = re.sub(
+                    rf"\b{re.escape(block.name)}\b",
+                    f"phase{phase_idx}_{block.name}",
+                    block.text,
+                )
+                phase_names.setdefault(phase_idx, []).append(block.name)
+                prefixed_norm = cpp_parser.normalize_block(prefixed)
+                if prefixed_norm not in seen_content:
+                    seen_content.add(prefixed_norm)
+                    all_blocks.append(prefixed)
                 continue
 
             # --- Shared: namespace blocks ---
-            has_braces = "{" in normalized and "}" in normalized
-            if has_braces:
-                sig = _extract_block_signature(block)
+            if block.kind == "namespace":
+                sig = block.text.split("{")[0].strip() if "{" in block.text else normalized
                 if sig not in seen_signatures:
                     seen_signatures.add(sig)
-                    all_blocks.append(block)
+                    all_blocks.append(block.text)
             else:
-                # --- Shared: single-line declarations ---
+                # --- Shared: namespace_alias, using, struct, template, other ---
                 if normalized not in seen_content:
                     seen_content.add(normalized)
-                    all_blocks.append(block)
+                    all_blocks.append(block.text)
 
     return "\n\n".join(all_blocks), phase_names
 
@@ -1348,38 +537,25 @@ def _generate_rebind_code(
     """
     if not rebinds:
         return []
+    shift = " >> 4" if for_compute else ""
     lines = [f"    // Rebind CB addresses for phase {phase_idx}"]
     if for_compute:
         # TRISC1 (math) doesn't have cb_interface linked in — skip it
         lines.append("#ifndef TRISC_MATH")
     for cb_idx, _, _ in rebinds:
         prefix = f"phase{phase_idx}_cb{cb_idx}"
-        if for_compute:
-            lines.append(f"    {{")
-            lines.append(
-                f'        constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr") >> 4;'
-            )
-            lines.append(
-                f'        constexpr uint32_t new_size = get_named_compile_time_arg_val("{prefix}_rebind_size") >> 4;'
-            )
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = new_addr;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = new_addr;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_size = new_size;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_limit = new_addr + new_size;")
-            lines.append(f"    }}")
-        else:
-            lines.append(f"    {{")
-            lines.append(
-                f'        constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr");'
-            )
-            lines.append(
-                f'        constexpr uint32_t new_size = get_named_compile_time_arg_val("{prefix}_rebind_size");'
-            )
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = new_addr;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = new_addr;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_size = new_size;")
-            lines.append(f"        get_local_cb_interface({cb_idx}).fifo_limit = new_addr + new_size;")
-            lines.append(f"    }}")
+        lines.append(f"    {{")
+        lines.append(
+            f'        constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr"){shift};'
+        )
+        lines.append(
+            f'        constexpr uint32_t new_size = get_named_compile_time_arg_val("{prefix}_rebind_size"){shift};'
+        )
+        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = new_addr;")
+        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = new_addr;")
+        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_size = new_size;")
+        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_limit = new_addr + new_size;")
+        lines.append(f"    }}")
     if for_compute:
         lines.append("#endif")
     return lines
@@ -1430,17 +606,17 @@ def _generate_fused_riscv0_source(
         source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
-        source = _inline_local_includes(source, kernel_dir)
+        source = cpp_parser.inline_local_includes(source, kernel_dir)
         phase_defs = {name for name, _ in kernel.defines} if hasattr(kernel, "defines") else set()
-        resolved = _resolve_ifdef_directives(source, phase_defs)
+        resolved = cpp_parser.resolve_ifdef_directives(source, phase_defs)
         reader_sources.append((i, resolved))
 
     if not reader_sources:
         return None
 
     all_sources = [s for _, s in reader_sources]
-    includes = _collect_includes(all_sources)
-    defines = _collect_defines(all_sources)
+    includes = cpp_parser.collect_includes(all_sources)
+    defines = cpp_parser.collect_defines(all_sources)
     # Merge pre-main code from all phases with per-phase name isolation.
     pre_main, phase_names = _collect_all_pre_main_code(reader_sources)
 
@@ -1538,7 +714,7 @@ def _generate_fused_riscv0_source(
 
     # Generate phase functions
     for phase_idx, resolved_source in reader_sources:
-        body = _extract_kernel_body_for_fusion(resolved_source)
+        body = cpp_parser.extract_kernel_body(resolved_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
         pnames = phase_names.get(phase_idx, [])
         transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
@@ -1642,17 +818,17 @@ def _generate_fused_riscv1_source(
         source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
-        source = _inline_local_includes(source, kernel_dir)
+        source = cpp_parser.inline_local_includes(source, kernel_dir)
         phase_defs = {name for name, _ in kernel.defines} if hasattr(kernel, "defines") else set()
-        resolved = _resolve_ifdef_directives(source, phase_defs)
+        resolved = cpp_parser.resolve_ifdef_directives(source, phase_defs)
         writer_sources.append((i, resolved))
 
     if not writer_sources:
         return None
 
     all_sources = [s for _, s in writer_sources]
-    includes = _collect_includes(all_sources)
-    defines = _collect_defines(all_sources)
+    includes = cpp_parser.collect_includes(all_sources)
+    defines = cpp_parser.collect_defines(all_sources)
     pre_main, phase_names = _collect_all_pre_main_code(writer_sources)
 
     lines = [
@@ -1693,7 +869,7 @@ def _generate_fused_riscv1_source(
 
     # Generate phase functions
     for phase_idx, resolved_source in writer_sources:
-        body = _extract_kernel_body_for_fusion(resolved_source)
+        body = cpp_parser.extract_kernel_body(resolved_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
         pnames = phase_names.get(phase_idx, [])
         transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
@@ -1785,17 +961,17 @@ def _generate_fused_compute_source(
         source, kernel_dir = _read_kernel_source(kernel)
         if not source:
             continue
-        source = _inline_local_includes(source, kernel_dir)
+        source = cpp_parser.inline_local_includes(source, kernel_dir)
         phase_defs = {name for name, _ in kernel.defines}
-        resolved = _resolve_ifdef_directives(source, phase_defs)
+        resolved = cpp_parser.resolve_ifdef_directives(source, phase_defs)
         compute_sources.append((i, resolved))
 
     if not compute_sources:
         return None
 
     all_sources = [s for _, s in compute_sources]
-    includes = _collect_includes(all_sources)
-    defines = _collect_defines(all_sources)
+    includes = cpp_parser.collect_includes(all_sources)
+    defines = cpp_parser.collect_defines(all_sources)
     pre_main, phase_names = _collect_all_pre_main_code(compute_sources)
 
     lines = [
@@ -1859,7 +1035,7 @@ def _generate_fused_compute_source(
 
     # Generate phase functions
     for phase_idx, resolved_source in compute_sources:
-        body = _extract_kernel_body_for_fusion(resolved_source)
+        body = cpp_parser.extract_kernel_body(resolved_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
         pnames = phase_names.get(phase_idx, [])
         transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
@@ -2140,7 +1316,7 @@ def _merge_defines(
                 if name not in seen_common:
                     merged.append((name, value))
                     seen_common.add(name)
-            elif name in _SOURCE_LEVEL_DEFINES:
+            elif name in cpp_parser.SOURCE_LEVEL_DEFINES:
                 continue
             else:
                 if i == 0:
@@ -2522,16 +1698,6 @@ class SequentialChainBuilder:
 
         # Compute CB address rebinding info for buffer-backed CBs
         rebind_info = _compute_rebind_info(self.phases)
-
-        # DEBUG: print rebind info
-        if rebind_info:
-            print(f"\n=== REBIND INFO ({len(self.phases)} phases) ===")
-            for phase_idx, rebinds in sorted(rebind_info.items()):
-                if rebinds:
-                    for cb_idx, addr, size in rebinds:
-                        print(f"  Phase {phase_idx}: CB[{cb_idx}] -> addr=0x{addr:x}, size={size}")
-                else:
-                    print(f"  Phase {phase_idx}: no rebinds")
 
         # Create barrier config with GlobalSemaphores on union of all core ranges
         union_core_ranges = _compute_union_core_ranges(self.phases)
