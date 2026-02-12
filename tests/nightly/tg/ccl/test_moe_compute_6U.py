@@ -8,6 +8,7 @@ import pytest
 import random
 import torch
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 
 def validate_per_expert_tokens(
@@ -237,8 +238,11 @@ def validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t
     return e_t_all_passed
 
 
-def validate_matmul(layer_id, experts_per_device, output_tensor):
+def validate_matmul(mesh_device, layer_id, experts_per_device, output_tensor):
     logger.info(f"\n========== Matmul Output Tensor Validation ==========")
+    print(output_tensor.shape)
+    tt_to_torch_outputs = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    torch_output_ref = torch.randn(1, 2, 32, 7168)
     matmul_all_passed = True
 
     MATMUL_PCC_THRESHOLD = 0.988
@@ -255,11 +259,11 @@ def validate_matmul(layer_id, experts_per_device, output_tensor):
         )
         allclose_passed, allclose_val = comp_allclose(torch_layer_output, tt_layer_output)
 
-        if pcc < MATMUL_PCC_THRESHOLD:
+        if pcc_val < MATMUL_PCC_THRESHOLD:
             matmul_all_passed = False
-            logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc:.6f}")
+            logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f}")
         else:
-            logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc:.6f} (Passed)")
+            logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} (Passed)")
 
     return matmul_all_passed
 
@@ -1051,9 +1055,9 @@ def test_moe_compute(
     dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
     dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
 
-    torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
-    torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
-    torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
+    torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)  # 1, 2, 7168, 2048
+    torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)  # 1, 2, 7168, 2048
+    torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)  # 1, 2, 2048, 7168
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w0_w1
@@ -1095,7 +1099,7 @@ def test_moe_compute(
         layout=ttnn.TILE_LAYOUT,
         memory_config=w0_w1_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    )  # 12,1,2,3,7168,128
 
     # ------------------------------------------------------------------------
     # Prepare w2 tensor (padded and reordered)
@@ -1109,7 +1113,7 @@ def test_moe_compute(
         layout=ttnn.TILE_LAYOUT,
         memory_config=w2_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    )  # 12,1,2,5,2240,128
 
     #########################################
     # RUN OP

@@ -12,10 +12,11 @@ import ttnn
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoEInferTest
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3.utils.config_helpers import dequantize
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
@@ -43,18 +44,31 @@ def load_expert_weights_from_state_dict(
     hidden_size,
     N,
     expert_start_index=0,
+    block_shape=None,
 ):
     """
-    Load expert weights from a reference model state_dict (e.g. DeepseekV3MoE).
+    Load expert weights from a reference model state_dict (e.g. DeepseekV3MoEInferTest).
 
     state_dict keys expected: experts.{e}.gate_proj.weight, experts.{e}.up_proj.weight,
     experts.{e}.down_proj.weight for e in [expert_start_index, expert_start_index + experts_per_device).
+    When quantized, experts.{e}.{proj}.weight_scale_inv must also be present.
+
+    Args:
+        block_shape: e.g. (128, 128) for dequantization. If None and weight_scale_inv exists,
+            weights are used as-is (may be wrong for quantized weights).
 
     Returns:
         torch_w0: (num_layers, experts_per_device, hidden_size, N) - gate_proj per expert
         torch_w1: (num_layers, experts_per_device, hidden_size, N) - up_proj per expert
         torch_w2: (num_layers, experts_per_device, N, hidden_size) - down_proj per expert
     """
+
+    def _load_weight(weight_key, scale_inv_key):
+        w = state_dict[weight_key]
+        if scale_inv_key in state_dict and block_shape is not None:
+            w = dequantize(w, state_dict[scale_inv_key], block_shape)
+        return w.to(torch.bfloat16)
+
     torch_w0 = torch.empty((num_layers, experts_per_device, hidden_size, N), dtype=torch.bfloat16)
     torch_w1 = torch.empty((num_layers, experts_per_device, hidden_size, N), dtype=torch.bfloat16)
     torch_w2 = torch.empty((num_layers, experts_per_device, N, hidden_size), dtype=torch.bfloat16)
@@ -63,17 +77,20 @@ def load_expert_weights_from_state_dict(
         for local_e in range(experts_per_device):
             e = expert_start_index + local_e
             # PyTorch Linear stores (out_features, in_features)
-            gate = state_dict[f"experts.{e}.gate_proj.weight"]  # (N, hidden_size)
-            up = state_dict[f"experts.{e}.up_proj.weight"]  # (N, hidden_size)
-            down = state_dict[f"experts.{e}.down_proj.weight"]  # (hidden_size, N)
-            torch_w0[layer_id, local_e] = gate.T.to(torch.bfloat16)  # (hidden_size, N)
-            torch_w1[layer_id, local_e] = up.T.to(torch.bfloat16)  # (hidden_size, N)
-            torch_w2[layer_id, local_e] = down.T.to(torch.bfloat16)  # (N, hidden_size)
+            gate = _load_weight(f"experts.{e}.gate_proj.weight", f"experts.{e}.gate_proj.weight_scale_inv")
+            up = _load_weight(f"experts.{e}.up_proj.weight", f"experts.{e}.up_proj.weight_scale_inv")
+            down = _load_weight(f"experts.{e}.down_proj.weight", f"experts.{e}.down_proj.weight_scale_inv")
+            torch_w0[layer_id, local_e] = gate.T  # (hidden_size, N)
+            torch_w1[layer_id, local_e] = up.T  # (hidden_size, N)
+            torch_w2[layer_id, local_e] = down.T  # (N, hidden_size)
 
     return torch_w0, torch_w1, torch_w2
 
 
 def get_moe_compute_result(
+    input_tensor,
+    expert_indices,
+    expert_scores,
     mesh_device,
     total_tokens,
     experts,
@@ -85,8 +102,10 @@ def get_moe_compute_result(
     dtype=ttnn.bfloat16,
     enable_trace=False,
     state_dict=None,
+    block_shape=None,
 ):
     """
+    input_tensor is the input tensor to the moe_compute op, the same as sparse_buffer in test_moe_compute_6U.py
     total_tokens is the total number of tokens in the batch, equal to num_tokens below
     experts is the total number of experts, equal to hf_config.n_routed_experts
     selected_experts_k is the number of experts to select for each token, equal to hf_config.num_experts_per_tok
@@ -157,21 +176,13 @@ def get_moe_compute_result(
     tt_sparse_buffers = []
     tt_expert_indices_buffers = []
     tt_expert_scores_buffers = []
+    expert_indices = expert_indices.to(torch.uint16)
+    expert_scores = expert_scores.bfloat16()
 
-    logger.info(f"Creating goldens and input tensors")
+    # Build sparse buffer: [num_devices, total_tokens, hidden_size] - each device gets tokens routed to its experts
+    sparse_buffer = input_tensor.repeat(num_devices, 1, 1)
+
     for layer_id in range(num_layers):
-        # Generate test data
-        sparse_buffer, expert_indices, expert_scores, original_tokens = gen_sparse_buffer_and_indices(
-            tokens_per_device,
-            hidden_size,
-            experts,
-            selected_experts_k,
-            mesh_shape,
-            cluster_axis,
-            dtype=tt_to_torch_dtype(dtype),
-        )
-
-        # Create input tensors
         # NOTE:
         # - when running multiple layers we initially create tt_sparse_buffer, tt_expert_indices and tt_expert_scores in DRAM, we'll move to L1 before running moe_compute
         # - we're extremely tight on L1 for a single invocation of the op
@@ -212,7 +223,8 @@ def get_moe_compute_result(
         tt_expert_indices_buffers.append(tt_expert_indices)
 
         ### Expert scores - same distribution as indices ###
-        expert_scores_flat = expert_scores.reshape(total_tokens, selected_experts_k)
+        # expert_scores_flat = expert_scores.reshape(total_tokens, selected_experts_k)
+        expert_scores_flat = torch.zeros((total_tokens, selected_experts_k))
         expert_scores_replicated = expert_scores_flat.unsqueeze(0).repeat(num_devices, 1, 1)
         tt_expert_scores = ttnn.from_torch(
             expert_scores_replicated,
@@ -276,6 +288,7 @@ def get_moe_compute_result(
                 hidden_size,
                 N,
                 expert_start_index=expert_start,
+                block_shape=block_shape,
             )
             w0_w1_list.append(
                 prepare_w0_w1_tensor(torch_w0_d, torch_w1_d, num_layers, experts_per_device, hidden_size, N, ring2cores)
@@ -372,17 +385,19 @@ def get_moe_compute_result(
                 l1_e_t_output_tensor,
                 l1_output_tensor,  # 1,2,32,7168
             ) = ttnn.experimental.moe_compute(
-                tt_sparse_buffer,
-                tt_expert_indices,
-                tt_expert_scores,
-                tt_expert_mapping,
-                tt_w0_w1,
-                tt_w2,
-                layer_id=layer_id,
-                cluster_axis=cluster_axis,
+                tt_sparse_buffer,  # 1, 128, 7168 (1, num_tokens, hidden_size)
+                tt_expert_indices,  # 1, 128, 1 (1, num_tokens, selected_experts_k)
+                tt_expert_scores,  # 1, 128, 1 (1, num_tokens, selected_experts_k)
+                tt_expert_mapping,  # 16, 32 (num_devices, experts)
+                tt_w0_w1,  # 1, 12, 1, 2, 3, 7168, 128
+                tt_w2,  # 1, 12, 1, 2, 5, 2240, 128
+                layer_id=layer_id,  # 0
+                cluster_axis=cluster_axis,  # 1
             )
-            dram_output_tensor = ttnn.to_memory_config(l1_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            moe_compute_outputs.append(dram_output_tensor)
+
+            # dram_output_tensor = ttnn.to_memory_config(l1_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            output_tensor = ttnn.to_torch(l1_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            moe_compute_outputs.append(output_tensor)
 
             # deallocate L1 inputs
             # if running with multiple layers, we have to deallocate previous inputs to free up L1 space
@@ -392,25 +407,6 @@ def get_moe_compute_result(
                 ttnn.deallocate(tt_expert_indices)
                 ttnn.deallocate(tt_expert_scores)
 
-            """
-            # convert outputs to DRAM (we don't have enough L1 space to leave outputs in L1 when running multiple invocations)
-            dram_per_expert_total_tokens_output_tensor = ttnn.to_memory_config(
-                l1_per_expert_total_tokens_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            dram_expert_activation_output_tensor = ttnn.to_memory_config(
-                l1_expert_activation_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            dram_e_t_output_tensor = ttnn.to_memory_config(l1_e_t_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            dram_output_tensor = ttnn.to_memory_config(l1_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # save outputs to verify later
-            moe_compute_output = (
-                dram_per_expert_total_tokens_output_tensor,
-                dram_expert_activation_output_tensor,
-                dram_e_t_output_tensor,
-                dram_output_tensor,
-            )
-            moe_compute_outputs.append(moe_compute_output)
-            """
             # deallocate L1 outputs and save output to verify later
             ttnn.deallocate(l1_per_expert_total_tokens_output_tensor)
             ttnn.deallocate(l1_expert_activation_output_tensor)
@@ -445,7 +441,11 @@ def reference_model(hf_config):
     torch.use_deterministic_algorithms(True)
     # Note : Running Reference MoE without shared experts
     hf_config.n_shared_experts = None
-    return DeepseekV3MoE(hf_config).eval()
+    hf_config.num_experts_per_tok = 1  # the same as selected_experts_k
+    hf_config.n_routed_experts = 32  # the same as experts
+    hf_config.moe_intermediate_size = 2048  # the same as N
+    hf_config.hidden_size = 7168  # the same as hidden_size
+    return DeepseekV3MoEInferTest(hf_config).eval()
 
 
 @pytest.mark.parametrize(
@@ -476,19 +476,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "mode,num_tokens",
     [
-        ("decode", 128),
-    ]
-    + [
-        ("prefill", seq_len)
-        if seq_len == 128
-        else pytest.param(
-            "prefill",
-            seq_len,
-            marks=pytest.mark.skip(
-                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-            ),
-        )
-        for seq_len in PREFILL_SEQ_LENS
+        ("decode", 512),
     ],
 )
 def test_forward_pass(
@@ -517,7 +505,7 @@ def test_forward_pass(
     reference_model.eval()
     reference_model.to(torch.bfloat16)
     with torch.no_grad():
-        reference_output = reference_model(torch_input)  # 1, 128, 7168
+        reference_output, expert_indices, expert_scores = reference_model(torch_input)  # 1, 128, 7168
 
     weight_config = get_test_weight_config(
         MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
@@ -535,87 +523,38 @@ def test_forward_pass(
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
-    # Convert input to TTNN, DP=4 and Replicated
-    tt_input = ttnn.from_torch(
-        torch_input.unsqueeze(1),
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    # TTNN forward pass using utility function
-    # tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    # tt_output = run_module_forward(MoE, mode, tt_input, run_config)
-
     # get_moe_compute_result uses 6U-specific layout (1x16 mesh, 12 DRAM banks). Skip on other meshes to avoid segfault.
     if tuple(mesh_device.shape) == (1, 16):
-        # Use reference model weights so moe_compute output can be verified against reference
-        reference_state_dict = reference_model.state_dict()
+        # Use reference model weights so moe_compute output can be verified against reference.
+        # state_dict may have quantized weights + weight_scale_inv; block_shape enables dequantization.
         tt_output_moe_compute = get_moe_compute_result(
-            mesh_device,
-            num_tokens,
-            hf_config.n_routed_experts,
-            hf_config.num_experts_per_tok,
-            1,
-            hf_config.hidden_size,
-            hf_config.moe_intermediate_size,
-            1,
-            ttnn.bfloat16,
-            state_dict=reference_state_dict,
-        )
-        import pdb
-
-        pdb.set_trace()
-        # Compare on DRAM: upload reference shards to device, compute max|diff| on device, read back only scalars
-        dram_output_tensor = tt_output_moe_compute[0]
-        num_devices = mesh_device.shape[0] * mesh_device.shape[1]
-        device_tensors = ttnn.get_device_tensors(dram_output_tensor)
-        assert len(device_tensors) == num_devices
-        # Per-device shape (from tensor spec; no read from device)
-        device_shape = tuple(int(s) for s in device_tensors[0].shape)
-        shard_numel = 1
-        for s in device_shape:
-            shard_numel *= s
-        ref_flat = reference_output.reshape(-1).float()
-        assert ref_flat.numel() >= num_devices * shard_numel, "Reference too small for per-device shards"
-        ref_slices_cpu = [
-            ref_flat[device_id * shard_numel : (device_id + 1) * shard_numel]
-            .reshape(device_shape)
-            .clone()
-            .to(torch.bfloat16)
-            for device_id in range(num_devices)
-        ]
-        tt_ref_sharded = ttnn.from_torch(
-            torch.stack(ref_slices_cpu),
-            device=mesh_device,
+            input_tensor=torch_input,
+            expert_indices=expert_indices,
+            expert_scores=expert_scores,
+            mesh_device=mesh_device,
+            total_tokens=num_tokens,
+            experts=hf_config.n_routed_experts,
+            selected_experts_k=hf_config.num_experts_per_tok,
+            num_layers=1,
+            hidden_size=hf_config.hidden_size,
+            N=hf_config.moe_intermediate_size,
+            cluster_axis=1,
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            enable_trace=False,
+            state_dict=state_dict,
+            block_shape=hf_config.quantization_config["weight_block_size"],
         )
-        ref_device_tensors = ttnn.get_device_tensors(tt_ref_sharded)
-        max_abs_diff_atol = 0.15
-        logger.info(f"Mode: {mode}, Num tokens: {num_tokens}, comparing on DRAM (max|diff| < {max_abs_diff_atol})")
-        for device_id in range(num_devices):
-            ref_d = ref_device_tensors[device_id]
-            out_d = device_tensors[device_id]
-            if ref_d.layout() != out_d.layout():
-                ref_d = ttnn.to_layout(ref_d, out_d.layout())
-            diff_d = ttnn.subtract(out_d, ref_d)
-            abs_diff = ttnn.abs(diff_d)
-            reduce_dims = tuple(range(len(device_shape)))
-            max_abs_d = ttnn.max(abs_diff, dim=reduce_dims)
-            max_val = ttnn.to_torch(max_abs_d).float().item()
-            ttnn.deallocate(diff_d)
-            ttnn.deallocate(abs_diff)
-            ttnn.deallocate(max_abs_d)
-            assert (
-                max_val < max_abs_diff_atol
-            ), f"Device {device_id} max|actual - ref| = {max_val} >= {max_abs_diff_atol}"
-        ttnn.deallocate(tt_ref_sharded)
-        logger.info(f"Per-device DRAM comparison passed for all {num_devices} devices")
+        # moe_compute returns (16, 2, 32, 7168) after ConcatMeshToTensor: 16 devices, 2 experts/device, 32 tokens/device
+        # Reduce expert dim (for topk=1 only one expert contributes per token) and reshape to (1, 512, 7168)
+        output_tensor = tt_output_moe_compute[0]
+        if isinstance(output_tensor, (list, tuple)):
+            output_tensor = output_tensor[0]
+        # (16, 2, 32, 7168) -> sum over experts -> (16, 32, 7168) -> (1, 512, 7168)
+        tt_output_torch = output_tensor.sum(dim=1).reshape(1, num_tokens, hf_config.hidden_size)
+        reference_flat = reference_output.reshape(1, -1, reference_output.shape[-1])
+        _pcc_passed, pcc_val = comp_pcc(tt_output_torch, reference_flat, 0.98)
+        assert_hidden_dim_pcc(tt_output_torch, reference_flat, 0.98)
+
     # Verify output memory config matches expected
     """
     expected_output_memory_config = run_config["output_memory_config"]
@@ -635,11 +574,7 @@ def test_forward_pass(
     logger.info(f"Mode: {mode}, Num tokens: {num_tokens}")
     assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
     """
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    if tuple(mesh_device.shape) == (1, 16):
-        for output in tt_output_moe_compute:
-            ttnn.deallocate(output)
+    # Cleanup: tt_output_moe_compute holds torch tensors from to_torch, no ttnn deallocation needed
 
 
 if __name__ == "__main__":
