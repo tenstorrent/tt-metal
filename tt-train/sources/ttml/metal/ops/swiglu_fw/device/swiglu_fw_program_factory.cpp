@@ -209,7 +209,7 @@ bool row_of_m_fits_in_l1_check(
     const uint64_t input_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_input
     // W1/W3: double-buffered, W2: triple-buffered (prefetch during Phase B)
     const uint64_t w1_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w1
-    const uint64_t w2_memory = (3U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w2 (triple)
+    const uint64_t w2_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w2 (minimum 2x)
     const uint64_t w3_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w3
 
     // Memory for output CB (L1 acc eliminates cb_y_partial)
@@ -359,19 +359,33 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         hidden_Wt,
         hidden_Wt * 32);
 
-    // W1/W3 CB size: use batched mcast (block_size rows × block_size tiles per batch)
-    // Plus double-buffering: 2 × block_size^2 = 32 tiles for block_size=4
-    const uint32_t w1_w3_cb_tiles = 2U * block_size * block_size;
-
-    // W2 CB size: triple-buffered to allow sender to prefetch W2 during Phase B (SiLU).
-    // The sender finishes Phase A W1/W3 and immediately starts Phase C W2 reads.
-    // Triple-buffering lets the sender stay 3 batches ahead, overlapping with SiLU compute.
-    const uint32_t w2_cb_tiles = 3U * block_size * block_size;
-
     // CB sizing for M-fits-L1 algorithm (full row caching)
     const uint32_t num_tiles_xw1 = ((hidden_Wt + block_size - 1U) / block_size) * block_size;
     const uint32_t num_tiles_xw3 = num_tiles_xw1;
     const uint32_t num_tiles_m = num_tiles_xw1;
+
+    // W1/W3 CB size: double-buffered batched mcast
+    const uint32_t w1_w3_cb_tiles = 2U * block_size * block_size;
+
+    // W2 CB size: dynamically sized to maximize prefetch during Phase B (SiLU).
+    // The sender finishes Phase A W1/W3 and immediately starts Phase C W2 reads.
+    // More buffering = sender can get further ahead during SiLU compute.
+    // We compute remaining L1 after all other CBs and fill it with W2 buffering.
+    const uint32_t w2_batch = block_size * block_size;                // tiles per mcast batch (16)
+    const uint32_t other_cbs_tiles = twice_block_size +               // cb_input
+                                     2U * w1_w3_cb_tiles +            // cb_w1 + cb_w3
+                                     num_tiles_xw1 + num_tiles_xw3 +  // cb_xw1 + cb_xw3
+                                     num_tiles_m +                    // cb_m
+                                     twice_block_size;                // cb_y
+    const uint32_t other_cbs_bytes = other_cbs_tiles * bfloat16_single_tile_size_bytes;
+    const uint32_t available_L1_in_bytes =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t remaining_bytes =
+        (available_L1_in_bytes > other_cbs_bytes) ? (available_L1_in_bytes - other_cbs_bytes) : 0;
+    const uint32_t max_w2_buffers = remaining_bytes / (w2_batch * bfloat16_single_tile_size_bytes);
+    // At least double-buffer (2), cap at 24 (full Phase C for typical shapes)
+    const uint32_t w2_num_buffers = std::max(2U, std::min(max_w2_buffers, 24U));
+    const uint32_t w2_cb_tiles = w2_num_buffers * w2_batch;
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
