@@ -14,18 +14,18 @@ package tt.tt_fabric.proto;
 // VALIDATION RULES - ALL ENCODED IN SCHEMA STRUCTURE:
 //
 // RULE 1: REQUIRED GROUPINGS (documented in comments, enforced by runtime validation)
-//   - A grouping with name="meshes" MUST exist in PhysicalGroupings.groupings
+//   - A grouping with custom_type="meshes" MUST exist in PhysicalGroupings.groupings
 //   - This is a hard requirement - validation will fail with an error if "meshes" is not defined
 //
 // RULE 2: MULTIPLE DEFINITIONS (enforced by schema structure)
-//   - The same grouping name CAN appear multiple times in groupings list
+//   - The same grouping type CAN appear multiple times in groupings list (different names)
 //   - ENFORCED BY: repeated Grouping (not map<string, Grouping>)
 //
 // RULE 3: GROUPING REFERENCES (documented in comments, needs runtime check)
-//   - GroupingReference.grouping_name MUST reference a grouping that exists in groupings
+//   - GroupingReference.grouping_type MUST reference a grouping type that exists in groupings
 //
 // RULE 4: INSTANCE COUNT VALIDATION (documented in comments, type constraints)
-//   - If Grouping.name == "meshes": at least 1 instance required
+//   - If Grouping.custom_type == "meshes": at least 1 instance required
 //   - Otherwise: at least 2 instances required
 //   - ENFORCED BY: repeated Instance instances (must be non-empty)
 //
@@ -36,9 +36,10 @@ package tt.tt_fabric.proto;
 //   - Can mix ASIC locations and grouping references in the same grouping
 //
 // Example textproto:
-//   # Using predefined keywords (preset_name)
+//   # Using predefined keywords (preset_type)
 //   groupings {
-//     preset_name: TRAY_1
+//     name: "tray_1_cluster_0"
+//     preset_type: TRAY_1
 //     instances: [
 //       { id: 0 asic_location: ASIC_LOCATION_1 },
 //       { id: 1 asic_location: ASIC_LOCATION_2 },
@@ -46,10 +47,11 @@ package tt.tt_fabric.proto;
 //     ]
 //   }
 //   groupings {
-//     preset_name: MESH
+//     name: "mesh_16x8_quad"
+//     preset_type: MESH
 //     instances: [
-//       { id: 0 grouping_ref { preset_name: TRAY_1 } },
-//       { id: 1 grouping_ref { preset_name: TRAY_2 } }
+//       { id: 0 grouping_ref { preset_type: TRAY_1 } },
+//       { id: 1 grouping_ref { preset_type: TRAY_2 } }
 //     ]
     //     row_major_mesh {
     //       dims: [2, 1]
@@ -57,24 +59,26 @@ package tt.tt_fabric.proto;
     //       num_connections: 2
     //     }
 //   }
-//   # Using custom names
+//   # Using custom types
 //   groupings {
-//     custom_name: "hosts"
+//     name: "hosts_cluster_0"
+//     custom_type: "hosts"
 //     instances: [
-//       { id: 0 grouping_ref { custom_name: "trays" } }
+//       { id: 0 grouping_ref { custom_type: "trays" } }
 //     ]
 //   }
 //   groupings {
-//     custom_name: "meshes"
+//     name: "meshes_128asic"
+//     custom_type: "meshes"
 //     instances: [
-//       { id: 0 grouping_ref { custom_name: "hosts" } },
-//       { id: 1 grouping_ref { custom_name: "hosts" } },
-//       { id: 2 grouping_ref { custom_name: "hosts" } },
-//       { id: 3 grouping_ref { custom_name: "hosts" } },
-//       { id: 4 grouping_ref { custom_name: "hosts" } },
-//       { id: 5 grouping_ref { custom_name: "hosts" } },
-//       { id: 6 grouping_ref { custom_name: "hosts" } },
-//       { id: 7 grouping_ref { custom_name: "hosts" } }
+//       { id: 0 grouping_ref { custom_type: "hosts" } },
+//       { id: 1 grouping_ref { custom_type: "hosts" } },
+//       { id: 2 grouping_ref { custom_type: "hosts" } },
+//       { id: 3 grouping_ref { custom_type: "hosts" } },
+//       { id: 4 grouping_ref { custom_type: "hosts" } },
+//       { id: 5 grouping_ref { custom_type: "hosts" } },
+//       { id: 6 grouping_ref { custom_type: "hosts" } },
+//       { id: 7 grouping_ref { custom_type: "hosts" } }
 //     ]
     //     row_major_mesh {
     //       dims: [2, 4]
@@ -83,19 +87,21 @@ package tt.tt_fabric.proto;
     //     }
 //   }
 //   groupings {
-//     custom_name: "pods"
+//     name: "pods_cluster_0"
+//     custom_type: "pods"
 //     instances: [
-//       { id: 0 grouping_ref { custom_name: "meshes" } },
-//       { id: 1 grouping_ref { custom_name: "meshes" } }
+//       { id: 0 grouping_ref { custom_type: "meshes" } },
+//       { id: 1 grouping_ref { custom_type: "meshes" } }
 //     ]
     //     all_to_all { num_connections: 2 }
 //   }
-    //   # Mixing preset keywords and custom names
+    //   # Mixing preset keywords and custom types
     //   groupings {
-    //     custom_name: "custom_group"
+    //     name: "custom_group_0"
+    //     custom_type: "custom_group"
     //     instances: [
-    //       { id: 0 grouping_ref { preset_name: MESH } },
-    //       { id: 1 grouping_ref { custom_name: "meshes" } }
+    //       { id: 0 grouping_ref { preset_type: MESH } },
+    //       { id: 1 grouping_ref { custom_type: "meshes" } }
     //     ]
     //     custom {
     //       connections: [
@@ -134,17 +140,17 @@ enum GroupingKeyword {
 
 // Reference to another grouping (without count - instances are explicitly instantiated)
 // VALIDATION:
-//   - grouping_name: MUST reference an existing Grouping.name in the PhysicalGroupings.groupings list
+//   - grouping_type: MUST reference an existing Grouping.type in the PhysicalGroupings.groupings list
 message GroupingReference {
-    // Name of the grouping being referenced - can be either a predefined keyword or a custom name
-    // VALIDATION: Must match at least one Grouping.name in PhysicalGroupings.groupings
+    // Type of the grouping being referenced - can be either a predefined keyword or a custom type
+    // VALIDATION: Must match at least one Grouping.type in PhysicalGroupings.groupings
     // Forward references are allowed (can reference a grouping defined later in the file)
-    oneof grouping_name {
+    oneof grouping_type {
         // Predefined keyword (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
-        GroupingKeyword preset_name = 1;
+        GroupingKeyword preset_type = 1;
 
-        // Custom grouping name (e.g., "hosts", "meshes", "pods", "superpods", "halftray")
-        string custom_name = 2;
+        // Custom grouping type (e.g., "hosts", "meshes", "pods", "superpods", "halftray")
+        string custom_type = 2;
     }
 }
 
@@ -211,29 +217,39 @@ message CustomConnections {
 
 // A single grouping definition
 // VALIDATION RULES (encoded in schema structure):
-//   1. name: REQUIRED (exactly one of preset_name or custom_name must be set)
-//      - If custom_name == "meshes": This grouping is REQUIRED to exist in PhysicalGroupings.groupings
-//      - Same name can appear multiple times (multiple Grouping messages with same name)
-//   2. instances: List of instances (ASIC locations and/or grouping references)
+//   1. name: REQUIRED (string identifier for this specific grouping instance)
+//      - Each grouping must have a unique name within the file
+//      - Used for validation and tracking which grouping gets assigned
+//   2. type: REQUIRED (exactly one of preset_type or custom_type must be set)
+//      - If custom_type == "meshes": This grouping type is REQUIRED to exist in PhysicalGroupings.groupings
+//      - Multiple Grouping messages can have the same type (allowed for custom groupings)
+//   3. instances: List of instances (ASIC locations and/or grouping references)
 //      - Can mix ASIC locations and grouping references in the same grouping
 //      - Must be non-empty
-//   3. connections: Optional connection specification
+//   4. connections: Optional connection specification
 //      - If omitted, instances are not connected
 //      - If all_to_all or row_major_mesh: applies to all instances
 //      - If custom: can have multiple custom connections
 message Grouping {
-    // Name of this grouping - can be either a predefined keyword or a custom name
+    // Name of this grouping - unique identifier for this specific grouping instance
     // VALIDATION:
-    //   - REQUIRED: Exactly one of preset_name (keyword) or custom_name must be set
-    //   - If custom_name == "meshes": This grouping MUST exist (at least one Grouping with this name)
-    //   - Multiple Grouping messages can have the same name (allowed for custom groupings)
-    //   - Examples: preset_name: MESH, custom_name: "pods", custom_name: "superpods"
-    oneof name {
-        // Predefined keyword (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
-        GroupingKeyword preset_name = 1;
+    //   - REQUIRED: Must be non-empty
+    //   - Used to identify which grouping gets assigned during matching
+    //   - Examples: "tray_1_cluster_0", "mesh_16x8_quad", "pod_0"
+    string name = 1;
 
-        // Custom grouping name (e.g., "meshes", "pods", "superpods", "clusters", "halftray", "trays", "hosts")
-        string custom_name = 2;
+    // Type of this grouping - can be either a predefined keyword or a custom type
+    // VALIDATION:
+    //   - REQUIRED: Exactly one of preset_type (keyword) or custom_type must be set
+    //   - If custom_type == "meshes": This grouping type MUST exist (at least one Grouping with this type)
+    //   - Multiple Grouping messages can have the same type (allowed for custom groupings)
+    //   - Examples: preset_type: MESH, custom_type: "pods", custom_type: "superpods"
+    oneof type {
+        // Predefined keyword (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
+        GroupingKeyword preset_type = 2;
+
+        // Custom grouping type (e.g., "meshes", "pods", "superpods", "clusters", "halftray", "trays", "hosts")
+        string custom_type = 3;
     }
 
     // List of instances - each instance must have a unique ID and can be either an ASIC location or a grouping reference
@@ -242,12 +258,12 @@ message Grouping {
     //   - Must be non-empty
     //   - Each instance must have a unique id within this grouping
     //   - Each instance must have exactly one of: asic_location or grouping_ref (enforced by oneof)
-    //   - If custom_name == "meshes": at least 1 instance required
+    //   - If custom_type == "meshes": at least 1 instance required
     //   - Otherwise: at least 2 instances required
     // Example for trays: [Instance { id: 0 asic_location: ASIC_LOCATION_1 }, ...]
-    // Example for meshes: [Instance { id: 0 grouping_ref { grouping_name: "hosts" } }, ...]
-    // Example for pods: [Instance { id: 0 grouping_ref { grouping_name: "meshes" } }, Instance { id: 1 grouping_ref { grouping_name: "meshes" } }]
-    repeated Instance instances = 2;
+    // Example for meshes: [Instance { id: 0 grouping_ref { custom_type: "hosts" } }, ...]
+    // Example for pods: [Instance { id: 0 grouping_ref { custom_type: "meshes" } }, Instance { id: 1 grouping_ref { custom_type: "meshes" } }]
+    repeated Instance instances = 4;
 
     // Connection specification - defines how instances connect and their topology
     // This is separate from instances - connections reference instance IDs
@@ -259,28 +275,28 @@ message Grouping {
     //   - For row_major_mesh: dims product must equal number of instances
     oneof connection {
         // All-to-all connectivity - every instance connects to every other instance
-        AllToAllConnection all_to_all = 3;
+        AllToAllConnection all_to_all = 5;
 
         // Row-major mesh connectivity - instances arranged in a grid
-        RowMajorMeshConnection row_major_mesh = 4;
+        RowMajorMeshConnection row_major_mesh = 6;
 
         // Custom explicit connections - list of edges between specific instances
-        CustomConnections custom = 5;
+        CustomConnections custom = 7;
     }
 }
 
 // Top-level message containing all groupings
 // VALIDATION RULES:
-//   1. groupings: Must contain at least one Grouping with custom_name == "meshes"
-//   2. Multiple Grouping messages can have the same name (explicitly allowed)
-//   3. All GroupingReference.grouping_name values must reference a Grouping.name in this list
+//   1. groupings: Must contain at least one Grouping with custom_type == "meshes"
+//   2. Multiple Grouping messages can have the same type (explicitly allowed)
+//   3. All GroupingReference.grouping_type values must reference a Grouping.type in this list
 message PhysicalGroupings {
     // List of all groupings
     // VALIDATION:
-    //   - Must contain at least one Grouping with custom_name == "meshes" (REQUIRED)
-    //   - Can contain multiple Grouping messages with the same name (allowed)
+    //   - Must contain at least one Grouping with custom_type == "meshes" (REQUIRED)
+    //   - Can contain multiple Grouping messages with the same type (allowed)
     //   - Order does not matter (forward references are allowed)
     //   - Each Grouping must satisfy the validation rules in the Grouping message
-    //   - All GroupingReference.grouping_name values must match at least one Grouping.name here
+    //   - All GroupingReference.grouping_type values must match at least one Grouping.type here
     repeated Grouping groupings = 1;
 }
