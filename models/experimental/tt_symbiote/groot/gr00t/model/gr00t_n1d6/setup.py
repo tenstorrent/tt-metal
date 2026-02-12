@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import logging
 from pathlib import Path
@@ -45,13 +48,9 @@ class Gr00tN1d6Pipeline(ModelPipeline):
         if self.model_config.model_revision is not None:
             transformers_loading_kwargs["revision"] = self.model_config.model_revision
         if self.config.training.transformers_cache_dir is not None:
-            transformers_loading_kwargs[
-                "cache_dir"
-            ] = self.config.training.transformers_cache_dir
+            transformers_loading_kwargs["cache_dir"] = self.config.training.transformers_cache_dir
         if self.config.training.transformers_access_token is not None:
-            transformers_loading_kwargs[
-                "token"
-            ] = self.config.training.transformers_access_token
+            transformers_loading_kwargs["token"] = self.config.training.transformers_access_token
 
         self.transformers_loading_kwargs = transformers_loading_kwargs
 
@@ -91,9 +90,7 @@ class Gr00tN1d6Pipeline(ModelPipeline):
             if mask_token_missing and model.action_head.mask_token is not None:
                 # Initialize mask_token
                 with torch.no_grad():
-                    model.action_head.mask_token.data.copy_(
-                        0.02 * torch.randn_like(model.action_head.mask_token)
-                    )
+                    model.action_head.mask_token.data.copy_(0.02 * torch.randn_like(model.action_head.mask_token))
                 logging.info("mask_token not in checkpoint - initialized")
 
         else:
@@ -110,9 +107,7 @@ class Gr00tN1d6Pipeline(ModelPipeline):
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         logging.info(f"Total parameters: {total_params:,}")
-        logging.info(
-            f"Trainable parameters: {trainable_params:,} ({100 * trainable_params / total_params:.2f}%)"
-        )
+        logging.info(f"Trainable parameters: {trainable_params:,} ({100 * trainable_params / total_params:.2f}%)")
         print("Model: ", model)
 
         return model

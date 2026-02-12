@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -63,9 +66,7 @@ class CategorySpecificLinear(nn.Module):
         selected_b = self.b[cat_ids]
         return torch.bmm(x, selected_W) + selected_b.unsqueeze(1)
 
-    def expand_action_dimension(
-        self, old_action_dim, new_action_dim, expand_input=False, expand_output=False
-    ):
+    def expand_action_dimension(self, old_action_dim, new_action_dim, expand_input=False, expand_output=False):
         """
         Safely expand action dimension with explicit targeting.
 
@@ -76,9 +77,7 @@ class CategorySpecificLinear(nn.Module):
             expand_output: Whether to expand output dimension (dim=2)
         """
         if new_action_dim <= old_action_dim:
-            raise ValueError(
-                f"New action dim {new_action_dim} must be larger than old action dim {old_action_dim}"
-            )
+            raise ValueError(f"New action dim {new_action_dim} must be larger than old action dim {old_action_dim}")
 
         # Expand input dimension (dim=1) only if explicitly requested AND dimensions match
         if expand_input and self.W.shape[1] == old_action_dim:
@@ -154,9 +153,7 @@ class CategorySpecificMLP(nn.Module):
             new_action_dim: New (larger) action dimension
         """
         # self.layer1 does not take action_dim as input, so no expansion needed
-        self.layer2.expand_action_dimension(
-            old_action_dim, new_action_dim, expand_input=False, expand_output=True
-        )
+        self.layer2.expand_action_dimension(old_action_dim, new_action_dim, expand_input=False, expand_output=True)
 
 
 class MultiEmbodimentActionEncoder(nn.Module):
@@ -168,15 +165,9 @@ class MultiEmbodimentActionEncoder(nn.Module):
         self.num_embodiments = num_embodiments
 
         # W1: R^{w x d}, W2: R^{w x 2w}, W3: R^{w x w}
-        self.W1 = CategorySpecificLinear(
-            num_embodiments, action_dim, hidden_size
-        )  # (d -> w)
-        self.W2 = CategorySpecificLinear(
-            num_embodiments, 2 * hidden_size, hidden_size
-        )  # (2w -> w)
-        self.W3 = CategorySpecificLinear(
-            num_embodiments, hidden_size, hidden_size
-        )  # (w -> w)
+        self.W1 = CategorySpecificLinear(num_embodiments, action_dim, hidden_size)  # (d -> w)
+        self.W2 = CategorySpecificLinear(num_embodiments, 2 * hidden_size, hidden_size)  # (2w -> w)
+        self.W3 = CategorySpecificLinear(num_embodiments, hidden_size, hidden_size)  # (w -> w)
         self.pos_encoding = SinusoidalPositionalEncoding(hidden_size)
 
     def forward(self, actions, timesteps, cat_ids):
@@ -197,9 +188,7 @@ class MultiEmbodimentActionEncoder(nn.Module):
             # shape (B,) => (B,T)
             timesteps = timesteps.unsqueeze(1).expand(-1, T)
         else:
-            raise ValueError(
-                "Expected `timesteps` to have shape (B,) so we can replicate across T."
-            )
+            raise ValueError("Expected `timesteps` to have shape (B,) so we can replicate across T.")
 
         # 2) Standard action MLP step for shape => (B, T, w)
         a_emb = self.W1(actions, cat_ids)
@@ -224,6 +213,4 @@ class MultiEmbodimentActionEncoder(nn.Module):
             new_action_dim: New (larger) action dimension
         """
         # Only W1 takes action_dim as input, so only expand its input dimension
-        self.W1.expand_action_dimension(
-            old_action_dim, new_action_dim, expand_input=True, expand_output=False
-        )
+        self.W1.expand_action_dimension(old_action_dim, new_action_dim, expand_input=True, expand_output=False)

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 #                🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨
 #           This file was automatically generated from src/transformers/models/siglip2/modular_siglip2.py.
 # Copyright 2025 The HuggingFace Inc. team.
@@ -80,9 +83,7 @@ if is_flash_attn_2_available():
         flash_attn_varlen_func,
     )
 
-    _flash_supports_window_size = "window_size" in list(
-        inspect.signature(flash_attn_func).parameters
-    )
+    _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
 
 
 def _flash_attention_forward(
@@ -134,13 +135,9 @@ def _flash_attention_forward(
         causal = is_causal and query_length != 1
     # Assuming 4D tensors, key_states.shape[1] is the key/value sequence length (source length).
     use_sliding_windows = (
-        _flash_supports_window_size
-        and sliding_window is not None
-        and key_states.shape[1] > sliding_window
+        _flash_supports_window_size and sliding_window is not None and key_states.shape[1] > sliding_window
     )
-    flash_kwargs = (
-        {"window_size": (sliding_window, sliding_window)} if use_sliding_windows else {}
-    )
+    flash_kwargs = {"window_size": (sliding_window, sliding_window)} if use_sliding_windows else {}
     if flash_241:
         if deterministic is None:
             deterministic = deterministic_g
@@ -205,19 +202,13 @@ def flash_attention_forward_for_packing(
         elif hasattr(module.config, "_pre_quantization_dtype"):
             target_dtype = module.config._pre_quantization_dtype
         else:
-            target_dtype = next(
-                layer
-                for layer in module.modules()
-                if isinstance(layer, torch.nn.Linear)
-            ).weight.dtype
+            target_dtype = next(layer for layer in module.modules() if isinstance(layer, torch.nn.Linear)).weight.dtype
 
     # FA2 always relies on the value set in the module, so remove it if present in kwargs to avoid passing it twice
     kwargs.pop("is_causal", None)
 
     cu_seqlens = F.pad(
-        torch.cumsum(
-            torch.tensor(seq_len_list, device=query.device, dtype=torch.int32), dim=0
-        ),
+        torch.cumsum(torch.tensor(seq_len_list, device=query.device, dtype=torch.int32), dim=0),
         (1, 0),
     )
     cu_seqlens = cu_seqlens.to(torch.int32)
@@ -376,9 +367,7 @@ def convert_image_to_patches(image: "torch.Tensor", patch_size: int) -> "torch.T
     num_channels, image_height, image_width = image.shape
     num_patches_height = image_height // patch_size
     num_patches_width = image_width // patch_size
-    patched_image = image.reshape(
-        num_channels, num_patches_height, patch_size, num_patches_width, patch_size
-    )
+    patched_image = image.reshape(num_channels, num_patches_height, patch_size, num_patches_width, patch_size)
     patched_image = patched_image.permute(1, 3, 2, 4, 0)
     patched_image = patched_image.reshape(num_patches_height * num_patches_width, -1)
     return patched_image
@@ -407,9 +396,7 @@ def convert_images_to_patches(image: "torch.Tensor", patch_size: int) -> "torch.
         0, 2, 4, 3, 5, 1
     )  # (batch_size, num_patches_height, num_patches_width, patch_size, patch_size, num_channels)
 
-    patched_image = patched_image.reshape(
-        batch_size * num_patches_height * num_patches_width, -1
-    )
+    patched_image = patched_image.reshape(batch_size * num_patches_height * num_patches_width, -1)
     return patched_image
 
 
@@ -430,9 +417,7 @@ class Siglip2VisionEmbeddings(nn.Module):
         self.position_embedding_size = int(self.num_patches**0.5)
         self.position_embedding = nn.Embedding(self.num_patches, self.embed_dim)
 
-    def split_patch_embeddings_to_windows_with_meta(
-        self, patch_embeds, batch_hw, window_size
-    ):
+    def split_patch_embeddings_to_windows_with_meta(self, patch_embeds, batch_hw, window_size):
         """
         Args:
             patch_embeds: Tensor, shape (1, sum(H_i*W_i), C)
@@ -495,9 +480,7 @@ class Siglip2VisionEmbeddings(nn.Module):
 
             # 3.4 reshape到 (B*n_windows, ws*ws, C)
             patches = (
-                patches_unf.view(
-                    B, C, window_size * window_size, n_windows
-                )  # (B, C, ws*ws, n_win)
+                patches_unf.view(B, C, window_size * window_size, n_windows)  # (B, C, ws*ws, n_win)
                 .permute(0, 3, 2, 1)  # (B, n_win, ws*ws, C)
                 .reshape(-1, window_size * window_size, C)  # (B*n_win, ws*ws, C)
             )
@@ -541,15 +524,11 @@ class Siglip2VisionEmbeddings(nn.Module):
             if valid_num == window_size * window_size:
                 windows_list.append(win)
             else:
-                win = win.view(window_size, window_size, -1)[:h_eff, :w_eff, :].reshape(
-                    h_eff * w_eff, -1
-                )
+                win = win.view(window_size, window_size, -1)[:h_eff, :w_eff, :].reshape(h_eff * w_eff, -1)
                 windows_list.append(win)  # shape (valid_num, C)
 
         # 如果你需要一个单一 tensor，可以再 cat 一次：
-        all_tokens = torch.cat(windows_list, dim=0).unsqueeze(
-            0
-        )  # shape (sum(valid_num), C)
+        all_tokens = torch.cat(windows_list, dim=0).unsqueeze(0)  # shape (sum(valid_num), C)
 
         # 1. 先重算每张图在原始 flat tensor 中的起始位置
         counts = [H * W for H, W in batch_hw]
@@ -626,9 +605,7 @@ class Siglip2VisionEmbeddings(nn.Module):
             )
 
             # (1, dim, target_height, target_width) -> (target_height * target_width, dim)
-            resized_embeddings = resized_embeddings.reshape(
-                embed_dim, height * width
-            ).transpose(0, 1)
+            resized_embeddings = resized_embeddings.reshape(embed_dim, height * width).transpose(0, 1)
 
             # Cast to original dtype
             resized_embeddings = resized_embeddings.to(source_dtype)
@@ -669,9 +646,7 @@ class Siglip2VisionEmbeddings(nn.Module):
         )
         spatial_shapes = self.get_spatial_shapes(bchw_list)
 
-        resized_positional_embeddings = self.resize_positional_embeddings(
-            positional_embeddings, spatial_shapes
-        )
+        resized_positional_embeddings = self.resize_positional_embeddings(positional_embeddings, spatial_shapes)
         # Add positional embeddings to patch embeddings
         embeddings = patch_embeds + resized_positional_embeddings
 
@@ -679,9 +654,7 @@ class Siglip2VisionEmbeddings(nn.Module):
             windows_tensor,
             win_meta_list,
             reverse_mapping,
-        ) = self.split_patch_embeddings_to_windows_with_meta(
-            embeddings, spatial_shapes, self.window_size
-        )
+        ) = self.split_patch_embeddings_to_windows_with_meta(embeddings, spatial_shapes, self.window_size)
 
         return windows_tensor, win_meta_list, spatial_shapes, reverse_mapping
 
@@ -740,25 +713,19 @@ class Rope2DPosEmb(nn.Module):
         flat_pos = torch.arange(0, N).float().to(device)
         x_pos = flat_pos % self.max_width
         y_pos = flat_pos // self.max_width
-        dim_range = (
-            torch.arange(0, self.dim, 4)[: (self.dim // 4)].float().to(device)
-        )  # C/4
+        dim_range = torch.arange(0, self.dim, 4)[: (self.dim // 4)].float().to(device)  # C/4
         freqs = 1.0 / (self.theta_base ** (dim_range / self.dim))
         x_freqs = torch.outer(x_pos, freqs).float()  # N, C/4
         y_freqs = torch.outer(y_pos, freqs).float()  # N, C/4
         x_cis = torch.polar(torch.ones_like(x_freqs), x_freqs)  # N, C/4
         y_cis = torch.polar(torch.ones_like(y_freqs), y_freqs)  # N, C/4
         # N, C/4, 2
-        freqs_cis = torch.cat(
-            [x_cis.unsqueeze(dim=-1), y_cis.unsqueeze(dim=-1)], dim=-1
-        )
+        freqs_cis = torch.cat([x_cis.unsqueeze(dim=-1), y_cis.unsqueeze(dim=-1)], dim=-1)
         # max_height, max_width, C/2
         freqs_cis = freqs_cis.reshape(self.max_height, self.max_width, -1)
         return freqs_cis
 
-    def get_freqs_cis(
-        self, win_meta_list: List[Dict], device: torch.device
-    ) -> torch.Tensor:
+    def get_freqs_cis(self, win_meta_list: List[Dict], device: torch.device) -> torch.Tensor:
         """
         Args:
             win_meta_list (List[Dict]): window meta list
@@ -770,17 +737,14 @@ class Rope2DPosEmb(nn.Module):
 
         # assert all xy <512
         assert all(
-            win_meta["win_xy"][0] + win_meta["win_hw"][0] < 512
-            and win_meta["win_xy"][1] + win_meta["win_hw"][1] < 512
+            win_meta["win_xy"][0] + win_meta["win_hw"][0] < 512 and win_meta["win_xy"][1] + win_meta["win_hw"][1] < 512
             for win_meta in win_meta_list
         )
         freqs_cis = torch.cat(
             [
                 self.freqs_cis[
-                    win_meta["win_xy"][0] : win_meta["win_xy"][0]
-                    + win_meta["win_hw"][0],
-                    win_meta["win_xy"][1] : win_meta["win_xy"][1]
-                    + win_meta["win_hw"][1],
+                    win_meta["win_xy"][0] : win_meta["win_xy"][0] + win_meta["win_hw"][0],
+                    win_meta["win_xy"][1] : win_meta["win_xy"][1] + win_meta["win_hw"][1],
                 ].reshape(-1, self.dim // 2)
                 for win_meta in win_meta_list
             ],
@@ -804,12 +768,8 @@ def eager_attention_forward(
     if attention_mask is not None:
         attn_weights = attn_weights + attention_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
-        query.dtype
-    )
-    attn_weights = nn.functional.dropout(
-        attn_weights, p=dropout, training=module.training
-    )
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
 
     attn_output = torch.matmul(attn_weights, value)
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -824,9 +784,7 @@ def _apply_rope_input_validation(x, freqs_cis):
     assert freqs_cis.dtype == torch.complex64, freqs_cis.dtype
 
 
-def apply_rope(
-    xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_rope(xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Args: (The leading dimensions of all inputs should be the same)
         xq: query, tensor of shape (..., num_heads, head_dim)
@@ -889,15 +847,9 @@ class Siglip2Attention(nn.Module):
         keys = self.k_proj(hidden_states)
         values = self.v_proj(hidden_states)
 
-        queries = queries.view(
-            batch_size, seq_length, self.num_heads, self.head_dim
-        )  # .transpose(1, 2)
-        keys = keys.view(
-            batch_size, seq_length, self.num_heads, self.head_dim
-        )  # .transpose(1, 2)
-        values = values.view(
-            batch_size, seq_length, self.num_heads, self.head_dim
-        ).transpose(1, 2)
+        queries = queries.view(batch_size, seq_length, self.num_heads, self.head_dim)  # .transpose(1, 2)
+        keys = keys.view(batch_size, seq_length, self.num_heads, self.head_dim)  # .transpose(1, 2)
+        values = values.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
 
         if self.use_rope:
             queries, keys = apply_rope(queries, keys, rope_freqs_cis)
@@ -915,33 +867,22 @@ class Siglip2Attention(nn.Module):
             if self.config._attn_implementation == "flash_attention_2":
                 from transformers.modeling_utils import AttentionInterface
 
-                AttentionInterface._global_mapping[
-                    "flash_attention_2_packing"
-                ] = flash_attention_forward_for_packing
+                AttentionInterface._global_mapping["flash_attention_2_packing"] = flash_attention_forward_for_packing
                 setattr(
                     AttentionInterface,
                     "flash_attention_2_packing",
                     flash_attention_forward_for_packing,
                 )
-                attention_interface = ALL_ATTENTION_FUNCTIONS[
-                    "flash_attention_2_packing"
-                ]
+                attention_interface = ALL_ATTENTION_FUNCTIONS["flash_attention_2_packing"]
             else:
-                attention_interface = ALL_ATTENTION_FUNCTIONS[
-                    self.config._attn_implementation
-                ]
+                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
         if windows_attn and self.use_windows_attn:
-            seq_len_list = [
-                win_meta["win_hw"][0] * win_meta["win_hw"][1]
-                for win_meta in win_meta_list
-            ]
+            seq_len_list = [win_meta["win_hw"][0] * win_meta["win_hw"][1] for win_meta in win_meta_list]
         else:
             mapper = defaultdict(lambda: 0)
             for win_meta in win_meta_list:
-                mapper[win_meta["img_idx"]] += (
-                    win_meta["win_hw"][0] * win_meta["win_hw"][1]
-                )
+                mapper[win_meta["img_idx"]] += win_meta["win_hw"][0] * win_meta["win_hw"][1]
             seq_len_list = [mapper[i] for i in range(len(mapper))]
 
         attention_mask = None
@@ -956,9 +897,7 @@ class Siglip2Attention(nn.Module):
             dropout=0.0 if not self.training else self.dropout,
             seq_len_list=seq_len_list,
         )
-        attn_output = attn_output.reshape(
-            batch_size, seq_length, embed_dim
-        ).contiguous()
+        attn_output = attn_output.reshape(batch_size, seq_length, embed_dim).contiguous()
         attn_output = self.out_proj(attn_output)
 
         if not output_attentions:
@@ -1053,9 +992,7 @@ class Siglip2Encoder(nn.Module):
             512,
             config.window_size,
         )
-        self.layers = nn.ModuleList(
-            [Siglip2EncoderLayer(config) for _ in range(config.num_hidden_layers)]
-        )
+        self.layers = nn.ModuleList([Siglip2EncoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.gradient_checkpointing = False
         self.full_attention_indexes = config.full_attention_indexes
 
@@ -1091,23 +1028,15 @@ class Siglip2Encoder(nn.Module):
             return_dict (`bool`, *optional*):
                 Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
         """
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
 
         encoder_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
 
-        rope_freqs_cis = self.rope_2d.get_freqs_cis(
-            win_meta_list=win_meta_list, device=inputs_embeds.device
-        )
+        rope_freqs_cis = self.rope_2d.get_freqs_cis(win_meta_list=win_meta_list, device=inputs_embeds.device)
 
         hidden_states = inputs_embeds
         for win_idx, encoder_layer in enumerate(self.layers):
@@ -1188,18 +1117,14 @@ class Siglip2VisionTransformer(nn.Module):
         self.embeddings = Siglip2VisionEmbeddings(config)
         self.encoder = Siglip2Encoder(config)
         self.post_layernorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
-        self.use_head = (
-            True if not hasattr(config, "vision_use_head") else config.vision_use_head
-        )
+        self.use_head = True if not hasattr(config, "vision_use_head") else config.vision_use_head
         if self.use_head:
             self.head = Siglip2MultiheadAttentionPoolingHead(config)
         self._use_flash_attention_2 = config._attn_implementation == "flash_attention_2"
 
     @can_return_tuple
     @add_start_docstrings_to_model_forward(SIGLIP2_VISION_INPUTS_DOCSTRING)
-    @replace_return_docstrings(
-        output_type=BaseModelOutputWithPooling, config_class=Siglip2VisionConfig
-    )
+    @replace_return_docstrings(output_type=BaseModelOutputWithPooling, config_class=Siglip2VisionConfig)
     def forward(
         self,
         pixel_values: torch.FloatTensor,
@@ -1210,15 +1135,9 @@ class Siglip2VisionTransformer(nn.Module):
         Returns:
 
         """
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
 
         (
@@ -1457,8 +1376,7 @@ class Siglip2PreTrainedModel(PreTrainedModel):
         elif isinstance(module, Siglip2ForImageClassification):
             nn.init.normal_(
                 module.classifier.weight,
-                std=self.config.vision_config.hidden_size**-0.5
-                * self.config.initializer_factor,
+                std=self.config.vision_config.hidden_size**-0.5 * self.config.initializer_factor,
             )
         elif isinstance(module, (nn.Linear, nn.Conv2d)):
             lecun_normal_(module.weight)
@@ -1476,30 +1394,22 @@ class Siglip2MultiheadAttentionPoolingHead(nn.Module):
         super().__init__()
 
         self.probe = nn.Parameter(torch.randn(1, 1, config.hidden_size))
-        self.attention = torch.nn.MultiheadAttention(
-            config.hidden_size, config.num_attention_heads, batch_first=True
-        )
+        self.attention = torch.nn.MultiheadAttention(config.hidden_size, config.num_attention_heads, batch_first=True)
         self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.mlp = Siglip2MLP(config)
         self.num_heads = config.num_attention_heads
 
-    def forward(
-        self, hidden_state: torch.Tensor, attention_mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
+    def forward(self, hidden_state: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         batch_size = hidden_state.shape[0]
         probe = self.probe.repeat(batch_size, 1, 1)
 
         if attention_mask is not None:
             target_len, source_len = probe.shape[1], hidden_state.shape[1]
-            attention_mask = _prepare_4d_attention_mask(
-                attention_mask, hidden_state.dtype, target_len
-            )
+            attention_mask = _prepare_4d_attention_mask(attention_mask, hidden_state.dtype, target_len)
             attention_mask = attention_mask.repeat(1, self.num_heads, target_len, 1)
             attention_mask = attention_mask.reshape(-1, target_len, source_len)
 
-        hidden_state = self.attention(
-            probe, hidden_state, hidden_state, attn_mask=attention_mask
-        )[0]
+        hidden_state = self.attention(probe, hidden_state, hidden_state, attn_mask=attention_mask)[0]
 
         residual = hidden_state
         hidden_state = self.layernorm(hidden_state)
@@ -1529,9 +1439,7 @@ class Siglip2VisionModel(Siglip2PreTrainedModel):
 
     @can_return_tuple
     @add_start_docstrings_to_model_forward(SIGLIP2_VISION_INPUTS_DOCSTRING)
-    @replace_return_docstrings(
-        output_type=BaseModelOutputWithPooling, config_class=Siglip2VisionConfig
-    )
+    @replace_return_docstrings(output_type=BaseModelOutputWithPooling, config_class=Siglip2VisionConfig)
     def forward(
         self,
         pixel_values: torch.FloatTensor,

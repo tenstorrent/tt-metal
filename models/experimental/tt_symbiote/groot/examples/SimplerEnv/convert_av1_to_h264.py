@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env python3
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -10,9 +13,7 @@ VIDEO_EXTS = {".mp4", ".mov", ".mkv"}
 
 
 def run(cmd):
-    return subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
 def is_av1(path: Path) -> bool:
@@ -86,9 +87,7 @@ def find_videos(root: Path):
 
 
 def main():
-    ap = argparse.ArgumentParser(
-        description="Recursively convert AV1 videos to H.264 (lossless-ish) in place."
-    )
+    ap = argparse.ArgumentParser(description="Recursively convert AV1 videos to H.264 (lossless-ish) in place.")
     ap.add_argument("root", nargs="?", default=".", help="Root directory (default: .)")
     ap.add_argument(
         "-j",

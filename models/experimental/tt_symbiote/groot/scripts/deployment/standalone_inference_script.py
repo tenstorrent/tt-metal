@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -103,9 +106,7 @@ class TensorRTDiTWrapper:
         self.context = self.engine.create_execution_context()
         logging.info(f"TensorRT engine loaded: {engine_path}")
 
-    def __call__(
-        self, sa_embs, vl_embs, timestep, image_mask=None, backbone_attention_mask=None
-    ):
+    def __call__(self, sa_embs, vl_embs, timestep, image_mask=None, backbone_attention_mask=None):
         """Forward pass through TensorRT DiT."""
         # Setup context bindings
         sa_embs = sa_embs.to(f"cuda:{self.device}").contiguous()
@@ -115,9 +116,7 @@ class TensorRTDiTWrapper:
         if image_mask is not None:
             image_mask = image_mask.to(f"cuda:{self.device}").contiguous()
         if backbone_attention_mask is not None:
-            backbone_attention_mask = backbone_attention_mask.to(
-                f"cuda:{self.device}"
-            ).contiguous()
+            backbone_attention_mask = backbone_attention_mask.to(f"cuda:{self.device}").contiguous()
 
         self.context.set_input_shape("sa_embs", sa_embs.shape)
         self.context.set_input_shape("vl_embs", vl_embs.shape)
@@ -125,9 +124,7 @@ class TensorRTDiTWrapper:
         if image_mask is not None:
             self.context.set_input_shape("image_mask", image_mask.shape)
         if backbone_attention_mask is not None:
-            self.context.set_input_shape(
-                "backbone_attention_mask", backbone_attention_mask.shape
-            )
+            self.context.set_input_shape("backbone_attention_mask", backbone_attention_mask.shape)
 
         self.context.set_tensor_address("sa_embs", sa_embs.data_ptr())
         self.context.set_tensor_address("vl_embs", vl_embs.data_ptr())
@@ -135,15 +132,11 @@ class TensorRTDiTWrapper:
         if image_mask is not None:
             self.context.set_tensor_address("image_mask", image_mask.data_ptr())
         if backbone_attention_mask is not None:
-            self.context.set_tensor_address(
-                "backbone_attention_mask", backbone_attention_mask.data_ptr()
-            )
+            self.context.set_tensor_address("backbone_attention_mask", backbone_attention_mask.data_ptr())
 
         # Output in BF16 (matches ONNX export and engine precision)
         output_shape = self.context.get_tensor_shape("output")
-        output = torch.empty(
-            tuple(output_shape), dtype=torch.bfloat16, device=f"cuda:{self.device}"
-        )
+        output = torch.empty(tuple(output_shape), dtype=torch.bfloat16, device=f"cuda:{self.device}")
         self.context.set_tensor_address("output", output.data_ptr())
 
         success = self.context.execute_async_v3(torch.cuda.current_stream().cuda_stream)
@@ -153,9 +146,7 @@ class TensorRTDiTWrapper:
         return output
 
 
-def replace_dit_with_tensorrt(
-    policy: Gr00tPolicy | Any, trt_engine_path: str, device: int = 0
-):
+def replace_dit_with_tensorrt(policy: Gr00tPolicy | Any, trt_engine_path: str, device: int = 0):
     """Replace the DiT forward method with TensorRT inference."""
     trt_dit = TensorRTDiTWrapper(trt_engine_path, device=device)
 
@@ -190,9 +181,7 @@ def replace_dit_with_tensorrt(
             # TensorRT only returns the final output, not intermediate states
             # For inference, we don't need intermediate states, so raise
             # as this seems invalid config for inference
-            raise RuntimeError(
-                "TensorRT only returns the final output. Check inference config"
-            )
+            raise RuntimeError("TensorRT only returns the final output. Check inference config")
         else:
             return output
 
@@ -287,9 +276,7 @@ def plot_trajectory_results(
     plt.close()  # Close the figure to free memory
 
 
-def parse_observation_gr00t(
-    obs: dict[str, Any], modality_configs: dict[str, Any]
-) -> dict[str, Any]:
+def parse_observation_gr00t(obs: dict[str, Any], modality_configs: dict[str, Any]) -> dict[str, Any]:
     new_obs = {}
     for modality in ["video", "state", "language"]:
         new_obs[modality] = {}
@@ -394,9 +381,7 @@ def run_single_trajectory(
 
     traj_length = len(traj)
     actual_steps = min(steps, traj_length)
-    logging.info(
-        f"Using {actual_steps} steps (requested: {steps}, trajectory length: {traj_length})"
-    )
+    logging.info(f"Using {actual_steps} steps (requested: {steps}, trajectory length: {traj_length})")
 
     pred_action_across_time = []
 
@@ -411,9 +396,7 @@ def run_single_trajectory(
     num_inference_steps = len(range(0, actual_steps, action_horizon))
     logging.info(f"\nRunning {num_inference_steps} inference steps...")
     logging.info(f"(Skipping first {skip_timing_steps} step(s) for timing statistics)")
-    logging.info(
-        "Using async prefetching: preparing step i+1 while GPU processes step i"
-    )
+    logging.info("Using async prefetching: preparing step i+1 while GPU processes step i")
     logging.info("-" * 80)
 
     # Create thread pool for async data preparation (single worker is sufficient)
@@ -433,9 +416,7 @@ def run_single_trajectory(
     )
 
     for step_idx, step_count in enumerate(step_counts):
-        logging.info(
-            f"\n[Step {step_idx + 1}/{num_inference_steps}] Processing timestep {step_count}"
-        )
+        logging.info(f"\n[Step {step_idx + 1}/{num_inference_steps}] Processing timestep {step_count}")
 
         # Wait for data preparation to complete (should be ready from prefetch)
         data_prep_start = time.time()
@@ -470,10 +451,7 @@ def run_single_trajectory(
             # NOTE: concat_pred_action = action[f"action.{modality_keys[0]}"][j]
             # the np.atleast_1d is to ensure the action is a 1D array, handle where single value is returned
             concat_pred_action = np.concatenate(
-                [
-                    np.atleast_1d(np.atleast_1d(action_chunk[f"action.{key}"])[j])
-                    for key in action_keys
-                ],
+                [np.atleast_1d(np.atleast_1d(action_chunk[f"action.{key}"])[j]) for key in action_keys],
                 axis=0,
             )
             pred_action_across_time.append(concat_pred_action)
@@ -528,12 +506,8 @@ def evaluate_predictions(
         return np.concatenate([np_dict[column] for column in columns], axis=-1)
 
     # plot the joints
-    state_joints_across_time = extract_state_joints(
-        traj, [f"state.{key}" for key in state_keys]
-    )
-    gt_action_across_time = extract_state_joints(
-        traj, [f"action.{key}" for key in action_keys]
-    )[:actual_steps]
+    state_joints_across_time = extract_state_joints(traj, [f"state.{key}" for key in state_keys])
+    gt_action_across_time = extract_state_joints(traj, [f"action.{key}" for key in action_keys])[:actual_steps]
     pred_action_across_time = np.array(pred_action_across_time)[:actual_steps]
     assert (
         gt_action_across_time.shape == pred_action_across_time.shape
@@ -559,8 +533,7 @@ def evaluate_predictions(
         state_keys=state_keys,
         action_keys=action_keys,
         action_horizon=action_horizon,
-        save_plot_path=save_plot_path
-        or f"/tmp/stand_alone_inference/traj_{traj_id}.jpeg",
+        save_plot_path=save_plot_path or f"/tmp/stand_alone_inference/traj_{traj_id}.jpeg",
     )
 
     return mse, mae
@@ -650,17 +623,11 @@ def main(args: ArgsConfig):
         if match:
             try:
                 global_step = int(match.group(1))
-                logging.info(
-                    f"Extracted global_step {global_step} from checkpoint path"
-                )
+                logging.info(f"Extracted global_step {global_step} from checkpoint path")
             except ValueError:
-                logging.warning(
-                    f"Could not parse step number from checkpoint path: {local_model_path}"
-                )
+                logging.warning(f"Could not parse step number from checkpoint path: {local_model_path}")
         else:
-            logging.warning(
-                f"Could not find checkpoint-<step> pattern in path: {local_model_path}"
-            )
+            logging.warning(f"Could not find checkpoint-<step> pattern in path: {local_model_path}")
 
     # Model loading
     logging.info("\n" + "=" * 80)
@@ -814,19 +781,13 @@ def main(args: ArgsConfig):
 
             logging.info("\nInference Statistics:")
             logging.info(f"  Total inference steps:       {total_inference_steps}")
-            logging.info(
-                f"  Avg inference time per step: {total_inference / total_inference_steps:.4f}s"
-            )
+            logging.info(f"  Avg inference time per step: {total_inference / total_inference_steps:.4f}s")
 
             # Collect all inference times for min/max/p90
-            all_inf_times = [
-                t for timing in all_timings for t in timing["inference_times"]
-            ]
+            all_inf_times = [t for timing in all_timings for t in timing["inference_times"]]
             logging.info(f"  Min inference time:          {min(all_inf_times):.4f}s")
             logging.info(f"  Max inference time:          {max(all_inf_times):.4f}s")
-            logging.info(
-                f"  P90 inference time:          {np.percentile(all_inf_times, 90):.4f}s"
-            )
+            logging.info(f"  P90 inference time:          {np.percentile(all_inf_times, 90):.4f}s")
 
     logging.info("=" * 80)
     logging.info("Done")

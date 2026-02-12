@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from collections import defaultdict, deque
 import warnings
 
@@ -29,9 +32,7 @@ def repeated_space(space, n, loc=0):
         return result_space
     elif isinstance(space, spaces.Discrete):
         return spaces.MultiDiscrete([[space.n] for _ in range(n)])
-    elif isinstance(
-        space, spaces.Text
-    ):  # For language, we don't repeat and only keep the last one
+    elif isinstance(space, spaces.Text):  # For language, we don't repeat and only keep the last one
         return space
     else:
         raise RuntimeError(f"Unsupported space type {type(space)}")
@@ -77,9 +78,7 @@ def compress_dict_list(ds, recursive=False):
         if set(d.keys()) != keys:
             missing_keys = keys - set(d.keys())
             extra_keys = set(d.keys()) - keys
-            error_msg = (
-                f"Dictionary at index {i} has different keys than the first dictionary."
-            )
+            error_msg = f"Dictionary at index {i} has different keys than the first dictionary."
             if missing_keys:
                 error_msg += f" Missing keys: {missing_keys}."
             if extra_keys:
@@ -100,9 +99,7 @@ def compress_dict_list(ds, recursive=False):
             try:
                 result[key] = np.array(value_list)
             except Exception as e:
-                raise ValueError(
-                    f"Failed to convert values for key '{key}' to numpy array: {str(e)}"
-                )
+                raise ValueError(f"Failed to convert values for key '{key}' to numpy array: {str(e)}")
 
     return result
 
@@ -173,9 +170,7 @@ class MultiStepWrapper(gym.Wrapper):
         self.info = defaultdict(lambda: deque(maxlen=self.n_action_steps + 1))
         self.terminate_on_success = terminate_on_success
 
-    def convert_observation_space(
-        self, observation_space, video_horizon, state_horizon
-    ):
+    def convert_observation_space(self, observation_space, video_horizon, state_horizon):
         """
         For video, the observation space will be (video_horizon,) + original shape
         For state (if not None), the observation space will be (state_horizon,) + original shape
@@ -209,13 +204,9 @@ class MultiStepWrapper(gym.Wrapper):
         """
         Get the maximum number of steps that we need to cache.
         """
-        video_max_steps_needed = (
-            np.max(self.video_delta_indices) - np.min(self.video_delta_indices) + 1
-        )
+        video_max_steps_needed = np.max(self.video_delta_indices) - np.min(self.video_delta_indices) + 1
         if self.state_delta_indices is not None:
-            state_max_steps_needed = (
-                np.max(self.state_delta_indices) - np.min(self.state_delta_indices) + 1
-            )
+            state_max_steps_needed = np.max(self.state_delta_indices) - np.min(self.state_delta_indices) + 1
         else:
             state_max_steps_needed = 0
         return int(max(video_max_steps_needed, state_max_steps_needed))
@@ -230,9 +221,7 @@ class MultiStepWrapper(gym.Wrapper):
         assert delta_indices[-1] == 0, f"{delta_indices=}"
         if len(delta_indices) > 1:
             # The step is consistent (because in real robot experiments, we actually use the dt to get the observations, which requires the step to be consistent)
-            assert np.all(
-                np.diff(delta_indices) == delta_indices[1] - delta_indices[0]
-            ), f"{delta_indices=}"
+            assert np.all(np.diff(delta_indices) == delta_indices[1] - delta_indices[0]), f"{delta_indices=}"
             # And the step is positive
             assert (delta_indices[1] - delta_indices[0]) > 0, f"{delta_indices=}"
 
@@ -240,9 +229,7 @@ class MultiStepWrapper(gym.Wrapper):
         """Resets the environment using kwargs."""
         obs, info = super().reset(seed=seed, options=options)
 
-        self.obs = deque(
-            [obs] * (self.max_steps_needed + 1), maxlen=self.max_steps_needed + 1
-        )
+        self.obs = deque([obs] * (self.max_steps_needed + 1), maxlen=self.max_steps_needed + 1)
         self.reward = list()
         self.done = list()
         self.info = defaultdict(lambda: deque(maxlen=self.n_action_steps + 1))
@@ -276,9 +263,7 @@ class MultiStepWrapper(gym.Wrapper):
             dones.append(done)
             self.obs.append(observation)
             self.reward.append(reward)
-            if (self.max_episode_steps is not None) and (
-                len(self.reward) >= self.max_episode_steps
-            ):
+            if (self.max_episode_steps is not None) and (len(self.reward) >= self.max_episode_steps):
                 # truncation
                 done = True
             self.done.append(done)
@@ -309,9 +294,7 @@ class MultiStepWrapper(gym.Wrapper):
             }
             The length is `n_action_steps`.
             """
-            info["intermediate_signals"] = compress_dict_list(
-                list(info["intermediate_signals"])
-            )
+            info["intermediate_signals"] = compress_dict_list(list(info["intermediate_signals"]))
 
         if self.terminate_on_success and any(info["success"]):
             # Terminate after this step.
@@ -363,9 +346,7 @@ class MultiStepWrapper(gym.Wrapper):
                     result[key] = np.stack(this_obs, axis=0)
             return result
         else:
-            raise RuntimeError(
-                f"Unsupported space type: {type(self.observation_space)=}"
-            )
+            raise RuntimeError(f"Unsupported space type: {type(self.observation_space)=}")
 
     def _add_info(self, info):
         for key, value in info.items():

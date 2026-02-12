@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import os
 from pathlib import Path
@@ -44,15 +47,9 @@ EMBODIMENT_TAG_TO_PROJECTOR_INDEX = {
 }
 
 
-def build_processor(
-    model_name: str, transformers_loading_kwargs: dict
-) -> ProcessorMixin:
-    assert (
-        model_name == "nvidia/Eagle-Block2A-2B-v2"
-    ), f"Processor for {model_name} not supported"
-    eagle_path = os.path.join(
-        os.path.dirname(__file__), "..", "modules", "nvidia", "Eagle-Block2A-2B-v2"
-    )
+def build_processor(model_name: str, transformers_loading_kwargs: dict) -> ProcessorMixin:
+    assert model_name == "nvidia/Eagle-Block2A-2B-v2", f"Processor for {model_name} not supported"
+    eagle_path = os.path.join(os.path.dirname(__file__), "..", "modules", "nvidia", "Eagle-Block2A-2B-v2")
     return AutoProcessor.from_pretrained(eagle_path, **transformers_loading_kwargs)
 
 
@@ -89,9 +86,7 @@ class Gr00tN1d6DataCollator:
 
                 # NOTE: some VLMs need this, others don't.
                 if self.model_type == "eagle":
-                    image_inputs, _ = self.processor.process_vision_info(
-                        [v["conversation"] for v in values]
-                    )
+                    image_inputs, _ = self.processor.process_vision_info([v["conversation"] for v in values])
                 vlm_inputs = self.processor(
                     text=text_list,
                     images=image_inputs,
@@ -122,8 +117,7 @@ class Gr00tN1d6Processor(BaseProcessor):
     def __init__(
         self,
         modality_configs: dict[str, dict[str, ModalityConfig]],
-        statistics: dict[str, dict[str, dict[str, dict[str, list[float]]]]]
-        | None = None,
+        statistics: dict[str, dict[str, dict[str, dict[str, list[float]]]]] | None = None,
         use_percentiles: bool = False,
         clip_outliers: bool = True,
         image_crop_size: list[int] = None,
@@ -179,9 +173,7 @@ class Gr00tN1d6Processor(BaseProcessor):
         self.processor = build_processor(model_name, transformers_loading_kwargs)
         # Set padding side to 'left' for Flash Attention compatibility
         self.processor.tokenizer.padding_side = "left"
-        self.embodiment_id_mapping = (
-            embodiment_id_mapping or EMBODIMENT_TAG_TO_PROJECTOR_INDEX
-        )
+        self.embodiment_id_mapping = embodiment_id_mapping or EMBODIMENT_TAG_TO_PROJECTOR_INDEX
         # handle the case where the fine-tuning embodiment tag is not in the pre-trained embodiment tag mapping
         for k, v in EMBODIMENT_TAG_TO_PROJECTOR_INDEX.items():
             if k not in self.embodiment_id_mapping:
@@ -243,9 +235,7 @@ class Gr00tN1d6Processor(BaseProcessor):
         # Compute action dimensions for convenience
         self.action_dim = {}
         for embodiment_tag in self.state_action_processor.statistics:
-            self.action_dim[
-                embodiment_tag
-            ] = self.state_action_processor.get_action_dim(embodiment_tag)
+            self.action_dim[embodiment_tag] = self.state_action_processor.get_action_dim(embodiment_tag)
 
     def decode_action(
         self,
@@ -257,25 +247,15 @@ class Gr00tN1d6Processor(BaseProcessor):
         # Split concatenated action into joint groups
         out_dict = {}
         start_idx = 0
-        joint_groups = self.modality_configs[embodiment_tag.value][
-            "action"
-        ].modality_keys
-        action_horizon = len(
-            self.modality_configs[embodiment_tag.value]["action"].delta_indices
-        )
+        joint_groups = self.modality_configs[embodiment_tag.value]["action"].modality_keys
+        action_horizon = len(self.modality_configs[embodiment_tag.value]["action"].delta_indices)
         for key in joint_groups:
-            joint_dim = self.state_action_processor.norm_params[embodiment_tag.value][
-                "action"
-            ][key]["dim"].item()
-            out_dict[key] = action[
-                ..., :action_horizon, start_idx : start_idx + joint_dim
-            ]
+            joint_dim = self.state_action_processor.norm_params[embodiment_tag.value]["action"][key]["dim"].item()
+            out_dict[key] = action[..., :action_horizon, start_idx : start_idx + joint_dim]
             start_idx += joint_dim
 
         # Use StateActionProcessor to unnormalize and convert to absolute
-        return self.state_action_processor.unapply_action(
-            out_dict, embodiment_tag.value, state=state
-        )
+        return self.state_action_processor.unapply_action(out_dict, embodiment_tag.value, state=state)
 
     def _apply_vlm_processing(self, images: np.ndarray, language: str) -> BatchFeature:
         """
@@ -299,9 +279,7 @@ class Gr00tN1d6Processor(BaseProcessor):
         ]
 
         # Apply chat template but don't process yet - let collator handle it
-        text = self.processor.apply_chat_template(
-            conversation, tokenize=False, add_generation_prompt=False
-        )
+        text = self.processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=False)
 
         # Return vlm_content format for collation
         return {
@@ -331,9 +309,7 @@ class Gr00tN1d6Processor(BaseProcessor):
 
         if normalized_actions:
             # Concatenate actions
-            action_keys = self.modality_configs[embodiment_tag.value][
-                "action"
-            ].modality_keys
+            action_keys = self.modality_configs[embodiment_tag.value]["action"].modality_keys
             normalized_actions = torch.cat(
                 [torch.from_numpy(normalized_actions[key]) for key in action_keys],
                 dim=-1,
@@ -373,9 +349,7 @@ class Gr00tN1d6Processor(BaseProcessor):
 
         # Concatenate states
         state_keys = self.modality_configs[embodiment_tag.value]["state"].modality_keys
-        normalized_states = torch.cat(
-            [torch.from_numpy(normalized_states[key]) for key in state_keys], dim=-1
-        )
+        normalized_states = torch.cat([torch.from_numpy(normalized_states[key]) for key in state_keys], dim=-1)
         normalized_states = torch.cat(
             [
                 normalized_states,
@@ -411,16 +385,12 @@ class Gr00tN1d6Processor(BaseProcessor):
             "state": normalized_states.to(torch.get_default_dtype()),
         }
         if normalized_actions is not None:
-            transformed_inputs["action"] = normalized_actions.to(
-                torch.get_default_dtype()
-            )
+            transformed_inputs["action"] = normalized_actions.to(torch.get_default_dtype())
         # Add VLM inputs
         transformed_inputs.update(vlm_inputs)
         if action_mask is not None:
             transformed_inputs["action_mask"] = action_mask
-        transformed_inputs["embodiment_id"] = self.embodiment_id_mapping[
-            embodiment_tag.value
-        ]
+        transformed_inputs["embodiment_id"] = self.embodiment_id_mapping[embodiment_tag.value]
         return transformed_inputs
 
     def _get_vlm_inputs(
@@ -438,12 +408,8 @@ class Gr00tN1d6Processor(BaseProcessor):
             for view in image_keys:
                 assert view in images, f"{view} not in {images}"
                 # Apply transforms with replay for consistency
-                transformed_images, replay = apply_with_replay(
-                    image_transform, images[view], replay
-                )
-                temporal_stacked_images[view] = torch.stack(
-                    transformed_images
-                )  # (T, C, H, W)
+                transformed_images, replay = apply_with_replay(image_transform, images[view], replay)
+                temporal_stacked_images[view] = torch.stack(transformed_images)  # (T, C, H, W)
         else:
             # Use torchvision transforms
             for view in image_keys:
@@ -460,9 +426,7 @@ class Gr00tN1d6Processor(BaseProcessor):
             assert v.shape[1] == 3, f"{v} is not a 3 channel tensor"
 
         stacked_images = (
-            torch.stack([temporal_stacked_images[view] for view in image_keys], dim=1)
-            .flatten(0, 1)
-            .numpy()
+            torch.stack([temporal_stacked_images[view] for view in image_keys], dim=1).flatten(0, 1).numpy()
         )  # (T*V, C, H, W), Eagle processor expects numpy array
 
         vlm_inputs = self._apply_vlm_processing(stacked_images, language)
@@ -518,24 +482,16 @@ class Gr00tN1d6Processor(BaseProcessor):
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str | Path, **kwargs):
-        transformers_loading_kwargs = kwargs.pop(
-            "transformers_loading_kwargs", {"trust_remote_code": True}
-        )
+        transformers_loading_kwargs = kwargs.pop("transformers_loading_kwargs", {"trust_remote_code": True})
         pretrained_model_name_or_path = Path(pretrained_model_name_or_path)
         config_file = pretrained_model_name_or_path / "processor_config.json"
         statistics_file = pretrained_model_name_or_path / "statistics.json"
         embodiment_id_file = pretrained_model_name_or_path / "embodiment_id.json"
         is_local = os.path.isdir(pretrained_model_name_or_path)
         if not is_local:
-            config_file = Path(
-                cached_file(pretrained_model_name_or_path, "processor_config.json")
-            )
-            statistics_file = Path(
-                cached_file(pretrained_model_name_or_path, "statistics.json")
-            )
-            embodiment_id_file = Path(
-                cached_file(pretrained_model_name_or_path, "embodiment_id.json")
-            )
+            config_file = Path(cached_file(pretrained_model_name_or_path, "processor_config.json"))
+            statistics_file = Path(cached_file(pretrained_model_name_or_path, "statistics.json"))
+            embodiment_id_file = Path(cached_file(pretrained_model_name_or_path, "embodiment_id.json"))
 
         with open(config_file, "r") as f:
             config = json.load(f)
@@ -565,9 +521,7 @@ class Gr00tN1d6Processor(BaseProcessor):
                     override = kwargs.pop(key)
                     if override is not None:
                         processor_kwargs[key] = override
-        return cls(
-            **processor_kwargs, transformers_loading_kwargs=transformers_loading_kwargs
-        )
+        return cls(**processor_kwargs, transformers_loading_kwargs=transformers_loading_kwargs)
 
 
 AutoProcessor.register("Gr00tN1d6", Gr00tN1d6Processor)

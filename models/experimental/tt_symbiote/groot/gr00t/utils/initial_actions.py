@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from pathlib import Path
 
 import numpy as np
@@ -6,9 +9,7 @@ import numpy as np
 INITIAL_ACTIONS_FILENAME = "initial_actions.npz"
 
 
-def save_initial_actions(
-    initial_actions: dict[str, dict[str, np.ndarray]], initial_actions_path: str | Path
-):
+def save_initial_actions(initial_actions: dict[str, dict[str, np.ndarray]], initial_actions_path: str | Path):
     np.savez(str(initial_actions_path), initial_actions)
 
 
@@ -24,9 +25,7 @@ def load_initial_actions(initial_actions_path: str | Path):
     """
     initial_actions_npz = np.load(str(initial_actions_path), allow_pickle=True)
     initial_actions = []
-    initial_actions_array = initial_actions_npz[
-        "arr_0"
-    ]  # This is the default key when np.savez saves a list
+    initial_actions_array = initial_actions_npz["arr_0"]  # This is the default key when np.savez saves a list
     for dataset_initial_actions in initial_actions_array:
         initial_actions_for_this_dataset = {}
         for trajectory_name, action_dict in dataset_initial_actions.items():

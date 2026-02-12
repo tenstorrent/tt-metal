@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Custom Trainer with simple profiling utilities.
 
 This subclass of HuggingFace's ``Trainer`` measures:
@@ -145,9 +148,7 @@ _eval_accuracy_accumulated_correct = 0
 _eval_accuracy_accumulated_total = 0
 
 
-def compute_eval_accuracy(
-    eval_pred: EvalPrediction, compute_result: bool, action_offset: Optional[int] = None
-):
+def compute_eval_accuracy(eval_pred: EvalPrediction, compute_result: bool, action_offset: Optional[int] = None):
     logits = eval_pred.predictions[0]
     if action_offset is not None:
         logits = logits[..., action_offset:]
@@ -172,9 +173,7 @@ def compute_eval_accuracy(
     _eval_accuracy_accumulated_total += total
 
     if compute_result:
-        accuracy = _eval_accuracy_accumulated_correct / max(
-            _eval_accuracy_accumulated_total, 1
-        )
+        accuracy = _eval_accuracy_accumulated_correct / max(_eval_accuracy_accumulated_total, 1)
         _eval_accuracy_accumulated_correct = 0
         _eval_accuracy_accumulated_total = 0
         return {"eval_accuracy": accuracy}
@@ -221,16 +220,12 @@ class Gr00tTrainer(Trainer):
         if curr_global_step > 0:
             new_seed = self.train_dataset.seed + curr_global_step
             self.train_dataset.reset_seed(new_seed)
-            print(
-                f"Resetting seed to {new_seed}. Please note that this will make the experiment non-reproducible."
-            )
+            print(f"Resetting seed to {new_seed}. Please note that this will make the experiment non-reproducible.")
 
         print("Creating custom train dataloader")
         # Handle the case where the dataset is an IterableDataset
         data_collator = self.data_collator
-        data_collator = self._get_collator_with_removed_columns(
-            data_collator, description="training"
-        )
+        data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
         # Use persistent workers for sharded dataset if num_workers is greater than 0
         persistent_workers = self.args.dataloader_num_workers > 0
 
@@ -260,16 +255,12 @@ class Gr00tTrainer(Trainer):
         if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
             resume_from_checkpoint = get_last_checkpoint(self.args.output_dir)
             if resume_from_checkpoint is None:
-                logging.warning(
-                    f"No valid checkpoint found in output directory ({self.args.output_dir})"
-                )
+                logging.warning(f"No valid checkpoint found in output directory ({self.args.output_dir})")
 
         if resume_from_checkpoint is not None:
             logging.info(f"Resuming from checkpoint {resume_from_checkpoint}")
             # In case of repeating the find_executable_batch_size, set `self._train_batch_size` properly
-            self.state = TrainerState.load_from_json(
-                os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)
-            )
+            self.state = TrainerState.load_from_json(os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME))
 
         return super().train(resume_from_checkpoint=resume_from_checkpoint, **kwargs)
 
@@ -312,23 +303,13 @@ class Gr00tTrainer(Trainer):
         # --------------------------------------------------------------
         # Accuracy calculation
         # --------------------------------------------------------------
-        if (
-            self.state.global_step % self.args.logging_steps == 0
-            and model.training
-            and "labels" in inputs
-        ):
+        if self.state.global_step % self.args.logging_steps == 0 and model.training and "labels" in inputs:
             if self.action_offset is not None:
-                preds = (
-                    outputs.logits.detach()[:, :, self.action_offset :]
-                    .argmax(dim=-1)
-                    .cpu()
-                )
+                preds = outputs.logits.detach()[:, :, self.action_offset :].argmax(dim=-1).cpu()
             else:
                 preds = outputs.logits.detach().argmax(dim=-1).cpu()
             with torch.no_grad():
-                acc_local = _batch_accuracy(
-                    preds, inputs["labels"].to(device=preds.device), self.action_offset
-                )
+                acc_local = _batch_accuracy(preds, inputs["labels"].to(device=preds.device), self.action_offset)
             acc_tensor = torch.tensor(acc_local.item(), device=loss.device)
             acc_mean = self._nested_gather(acc_tensor).mean().item()
 

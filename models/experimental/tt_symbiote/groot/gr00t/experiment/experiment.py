@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env python
 import json
 import logging
@@ -42,9 +45,7 @@ def warn_configs(config: Config):
     ), "global_batch_size must be divisible by num_gpus"
 
     if config.data.video_backend != "torchcodec":
-        warnings.warn(
-            "video_backend is not torchcodec. Only torchcodec will be supported in the future."
-        )
+        warnings.warn("video_backend is not torchcodec. Only torchcodec will be supported in the future.")
 
     if config.training.batch_size is not None:
         warnings.warn(
@@ -56,52 +57,32 @@ def warn_configs(config: Config):
             "warmup_steps will be deprecated in the future, please use warmup_ratio instead. For now, this will override warmup_ratio."
         )
 
-    if (
-        hasattr(config.model, "backbone_trainable_params_fp32")
-        and not config.model.backbone_trainable_params_fp32
-    ):
-        warnings.warn(
-            "backbone_trainable_params_fp32 is not True. This will be deprecated in the future."
-        )
+    if hasattr(config.model, "backbone_trainable_params_fp32") and not config.model.backbone_trainable_params_fp32:
+        warnings.warn("backbone_trainable_params_fp32 is not True. This will be deprecated in the future.")
 
-    if (
-        hasattr(config.model, "use_albumentations_transforms")
-        and not config.model.use_albumentations_transforms
-    ):
-        warnings.warn(
-            "use_albumentations_transforms is not True. This will be deprecated in the future."
-        )
+    if hasattr(config.model, "use_albumentations_transforms") and not config.model.use_albumentations_transforms:
+        warnings.warn("use_albumentations_transforms is not True. This will be deprecated in the future.")
 
     if (
         hasattr(config.model, "image_crop_size")
         and hasattr(config.model, "image_target_size")
-        and (
-            config.model.image_crop_size is not None
-            or config.model.image_target_size is not None
-        )
+        and (config.model.image_crop_size is not None or config.model.image_target_size is not None)
     ):
         assert (
-            config.model.image_crop_size is not None
-            and config.model.image_target_size is not None
+            config.model.image_crop_size is not None and config.model.image_target_size is not None
         ), "image_crop_size and image_target_size must be set together"
         warnings.warn(
             "image_crop_size and image_target_size will be deprecated in the future. Please use shortest_image_edge and crop_fraction instead."
         )
-        if hasattr(config.model, "shortest_image_edge") and hasattr(
-            config.model, "crop_fraction"
-        ):
+        if hasattr(config.model, "shortest_image_edge") and hasattr(config.model, "crop_fraction"):
             assert (
-                config.model.shortest_image_edge is None
-                and config.model.crop_fraction is None
+                config.model.shortest_image_edge is None and config.model.crop_fraction is None
             ), "Do not set shortest_image_edge and crop_fraction together with image_crop_size and image_target_size"
 
     if (
         hasattr(config.model, "shortest_image_edge")
         and hasattr(config.model, "crop_fraction")
-        and (
-            config.model.shortest_image_edge is not None
-            or config.model.crop_fraction is not None
-        )
+        and (config.model.shortest_image_edge is not None or config.model.crop_fraction is not None)
     ):
         assert (
             config.model.use_albumentations_transforms
@@ -194,9 +175,7 @@ def run(config: Config):
 
     # for now we will let batch_size override global_batch_size, in future we will deprecate batch_size
     if config.training.batch_size is None:
-        per_device_train_batch_size = (
-            config.training.global_batch_size // config.training.num_gpus
-        )
+        per_device_train_batch_size = config.training.global_batch_size // config.training.num_gpus
     else:
         per_device_train_batch_size = config.training.batch_size
 
@@ -265,9 +244,7 @@ def run(config: Config):
         if initial_actions:
             initial_actions_path = save_cfg_dir / INITIAL_ACTIONS_FILENAME
             save_initial_actions(initial_actions, initial_actions_path)
-            logging.info(
-                f"Saved {len(initial_actions)} initial actions to {initial_actions_path}"
-            )
+            logging.info(f"Saved {len(initial_actions)} initial actions to {initial_actions_path}")
 
     # Train
     logging.info("🚀 Starting training...")
@@ -277,10 +254,7 @@ def run(config: Config):
         logging.info(f"{global_rank} Starting training with profiling...")
 
         def on_trace_ready_handler(trainer, profile_dir, prof):
-            output_path = (
-                profile_dir
-                / f"trace_rank_{global_rank}_iter_{trainer.state.global_step}.json"
-            )
+            output_path = profile_dir / f"trace_rank_{global_rank}_iter_{trainer.state.global_step}.json"
             prof.export_chrome_trace(str(output_path))
             logging.info(f"Trace saved to {output_path}")
 
@@ -292,9 +266,7 @@ def run(config: Config):
                 torch.profiler.ProfilerActivity.CPU,
                 torch.profiler.ProfilerActivity.CUDA,
             ],
-            schedule=torch.profiler.schedule(
-                skip_first=10, wait=1, warmup=1, active=3, repeat=1
-            ),
+            schedule=torch.profiler.schedule(skip_first=10, wait=1, warmup=1, active=3, repeat=1),
             # profile_memory=True,
             with_stack=True,
             # record_shapes=True,
@@ -312,9 +284,7 @@ def run(config: Config):
     if config.training.assert_loss_less_than is not None:
         final_loss = trainer.loss
         if final_loss.item() > config.training.assert_loss_less_than:
-            raise AssertionError(
-                f"Loss too high: {final_loss.item()} vs {config.training.assert_loss_less_than})"
-            )
+            raise AssertionError(f"Loss too high: {final_loss.item()} vs {config.training.assert_loss_less_than})")
 
     # # Cleanup
     if hasattr(train_dataset, "close"):

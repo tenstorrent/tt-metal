@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -78,9 +81,7 @@ class ActionEncoder(nn.Module):
             # shape (B,) => (B,T)
             timesteps = timesteps.unsqueeze(1).expand(-1, T)
         else:
-            raise ValueError(
-                "Expected `timesteps` to have shape (B,) so we can replicate across T."
-            )
+            raise ValueError("Expected `timesteps` to have shape (B,) so we can replicate across T.")
 
         # 2) Standard action MLP step for shape => (B, T, w)
         a_emb = self.W1(actions)

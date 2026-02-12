@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass
 import io
 from typing import Any, Callable
@@ -95,9 +98,7 @@ class PolicyServer:
         """
         return {"status": "ok", "message": "Server is running"}
 
-    def register_endpoint(
-        self, name: str, handler: Callable, requires_input: bool = True
-    ):
+    def register_endpoint(self, name: str, handler: Callable, requires_input: bool = True):
         """
         Register a new endpoint to the server.
 
@@ -126,11 +127,7 @@ class PolicyServer:
 
                 # Validate token before processing request
                 if not self._validate_token(request):
-                    self.socket.send(
-                        MsgSerializer.to_bytes(
-                            {"error": "Unauthorized: Invalid API token"}
-                        )
-                    )
+                    self.socket.send(MsgSerializer.to_bytes({"error": "Unauthorized: Invalid API token"}))
                     continue
 
                 endpoint = request.get("endpoint", "get_action")
@@ -139,11 +136,7 @@ class PolicyServer:
                     raise ValueError(f"Unknown endpoint: {endpoint}")
 
                 handler = self._endpoints[endpoint]
-                result = (
-                    handler.handler(**request.get("data", {}))
-                    if handler.requires_input
-                    else handler.handler()
-                )
+                result = handler.handler(**request.get("data", {})) if handler.requires_input else handler.handler()
                 self.socket.send(MsgSerializer.to_bytes(result))
             except Exception as e:
                 print(f"Error in server: {e}")
@@ -194,9 +187,7 @@ class PolicyClient(BasePolicy):
         """
         self.call_endpoint("kill", requires_input=False)
 
-    def call_endpoint(
-        self, endpoint: str, data: dict | None = None, requires_input: bool = True
-    ) -> Any:
+    def call_endpoint(self, endpoint: str, data: dict | None = None, requires_input: bool = True) -> Any:
         """
         Call an endpoint on the server.
 
@@ -214,9 +205,7 @@ class PolicyClient(BasePolicy):
         self.socket.send(MsgSerializer.to_bytes(request))
         message = self.socket.recv()
         if message == b"ERROR":
-            raise RuntimeError(
-                "Server error. Make sure we are running the correct policy server."
-            )
+            raise RuntimeError("Server error. Make sure we are running the correct policy server.")
         response = MsgSerializer.from_bytes(message)
 
         if isinstance(response, dict) and "error" in response:
@@ -231,9 +220,7 @@ class PolicyClient(BasePolicy):
     def _get_action(
         self, observation: dict[str, Any], options: dict[str, Any] | None = None
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        response = self.call_endpoint(
-            "get_action", {"observation": observation, "options": options}
-        )
+        response = self.call_endpoint("get_action", {"observation": observation, "options": options})
         return tuple(response)  # Convert list (from msgpack) to tuple of (action, info)
 
     def reset(self, options: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import argparse
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -185,9 +188,7 @@ def get_gym_env(env_name: str, env_idx: int, total_n_envs: int):
     return env_fn()
 
 
-def create_eval_env(
-    env_name: str, env_idx: int, total_n_envs: int, wrapper_configs: WrapperConfigs
-) -> gym.Env:
+def create_eval_env(env_name: str, env_idx: int, total_n_envs: int, wrapper_configs: WrapperConfigs) -> gym.Env:
     """Create a single evaluation environment with wrappers.
 
     Args:
@@ -254,9 +255,7 @@ def run_rollout_gymnasium_policy(
     """
     start_time = time.time()
     n_episodes = max(n_episodes, n_envs)
-    print(
-        f"Running collecting {n_episodes} episodes for {env_name} with {n_envs} vec envs"
-    )
+    print(f"Running collecting {n_episodes} episodes for {env_name} with {n_envs} vec envs")
 
     env_fns = [
         partial(
@@ -317,10 +316,7 @@ def run_rollout_gymnasium_policy(
             else:
                 current_successes[env_idx] = False
 
-            if (
-                "final_info" in env_infos
-                and env_infos["final_info"][env_idx] is not None
-            ):
+            if "final_info" in env_infos and env_infos["final_info"][env_idx] is not None:
                 env_success = env_infos["final_info"][env_idx]["success"]
                 if isinstance(env_success, list):
                     env_success = any(env_success)
@@ -339,17 +335,11 @@ def run_rollout_gymnasium_policy(
             # If episode ended, store results
             if terminations[env_idx] or truncations[env_idx]:
                 if "final_info" in env_infos:
-                    current_successes[env_idx] |= any(
-                        env_infos["final_info"][env_idx]["success"]
-                    )
+                    current_successes[env_idx] |= any(env_infos["final_info"][env_idx]["success"])
                 if "task_progress" in env_infos:
-                    episode_infos["task_progress"].append(
-                        env_infos["task_progress"][env_idx][-1]
-                    )
+                    episode_infos["task_progress"].append(env_infos["task_progress"][env_idx][-1])
                 if "q_score" in env_infos:
-                    episode_infos["q_score"].append(
-                        np.max(env_infos["q_score"][env_idx])
-                    )
+                    episode_infos["q_score"].append(np.max(env_infos["q_score"][env_idx]))
                 if "valid" in env_infos:
                     episode_infos["valid"].append(all(env_infos["valid"][env_idx]))
                 # Accumulate results
@@ -381,18 +371,14 @@ def run_rollout_gymnasium_policy(
 
     episode_infos = dict(episode_infos)  # Convert defaultdict to dict
     for key, value in episode_infos.items():
-        assert len(value) == len(
-            episode_successes
-        ), f"Length of {key} is not equal to the number of episodes"
+        assert len(value) == len(episode_successes), f"Length of {key} is not equal to the number of episodes"
 
     # process valid results
     if "valid" in episode_infos:
         valids = episode_infos["valid"]
         valid_idxs = np.where(valids)[0]
         episode_successes = [episode_successes[i] for i in valid_idxs]
-        episode_infos = {
-            k: [v[i] for i in valid_idxs] for k, v in episode_infos.items()
-        }
+        episode_infos = {k: [v[i] for i in valid_idxs] for k, v in episode_infos.items()}
 
     return env_name, episode_successes, episode_infos
 
@@ -451,9 +437,7 @@ def run_gr00t_sim_policy(
         ),
     )
 
-    policy = create_gr00t_sim_policy(
-        model_path, embodiment_tag, policy_client_host, policy_client_port
-    )
+    policy = create_gr00t_sim_policy(model_path, embodiment_tag, policy_client_host, policy_client_port)
 
     results = run_rollout_gymnasium_policy(
         env_name=env_name,
@@ -488,12 +472,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # validate policy configuration
-    assert (
-        args.model_path and not (args.policy_client_host or args.policy_client_port)
-    ) or (
-        not args.model_path
-        and args.policy_client_host
-        and args.policy_client_port is not None
+    assert (args.model_path and not (args.policy_client_host or args.policy_client_port)) or (
+        not args.model_path and args.policy_client_host and args.policy_client_port is not None
     ), (
         "Invalid policy configuration: You must provide EITHER model_path OR (policy_client_host & policy_client_port), not both.\n"
         "If all 3 arguments are provided, explicitly choose one:\n"

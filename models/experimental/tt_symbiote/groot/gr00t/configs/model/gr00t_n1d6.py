@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import MISSING, asdict, dataclass, field, is_dataclass
 from enum import Enum
 import json
@@ -44,9 +47,7 @@ class Gr00tN1d6Config(PretrainedConfig):
     color_jitter_params: dict[str, float] | None = None
     use_albumentations_transforms: bool = True
     formalize_language: bool = True
-    apply_sincos_state_encoding: bool = (
-        False  # Global flag to enable per-embodiment sin/cos encoding
-    )
+    apply_sincos_state_encoding: bool = False  # Global flag to enable per-embodiment sin/cos encoding
     use_relative_action: bool = False
 
     # Action head configuration parameters
@@ -94,9 +95,7 @@ class Gr00tN1d6Config(PretrainedConfig):
 
     # State Augmentation parameters
     state_dropout_prob: float = 0.0  # State dropout probability
-    state_additive_noise_scale: float = (
-        0.0  # Scale for additive Gaussian noise on state features
-    )
+    state_additive_noise_scale: float = 0.0  # Scale for additive Gaussian noise on state features
 
     # Multi-embodiment parameters
     max_num_embodiments: int = 32

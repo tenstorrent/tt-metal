@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from pathlib import Path
 import shutil
 
@@ -37,28 +40,20 @@ class CheckpointFormatCallback(TrainerCallback):
             if self.exp_cfg_dir is not None:
                 exp_cfg_dst = checkpoint_dir / self.exp_cfg_dir.name
                 if self.exp_cfg_dir.exists():
-                    print(
-                        f"Copying experiment config directory {self.exp_cfg_dir} to {exp_cfg_dst}"
-                    )
+                    print(f"Copying experiment config directory {self.exp_cfg_dir} to {exp_cfg_dst}")
                     shutil.copytree(self.exp_cfg_dir, exp_cfg_dst, dirs_exist_ok=True)
 
             # Copy processor directory if provided
             if self.processor_dir is not None:
                 if self.processor_dir.exists():
-                    print(
-                        f"Copying processor directory {self.processor_dir} to {checkpoint_dir}"
-                    )
-                    shutil.copytree(
-                        self.processor_dir, checkpoint_dir, dirs_exist_ok=True
-                    )
+                    print(f"Copying processor directory {self.processor_dir} to {checkpoint_dir}")
+                    shutil.copytree(self.processor_dir, checkpoint_dir, dirs_exist_ok=True)
 
             # Copy wandb_config.json if provided
             wandb_config_src = Path(args.output_dir) / "wandb_config.json"
             wandb_config_dst = checkpoint_dir / "wandb_config.json"
             if wandb_config_src.exists():
-                print(
-                    f"Copying wandb_config.json from {wandb_config_src} to {wandb_config_dst}"
-                )
+                print(f"Copying wandb_config.json from {wandb_config_src} to {wandb_config_dst}")
                 shutil.copy2(wandb_config_src, wandb_config_dst)
 
 
@@ -89,11 +84,7 @@ class BestMetricCheckpointCallback(TrainerCallback):
         if state.is_world_process_zero and metrics is not None:
             current_metric = metrics.get(self.metric_name, None)
             if current_metric is not None:
-                is_better = (
-                    self.greater_is_better
-                    if current_metric > self.best_metric
-                    else not self.greater_is_better
-                )
+                is_better = self.greater_is_better if current_metric > self.best_metric else not self.greater_is_better
                 if is_better:
                     self.best_metric = current_metric
                     best_checkpoint_dir = (
@@ -106,21 +97,14 @@ class BestMetricCheckpointCallback(TrainerCallback):
                     if self.exp_cfg_dir is not None:
                         exp_cfg_dst = best_checkpoint_dir / self.exp_cfg_dir.name
                         if self.exp_cfg_dir.exists():
-                            print(
-                                f"Copying experiment config directory {self.exp_cfg_dir} to {exp_cfg_dst}"
-                            )
-                            shutil.copytree(
-                                self.exp_cfg_dir, exp_cfg_dst, dirs_exist_ok=True
-                            )
+                            print(f"Copying experiment config directory {self.exp_cfg_dir} to {exp_cfg_dst}")
+                            shutil.copytree(self.exp_cfg_dir, exp_cfg_dst, dirs_exist_ok=True)
 
                     print(
                         f"Best checkpoint saved to {best_checkpoint_dir} with metric {self.metric_name} = {current_metric}"
                     )
 
-                    if (
-                        self._best_checkpoint_dir is not None
-                        and Path(self._best_checkpoint_dir).exists()
-                    ):
+                    if self._best_checkpoint_dir is not None and Path(self._best_checkpoint_dir).exists():
                         shutil.rmtree(self._best_checkpoint_dir)
 
                     self._best_checkpoint_dir = str(best_checkpoint_dir)

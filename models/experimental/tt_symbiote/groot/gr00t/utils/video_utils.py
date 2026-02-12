@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import math
 import subprocess
@@ -134,9 +137,7 @@ def _extract_frames_ffmpeg(video_path: str, frame_indices: list[int]) -> np.ndar
     return np.array(frames)
 
 
-def _extract_frames_at_timestamps_ffmpeg(
-    video_path: str, timestamps: list[float]
-) -> np.ndarray:
+def _extract_frames_at_timestamps_ffmpeg(video_path: str, timestamps: list[float]) -> np.ndarray:
     """Extract frames at specific timestamps using ffmpeg."""
     frames = []
 
@@ -245,9 +246,7 @@ def _extract_all_frames_ffmpeg(video_path: str) -> tuple[np.ndarray, np.ndarray]
         total_pixels = len(frame_data) // 3
         actual_frames = total_pixels // (width * height)
 
-        frames = frame_data[: actual_frames * width * height * 3].reshape(
-            (actual_frames, height, width, 3)
-        )
+        frames = frame_data[: actual_frames * width * height * 3].reshape((actual_frames, height, width, 3))
 
         # Generate timestamps
         timestamps = np.arange(actual_frames) / fps
@@ -266,9 +265,7 @@ def get_frames_by_indices(
 ) -> np.ndarray:
     if video_backend == "decord":
         if not DECORD_AVAILABLE:
-            raise ImportError(
-                "decord is not available. Install it with: pip install decord"
-            )
+            raise ImportError("decord is not available. Install it with: pip install decord")
         vr = decord.VideoReader(video_path, **video_backend_kwargs)
         frames = vr.get_batch(indices)
         return frames.asnumpy()
@@ -315,9 +312,7 @@ def get_frames_by_timestamps(
     """
     if video_backend == "decord":
         if not DECORD_AVAILABLE:
-            raise ImportError(
-                "decord is not available. Install it with: pip install decord"
-            )
+            raise ImportError("decord is not available. Install it with: pip install decord")
         vr = decord.VideoReader(video_path, **video_backend_kwargs)
         num_frames = len(vr)
         # Retrieve the timestamps for each frame in the video
@@ -369,9 +364,7 @@ def get_frames_by_timestamps(
         # Calculate timestamps for each frame
         fps = cap.get(cv2.CAP_PROP_FPS)
         frame_ts = np.arange(num_frames) / fps
-        frame_ts = frame_ts[
-            :, np.newaxis
-        ]  # Reshape to (num_frames, 1) for broadcasting
+        frame_ts = frame_ts[:, np.newaxis]  # Reshape to (num_frames, 1) for broadcasting
         # Map each requested timestamp to the closest frame index
         indices = np.abs(frame_ts - timestamps).argmin(axis=0)
         frames = []
@@ -434,9 +427,7 @@ def get_all_frames(
     """
     if video_backend == "decord":
         if not DECORD_AVAILABLE:
-            raise ImportError(
-                "decord is not available. Install it with: pip install decord"
-            )
+            raise ImportError("decord is not available. Install it with: pip install decord")
         vr = decord.VideoReader(video_path, **video_backend_kwargs)
         frames = vr.get_batch(range(len(vr))).asnumpy()
         return frames, vr.get_frame_timestamp(range(len(vr)))[:, 0]

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Gr00t Policy implementation for inference.
 
 This module provides the core policy classes for running Gr00t models:
@@ -90,18 +93,14 @@ class Gr00tPolicy(BasePolicy):
 
         # Store embodiment-specific configurations
         self.embodiment_tag = embodiment_tag
-        self.modality_configs = self.processor.get_modality_configs()[
-            self.embodiment_tag.value
-        ]
+        self.modality_configs = self.processor.get_modality_configs()[self.embodiment_tag.value]
         self.collate_fn = self.processor.collator
 
         # Extract and validate language configuration
         # Currently only supports single language input per timestep
         language_keys = self.modality_configs["language"].modality_keys
         language_delta_indices = self.modality_configs["language"].delta_indices
-        assert (
-            len(language_delta_indices) == 1
-        ), "Only one language delta index is supported"
+        assert len(language_delta_indices) == 1, "Only one language delta index is supported"
         assert len(language_keys) == 1, "Only one language key is supported"
         self.language_key = language_keys[0]
 
@@ -173,9 +172,7 @@ class Gr00tPolicy(BasePolicy):
         """
         # Check that observation contains all required top-level modality keys
         for modality in ["video", "state", "language"]:
-            assert (
-                modality in observation
-            ), f"Observation must contain a '{modality}' key"
+            assert modality in observation, f"Observation must contain a '{modality}' key"
             assert isinstance(
                 observation[modality], dict
             ), f"Observation '{modality}' must be a dictionary. Got {type(observation[modality])}: {observation[modality]}"
@@ -195,9 +192,7 @@ class Gr00tPolicy(BasePolicy):
                 ), f"Video key '{video_key}' must have batch size {bs}. Got {len(observation['video'][video_key])}"
 
             # Check that the expected video key exists in the observation
-            assert (
-                video_key in observation["video"]
-            ), f"Video key '{video_key}' must be in observation"
+            assert video_key in observation["video"], f"Video key '{video_key}' must be in observation"
 
             batched_video = observation["video"][video_key]
 
@@ -238,9 +233,7 @@ class Gr00tPolicy(BasePolicy):
                 ), f"State key '{state_key}' must have batch size {bs}. Got {len(observation['state'][state_key])}"
 
             # Check that the expected state key exists in the observation
-            assert (
-                state_key in observation["state"]
-            ), f"State key '{state_key}' must be in observation"
+            assert state_key in observation["state"], f"State key '{state_key}' must be in observation"
 
             batched_state = observation["state"][state_key]
 
@@ -276,9 +269,7 @@ class Gr00tPolicy(BasePolicy):
                 ), f"Language key '{language_key}' must have batch size {bs}. Got {len(observation['language'][language_key])}"
 
             # Check that the expected language key exists in the observation
-            assert (
-                language_key in observation["language"]
-            ), f"Language key '{language_key}' must be in observation"
+            assert language_key in observation["language"], f"Language key '{language_key}' must be in observation"
 
             batched_language: list[list[str]] = observation["language"][language_key]
 
@@ -295,14 +286,10 @@ class Gr00tPolicy(BasePolicy):
                 ), f"Language key '{language_key}'s horizon must be {len(self.modality_configs['language'].delta_indices)}. Got {len(batched_language)}"
 
                 # Verify inner structure is also a list (temporal dimension)
-                assert isinstance(
-                    batch_item, list
-                ), f"Language batch item must be a list. Got {type(batch_item)}"
+                assert isinstance(batch_item, list), f"Language batch item must be a list. Got {type(batch_item)}"
 
                 # Current implementation expects exactly one language instruction per timestep
-                assert (
-                    len(batch_item) == 1
-                ), f"Language batch item must have exactly one item. Got {len(batch_item)}"
+                assert len(batch_item) == 1, f"Language batch item must have exactly one item. Got {len(batch_item)}"
 
                 # Verify the instruction itself is a string
                 assert isinstance(
@@ -336,12 +323,8 @@ class Gr00tPolicy(BasePolicy):
         states = []
         for obs in unbatched_observations:
             vla_step_data = self._to_vla_step_data(obs)
-            states.append(
-                vla_step_data.states
-            )  # dict[str, np.ndarray[np.float32, (T, D)]]
-            messages = [
-                {"type": MessageType.EPISODE_STEP.value, "content": vla_step_data}
-            ]
+            states.append(vla_step_data.states)  # dict[str, np.ndarray[np.float32, (T, D)]]
+            messages = [{"type": MessageType.EPISODE_STEP.value, "content": vla_step_data}]
             processed_inputs.append(self.processor(messages))
 
         # Step 3: Collate processed inputs into a single batch for model
@@ -362,9 +345,7 @@ class Gr00tPolicy(BasePolicy):
         )
 
         # Cast all actions to float32 for consistency
-        casted_action = {
-            key: value.astype(np.float32) for key, value in unnormalized_action.items()
-        }
+        casted_action = {key: value.astype(np.float32) for key, value in unnormalized_action.items()}
         return casted_action, {}
 
     def check_action(self, action: dict[str, Any]) -> None:
@@ -484,9 +465,7 @@ class Gr00tSimPolicyWrapper(PolicyWrapper):
         for video_key in modality_configs["video"].modality_keys:
             # Construct flat key expected in Gr00t sim environment
             parsed_key = f"video.{video_key}"
-            assert (
-                parsed_key in observation
-            ), f"Video key '{parsed_key}' must be in observation"
+            assert parsed_key in observation, f"Video key '{parsed_key}' must be in observation"
 
             batched_video = observation[parsed_key]
 
@@ -520,9 +499,7 @@ class Gr00tSimPolicyWrapper(PolicyWrapper):
         for state_key in modality_configs["state"].modality_keys:
             # Construct flat key expected in Gr00t sim environment
             parsed_key = f"state.{state_key}"
-            assert (
-                parsed_key in observation
-            ), f"State key '{parsed_key}' must be in observation"
+            assert parsed_key in observation, f"State key '{parsed_key}' must be in observation"
 
             batched_state = observation[parsed_key]
 
@@ -551,17 +528,12 @@ class Gr00tSimPolicyWrapper(PolicyWrapper):
         for language_key in modality_configs["language"].modality_keys:
             # PATCH: Legacy compatibility for DC environments
             # DC envs use 'annotation.human.coarse_action' instead of 'task'
-            if (
-                language_key == "task"
-                and "annotation.human.coarse_action" in observation
-            ):
+            if language_key == "task" and "annotation.human.coarse_action" in observation:
                 language_key = "annotation.human.coarse_action"
             # /PATCH
 
             # Check that the expected language key exists
-            assert (
-                language_key in observation
-            ), f"Language key '{language_key}' must be in observation"
+            assert language_key in observation, f"Language key '{language_key}' must be in observation"
 
             # In Gr00t sim format, language is a tuple of strings (B,)
             batched_language: tuple[str] | list[str] = observation[language_key]  # (B,)
@@ -606,10 +578,7 @@ class Gr00tSimPolicyWrapper(PolicyWrapper):
             for key in self.policy.modality_configs[modality].modality_keys:
                 if modality == "language":
                     # PATCH: Legacy compatibility for DC environments
-                    if (
-                        key == "task"
-                        and "annotation.human.coarse_action" in observation
-                    ):
+                    if key == "task" and "annotation.human.coarse_action" in observation:
                         parsed_key = "annotation.human.coarse_action"
                     # /PATCH
                     else:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from typing import Tuple
 
 from gr00t.configs.model.gr00t_n1d6 import Gr00tN1d6Config

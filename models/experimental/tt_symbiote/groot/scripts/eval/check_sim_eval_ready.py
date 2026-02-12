@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import ctypes
 import os
 from pathlib import Path
@@ -30,9 +33,7 @@ EOF
 
 def check_uv_installation():
     try:
-        output = subprocess.check_output(
-            ["uv", "--version"], text=True, stderr=subprocess.DEVNULL
-        )
+        output = subprocess.check_output(["uv", "--version"], text=True, stderr=subprocess.DEVNULL)
         version_str = output.strip()
         print(f"✓ uv is installed: {version_str}")
 
@@ -55,9 +56,7 @@ def check_uv_installation():
 def _test_nvidia_driver_installation():
     try:
         cmd = "find /usr -type f -name 'libEGL_nvidia.so*' -o -name 'libGLX_nvidia.so*' -o -name 'libGLESv*.so*' 2>/dev/null"
-        output = subprocess.check_output(
-            cmd, shell=True, text=True, stderr=subprocess.DEVNULL
-        )
+        output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
         if not output:
             raise RuntimeError("Necessary EGL/GLX/GLES libraries are not installed")
         print("✓ EGL/GLX/GLES libraries found")
@@ -91,9 +90,7 @@ def _test_egl():
         num_configs = ctypes.c_int()
         configs = (EGL.EGLConfig * 1)()
 
-        if not EGL.eglChooseConfig(
-            display, attrib_list, configs, 1, ctypes.byref(num_configs)
-        ):
+        if not EGL.eglChooseConfig(display, attrib_list, configs, 1, ctypes.byref(num_configs)):
             raise RuntimeError("Failed to choose EGL config.")
 
         if num_configs.value == 0:
@@ -147,9 +144,7 @@ def check_egl_installation():
         _test_nvidia_driver_installation()
     ), "Necessary EGL/GLX/GLES libraries are not installed. Reinstall the NVIDIA driver or set NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility when launching the container"
 
-    assert Path(
-        "/usr/share/glvnd/egl_vendor.d"
-    ).exists(), "EGL is not installed, please run `apt install libegl1 -y`"
+    assert Path("/usr/share/glvnd/egl_vendor.d").exists(), "EGL is not installed, please run `apt install libegl1 -y`"
     if not Path("/usr/share/glvnd/egl_vendor.d/10_nvidia.json").exists():
         print("Creating /usr/share/glvnd/egl_vendor.d/10_nvidia.json ...")
         subprocess.run(CREATE_10_NVIDIA_JSON, shell=True)
@@ -171,12 +166,8 @@ def check_robocasa_environments():
         "print('Env OK:', type(env))"
     )
     cmd = f'PYTHONPATH={groot_path} {python_exec} -c "{python_script}"'
-    output = subprocess.check_output(
-        cmd, shell=True, text=True, stderr=subprocess.DEVNULL
-    )
-    assert (
-        "Env OK:" in output
-    ), f"Failed to check robocasa environment:\n{cmd}\n{output}"
+    output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+    assert "Env OK:" in output, f"Failed to check robocasa environment:\n{cmd}\n{output}"
     print("✓ RoboCasa environment is installed")
 
 
@@ -195,12 +186,8 @@ def check_robocasa_gr1_tabletop_tasks_environments():
         "print('Env OK:', type(env))"
     )
     cmd = f'PYTHONPATH={groot_path} {python_exec} -c "{python_script}"'
-    output = subprocess.check_output(
-        cmd, shell=True, text=True, stderr=subprocess.DEVNULL
-    )
-    assert (
-        "Env OK:" in output
-    ), f"Failed to check robocasa environment:\n{cmd}\n{output}"
+    output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+    assert "Env OK:" in output, f"Failed to check robocasa environment:\n{cmd}\n{output}"
     print("✓ RoboCasa GR1 Tabletop Tasks environment is installed")
 
 
@@ -219,12 +206,8 @@ def check_g1_locomanipulation_environment():
         "print('Env OK:', type(env))"
     )
     cmd = f'PYTHONPATH={groot_path} {python_exec} -c "{python_script}"'
-    output = subprocess.check_output(
-        cmd, shell=True, text=True, stderr=subprocess.DEVNULL
-    )
-    assert (
-        "Env OK:" in output
-    ), f"Failed to check G1 LocoManipulation environment:\n{cmd}\n{output}"
+    output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+    assert "Env OK:" in output, f"Failed to check G1 LocoManipulation environment:\n{cmd}\n{output}"
     print("✓ G1 LocoManipulation environment is installed")
 
 
@@ -244,12 +227,8 @@ def check_simpler_env_environments():
         "print('Env OK:', type(env))"
     )
     cmd = f'PYTHONPATH={groot_path} {python_exec} -c "{python_script}"'
-    output = subprocess.check_output(
-        cmd, shell=True, text=True, stderr=subprocess.DEVNULL
-    )
-    assert (
-        "Env OK:" in output
-    ), f"Failed to check SimplerEnv environment:\n{cmd}\n{output}"
+    output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
+    assert "Env OK:" in output, f"Failed to check SimplerEnv environment:\n{cmd}\n{output}"
     print("✓ SimplerEnv environment is installed")
 
 
@@ -274,9 +253,7 @@ def check_libero_environments():
         "print('Env OK:', type(env))"
     )
     cmd = f'PYTHONPATH={groot_path} {python_exec} -c "{python_script}"'
-    output = subprocess.check_output(
-        cmd, shell=True, text=True, stderr=subprocess.DEVNULL
-    )
+    output = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.DEVNULL)
     assert "Env OK:" in output, f"Failed to check Libero environment:\n{cmd}\n{output}"
     print("✓ LIBERO environment is installed")
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 # coding=utf-8
 # Copyright 2024 The HuggingFace Inc. team.
 #
@@ -71,15 +74,11 @@ VIDEO_MAX_PIXELS = 768 * 28 * 28
 # Set the maximum number of video token inputs.
 # Here, 128K represents the maximum number of input tokens for the VLLM model.
 # Remember to adjust it according to your own configuration.
-VIDEO_TOTAL_PIXELS = int(
-    float(os.environ.get("VIDEO_MAX_PIXELS", 128000 * 28 * 28 * 0.9))
-)
+VIDEO_TOTAL_PIXELS = int(float(os.environ.get("VIDEO_MAX_PIXELS", 128000 * 28 * 28 * 0.9)))
 logger.info(f"set VIDEO_TOTAL_PIXELS: {VIDEO_TOTAL_PIXELS}")
 
 
-def adjust_by_factor(
-    number: int, factor: int, method: Literal["round", "ceil", "floor"] = "round"
-) -> int:
+def adjust_by_factor(number: int, factor: int, method: Literal["round", "ceil", "floor"] = "round") -> int:
     """Adjusts 'number' to the nearest, ceiling, or floor multiple of 'factor'."""
     op = {"round": round, "ceil": math.ceil, "floor": math.floor}[method]
     return op(number / factor) * factor
@@ -88,9 +87,7 @@ def adjust_by_factor(
 def to_rgb(pil_image: Image.Image) -> Image.Image:
     if pil_image.mode == "RGBA":
         white_background = Image.new("RGB", pil_image.size, (255, 255, 255))
-        white_background.paste(
-            pil_image, mask=pil_image.split()[3]
-        )  # Use alpha channel as mask
+        white_background.paste(pil_image, mask=pil_image.split()[3])  # Use alpha channel as mask
         return white_background
     else:
         return pil_image.convert("RGB")
@@ -114,12 +111,8 @@ def smart_resize(
             f"absolute aspect ratio must be smaller than {MAX_RATIO}, got {max(height, width) / min(height, width)}"
         )
 
-    h_bar = min(
-        max(factor, adjust_by_factor(height, factor, method="round")), IMAGE_MAX_SIZE
-    )
-    w_bar = min(
-        max(factor, adjust_by_factor(width, factor, method="round")), IMAGE_MAX_SIZE
-    )
+    h_bar = min(max(factor, adjust_by_factor(height, factor, method="round")), IMAGE_MAX_SIZE)
+    w_bar = min(max(factor, adjust_by_factor(width, factor, method="round")), IMAGE_MAX_SIZE)
     if h_bar * w_bar > max_pixels:
         beta = math.sqrt((h_bar * w_bar) / max_pixels)
         h_bar = adjust_by_factor(h_bar / beta, factor, method="floor")
@@ -150,9 +143,7 @@ def read_img_from_lmdb_v2(image_data):
         print(f"Warning: Key {key} not found.")
         return None
     record = pickle.loads(value)
-    image_bgr = cv2.imdecode(
-        np.frombuffer(record["image"], dtype=np.uint8), cv2.IMREAD_COLOR
-    )
+    image_bgr = cv2.imdecode(np.frombuffer(record["image"], dtype=np.uint8), cv2.IMREAD_COLOR)
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     image = Image.fromarray(image_rgb)
 
@@ -163,9 +154,7 @@ def parse_lmdb_image_data(image_data):
     lmdb_file = image_data["lmdb_file"]
     if not os.path.exists(lmdb_file):
         if "/home/zhidingy/workspace/libs/eagle/Eagle2/" in lmdb_file:
-            lmdb_file = lmdb_file.replace(
-                "/home/zhidingy/workspace/libs/eagle/Eagle2/", ""
-            )
+            lmdb_file = lmdb_file.replace("/home/zhidingy/workspace/libs/eagle/Eagle2/", "")
         else:
             raise ValueError(f"LMDB file {lmdb_file} does not exist")
 
@@ -174,9 +163,7 @@ def parse_lmdb_image_data(image_data):
         return read_img_from_lmdb_v2(image_data)
 
     try:
-        env = lmdb.open(
-            image_data["lmdb_file"], readonly=True, lock=False, max_readers=10240
-        )
+        env = lmdb.open(image_data["lmdb_file"], readonly=True, lock=False, max_readers=10240)
     except Exception as e:
         print(
             f"Failed to open lmdb file {image_data['lmdb_file']}. Error message: {e}",
@@ -204,9 +191,7 @@ def parse_lmdb_image_data(image_data):
     return image
 
 
-def fetch_image(
-    ele: dict[str, str | Image.Image], size_factor: int = IMAGE_FACTOR
-) -> Image.Image:
+def fetch_image(ele: dict[str, str | Image.Image], size_factor: int = IMAGE_FACTOR) -> Image.Image:
     if "image" in ele:
         image = ele["image"]
     else:
@@ -229,9 +214,7 @@ def fetch_image(
     else:
         image_obj = Image.open(image)
     if image_obj is None:
-        raise ValueError(
-            f"Unrecognized image input, support local path, http url, base64 and PIL.Image, got {image}"
-        )
+        raise ValueError(f"Unrecognized image input, support local path, http url, base64 and PIL.Image, got {image}")
     image = to_rgb(image_obj)
     # if 'scale_factor' in ele:
     #     scale_factor = ele['scale_factor']
@@ -279,16 +262,12 @@ def smart_nframes(
     Returns:
         int: the number of frames for video used for model inputs.
     """
-    assert not (
-        "fps" in ele and "nframes" in ele
-    ), "Only accept either `fps` or `nframes`"
+    assert not ("fps" in ele and "nframes" in ele), "Only accept either `fps` or `nframes`"
     if "nframes" in ele:
         nframes = adjust_by_factor(ele["nframes"], FRAME_FACTOR, method="round")
     else:
         fps = ele.get("fps", FPS)
-        min_frames = adjust_by_factor(
-            ele.get("min_frames", FPS_MIN_FRAMES), FRAME_FACTOR, method="ceil"
-        )
+        min_frames = adjust_by_factor(ele.get("min_frames", FPS_MIN_FRAMES), FRAME_FACTOR, method="ceil")
         max_frames = adjust_by_factor(
             ele.get("max_frames", min(FPS_MAX_FRAMES, total_frames)),
             FRAME_FACTOR,
@@ -296,9 +275,7 @@ def smart_nframes(
         )
         nframes = total_frames / video_fps * fps
         if nframes > total_frames:
-            logger.warning(
-                f"smart_nframes: nframes[{nframes}] > total_frames[{total_frames}]"
-            )
+            logger.warning(f"smart_nframes: nframes[{nframes}] > total_frames[{total_frames}]")
         nframes = min(min(max(nframes, min_frames), max_frames), total_frames)
         nframes = adjust_by_factor(nframes, FRAME_FACTOR, method="floor")
     if not (FRAME_FACTOR <= nframes and nframes <= total_frames):
@@ -314,9 +291,7 @@ def _read_video_torchvision(
     video_path = ele["video"]
     if version.parse(torchvision.__version__) < version.parse("0.19.0"):
         if "http://" in video_path or "https://" in video_path:
-            warnings.warn(
-                "torchvision < 0.19.0 does not support http/https video path, please upgrade to 0.19.0."
-            )
+            warnings.warn("torchvision < 0.19.0 does not support http/https video path, please upgrade to 0.19.0.")
         if "file://" in video_path:
             video_path = video_path[7:]
     st = time.time()
@@ -328,9 +303,7 @@ def _read_video_torchvision(
         output_format="TCHW",
     )
     total_frames, video_fps = video.size(0), info["video_fps"]
-    logger.info(
-        f"torchvision:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - st:.3f}s"
-    )
+    logger.info(f"torchvision:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - st:.3f}s")
     nframes = smart_nframes(ele, total_frames=total_frames, video_fps=video_fps)
     # Calculate frame indices and corresponding timestamps (based on video start time)
     idx = torch.linspace(0, total_frames - 1, nframes).round().long()
@@ -370,28 +343,18 @@ def _read_video_pyav(
 
     if start_time > 0 or end_time is not None:
         # Seek to start time
-        start_pts = int(
-            start_time
-            * video_stream.time_base.denominator
-            / video_stream.time_base.numerator
-        )
+        start_pts = int(start_time * video_stream.time_base.denominator / video_stream.time_base.numerator)
         container.seek(start_pts, stream=video_stream)
 
         # Calculate end pts if specified
         if end_time is not None:
-            end_pts = int(
-                end_time
-                * video_stream.time_base.denominator
-                / video_stream.time_base.numerator
-            )
+            end_pts = int(end_time * video_stream.time_base.denominator / video_stream.time_base.numerator)
         else:
             end_pts = None
     else:
         end_pts = None
 
-    logger.info(
-        f"pyav:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - st:.3f}s"
-    )
+    logger.info(f"pyav:  {video_path=}, {total_frames=}, {video_fps=}, time={time.time() - st:.3f}s")
 
     # Calculate number of frames to extract
     nframes = smart_nframes(ele, total_frames=total_frames, video_fps=video_fps)
@@ -423,9 +386,7 @@ def _read_video_pyav(
 
     # Convert to tensor
     if frames:
-        video = torch.tensor(np.stack(frames)).permute(
-            0, 3, 1, 2
-        )  # Convert to TCHW format
+        video = torch.tensor(np.stack(frames)).permute(0, 3, 1, 2)  # Convert to TCHW format
     else:
         # Fallback: create empty tensor with correct shape
         video = torch.zeros((nframes, 3, 224, 224), dtype=torch.uint8)
@@ -455,13 +416,9 @@ def fetch_video(
     if isinstance(ele["video"], str):
         video_reader_backend = get_video_reader_backend()
         try:
-            video, sample_fps, timestamps = VIDEO_READER_BACKENDS[video_reader_backend](
-                ele
-            )
+            video, sample_fps, timestamps = VIDEO_READER_BACKENDS[video_reader_backend](ele)
         except Exception as e:
-            logger.warning(
-                f"video_reader_backend {video_reader_backend} error, use torchvision as default, msg: {e}"
-            )
+            logger.warning(f"video_reader_backend {video_reader_backend} error, use torchvision as default, msg: {e}")
             video, sample_fps, timestamps = VIDEO_READER_BACKENDS["torchvision"](ele)
 
         nframes, _, height, width = video.shape
@@ -474,9 +431,7 @@ def fetch_video(
         )
         max_pixels_supposed = ele.get("max_pixels", max_pixels)
         if max_pixels_supposed > max_pixels:
-            logger.warning(
-                f"The given max_pixels[{max_pixels_supposed}] exceeds limit[{max_pixels}]."
-            )
+            logger.warning(f"The given max_pixels[{max_pixels_supposed}] exceeds limit[{max_pixels}].")
         max_pixels = min(max_pixels_supposed, max_pixels)
         if "resized_height" in ele and "resized_width" in ele:
             resized_height, resized_width = smart_resize(
@@ -508,9 +463,7 @@ def fetch_video(
         process_info.pop("type", None)
         process_info.pop("video", None)
         images = [
-            fetch_image(
-                {"image": video_element, **process_info}, size_factor=image_factor
-            )
+            fetch_image({"image": video_element, **process_info}, size_factor=image_factor)
             for video_element in ele["video"]
         ]
         nframes = adjust_by_factor(len(images), FRAME_FACTOR, method="ceil")
@@ -587,12 +540,8 @@ class Eagle3_VLProcessor(ProcessorMixin):
         **kwargs,
     ):
         self.vision_feature_select_strategy = vision_feature_select_strategy
-        self.image_token = (
-            tokenizer.image_token if hasattr(tokenizer, "image_token") else image_token
-        )
-        self.video_token = (
-            tokenizer.video_token if hasattr(tokenizer, "video_token") else video_token
-        )
+        self.image_token = tokenizer.image_token if hasattr(tokenizer, "image_token") else image_token
+        self.video_token = tokenizer.video_token if hasattr(tokenizer, "video_token") else video_token
         self.image_token_id = (
             tokenizer.image_token_id
             if getattr(tokenizer, "image_token_id", None)
@@ -612,15 +561,11 @@ class Eagle3_VLProcessor(ProcessorMixin):
             self.auto_map = kwargs["auto_map"]
         super().__init__(image_processor, tokenizer, chat_template=chat_template)
 
-    def replace_media_placeholder(
-        self, text, image_list, video_list, timestamps_list, fps_list, **output_kwargs
-    ):
+    def replace_media_placeholder(self, text, image_list, video_list, timestamps_list, fps_list, **output_kwargs):
         num_of_images_in_this_sample = 0
         num_of_videos_in_this_sample = 0
         # Regular expression pattern to match formats like <image-1> or <video-2>
-        pattern = re.compile(
-            rf"<({self.image_placeholder}|{self.video_placeholder})-(\d+)>"
-        )
+        pattern = re.compile(rf"<({self.image_placeholder}|{self.video_placeholder})-(\d+)>")
         unified_frame_list = []
 
         # Function to replace tags in a single text
@@ -677,9 +622,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
                         frame_timestamps = timestamps_list[idx_in_list]
                     else:
                         frame_timestamps = None
-                    sampled_fps = (
-                        fps_list[idx_in_list] if fps_list is not None else None
-                    )
+                    sampled_fps = fps_list[idx_in_list] if fps_list is not None else None
 
                     num_of_tokens_list = [image_tokens] * N
 
@@ -703,10 +646,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
                             + "".join(special_placeholder)
                         )
                     else:
-                        special_placeholder = (
-                            f"The {idx_mapper[idx_in_list]} video: "
-                            + "".join(special_placeholder)
-                        )
+                        special_placeholder = f"The {idx_mapper[idx_in_list]} video: " + "".join(special_placeholder)
                     unified_frame_list.append(video_inputs)
                     num_of_videos_in_this_sample += 1
                 else:
@@ -718,9 +658,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
         text = replace_in_text(text)
         if len(unified_frame_list) > 0:
             pixel_values = [frame["pixel_values"] for frame in unified_frame_list]
-            image_sizes = torch.cat(
-                [frame["image_sizes"] for frame in unified_frame_list], dim=0
-            )
+            image_sizes = torch.cat([frame["image_sizes"] for frame in unified_frame_list], dim=0)
         else:
             pixel_values = []
             image_sizes = []
@@ -735,9 +673,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
     def __call__(
         self,
         images: ImageInput = None,
-        text: Union[
-            TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]
-        ] = None,
+        text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]] = None,
         audio=None,
         videos: VideoInput = None,
         **kwargs: Unpack[Eagle3_VLProcessorKwargs],
@@ -778,9 +714,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
         if isinstance(text, str):
             text_list = [text]
         elif not isinstance(text, list) and not isinstance(text[0], str):
-            raise ValueError(
-                "Invalid input text. Please provide a string, or a list of strings"
-            )
+            raise ValueError("Invalid input text. Please provide a string, or a list of strings")
         elif isinstance(text, list) and isinstance(text[0], str):
             text_list = text
 
@@ -797,11 +731,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
         timestamps_batch = output_kwargs["videos_kwargs"].pop("timestamps", None)
         fps_batch = output_kwargs["videos_kwargs"].pop("fps", None)
         for sample in text_list:
-            timestamps_list = (
-                timestamps_batch[video_start_idx:]
-                if timestamps_batch is not None
-                else None
-            )
+            timestamps_list = timestamps_batch[video_start_idx:] if timestamps_batch is not None else None
             fps_list = fps_batch[video_start_idx:] if fps_batch is not None else None
             (
                 sample,
@@ -861,9 +791,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
     # override to save video-config in a separate config file
     def save_pretrained(self, save_directory, **kwargs):
         if os.path.isfile(save_directory):
-            raise ValueError(
-                f"Provided path ({save_directory}) should be a directory, not a file"
-            )
+            raise ValueError(f"Provided path ({save_directory}) should be a directory, not a file")
         os.makedirs(save_directory, exist_ok=True)
 
         outputs = super().save_pretrained(save_directory, **kwargs)
@@ -884,11 +812,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
         self,
         conversations: list[dict] | list[list[dict]],
         return_video_kwargs: bool = False,
-    ) -> tuple[
-        list[Image.Image] | None,
-        list[torch.Tensor | list[Image.Image]] | None,
-        Optional[dict],
-    ]:
+    ) -> tuple[list[Image.Image] | None, list[torch.Tensor | list[Image.Image]] | None, Optional[dict],]:
         vision_infos = self.extract_vision_info(conversations)
         ## Read images or videos
         image_inputs = []
@@ -899,9 +823,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
             if "image" in vision_info or "image_url" in vision_info:
                 image_inputs.append(fetch_image(vision_info))
             elif "video" in vision_info:
-                video_input, video_sample_fps, video_timestamps = fetch_video(
-                    vision_info, return_video_sample_fps=True
-                )
+                video_input, video_sample_fps, video_timestamps = fetch_video(vision_info, return_video_sample_fps=True)
                 video_sample_fps_list.append(video_sample_fps)
                 video_inputs.append(video_input)
                 video_timestamps_list.append(video_timestamps)
@@ -919,9 +841,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
             )
         return image_inputs, video_inputs
 
-    def extract_vision_info(
-        self, conversations: list[dict] | list[list[dict]]
-    ) -> list[dict]:
+    def extract_vision_info(self, conversations: list[dict] | list[list[dict]]) -> list[dict]:
         vision_infos = []
         if isinstance(conversations[0], dict):
             conversations = [conversations]
@@ -938,9 +858,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
                             vision_infos.append(ele)
         return vision_infos
 
-    def py_apply_chat_template(
-        self, messages, tokenize=False, add_generation_prompt=False
-    ):
+    def py_apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
         """
         Renders a chat conversation using a custom template with verification of tokens.
         The purpose is to check for the existence of tokens like "<image-1>" or "<video-1>"
@@ -1000,9 +918,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
                 for item in content:
                     # Check if the item is an image (explicitly by type or by key presence).
                     if isinstance(item, dict) and (
-                        item.get("type") == "image"
-                        or "image" in item
-                        or "image_url" in item
+                        item.get("type") == "image" or "image" in item or "image_url" in item
                     ):
                         image_count += 1
                         candidate_token = f"<image-{image_count}>"
@@ -1010,9 +926,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
                         if candidate_token not in message_text:
                             result += candidate_token
                     # Check if the item is a video.
-                    elif isinstance(item, dict) and (
-                        item.get("type") == "video" or "video" in item
-                    ):
+                    elif isinstance(item, dict) and (item.get("type") == "video" or "video" in item):
                         video_count += 1
                         candidate_token = f"<video-{video_count}>"
                         # Only add the token if it is not already present.
@@ -1058,9 +972,7 @@ class Eagle3_VLProcessor(ProcessorMixin):
         # if "auto_map" in processor_dict:
         #    del processor_dict["auto_map"]
 
-        unused_kwargs = cls.validate_init_kwargs(
-            processor_config=processor_dict, valid_kwargs=cls.valid_kwargs
-        )
+        unused_kwargs = cls.validate_init_kwargs(processor_config=processor_dict, valid_kwargs=cls.valid_kwargs)
         processor = cls(*args, **processor_dict)
 
         # Update processor with kwargs if needed

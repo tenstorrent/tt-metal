@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import logging
 import os
 from pathlib import Path
@@ -16,9 +19,7 @@ if __name__ == "__main__":
     config = tyro.cli(Config, default=get_default_config(), description=__doc__)
     # Load config from path if provided
     if config.load_config_path:
-        assert Path(
-            config.load_config_path
-        ).exists(), f"Config path does not exist: {config.load_config_path}"
+        assert Path(config.load_config_path).exists(), f"Config path does not exist: {config.load_config_path}"
         config = config.load(Path(config.load_config_path))  # inplace loading
         config.load_config_path = None
         logging.info(f"Loaded config from {config.load_config_path}")

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -96,17 +99,13 @@ class Config:
             # if not Path(d_cfg.dataset_path).exists():
             #     raise ValueError(f"Dataset path does not exist: {d_cfg.dataset_path}")
             if d_cfg.dataset_type == "physical_embodiment" and not d_cfg.embodiment_tag:
-                raise ValueError(
-                    f"Embodiment tag is empty for dataset {d_cfg.dataset_path}"
-                )
+                raise ValueError(f"Embodiment tag is empty for dataset {d_cfg.dataset_path}")
             if d_cfg.embodiment_tag is not None:
                 embodiment_tags.add(d_cfg.embodiment_tag)
 
         stripped_modality_configs = {}
         for embodiment_tag in embodiment_tags:
-            stripped_modality_configs[embodiment_tag] = self.data.modality_configs[
-                embodiment_tag
-            ]
+            stripped_modality_configs[embodiment_tag] = self.data.modality_configs[embodiment_tag]
         self.data.modality_configs = stripped_modality_configs
 
         # ensure mix ratios are valid
@@ -117,19 +116,14 @@ class Config:
         # Fill in default values for action configs
         for embodiment_tag in self.data.modality_configs:
             # Fill in default values for action representation, type and format
-            if (
-                self.data.modality_configs[embodiment_tag]["action"].action_configs
-                is None
-            ):
+            if self.data.modality_configs[embodiment_tag]["action"].action_configs is None:
                 self.data.modality_configs[embodiment_tag]["action"].action_configs = [
                     ActionConfig(
                         rep=ActionRepresentation.ABSOLUTE,
                         type=ActionType.NON_EEF,
                         format=ActionFormat.DEFAULT,
                     )
-                ] * len(
-                    self.data.modality_configs[embodiment_tag]["action"].modality_keys
-                )
+                ] * len(self.data.modality_configs[embodiment_tag]["action"].modality_keys)
 
         if isinstance(self.model, Gr00tN1d6Config):
             import warnings
