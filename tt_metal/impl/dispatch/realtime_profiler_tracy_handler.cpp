@@ -95,6 +95,19 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
         return;
     }
 
+    if (record.end_timestamp < record.start_timestamp) {
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] Skipping zone with end < start: program_id={}, chip_id={}, "
+            "start_timestamp={}, end_timestamp={} (delta={})",
+            record.program_id,
+            record.chip_id,
+            record.start_timestamp,
+            record.end_timestamp,
+            static_cast<int64_t>(record.end_timestamp) - static_cast<int64_t>(record.start_timestamp));
+        return;
+    }
+
     std::string file_str = record.program_id > 0 ? tt::GetKernelSourcesForRuntimeId(record.program_id) : "";
     if (file_str.empty()) {
         file_str = "realtime_profiler";
