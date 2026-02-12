@@ -10,12 +10,6 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
 
-// DEBUG
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/debug/dprint_tensix.h"
-#include "enumerate.h"
-#include "api/compute/untilize.h"
-
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
@@ -111,26 +105,6 @@ void kernel_main() {
     // Unpacker A is for W0,W1 and W2, so Bf4_b
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
-    auto stall = []() {
-        for (uint32_t i = 0; i < 10000000; ++i) {
-            asm volatile("nop");
-        }
-        for (uint32_t i = 0; i < 10000000; ++i) {
-            asm volatile("nop");
-        }
-        for (uint32_t i = 0; i < 10000000; ++i) {
-            asm volatile("nop");
-        }
-        for (uint32_t i = 0; i < 10000000; ++i) {
-            asm volatile("nop");
-        }
-        for (uint32_t i = 0; i < 10000000; ++i) {
-            asm volatile("nop");
-        }
-        for (uint32_t i = 0; i < 10000000; ++i) {
-            asm volatile("nop");
-        }
-    };
     MATH(ckernel::zeroacc());
 
     //-------------------------------------------------------------------------
@@ -185,15 +159,13 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Apply SILU activation and then eltwise multiply
             //---------------------------------------------------------------------
-            // PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            // PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
 
             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
 
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-
-            // pack_reconfig_data_format(cb_s2c_in2);
 
             pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
             pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
@@ -205,7 +177,7 @@ void kernel_main() {
         cb_reserve_back(cb_c2w_rdy, 1);
         cb_push_back(cb_c2w_rdy, 1);
 
-        // pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
+        pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
 
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 4)
@@ -252,37 +224,14 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
-
-            //             ckernel::enumerate_tile_init();
-            //             ckernel::enumerate_tile(0, true, 1.0, expert_id * 32);
-            //             ckernel::enumerate_tile(1, true, 1.0, expert_id * 32);
-            //             ckernel::enumerate_tile(2, true, 1.0, expert_id * 32);
-            //             ckernel::enumerate_tile(3, true, 1.0, expert_id * 32);
-
-            if (expert_id == 1) {
-                dprint_tensix_dest_reg(0);
-                dprint_tensix_dest_reg(1);
-                dprint_tensix_dest_reg(2);
-                dprint_tensix_dest_reg(3);
-            }
-
             tile_regs_commit();
+
             tile_regs_wait();
-
-            //             pack_tile(0, cb_c2s_out);
-            //             pack_tile(1, cb_c2s_out);
-            //             pack_tile(2, cb_c2s_out);
-            //             pack_tile(3, cb_c2s_out);
-
-            pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
-
             pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(
                 cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
-            pack_untilize_uninit(cb_c2s_out);
-
             tile_regs_release();
         }
-        // pack_untilize_uninit(cb_c2s_out);
+        pack_untilize_uninit(cb_c2s_out);
         cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
     }  // end for (expert_id)
 

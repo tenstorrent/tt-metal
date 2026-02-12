@@ -109,12 +109,6 @@ def create_torch_input(L, in0_core_range_set, all_core_range_set, E, M, K):
     # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
 
     torch_input_ref = torch.rand((L, E, M, K), dtype=torch.bfloat16) - 0.5
-    #     torch_input = torch.zeros((L, E, M, K), dtype=torch.bfloat16)
-    #     for e in range(E):
-    #         torch_input[:,e,:2] = torch.rand(K) - 0.5
-
-    # torch_input[:,1,:,:] *= 2
-
     torch_input = torch_input_ref.unsqueeze(1).repeat(1, in0_core_range_set.num_cores(), 1, 1, 1)
     torch_input_shard_placed = torch.zeros([L, all_core_range_set.num_cores(), E, M, K], dtype=torch.bfloat16)
 
@@ -159,10 +153,6 @@ def create_torch_w0(L, E, K, N):
     #             le_val *= -1
 
     torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    #     torch_w0 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
-    #
-    #     k = min(K,N)
-    #     torch_w0[..., torch.arange(k), torch.arange(k)] = 1
 
     return torch_w0
 
@@ -194,9 +184,6 @@ def create_torch_w1(L, E, K, N):
     #             le_val *= -1
 
     torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    #  torch_w1 = torch.zeros((L, E, K, N), dtype=torch.bfloat16)
-    #     k = min(K,N)
-    #     torch_w1[..., torch.arange(k), torch.arange(k)] = 1
 
     return torch_w1
 
@@ -228,11 +215,6 @@ def create_torch_w2(L, E, N, K):
     #             le_val *= -1
 
     torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
-
-    #     torch_w2 = torch.zeros((L, E, N, K), dtype=torch.bfloat16) - 0.5
-    #
-    #     k = min(K,N)
-    #     torch_w2[..., torch.arange(k), torch.arange(k)] = 1
 
     return torch_w2
 
@@ -408,14 +390,13 @@ def prepare_output_tensor_from_combine_writer(
     M,
     K,
 ):
-    # python in doesn't work as expected with list of CoreCoord
+    # python `in` doesn't work as expected with list of CoreCoord
     def _output_shard_contains(core):
         for c in output_shard_cores:
             if core.x == c.x and core.y == c.y:
                 return True
         return False
 
-    torch.set_printoptions(profile="full")
     output_shards = []
     for i, c in enumerate(ttnn.corerange_to_cores(all_core_range_set, row_wise=True)):
         if _output_shard_contains(c):
@@ -432,14 +413,6 @@ def prepare_output_tensor_from_combine_writer(
     )
 
     shaped_torch_output = output_core_shards.view(output_shape)
-
-    #     for h in range(output_shard_height_dim):
-    #         for w in range(output_shard_width_dim):
-    #             for t in range(0,1):
-    #                 for e in range(E):
-    #                     print(f"{h=} {w=} {t=}  {e=}")
-    #                     print(f"output shards: {shaped_torch_output[h,w,e,t,:32]}")
-
     shaped_torch_output = shaped_torch_output.permute([2, 0, 3, 1, 4]).reshape([E, TOTAL_TOKENS, K])
     torch_output = torch.zeros([E, M, K], dtype=torch.bfloat16)
 
@@ -718,7 +691,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             # Compute gate activations for each expert
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
             torch_w0_output_ref = torch_input_ref @ torch_w0
-            torch_silu_output_ref = torch_w0_output_ref  # torch.nn.functional.silu(torch_w0_output_ref)
+            torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
             torch_w1_output_ref = torch_input_ref @ torch_w1
             torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, M, N)
@@ -730,12 +703,6 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
         for layer_id, expert_id in itertools.product(range(L), range(E)):
             torch_layer_output = torch_output_ref[layer_id, expert_id, :, :]
             tt_layer_output = tt_to_torch_outputs[layer_id, expert_id, :, :]
-
-            for t in range(torch_layer_output.shape[0]):
-                print(f"{expert_id=} {t=}")
-                print(f"{torch_layer_output[t,6656:]=}")
-                print(f"{tt_layer_output[t,6656:]=}")
-
             layer_metrics = get_accuracy_metrics(torch_layer_output, tt_layer_output)
             all_accuracy_metrics[(layer_id, expert_id)] = layer_metrics
 

@@ -84,7 +84,7 @@ void kernel_main() {
         num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     constexpr uint32_t source_width_tiles = 20;  // token segments/core are all padded up to 20
-    const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
     const uint32_t width_tile_base = detail::accumulate(moe_ring::W2_TILES_PER_CORE_B, ring_core_id);
     constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;  // 12/4 = 3
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
@@ -262,4 +262,6 @@ void kernel_main() {
             get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], semaphore_addr);
         noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
     }
+
+    noc_async_atomic_barrier(/*noc_idx=*/1);
 }
