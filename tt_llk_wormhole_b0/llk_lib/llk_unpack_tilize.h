@@ -565,14 +565,19 @@ inline void _llk_unpack_fast_tilize_block_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unit_dim,
     const std::uint32_t num_units,
-    const std::uint32_t full_dim)
+    const std::uint32_t full_dim,
+    const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
+    LLK_ASSERT(
+        (unit_dim == 2 && num_faces == 2) || num_faces == 4, "16x32 tiny tiles are only supported for tensors with even-sized tile widths for fast_tilize");
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
 
     std::uint32_t address = base_address + (SCALE_DATUM_SIZE(unpack_src_format, tile_index * TILE_C_DIM) >> 4); // move by tile width in 16B words
     // for unit_dim 2 UNPA reads top faces and UNPB reads bottom faces
     // for unit_dim 3 UNPA reads top 8 rows of top then bottom faces, UNPB reads bottom 8 rows of top then bottom faces
-    std::uint32_t unpB_row_offset = unit_dim == 2 ? FACE_R_DIM : (FACE_R_DIM / 2);
+    // tiny tiles will use same UPKB scheme as unit_dim 3, but only does top faces
+    std::uint32_t unpB_row_offset = unit_dim == 2 && num_faces == 4 ? FACE_R_DIM : (FACE_R_DIM / 2);
     std::uint32_t unpB_address    = address + (SCALE_DATUM_SIZE(unpack_src_format, full_dim * TILE_C_DIM * unpB_row_offset) >> 4);
 
     // reset all counters since X start and end are set after this
@@ -622,7 +627,7 @@ inline void _llk_unpack_fast_tilize_block_(
             TTI_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_0_CH0Z_0, 1);
             TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 2, 0);
         }
-        else if (unit_dim == 2)
+        else if (unit_dim == 2 && num_faces == 4)
         {
             // read top(A)/bottom(B) faces of two tiles in a row (4 faces each), switch bank,
             // then move to the next two tiles (CH0Y += 2) and back to the top of a tile (CH01Z = 0)
@@ -633,6 +638,21 @@ inline void _llk_unpack_fast_tilize_block_(
             //     TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0);
             // }
             TTI_MOP(p_mop::MASK_LOOP, (FACE_R_DIM - 1) - 1, 0x0);
+            TTI_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
+            TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
+            TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
+        }
+        else if (unit_dim == 2 && num_faces == 2)
+        {
+            // read top 8(A)/bottom 8(B) rows of top faces of two tiles in a row (4 halves of a face each),
+            // then move to the next two tiles (CH0Y += 2) and back to the top of a tile (CH01Z = 0)
+            // inside mop:
+            // for (std::uint32_t j = 0; j < FACE_R_DIM / 2 - 1; j++)
+            // {
+            //     TTI_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0);
+            //     TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0);
+            // }
+            TTI_MOP(p_mop::MASK_LOOP, (FACE_R_DIM / 2 - 1) - 1, 0x0);
             TTI_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
             TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
             TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));

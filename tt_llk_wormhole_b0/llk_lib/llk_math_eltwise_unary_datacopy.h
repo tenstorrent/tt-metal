@@ -522,8 +522,13 @@ inline void _llk_math_fast_tilize_uninit_(const std::uint32_t unpack_dst_format)
 }
 
 inline void _llk_math_fast_tilize_block_(
-    const std::uint32_t dst_index, const std::uint32_t unpack_dst_format, const std::uint32_t unit_dim, const std::uint32_t num_units)
+    const std::uint32_t dst_index,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units,
+    const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
     // split dest and write the top faces in the first half and the bottom faces in the second half (or more precisely quarter, since dest sync half)
     // make life easier by lying to set_dst_write_addr that tile shape is 32x16 so correct stride is obtained for dst_index
     math::set_dst_write_addr<DstTileShape::Tile32x16, UnpackDestination::SrcRegs>(dst_index);
@@ -553,7 +558,7 @@ inline void _llk_math_fast_tilize_block_(
             // clear just srcA dvalid since it's the only one set by the unpacker for unit_dim 1 and src RWCs
             TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
         }
-        else if (unit_dim == 2)
+        else if (unit_dim == 2 && num_faces == 4)
         {
             // srcA has the top faces (4 of them), copy them
             // inside mop:
@@ -574,6 +579,25 @@ inline void _llk_math_fast_tilize_block_(
             // finish with the bottom faces and jump back to the offset for the next tile
             TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
             // clear both dvalids and src RWCs
+            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB);
+        }
+        else if (unit_dim == 2 && num_faces == 2)
+        {
+            // srcA has the top 8 rows
+            // inside mop:
+            // for (uint j = 0; j < 4; j++)
+            // {
+            //     TTI_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0);
+            // }
+            TTI_MOP(p_mop::MASK_LOOP, 4 - 1, 0x0);
+            // srcB has the bottom 8 rows
+            // inside mop:
+            // for (uint j = 0; j < 8; j++)
+            // {
+            //     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 0);
+            // }
+            TTI_MOP(p_mop::MASK_LOOP, 8 - 1, 0xFFFF);
+            // done with this set of two tiles, clear dvalids and src RWCs
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB);
         }
         else if (unit_dim == 3)

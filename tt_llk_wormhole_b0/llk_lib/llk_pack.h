@@ -268,8 +268,17 @@ inline void _llk_pack_fast_tilize_mop_config_([[maybe_unused]] const std::uint32
 }
 
 template <DstSync Dst>
-inline void _llk_pack_fast_tilize_init_(const std::uint32_t use_32bit_dest, const std::uint32_t pack_dst_format, const std::uint32_t unit_dim)
+inline void _llk_pack_fast_tilize_init_(
+    const std::uint32_t use_32bit_dest,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_faces        = 4,
+    const std::uint32_t l1_tile_elements = TILE_C_DIM * TILE_R_DIM)
 {
+    LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
+    LLK_ASSERT(
+        pack_dst_format == to_underlying(DataFormat::Float16_b) || pack_dst_format == to_underlying(DataFormat::Float32) || num_faces == 4,
+        "16x32 tiny tiles are only supported with float16_b or float32 output formats");
     // instead of using the actual is_fp32_dest_acc_en flag dest 32 bit mode is enabled if unpack_dst_format is TF32
     // this is due to a hw quirk with MOVA2D and MOVB2D
     // so clear PCK_DEST_RD_CTRL_Read_32b_data unless unpack_src_format is TF32
@@ -280,7 +289,7 @@ inline void _llk_pack_fast_tilize_init_(const std::uint32_t use_32bit_dest, cons
     }
 
     // set the address offset to the size of the tile in 16B words
-    std::uint32_t tile_size = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
+    std::uint32_t tile_size = SCALE_DATUM_SIZE(pack_dst_format, l1_tile_elements);
     // Not sure why BFP formats are not included SCALE_DATUM_SIZE but too scared to change that.
     if (pack_dst_format == to_underlying(DataFormat::Bfp4) || pack_dst_format == to_underlying(DataFormat::Bfp4_b))
     {
@@ -292,7 +301,7 @@ inline void _llk_pack_fast_tilize_init_(const std::uint32_t use_32bit_dest, cons
     }
     if (IS_BFP_FORMAT(pack_dst_format))
     {
-        tile_size += (TILE_C_DIM * TILE_R_DIM) / 16; // one exp byte per 16 datums
+        tile_size += l1_tile_elements / 16; // one exp byte per 16 datums
     }
     tile_size = tile_size >> 4; // convert to 16B words
     TT_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, tile_size, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
@@ -301,27 +310,58 @@ inline void _llk_pack_fast_tilize_init_(const std::uint32_t use_32bit_dest, cons
     // difference between 16 bit dest and 32 bit dest is where the half of the active bank is (256 rows vs 128 rows)
     // stallwait and select_packer_dest_registers just replicate what _llk_init_packer_dest_offset_registers_ does
     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK);
+
+    // TTI_SETDMAREG requires compile-time immediate operands; branch on num_faces and use literals.
     if (!use_32bit_dest)
     {
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x100, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x101, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x100, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x101, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+        if (num_faces == 2)
+        {
+            // tiny tiles will use a similar packer scheme as unit_dim 2, but treats second tile as bottom 2 faces of the first tile
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x002, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x003, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x002, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x003, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+        }
+        else
+        {
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x100, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x101, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x100, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x101, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+        }
     }
     else
     {
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x080, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x081, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x080, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
-        TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x081, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+        if (num_faces == 2)
+        {
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x002, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x003, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x002, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x003, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+        }
+        else
+        {
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x080, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, 0x000 + 0x081, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x000, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x001, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x080, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
+            TTI_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, DEST_REGISTER_HALF_SIZE + 0x081, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
+        }
     }
     select_packer_dest_registers<Dst>();
 
@@ -361,8 +401,9 @@ inline void _llk_pack_fast_tilize_uninit_(
 }
 
 inline void _llk_pack_fast_tilize_block_(
-    const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t num_units)
+    const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t num_units, const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
     // use false here so that the 31st bit of the address remains set as the offset addresses for the other packers continue to be used
     // while the address for the first packer is manipulated using ADDDMAREG and REG2FLOP
     program_packer_destination(address, false);
@@ -408,19 +449,23 @@ inline void _llk_pack_fast_tilize_block_(
             TTI_MOP(p_mop::MASK_LOOP, (FACE_R_DIM - 1) - 1, 0x0);
             TTI_PACR_COMMON(ADDR_MOD_0, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(NUM_PACKERS), 0, 1);
             // move to the next tile in L1
-            TTI_ADDDMAREG(p_adddmareg::REG_PLUS_REG, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
-            TTI_REG2FLOP_COMMON(p_reg2flop::WRITE_4B, REG2FLOP_FLOP_INDEX(THCON_SEC0_REG1_L1_Dest_addr_ADDR32), p_gpr_pack::OUTPUT_ADDR);
-            // same notes for the flush bit as above
-            // address mod here moves to the next tile in the same unit
-            TTI_PACR_COMMON(ADDR_MOD_1, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(NUM_PACKERS), 1, 0);
-            // pack a single tile
-            // inside mop:
-            // for (uint j = 0; j < 15; j++)
-            // {
-            //     TTI_PACR_COMMON(ADDR_MOD_0, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(NUM_PACKERS), 0, 0);
-            // }
-            TTI_MOP(p_mop::MASK_LOOP, (FACE_R_DIM - 1) - 1, 0x0);
-            TTI_PACR_COMMON(ADDR_MOD_0, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(NUM_PACKERS), 0, 1);
+            // don't do this for tiny tiles, since we pack 2 tiny tiles as 1 full sized tile
+            if (num_faces == 4)
+            {
+                TTI_ADDDMAREG(p_adddmareg::REG_PLUS_REG, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
+                TTI_REG2FLOP_COMMON(p_reg2flop::WRITE_4B, REG2FLOP_FLOP_INDEX(THCON_SEC0_REG1_L1_Dest_addr_ADDR32), p_gpr_pack::OUTPUT_ADDR);
+                // same notes for the flush bit as above
+                // address mod here moves to the next tile in the same unit
+                TTI_PACR_COMMON(ADDR_MOD_1, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(NUM_PACKERS), 1, 0);
+                // pack a single tile
+                // inside mop:
+                // for (uint j = 0; j < 15; j++)
+                // {
+                //     TTI_PACR_COMMON(ADDR_MOD_0, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(NUM_PACKERS), 0, 0);
+                // }
+                TTI_MOP(p_mop::MASK_LOOP, (FACE_R_DIM - 1) - 1, 0x0);
+                TTI_PACR_COMMON(ADDR_MOD_0, p_pacr::P_ZERO_OUTPUT_DISABLED, PACK_SEL(NUM_PACKERS), 0, 1);
+            }
             // move to the next unit in dest (2 * 2 faces, same thing as tile_index)
             TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 4); // CH0Z += 4
             // move to the next tile in L1
