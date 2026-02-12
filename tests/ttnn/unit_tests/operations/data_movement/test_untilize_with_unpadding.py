@@ -211,7 +211,7 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True])  # , False])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize(
     "tensor_shape, output_end",
     [
@@ -219,33 +219,34 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
         ([3, 64, 64], [1, 29, 62]),
         ([5, 64, 64], [2, 50, 50]),
         ([4, 5, 64, 64], [1, 2, 50, 50]),
-        # ([3, 64, 64], [1, 31, 62]),
-        # ([4, 4, 3, 64, 64], [2, 3, 0, 31, 31]),
-        #   ([4, 3, 64, 64], [2, 0, 31, 31]),
+        ([3, 64, 64], [1, 31, 62]),
         ([1, 64, 64], [0, 63, 63]),
-        # ([2, 32, 32], [0, 31, 31]),
         ([2, 256, 512], [0, 255, 511]),
-        # ([4, 4, 256, 512], [0, 3, 255, 511]),
+        ([4, 4, 256, 512], [0, 3, 255, 511]),
+        ([4, 4, 256, 512], [2, 1, 255, 511]),
+        ([4, 4, 256, 512], [2, 1, 126, 255]),
+        ([4, 3, 64, 64], [2, 0, 31, 31]),
+        ([4, 4, 3, 64, 64], [2, 3, 0, 31, 31]),
     ],
 )
 @pytest.mark.parametrize(
     "input_shard_orientation",
     [
         ttnn.ShardOrientation.ROW_MAJOR,
-        # ttnn.ShardOrientation.COL_MAJOR,
+        ttnn.ShardOrientation.COL_MAJOR,
     ],
 )
 @pytest.mark.parametrize(
     "shard_core_grid",
     [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-        # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 2))}),
-        # ttnn.CoreRangeSet(
-        #     {
-        #         ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
-        #         ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(7, 2)),
-        #     }
-        # ),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 2))}),
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(7, 2)),
+            }
+        ),
     ],
 )
 def test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved(
@@ -273,11 +274,6 @@ def test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved(
     except Exception as e:
         pytest.xfail(f"from_torch failed while building sharded tensor: {e}")
 
-    # slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
-
-    # print(input_ttnn_tensor[slices].shape)
-
-    # output_end = [dim - 1 for dim in tensor_shape]
     ttnn_output_tensor = ttnn.untilize_with_unpadding(
         input_ttnn_tensor,
         output_tensor_end=output_end,
@@ -285,6 +281,9 @@ def test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved(
         use_multicore=True,
         use_pack_untilize=use_pack_untilize,
     )
-    slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
-
-    assert_equal(input_torch_tensor[slices], ttnn.to_torch(ttnn_output_tensor))
+    # In untilize_with_unpadding, if the tensor has rank > 4, it ignores the output_end parameter
+    if len(tensor_shape) > 4:
+        assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
+    else:
+        slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
+        assert_equal(input_torch_tensor[slices], ttnn.to_torch(ttnn_output_tensor))
