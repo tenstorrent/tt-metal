@@ -1,427 +1,328 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Distributed expert implementation for MoE.
+"""
+Distributed expert implementation for MoE.
 
-This implementation is based on models/demos/deepseek_v3/tt/experts.py
+This is a direct port of models/demos/deepseek_v3/tt/experts.py
+with all utilities copied directly into this file.
 """
 
 import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import torch
 from loguru import logger
 
 import ttnn
 
-try:
-    from ...utils.debug_logger import log_op, log_tensor_props
-except ImportError:
-    try:
-        from models.tt_moe.utils.debug_logger import log_op, log_tensor_props
-    except ImportError:
-        from utils.debug_logger import log_op, log_tensor_props
-
-try:
-    from .base_expert import BaseExpert
-except ImportError:
-    from components.experts.base_expert import BaseExpert
+# ============================================================================
+# Utility Functions (copied from models/demos/deepseek_v3/utils/config_helpers.py)
+# ============================================================================
 
 
-class DistributedExpert(BaseExpert):
+def even_int_div(a: int, b: int) -> int:
+    """Integer division that raises an error if b does not divide a without a remainder."""
+    assert a % b == 0
+    return a // b
+
+
+def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
+    """Dequantize a pytorch tensor using the provided scale."""
+    assert tensor.ndim == inv_scale.ndim
+    assert len(block_shape) == tensor.ndim and all(
+        inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
+    )
+    for i, block_dim in enumerate(block_shape):
+        inv_scale = inv_scale.repeat_interleave(block_dim, dim=i)
+
+    # Convert to float32 for multiplication
+    tensor_float = tensor.float()
+    scale_float = inv_scale[tuple(slice(0, s) for s in tensor.shape)].float()
+    result = tensor_float * scale_float
+
+    # Clamp values to prevent overflow when converting to bfloat16
+    # bfloat16 range is approximately ±3.4e38
+    result = torch.clamp(result, min=-3.38e38, max=3.38e38)
+
+    del inv_scale
+    return result.to(torch.bfloat16)  # Return as bfloat16
+
+
+# Compute kernel configuration (copied from config_helpers.py)
+COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
+# ============================================================================
+# DistributedExpert Class (Direct port of Experts from experts.py)
+# ============================================================================
+
+
+class DistributedExpert:
     """
     Distributed expert implementation for MoE.
 
-    This expert type processes tokens with FFN experts distributed across devices.
-    Based on the DeepSeek demo's Experts implementation.
+    This is a direct port of the DeepSeek Experts class, handling
+    all experts' weights together and processing them in batch.
+    Matches the exact interface of models/demos/deepseek_v3/tt/experts.py
     """
 
-    # Additional weight configuration (extends base)
-    WEIGHT_TORCH_DTYPE = torch.float8_e4m3fn
-
-    def __init__(self, config: dict, mesh_device: ttnn.MeshDevice, ccl=None):
-        """
-        Initialize distributed expert.
-
-        Args:
-            config: Expert configuration containing:
-                - intermediate_size: FFN intermediate dimension (moe_intermediate_size in HF)
-                - hidden_size: Model hidden dimension
-                - num_experts_per_device: Number of experts on each device
-                - dispatch_cluster_axis: Mesh axis for expert parallelism
-                - memory_config: Memory configuration string
-                - activation: Activation function (swiglu, gelu, etc.)
-                - n_routed_experts: Total number of routed experts (optional)
-            mesh_device: TTNN mesh device
-            ccl: CCL instance for collective operations
-        """
-        # Initialize base class - handles common config
-        super().__init__(config, mesh_device)
-
-        self.ccl = ccl
-
-        # Expert distribution
-        self.dispatch_cluster_axis = config["dispatch_cluster_axis"]
-        self.n_routed_experts = config.get("n_routed_experts", None)
-        if self.n_routed_experts:
-            # Calculate experts per device based on total devices (like working implementation)
-            num_devices = mesh_device.get_num_devices()
-            assert self.n_routed_experts % num_devices == 0, (
-                f"Number of experts ({self.n_routed_experts}) must be divisible by "
-                f"the number of devices ({num_devices})"
-            )
-            self.num_experts_per_device = self.n_routed_experts // num_devices
+    @classmethod
+    def _get_num_experts_per_device(cls, hf_config: Any, mesh_device: ttnn.MeshDevice) -> int:
+        """Calculate the number of experts per device based on the total number of experts and the device shape."""
+        # Support both HF config objects and plain dicts
+        if hasattr(hf_config, "n_routed_experts"):
+            n_routed_experts = hf_config.n_routed_experts
         else:
-            self.num_experts_per_device = config.get("num_experts_per_device", 1)
-        self.activation = config.get("activation", "swiglu")
+            n_routed_experts = hf_config.get("n_routed_experts", hf_config.get("num_experts", 256))
+        return even_int_div(n_routed_experts, mesh_device.get_num_devices())
 
-        # Expert weights (will be loaded later)
-        self.w1_experts = None  # Gate projection for SwiGLU
-        self.w2_experts = None  # Down projection
-        self.w3_experts = None  # Up projection for SwiGLU
-
-    def _setup_compute_config(self, config: dict):
-        """Override base compute config to use LoFi for distributed experts."""
-        self.compute_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-
-    def load_weights(self, state_dict: dict, weight_path: str = None):
+    @classmethod
+    def is_device_supported(cls, mesh_device: ttnn.MeshDevice) -> bool:
         """
-        Load expert FFN weights.
-
-        This follows the DeepSeek approach of loading all experts' weights together.
+        As we only support 1D tensor parallelism, we only support 1D mesh devices.
 
         Args:
-            state_dict: Dictionary containing expert weights either as:
-                - Combined tensors: w1_experts, w2_experts, w3_experts
-                - Per-expert tensors: experts.0.gate_proj.weight, etc.
-            weight_path: Optional path for cached weights
-        """
-        # Check if weights are already in combined format
-        if "w1_experts" in state_dict:
-            # Already combined format
-            self.w1_experts = state_dict["w1_experts"]
-            self.w2_experts = state_dict["w2_experts"]
-            self.w3_experts = state_dict["w3_experts"]
-        else:
-            # Per-expert format - need to combine
-            # Collect all expert weights
-            w1_list = []
-            w2_list = []
-            w3_list = []
-            w1_scale_list = []
-            w2_scale_list = []
-            w3_scale_list = []
-
-            # Determine which experts to load for this device
-            # In distributed setup, each device only loads a subset of experts
-            if self.n_routed_experts:
-                # Calculate which experts belong to this device
-                # For simplicity, assume device_id = 0 (in real setup, this would come from mesh device)
-                # TODO: Get actual device ID from mesh device for proper distribution
-                device_id = 0  # This should be obtained from mesh_device in production
-                start_expert = device_id * self.num_experts_per_device
-                end_expert = start_expert + self.num_experts_per_device
-                expert_range = range(start_expert, end_expert)
-            else:
-                # If not specified, load all experts in state dict (backward compatibility)
-                num_experts = 0
-                for key in state_dict.keys():
-                    if key.startswith("experts.") and ".gate_proj.weight" in key:
-                        num_experts += 1
-                expert_range = range(num_experts)
-
-            for expert_id in expert_range:
-                # Gate projection (w1)
-                gate_key = f"experts.{expert_id}.gate_proj.weight"
-                if gate_key in state_dict:
-                    weight = state_dict[gate_key]
-                    w1_list.append(weight)
-
-                    # Check for quantization scale
-                    scale_key = f"experts.{expert_id}.gate_proj.weight_scale_inv"
-                    if self.use_quantized_weights and scale_key in state_dict:
-                        w1_scale_list.append(state_dict[scale_key])
-
-                # Down projection (w2)
-                down_key = f"experts.{expert_id}.down_proj.weight"
-                if down_key in state_dict:
-                    weight = state_dict[down_key]
-                    w2_list.append(weight)
-
-                    scale_key = f"experts.{expert_id}.down_proj.weight_scale_inv"
-                    if self.use_quantized_weights and scale_key in state_dict:
-                        w2_scale_list.append(state_dict[scale_key])
-
-                # Up projection (w3)
-                up_key = f"experts.{expert_id}.up_proj.weight"
-                if up_key in state_dict:
-                    weight = state_dict[up_key]
-                    w3_list.append(weight)
-
-                    scale_key = f"experts.{expert_id}.up_proj.weight_scale_inv"
-                    if self.use_quantized_weights and scale_key in state_dict:
-                        w3_scale_list.append(state_dict[scale_key])
-
-            # Stack expert weights
-            if w1_list:
-                w1_stacked = torch.stack(w1_list)
-                w1_dequantized = False
-                if self.use_quantized_weights and w1_scale_list:
-                    w1_scale_stacked = torch.stack(w1_scale_list)
-                    w1_stacked = self._dequantize(w1_stacked, w1_scale_stacked, (1, *self.weight_block_size))
-                    w1_dequantized = True
-
-                # Transpose for matmul (weights are stored as [out_features, in_features])
-                w1_stacked = w1_stacked.unsqueeze(0).transpose(-1, -2)
-
-                # Handle dtype conversion based on quantization state
-                if w1_dequantized or w1_stacked.dtype == torch.float8_e4m3fn:
-                    # If dequantized or float8, convert to bfloat16
-                    w1_stacked = w1_stacked.to(torch.bfloat16)
-                    w1_dtype = ttnn.bfloat16
-                else:
-                    w1_dtype = ttnn.bfloat16  # Default
-
-                # Shard across devices if needed
-                self.w1_experts = self._shard_and_convert_weights(w1_stacked, "w1_experts", dtype=w1_dtype)
-
-            if w2_list:
-                w2_stacked = torch.stack(w2_list)
-                w2_dequantized = False
-                if self.use_quantized_weights and w2_scale_list:
-                    w2_scale_stacked = torch.stack(w2_scale_list)
-                    w2_stacked = self._dequantize(w2_stacked, w2_scale_stacked, (1, *self.weight_block_size))
-                    w2_dequantized = True
-
-                w2_stacked = w2_stacked.unsqueeze(0).transpose(-1, -2)
-
-                # Handle dtype conversion based on quantization state
-                if w2_dequantized or w2_stacked.dtype == torch.float8_e4m3fn:
-                    # If dequantized or float8, convert to bfloat16
-                    w2_stacked = w2_stacked.to(torch.bfloat16)
-                    w2_dtype = ttnn.bfloat16
-                else:
-                    # Use bfloat4_b for down projection if not dequantized
-                    w2_dtype = ttnn.bfloat4_b
-
-                self.w2_experts = self._shard_and_convert_weights(w2_stacked, "w2_experts", dtype=w2_dtype)
-
-            if w3_list:
-                w3_stacked = torch.stack(w3_list)
-                w3_dequantized = False
-                if self.use_quantized_weights and w3_scale_list:
-                    w3_scale_stacked = torch.stack(w3_scale_list)
-                    w3_stacked = self._dequantize(w3_stacked, w3_scale_stacked, (1, *self.weight_block_size))
-                    w3_dequantized = True
-
-                w3_stacked = w3_stacked.unsqueeze(0).transpose(-1, -2)
-
-                # Handle dtype conversion based on quantization state
-                if w3_dequantized or w3_stacked.dtype == torch.float8_e4m3fn:
-                    # If dequantized or float8, convert to bfloat16
-                    w3_stacked = w3_stacked.to(torch.bfloat16)
-                    w3_dtype = ttnn.bfloat16
-                else:
-                    # Use bfloat8_b for up projection if not dequantized
-                    w3_dtype = ttnn.bfloat8_b
-
-                self.w3_experts = self._shard_and_convert_weights(w3_stacked, "w3_experts", dtype=w3_dtype)
-
-    def _shard_and_convert_weights(self, weight_tensor: torch.Tensor, name: str, dtype=ttnn.bfloat16):
-        """
-        Shard weights across devices and convert to TTNN tensor.
-
-        Args:
-            weight_tensor: Combined weight tensor [1, num_experts, in_features, out_features]
-            name: Name of the weight tensor
-            dtype: TTNN dtype for the weights
+            mesh_device: The mesh device to check.
 
         Returns:
-            TTNN tensor with weights sharded across devices
+            True if the device is supported, False otherwise.
         """
-        # Use ttnn.from_torch like the working test does, not ttnn.as_tensor
-        # This properly initializes the tensor with correct block configurations
-        return ttnn.from_torch(
-            weight_tensor,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),  # Replicate like working test
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        return mesh_device.shape[1] == 8
+
+    @classmethod
+    def _create_model_config(cls, hf_config: Any, mesh_device: ttnn.MeshDevice, mode: str) -> Dict:
+        """Create model configuration for decode or prefill mode."""
+        num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
+
+        # Memory configurations based on mode
+        if mode == "decode":
+            input_memory_config = ttnn.L1_MEMORY_CONFIG
+            output_memory_config = ttnn.L1_MEMORY_CONFIG
+        else:
+            input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+        # Create config dictionary that includes weight references
+        config = {
+            "mesh_device": mesh_device,
+            "input_memory_config": input_memory_config,
+            "output_memory_config": output_memory_config,
+            "num_experts_per_device": num_experts_per_device,
+        }
+
+        # Add linear configs with proper structure
+        for name in ["w1_experts", "w2_experts", "w3_experts"]:
+            config[name] = {
+                "memory_config": output_memory_config,
+                "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,
+            }
+
+        # Add mul config for activation
+        config["mul_experts"] = {
+            "memory_config": output_memory_config,
+            "input_tensor_a_activations": [ttnn.UnaryOpType.SILU],
+        }
+
+        return config
+
+    @classmethod
+    def decode_model_config(cls, hf_config: Any, mesh_device: ttnn.MeshDevice) -> Dict:
+        """Generate decode configuration for this module."""
+        return cls._create_model_config(hf_config, mesh_device, "decode")
+
+    @classmethod
+    def prefill_model_config(cls, hf_config: Any, mesh_device: ttnn.MeshDevice) -> Dict:
+        """Generate prefill configuration for this module."""
+        return cls._create_model_config(hf_config, mesh_device, "prefill")
+
+    @classmethod
+    def create_state(cls, hf_config: Any, mesh_device: ttnn.MeshDevice) -> Dict:
+        """Create state (empty for experts)."""
+        return {}
+
+    @classmethod
+    def convert_weights(
+        cls,
+        hf_config: Any,
+        state_dicts: Tuple[Optional[Dict[str, torch.Tensor]], ...],
+        output_path: Path,
+        mesh_device: ttnn.MeshDevice,
+    ) -> Dict:
+        """
+        Convert and prepare weights for the distributed experts.
+
+        This method loads weights and returns them in the format expected by the forward pass.
+        For testing, we return the weights directly as TTNN tensors.
+        """
+        # Support both HF config objects and plain dicts
+        if hasattr(hf_config, "n_routed_experts"):
+            n_routed_experts = hf_config.n_routed_experts
+            use_quantized = hasattr(hf_config, "quantization_config")
+            weight_block_size = (
+                hf_config.quantization_config.get("weight_block_size", [1, 1]) if use_quantized else [1, 1]
+            )
+        else:
+            n_routed_experts = hf_config.get("n_routed_experts", hf_config.get("num_experts", 256))
+            use_quantized = hf_config.get("use_quantized_weights", False)
+            weight_block_size = hf_config.get("weight_block_size", [1, 1])
+
+        assert n_routed_experts % mesh_device.get_num_devices() == 0, (
+            f"Number of experts ({n_routed_experts}) must be divisible by the number of devices "
+            f"({mesh_device.get_num_devices()})"
         )
 
-    def _log_expert_stats(self, name: str, tensor: ttnn.Tensor, num_tokens: int):
-        """Log expert tensor statistics for debugging."""
-        debug_experts = os.getenv("DEEPSEEK_V3_DEBUG_EXPERTS") == "1" and num_tokens > 8192
-        if not debug_experts:
-            return
+        (state_dict,) = state_dicts
+        assert state_dict is not None
 
-        try:
-            # Convert to torch for stats
-            mesh_device = self.config.get("mesh_device")
-            if mesh_device is not None:
-                tensor_torch = ttnn.to_torch(
-                    tensor,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+        weight_config = {}
+
+        for hf_name, ttnn_name in [
+            ("gate_proj", "w1_experts"),
+            ("down_proj", "w2_experts"),
+            ("up_proj", "w3_experts"),
+        ]:
+            # Stack weights from all experts
+            weight_list = []
+            scale_list = []
+
+            for expert_id in range(n_routed_experts):
+                weight_key = f"experts.{expert_id}.{hf_name}.weight"
+                if weight_key in state_dict:
+                    weight_list.append(state_dict[weight_key])
+
+                    # Check for quantization scale
+                    scale_key = f"experts.{expert_id}.{hf_name}.weight_scale_inv"
+                    if use_quantized and scale_key in state_dict:
+                        scale_list.append(state_dict[scale_key])
+
+            if weight_list:
+                stacked_weights = torch.stack(weight_list)
+
+                # Apply dequantization if needed
+                if use_quantized and scale_list:
+                    stacked_scales = torch.stack(scale_list)
+                    stacked_weights = dequantize(
+                        stacked_weights,
+                        stacked_scales,
+                        (1, *weight_block_size),
+                    )
+
+                # Transpose for matmul: [num_experts, out_features, in_features] -> [1, num_experts, in_features, out_features]
+                stacked_weights = stacked_weights.unsqueeze(0).transpose(-1, -2)
+
+                # Convert to bfloat16 for TTNN
+                stacked_weights = stacked_weights.to(torch.bfloat16)
+
+                # Create TTNN tensor with sharding across devices
+                weight_tensor = ttnn.from_torch(
+                    stacked_weights,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),  # Shard experts across devices
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-            else:
-                tensor_torch = ttnn.to_torch(tensor)
 
-            finite_mask = torch.isfinite(tensor_torch)
-            numel = tensor_torch.numel()
-            finite_count = finite_mask.sum().item()
-            nan_count = torch.isnan(tensor_torch).sum().item()
-            inf_count = torch.isinf(tensor_torch).sum().item()
+                # Store the weight tensor in the config
+                weight_config[ttnn_name] = {"input_tensor_b": weight_tensor}
 
-            logger.info(
-                f"DEBUG experts {name}: shape={tensor_torch.shape}, "
-                f"mean={tensor_torch.mean():.4f}, std={tensor_torch.std():.4f}, "
-                f"max={tensor_torch.abs().max():.4f}, "
-                f"finite={finite_count}/{numel}, nan={nan_count}, inf={inf_count}"
-            )
-        except Exception as exc:
-            logger.warning(f"DEBUG experts {name}: failed to extract stats: {exc}")
+        return weight_config
 
-    def forward(self, x: ttnn.Tensor, indices: ttnn.Tensor = None, weights: ttnn.Tensor = None, mode: str = "decode"):
+    @classmethod
+    def _forward(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:
         """
         Forward pass through distributed experts.
 
-        This follows the DeepSeek experts.py implementation pattern.
+        This is a direct port of the reference Experts._forward method.
 
         Args:
-            x: Input tensor with expert-dispatched tokens
-               Shape: [1, num_experts_per_device, num_tokens, hidden_size]
-            indices: Expert indices from router (optional, for compatibility)
-            weights: Expert weights from router (optional, for compatibility)
-            mode: "decode" or "prefill" mode
+            x: Input tensor [1, num_experts_per_device, num_tokens, hidden_size]
+            cfg: Configuration dictionary with weights and memory configs
 
         Returns:
             Expert output [1, num_experts_per_device, num_tokens, hidden_size]
         """
+        # Verify input memory config
+        assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
+
         # Get input shape
         _, _, num_tokens, hidden_size = x.shape
 
-        # Dynamically select memory config based on mode
-        # Following DeepSeek's logic from experts.py
-        if mode == "decode":
-            output_memory_config = ttnn.L1_MEMORY_CONFIG
-        else:
-            # For prefill mode, use DRAM
-            output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        # Debug logging
+        debug_experts = os.getenv("DEEPSEEK_V3_DEBUG_EXPERTS") == "1" and num_tokens > 8192
 
-        # Check memory config
-        # Note: Input memory config might differ from output
-        # assert x.memory_config() == self.memory_config, (
-        #     f"Input memory config {x.memory_config()} != expected {self.memory_config}"
-        # )
+        def _log_expert_stats(name: str, tensor: ttnn.Tensor) -> None:
+            if not debug_experts:
+                return
+            try:
+                mesh_device = cfg.get("mesh_device")
+                if mesh_device is not None:
+                    tensor_torch = ttnn.to_torch(
+                        tensor,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape
+                        ),
+                    )
+                else:
+                    tensor_torch = ttnn.to_torch(tensor)
+                finite_mask = torch.isfinite(tensor_torch)
+                numel = tensor_torch.numel()
+                finite_count = finite_mask.sum().item()
+                nan_count = torch.isnan(tensor_torch).sum().item()
+                inf_count = torch.isinf(tensor_torch).sum().item()
+                logger.info(
+                    f"DEBUG experts {name}: shape={tensor_torch.shape}, "
+                    f"mean={tensor_torch.mean():.4f}, std={tensor_torch.std():.4f}, "
+                    f"max={tensor_torch.abs().max():.4f}, "
+                    f"finite={finite_count}/{numel}, nan={nan_count}, inf={inf_count}"
+                )
+            except Exception as exc:
+                logger.warning(f"DEBUG experts {name}: failed to extract stats: {exc}")
 
-        # Gate and up projections
-        # Add debug logging for tensor shapes and memory configs
-        logger.info(f"DEBUG: Input x shape: {x.shape}")
-        logger.info(f"DEBUG: Input x memory_config: {x.memory_config()}")
-        logger.info(f"DEBUG: w1_experts shape: {self.w1_experts.shape}")
-        logger.info(f"DEBUG: w1_experts memory_config: {self.w1_experts.memory_config()}")
-        logger.info(f"DEBUG: output_memory_config: {output_memory_config}")
+        # Gate and up projections (exactly like reference implementation)
+        # Debug: check if weights exist in config
+        if "input_tensor_b" not in cfg.get("w1_experts", {}):
+            logger.error(f"w1_experts missing input_tensor_b! Keys: {cfg.get('w1_experts', {}).keys()}")
+            raise ValueError("w1_experts missing input_tensor_b weight tensor")
 
-        # Log input tensor
-        log_tensor_props("Expert input x", x)
-        log_tensor_props("w1_experts weight", self.w1_experts)
-        log_tensor_props("w3_experts weight", self.w3_experts)
+        w1_out = ttnn.linear(x, **cfg["w1_experts"])
+        w3_out = ttnn.linear(x, **cfg["w3_experts"])
+        _log_expert_stats("w1_out", w1_out)
+        _log_expert_stats("w3_out", w3_out)
 
-        # Gate and up projections using ttnn.linear like working version
-        # Use keyword arguments to match the working implementation
-        w1_out = ttnn.linear(
-            x,
-            input_tensor_b=self.w1_experts,  # Use keyword arg like working version
-            memory_config=output_memory_config,
-            compute_kernel_config=self.compute_config,
-            program_config=None,  # Explicitly set to None like working version
-        )
-        log_op(
-            "ttnn.linear (w1_experts)",
-            inputs=x,
-            config={"memory_config": str(output_memory_config), "compute_kernel_config": str(self.compute_config)},
-            output=w1_out,
-        )
-
-        w3_out = ttnn.linear(
-            x,
-            input_tensor_b=self.w3_experts,  # Use keyword arg like working version
-            memory_config=output_memory_config,
-            compute_kernel_config=self.compute_config,
-            program_config=None,  # Explicitly set to None like working version
-        )
-        log_op(
-            "ttnn.linear (w3_experts)",
-            inputs=x,
-            config={"memory_config": str(output_memory_config), "compute_kernel_config": str(self.compute_config)},
-            output=w3_out,
-        )
-
-        # Log stats for debugging
-        self._log_expert_stats("w1_out", w1_out, num_tokens)
-        self._log_expert_stats("w3_out", w3_out, num_tokens)
-
-        # Apply SwiGLU activation: silu(w1_out) * w3_out
-        if self.activation == "swiglu":
-            activated = ttnn.mul(
-                w1_out,
-                w3_out,
-                memory_config=output_memory_config,
-                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            )
-            log_op(
-                "ttnn.mul (SwiGLU activation)",
-                inputs={"w1_out": w1_out, "w3_out": w3_out},
-                config={"memory_config": str(output_memory_config), "activation": "SILU"},
-                output=activated,
-            )
-        else:
-            # For other activations, would apply them here
-            raise ValueError(f"Unsupported activation: {self.activation}")
-
+        # Apply activation and multiply (SwiGLU)
+        activated = ttnn.mul(w1_out, w3_out, **cfg["mul_experts"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
-        self._log_expert_stats("activated", activated, num_tokens)
+        _log_expert_stats("activated", activated)
 
         # Down projection
-        log_tensor_props("w2_experts weight", self.w2_experts)
-        output = ttnn.linear(
-            activated,
-            input_tensor_b=self.w2_experts,  # Use keyword arg like working version
-            memory_config=output_memory_config,
-            compute_kernel_config=self.compute_config,
-            program_config=None,  # Explicitly set to None like working version
-        )
-        log_op(
-            "ttnn.linear (w2_experts)",
-            inputs=activated,
-            config={"memory_config": str(output_memory_config), "compute_kernel_config": str(self.compute_config)},
-            output=output,
-        )
+        output = ttnn.linear(activated, **cfg["w2_experts"])
         ttnn.deallocate(activated)
-        self._log_expert_stats("w2_out", output, num_tokens)
+        _log_expert_stats("w2_out", output)
 
-        # Reshape for output
-        # The DeepSeek implementation does a permute and reshape here
+        # Reshape for output (exactly like reference)
         output = ttnn.permute(output, (1, 0, 2, 3))
-        log_op("ttnn.permute", inputs=output, config={"perm": "(1, 0, 2, 3)"}, output=output)
+        output = ttnn.reshape(output, shape=(1, cfg["num_experts_per_device"], num_tokens, hidden_size))
 
-        output = ttnn.reshape(output, shape=(1, self.num_experts_per_device, num_tokens, hidden_size))
-        log_op(
-            "ttnn.reshape",
-            inputs=output,
-            config={"shape": (1, self.num_experts_per_device, num_tokens, hidden_size)},
-            output=output,
-        )
-
-        # Check output memory config
-        assert (
-            output.memory_config() == output_memory_config
-        ), f"Output memory config {output.memory_config()} != expected {output_memory_config}"
+        # Verify output memory config
+        assert output.memory_config() == cfg["output_memory_config"]
 
         return output
+
+    @classmethod
+    def forward_decode(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:
+        """Forward pass in decode mode."""
+        return cls._forward(x, cfg)
+
+    @classmethod
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:
+        """Forward pass in prefill mode."""
+        return cls._forward(x, cfg)

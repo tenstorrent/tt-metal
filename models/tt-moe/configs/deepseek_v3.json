@@ -40,7 +40,7 @@
       },
       "shared": {
         "enabled": true,
-        "intermediate_size": 1408,
+        "intermediate_size": 2048,
         "hidden_size": 7168,
         "parallel_with_moe": true,
         "memory_config": "L1_MEMORY_CONFIG",

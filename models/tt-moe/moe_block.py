@@ -21,14 +21,12 @@ try:
     from .components.experts.distributed_expert import DistributedExpert
     from .components.experts.shared_expert import SharedExpert
     from .components.routers.moe_gate import MoEGateRouter
-    from .utils.debug_logger import log_op, log_tensor_props
     from .utils.lazy_state_dict import LazyStateDict
 except ImportError:
     # Fall back to absolute imports (when testing)
     from components.experts.distributed_expert import DistributedExpert
     from components.experts.shared_expert import SharedExpert
     from components.routers.moe_gate import MoEGateRouter
-    from utils.debug_logger import log_op, log_tensor_props
     from utils.lazy_state_dict import LazyStateDict
 
 
@@ -97,30 +95,43 @@ class MoEBlock:
             raise ValueError(f"Unknown router type: {router_type}")
 
     def _init_experts(self):
-        """Initialize experts based on configuration."""
+        """Initialize expert configurations based on JSON configuration."""
         experts_config = self.config["experts"]
 
-        # Initialize distributed expert if enabled
-        self.distributed_expert = None
+        # Setup distributed expert configuration if enabled
+        self.distributed_expert_enabled = False
+        self.distributed_expert_config = None
+        self.distributed_expert_weights = None
+
         if experts_config.get("distributed", {}).get("enabled", False):
             dist_config = experts_config["distributed"]
             # Add n_routed_experts from router config if not present
             if "n_routed_experts" not in dist_config:
                 dist_config["n_routed_experts"] = self.config["router"]["config"].get("n_routed_experts", 256)
-            self.distributed_expert = DistributedExpert(dist_config, self.mesh_device, self.ccl)
-            self.ep_axis = dist_config["dispatch_cluster_axis"]
-            self.num_experts_per_device = self.distributed_expert.num_experts_per_device
 
-        # Initialize shared expert if enabled
-        self.shared_expert = None
+            self.distributed_expert_enabled = True
+            self.distributed_expert_config = dist_config
+            self.ep_axis = dist_config["dispatch_cluster_axis"]
+
+            # Calculate num_experts_per_device from config
+            n_routed_experts = dist_config["n_routed_experts"]
+            num_devices = self.mesh_device.get_num_devices()
+            self.num_experts_per_device = n_routed_experts // num_devices
+
+        # Setup shared expert configuration if enabled
+        self.shared_expert_enabled = False
+        self.shared_expert_config = None
+        self.shared_expert_weights = None
+
         if experts_config.get("shared", {}).get("enabled", False):
             shared_config = experts_config["shared"]
-            self.shared_expert = SharedExpert(shared_config, self.mesh_device)
+            self.shared_expert_enabled = True
+            self.shared_expert_config = shared_config
             self.shared_parallel = shared_config.get("parallel_with_moe", False)
 
     def _init_expert_mapping_tensors(self):
         """Initialize expert mapping tensors for all-to-all operations."""
-        if not self.distributed_expert:
+        if not self.distributed_expert_enabled:
             return
 
         num_devices = self.mesh_device.get_num_devices()
@@ -152,7 +163,7 @@ class MoEBlock:
         )
 
     def _load_weights_if_specified(self):
-        """Load weights from model path if specified in configuration."""
+        """Load weights from model path if specified in JSON configuration."""
         weight_path = self.config.get("weight_path")
         if not weight_path:
             return
@@ -160,10 +171,11 @@ class MoEBlock:
         module_prefix = self.config.get("module_prefix", "")
         layer_index = self.config.get("layer_index", 0)
 
-        # Load state dict lazily from HuggingFace model
+        # Load state dict lazily from model files
         from loguru import logger
 
-        logger.info(f"Loading weights from {weight_path}")
+        logger.info(f"Loading weights from {weight_path} (as specified in JSON config)")
+        logger.info(f"Using module_prefix: {module_prefix}, layer_index: {layer_index}")
 
         with LazyStateDict(Path(weight_path)) as lazy_dict:
             if module_prefix:
@@ -195,16 +207,44 @@ class MoEBlock:
             if router_state:
                 self.router.load_weights(router_state)
 
-        # Load distributed expert weights
-        if self.distributed_expert:
+        # Convert distributed expert weights using class method
+        if self.distributed_expert_enabled:
             # Pass through all mlp.experts.* keys for per-expert loading
             expert_state = {k.replace("mlp.", ""): v for k, v in state_dict.items() if k.startswith("mlp.experts.")}
 
             if expert_state:
-                self.distributed_expert.load_weights(expert_state)
+                # Create a config object from JSON config for weight conversion
+                class ExpertConfig:
+                    def __init__(self, json_config):
+                        self.n_routed_experts = json_config["n_routed_experts"]
+                        self.hidden_size = json_config["hidden_size"]
+                        self.moe_intermediate_size = json_config["intermediate_size"]
+                        self.quantization_config = {
+                            "weight_block_size": json_config.get("weight_block_size", [128, 128])
+                        }
 
-        # Load shared expert weights
-        if self.shared_expert:
+                config = ExpertConfig(self.distributed_expert_config)
+
+                # Convert weights using class method
+                weight_configs = DistributedExpert.convert_weights(
+                    config, (expert_state,), Path("/tmp/moe_block_expert_weights"), self.mesh_device
+                )
+
+                # Store the weight configs for forward pass
+                self.distributed_expert_weights = weight_configs
+
+                # Also create decode model config for forward pass
+                self.distributed_expert_decode_config = DistributedExpert.decode_model_config(config, self.mesh_device)
+
+                # Merge weight configs into decode config
+                for key, value in self.distributed_expert_weights.items():
+                    if key in self.distributed_expert_decode_config:
+                        self.distributed_expert_decode_config[key].update(value)
+                    else:
+                        self.distributed_expert_decode_config[key] = value
+
+        # Convert shared expert weights using class method
+        if self.shared_expert_enabled:
             shared_state = {}
             # Shared expert weights in DeepSeek
             if "mlp.shared_experts.gate_proj.weight" in state_dict:
@@ -215,7 +255,32 @@ class MoEBlock:
                 shared_state["down_proj.weight"] = state_dict["mlp.shared_experts.down_proj.weight"]
 
             if shared_state:
-                self.shared_expert.load_weights(shared_state)
+                # Create a config object from JSON config for weight conversion
+                class SharedConfig:
+                    def __init__(self, json_config):
+                        self.hidden_size = json_config["hidden_size"]
+                        self.moe_intermediate_size = json_config["intermediate_size"]
+                        self.quantization_config = {
+                            "weight_block_size": json_config.get("weight_block_size", [128, 128])
+                        }
+
+                config = SharedConfig(self.shared_expert_config)
+
+                # Convert weights using class method
+                weight_configs = SharedExpert.convert_weights(
+                    config, (shared_state,), Path("/tmp/moe_block_shared_weights"), self.mesh_device
+                )
+
+                # Store the weight configs for forward pass
+                self.shared_expert_weights = weight_configs
+
+                # Also create decode model config for forward pass
+                self.shared_expert_decode_config = SharedExpert.decode_model_config(config, self.mesh_device)
+
+                # Merge weight configs into decode config
+                for key in ["w1", "w2", "w3"]:
+                    if key in weight_configs:
+                        self.shared_expert_decode_config[key].update(weight_configs[key])
 
     def _prepare_expert_weights(self, weights: ttnn.Tensor, mode: str = "decode"):
         """
@@ -242,13 +307,14 @@ class MoEBlock:
         # Convert to ROW_MAJOR for repeat
         weights_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)
 
-        # Repeat weights
-        weights_rm = ttnn.repeat(weights_rm, ttnn.Shape(repeat_dims))
+        # Repeat weights (use DRAM for large repeat operations)
+        weights_rm = ttnn.repeat(weights_rm, ttnn.Shape(repeat_dims), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Permute dimensions (3, 1, 2, 0) following DeepSeek pattern
-        weights_rm = ttnn.permute(weights_rm, (3, 1, 2, 0))
+        # Use DRAM for permute of large tensors
+        weights_rm = ttnn.permute(weights_rm, (3, 1, 2, 0), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Convert back to TILE_LAYOUT
+        # Convert back to TILE_LAYOUT (can move to L1 if needed for subsequent operations)
         weights = ttnn.to_layout(weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(weights_rm)
 
@@ -305,32 +371,24 @@ class MoEBlock:
                 f"DEBUG: Before all_to_all_dispatch - x_chunk shape: {x_chunk.shape}, indices_chunk shape: {indices_chunk.shape}"
             )
             logger.info(
-                f"DEBUG: EP axis: {self.ep_axis if self.distributed_expert else 0}, num_experts_per_device: {self.num_experts_per_device}"
+                f"DEBUG: EP axis: {self.ep_axis if self.distributed_expert_enabled else 0}, num_experts_per_device: {self.num_experts_per_device}"
             )
-
-            # Log tensors before all_to_all
-            log_tensor_props("x_chunk before all_to_all_dispatch", x_chunk)
-            log_tensor_props("indices_chunk", indices_chunk)
+            logger.info(
+                f"DEBUG: expert_mapping_tensors type: {type(self.expert_mapping_tensors)}, length: {len(self.expert_mapping_tensors) if hasattr(self.expert_mapping_tensors, '__len__') else 'N/A'}"
+            )
+            logger.info(f"DEBUG: memory_config: {self._get_memory_config(mode, 'dispatch')}")
+            logger.info("DEBUG: *** CALLING all_to_all_dispatch NOW ***")
 
             dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
                 x_chunk,
                 indices_chunk,
                 self.expert_mapping_tensors,
-                cluster_axis=self.ep_axis if self.distributed_expert else 0,
+                cluster_axis=self.ep_axis if self.distributed_expert_enabled else 0,
                 memory_config=self._get_memory_config(mode, "dispatch"),
+                topology=ttnn.Topology.Linear,
             )
 
-            log_op(
-                "ttnn.all_to_all_dispatch",
-                inputs={"x_chunk": x_chunk, "indices_chunk": indices_chunk},
-                config={
-                    "cluster_axis": self.ep_axis if self.distributed_expert else 0,
-                    "memory_config": str(self._get_memory_config(mode, "dispatch")),
-                },
-                output=dispatch_output,
-            )
-            log_tensor_props("all_to_all_dispatch_metadata", dispatch_metadata)
-
+            logger.info("DEBUG: *** all_to_all_dispatch COMPLETED ***")
             ttnn.deallocate(x_chunk)
             ttnn.deallocate(indices_chunk)
 
@@ -338,12 +396,6 @@ class MoEBlock:
 
             # Reshape and repeat activations
             dispatch_chunk = ttnn.reshape(dispatch_output, shape=(1, 1, batch_size_chunk * seq_len, hidden_size))
-            log_op(
-                "ttnn.reshape",
-                inputs=dispatch_output,
-                config={"shape": (1, 1, batch_size_chunk * seq_len, hidden_size)},
-                output=dispatch_chunk,
-            )
             logger.info(f"DEBUG: After reshape - dispatch_chunk shape: {dispatch_chunk.shape}")
 
             # Apply activations_repeat configuration
@@ -354,17 +406,20 @@ class MoEBlock:
                 logger.info(
                     f"DEBUG: Repeating with dims: {repeat_dims} (num_experts_per_device={self.num_experts_per_device})"
                 )
-                dispatch_chunk = ttnn.repeat(dispatch_chunk, ttnn.Shape(repeat_dims))
-                log_op("ttnn.repeat", inputs=dispatch_chunk, config={"repeat_dims": repeat_dims}, output=dispatch_chunk)
+                # Use appropriate memory config based on mode
+                repeat_memory_config = self._get_memory_config(mode, "dispatch")
+                dispatch_chunk = ttnn.repeat(
+                    dispatch_chunk, ttnn.Shape(repeat_dims), memory_config=repeat_memory_config
+                )
                 logger.info(f"DEBUG: After repeat - dispatch_chunk shape: {dispatch_chunk.shape}")
 
             dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
-            log_op("ttnn.to_layout", inputs=dispatch_chunk, config={"layout": "TILE_LAYOUT"}, output=dispatch_chunk)
             ttnn.deallocate(dispatch_output)
 
             # Run experts
-            if self.distributed_expert:
-                experts_output = self.distributed_expert.forward(dispatch_chunk, mode=mode)
+            if self.distributed_expert_enabled:
+                # Use class method forward_decode with the stored config
+                experts_output = DistributedExpert.forward_decode(dispatch_chunk, self.distributed_expert_decode_config)
             else:
                 # Fallback if no distributed expert configured
                 experts_output = dispatch_chunk
@@ -386,8 +441,9 @@ class MoEBlock:
                 experts_output,
                 dispatch_metadata,
                 self.expert_mapping_tensors,
-                cluster_axis=self.ep_axis if self.distributed_expert else 0,
+                cluster_axis=self.ep_axis if self.distributed_expert_enabled else 0,
                 memory_config=self._get_memory_config(mode, "combine"),
+                topology=ttnn.Topology.Linear,
             )
             ttnn.deallocate(experts_output)
             ttnn.deallocate(dispatch_metadata)
@@ -445,6 +501,11 @@ class MoEBlock:
         Returns:
             MoE output tensor with same shape as input
         """
+        logger.info(f"DEBUG MoEBlock.forward: Starting with input shape {x.shape}, mode={mode}")
+        logger.info(
+            f"DEBUG MoEBlock.forward: TP enabled={self.tp_enabled}, TP axis={self.tp_axis}, TP size={self.tp_size}"
+        )
+
         # Check for chunking in prefill mode
         if mode == "prefill":
             prefill_chunk_config = self.config.get("prefill_chunking", {})
@@ -458,9 +519,12 @@ class MoEBlock:
 
         # Step 1: All-gather if TP is enabled and input is sharded
         x_was_gathered = False
-        if self.tp_enabled and self._is_tp_sharded(x):
-            log_tensor_props("Input before all_gather", x)
+        is_sharded = self._is_tp_sharded(x)
+        logger.info(
+            f"DEBUG MoEBlock.forward: _is_tp_sharded returned {is_sharded} (actual_dim={x.shape[-1]}, expected_sharded={self.config['experts']['distributed']['hidden_size'] // self.tp_size if self.tp_enabled else 'N/A'})"
+        )
 
+        if self.tp_enabled and self._is_tp_sharded(x):
             # Get CCL parameters for all_gather
             all_gather_config = {
                 "cluster_axis": self.tp_axis,
@@ -475,29 +539,41 @@ class MoEBlock:
             else:
                 raise ValueError("CCL instance is required for tensor parallel operations")
 
-            # Save input for logging before modifying x
-            x_input = x
             x = ttnn.experimental.all_gather_async(x, **all_gather_args)
-            log_op("ttnn.experimental.all_gather_async", inputs=x_input, config=all_gather_config, output=x)
             x_was_gathered = True
 
         # Step 2: Router forward
+        logger.info(f"DEBUG MoEBlock.forward: Calling router.forward with input shape {x.shape}")
         weights, indices = self.router.forward(x, mode)
+        logger.info(
+            f"DEBUG MoEBlock.forward: Router returned weights shape={weights.shape}, indices shape={indices.shape}"
+        )
 
         # Prepare expert weights
+        logger.info(f"DEBUG MoEBlock.forward: Preparing expert weights")
         weights_prepared = self._prepare_expert_weights(weights, mode)
+        logger.info(f"DEBUG MoEBlock.forward: Weights prepared shape={weights_prepared.shape}")
 
         # Step 3: Expert computation
         outputs = []
 
         # Distributed experts with MoE forward
-        if self.distributed_expert:
+        if self.distributed_expert_enabled:
+            logger.info(f"DEBUG MoEBlock.forward: Calling _forward_moe with distributed experts")
             moe_output = self._forward_moe(x, indices, weights_prepared, mode)
+            logger.info(
+                f"DEBUG MoEBlock.forward: _forward_moe returned shape={moe_output.shape if moe_output else 'None'}"
+            )
             outputs.append(moe_output)
 
         # Shared expert (if enabled and parallel with MoE)
-        if self.shared_expert and self.shared_parallel:
-            shared_out = self.shared_expert.forward(x, mode)
+        if self.shared_expert_enabled and self.shared_parallel:
+            logger.info(f"DEBUG MoEBlock.forward: Running SharedExpert.forward_decode")
+            # Use class method forward_decode with the stored config
+            shared_out = SharedExpert.forward_decode(x, self.shared_expert_decode_config)
+            logger.info(
+                f"DEBUG MoEBlock.forward: SharedExpert returned shape={shared_out.shape if shared_out else 'None'}"
+            )
             outputs.append(shared_out)
 
         # Step 4: Combine outputs
@@ -512,8 +588,6 @@ class MoEBlock:
 
         # Step 5: Reduce-scatter if we did all-gather
         if x_was_gathered:
-            log_tensor_props("Output before reduce_scatter", output)
-
             # Get CCL parameters for reduce_scatter
             reduce_scatter_config = {
                 "cluster_axis": self.tp_axis,
@@ -528,15 +602,7 @@ class MoEBlock:
             else:
                 raise ValueError("CCL instance is required for tensor parallel operations")
 
-            # Save input for logging before modifying output
-            output_input = output
             output = ttnn.experimental.reduce_scatter_minimal_async(output, **reduce_scatter_args)
-            log_op(
-                "ttnn.experimental.reduce_scatter_minimal_async",
-                inputs=output_input,
-                config=reduce_scatter_config,
-                output=output,
-            )
             # Cleanup gathered tensor
             ttnn.deallocate(x)
 

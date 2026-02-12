@@ -8,14 +8,6 @@ import torch
 import ttnn
 
 try:
-    from ...utils.debug_logger import log_op, log_tensor_props
-except ImportError:
-    try:
-        from models.tt_moe.utils.debug_logger import log_op, log_tensor_props
-    except ImportError:
-        from utils.debug_logger import log_op, log_tensor_props
-
-try:
     from .base_router import BaseRouter
 except ImportError:
     from components.routers.base_router import BaseRouter
@@ -177,37 +169,28 @@ class MoEGateRouter(BaseRouter):
         Returns:
             Tuple of (weights, indices) for expert selection
         """
-        log_tensor_props("MoEGate input", x)
-
         if self.gate_proj is None:
             raise ValueError("Weights not loaded. Call load_weights first.")
 
         # Gate projection
-        log_op(
-            "ttnn.linear (gate_proj)",
-            inputs=x,
-            config={"memory_config": str(self.memory_config), "compute_kernel_config": str(self.compute_config)},
-            output=None,
-        )
         logits = ttnn.linear(
             x,
             self.gate_proj,
             memory_config=self.memory_config,
             compute_kernel_config=self.compute_config,
         )
-        log_tensor_props("  output", logits)
 
         # Sigmoid activation to get scores
-        log_op("ttnn.sigmoid", inputs=logits, output=None)
         scores = ttnn.sigmoid(logits)
-        log_tensor_props("  output", scores)
         ttnn.deallocate(logits)
 
         # Add score correction bias if enabled
         if self.score_correction_bias_enabled and self.score_correction_bias is not None:
             # Expand bias to match scores shape
             scores_correction_bias = ttnn.repeat(self.score_correction_bias, ttnn.Shape((1, 1, scores.shape[2], 1)))
+
             scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
+
             scores_with_bias = ttnn.add(
                 scores,
                 scores_correction_bias,
@@ -224,7 +207,6 @@ class MoEGateRouter(BaseRouter):
             expert_scores_grouped = ttnn.reshape(
                 scores_with_bias, (1, -1, self.n_group, self.n_routed_experts // self.n_group)
             )
-
             # Get top-2 scores within expert groups
             TOPK_MIN_WIDTH = 64  # Minimum width for topk op
             if expert_scores_grouped.shape[3] < TOPK_MIN_WIDTH:
@@ -240,6 +222,7 @@ class MoEGateRouter(BaseRouter):
             # Sum top-2 scores within groups to get group scores
             expert_group_scores = ttnn.sum(topk_scores_within_groups, dim=3)
             ttnn.deallocate(topk_scores_within_groups)
+
             expert_group_scores = ttnn.unsqueeze(expert_group_scores, dim=0)
 
             # Get top-k expert groups
@@ -269,10 +252,13 @@ class MoEGateRouter(BaseRouter):
             ttnn.deallocate(src_tensor)
 
             # Reshape and expand mask to all experts
+            active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
             active_groups_mask = ttnn.reshape(active_groups_mask, (1, -1, self.n_group, 1))
+
             num_experts_per_group = self.n_routed_experts // self.n_group
             active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
             ttnn.deallocate(active_groups_mask)
+
             active_experts_mask = ttnn.reshape(active_experts_mask, (1, 1, -1, self.n_routed_experts))
 
             # Apply mask to scores
@@ -303,8 +289,10 @@ class MoEGateRouter(BaseRouter):
 
         # Normalize scores
         topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True)
+
         # Add small epsilon to avoid division by zero
         topk_expert_scores_sum = ttnn.add(topk_expert_scores_sum, 1e-20)
+
         topk_experts_scores_normalized = ttnn.div(topk_experts_scores, topk_expert_scores_sum)
         ttnn.deallocate(topk_expert_scores_sum)
         ttnn.deallocate(topk_experts_scores)
@@ -312,6 +300,7 @@ class MoEGateRouter(BaseRouter):
         # Apply expert scaling
         expert_scale = ttnn.repeat(self.expert_scale, ttnn.Shape((1, 1, topk_experts_scores_normalized.shape[2], 1)))
         expert_scale = ttnn.to_layout(expert_scale, ttnn.TILE_LAYOUT)
+
         topk_experts_scores_normalized = ttnn.mul(
             topk_experts_scores_normalized,
             expert_scale,
