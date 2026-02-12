@@ -190,6 +190,17 @@ class ReduceScatterAsyncMinimalConfig(OpConfigBase):
 
 
 @dataclass
+class DeepseekMoEReduceScatterConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.deepseek_moe_reduce_scatter op"""
+
+    output_memory_config: ttnn.MemoryConfig
+    dim: int
+    num_links: int = 4
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    cluster_axis: int | None = None
+
+
+@dataclass
 class PointToPointConfig(OpConfigBase):
     """Common parameters for a ttnn.point_to_point op"""
 

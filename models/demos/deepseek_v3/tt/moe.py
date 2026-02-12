@@ -16,6 +16,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
+    DeepseekMoEReduceScatterConfig,
     MeshDeviceStub,
     MulConfig,
     ReduceScatterAsyncMinimalConfig,
@@ -166,6 +167,22 @@ class MoE(SharedStateAddOn, AbstractModule):
                 strategy=ttnn.ShardStrategy.WIDTH,
             )
 
+            sum_experts_output_memory_config = ttnn.create_sharded_memory_config(
+                shape=(USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE),
+                core_grid=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(7, 0)),
+                    ]
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+            )
+
             # Construct the config
             return {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
@@ -186,7 +203,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "output_memory_config": input_output_memory_config,
                 "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
                 "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
-                "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
+                "sum_experts_output_memory_config": sum_experts_output_memory_config,
+                "final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
                     cluster_axis=1,
                     dim=3,
                     memory_config=input_output_memory_config,
@@ -225,6 +243,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "output_memory_config": memory_config,
                 "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
                 "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                "sum_experts_output_memory_config": memory_config,
                 "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                     cluster_axis=1,
                     dim=3,
@@ -258,7 +277,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
 
         # All Gather
-        x = cls._fwd_all_gather(x, cfg)
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_tp"]))
 
         # MoE Gate
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
@@ -267,7 +286,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
 
         # MOE
-        post_combine_output_tensor = cls._fwd_moe_decode(
+        post_combine_output_tensor = cls._fwd_decode_moe(
             x,
             topk_experts_indices,
             topk_experts_weights,
@@ -278,7 +297,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         # Reduce Scatter
-        post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
+        post_combine_output_tensor = ttnn.experimental.deepseek_moe_reduce_scatter(
+            post_combine_output_tensor, **cfg["final_output_reduce_scatter"]
+        )
 
         return post_combine_output_tensor
 
@@ -330,13 +351,13 @@ class MoE(SharedStateAddOn, AbstractModule):
             # Already full hidden size; skip all_gather
             pass
         elif x_dim == hidden_size // tp_size:
-            x = cls._fwd_all_gather(x, cfg)
+            x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_tp"]))
         else:
             logger.warning(
                 f"MoE forward: unexpected input hidden dim {x_dim} (hidden_size={hidden_size}, tp_size={tp_size}); "
                 "running all_gather as fallback."
             )
-            x = cls._fwd_all_gather(x, cfg)
+            x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_tp"]))
 
         # MoE Gate
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
@@ -345,7 +366,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
 
         # MOE
-        post_combine_output_tensor = cls._fwd_moe_prefill(
+        post_combine_output_tensor = cls._fwd_prefill_moe(
             x,
             topk_experts_indices,
             topk_experts_weights,
@@ -356,12 +377,14 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         # Reduce Scatter
-        post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
+        post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
+        )
 
         return post_combine_output_tensor
 
     @classmethod
-    def _fwd_moe_decode(
+    def _fwd_decode_moe(
         cls,
         x: ttnn.Tensor,
         topk_experts_indices: ttnn.Tensor,
@@ -431,11 +454,18 @@ class MoE(SharedStateAddOn, AbstractModule):
             post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]
         )
 
-        post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
+        tp_size = cfg["mesh_device"].shape[1]
+        post_combine_output_tensor = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+            post_combine_output_tensor,
+            dim=0,
+            split_size=post_combine_output_tensor[-1] // tp_size,
+            output_memory_config=cfg["sum_experts_output_memory_config"],
+        )
+
         return post_combine_output_tensor
 
     @classmethod
-    def _fwd_moe_prefill(
+    def _fwd_prefill_moe(
         cls,
         x: ttnn.Tensor,
         topk_experts_indices: ttnn.Tensor,
@@ -537,7 +567,9 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
             ttnn.deallocate(topk_weights_chunk)
 
-            post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
+            post_combine_output_tensor = ttnn.sum(
+                post_combine_output_tensor, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"]
+            )
             output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:
@@ -550,10 +582,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(x_rm)
         ttnn.deallocate(topk_experts_indices_rm)
         return post_combine_output_tensor
-
-    @classmethod
-    def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
     @classmethod
     def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -569,11 +597,3 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_experts_weights_rm)
         return topk_experts_weights
-
-    @classmethod
-    def _fwd_reduce_scatter(
-        cls, post_combine_output_tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, ccl: CCL
-    ) -> ttnn.Tensor:
-        return ttnn.experimental.reduce_scatter_minimal_async(
-            post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
-        )
