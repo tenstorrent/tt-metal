@@ -5,7 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <ranges>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tt::jit_build::utils {
@@ -60,20 +62,16 @@ private:
     static uint64_t unique_id_;
 };
 
-// An RAII wrapper that keeps track of a group of files, some of which need to be renamed.
+// An RAII wrapper that keeps track of a group of files that need to be renamed.
 class FileGroupRenamer {
 public:
-    FileGroupRenamer(std::vector<std::string> target_paths) : paths_(std::move(target_paths)) {}
-    std::string& generate_temp_path(size_t i) {
-        renamers_.emplace_back(paths_[i]);
-        paths_[i] = renamers_.back().path();
-        return paths_[i];
+    const std::string& add(const std::string& path) { return renamers_.emplace_back(path).path(); }
+    auto paths() const {
+        return renamers_ |
+               std::views::transform([](const FileRenamer& renamer) { return std::string_view{renamer.path()}; });
     }
-    // Returns the temp path or the original path if no temp path was generated.
-    const std::vector<std::string>& paths() const { return paths_; }
 
 private:
-    std::vector<std::string> paths_;
     std::vector<FileRenamer> renamers_;
 };
 

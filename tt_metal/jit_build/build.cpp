@@ -14,6 +14,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -68,6 +69,14 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
 void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
     if (dir_path.compare(git_hash_path) != 0) {
         std::filesystem::remove_all(dir_path);
+    }
+}
+
+void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
+    std::error_code ec;
+    std::filesystem::create_hard_link(target, link, ec);
+    if (ec) {
+        std::filesystem::copy_file(target, link);
     }
 }
 
@@ -497,14 +506,22 @@ size_t JitBuildState::compile(
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
+        auto obj_path = out_dir + this->objs_[i];
+        auto obj_temp_path = renamer.add(obj_path);
         if (need_compile(out_dir, this->objs_[i])) {
             launch_build_step(
-                [this, &out_dir, settings, i, obj_temp_path = renamer.generate_temp_path(i)]() {
+                [this, &out_dir, settings, i, obj_temp_path = std::move(obj_temp_path)]() {
                     this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i], obj_temp_path);
                 },
                 events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+            // No need to compile, but cannot use obj_path for linking because there is no guarantee that
+            // another process will not rename their compiled object to the same obj_path at the same time.
+            // Reasons we need this:
+            // 1. JIT compiler is not deterministic.  Different .o files are from the same source.
+            // 2. LTO opens the object file multiple times.  Atomic rename doesn't prevent linker gets confused.
+            hard_link_or_copy(obj_path, obj_temp_path);
         }
     }
 
@@ -637,13 +654,7 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
 
     fs::create_directories(out_dir);
     {
-        // object files will be created at unique names and renamed after linking
-        std::vector<std::string> obj_paths;
-        obj_paths.reserve(this->objs_.size());
-        for (const auto& obj : this->objs_) {
-            obj_paths.push_back(out_dir + obj);
-        }
-        jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
+        jit_build::utils::FileGroupRenamer renamer;
 
         if (compile(out_dir, settings, renamer) > 0 || need_link(out_dir)) {
             string link_objs = fmt::format("{} {} ", this->extra_link_objs_, fmt::join(renamer.paths(), " "));
