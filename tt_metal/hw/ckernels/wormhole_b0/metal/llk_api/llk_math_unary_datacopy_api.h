@@ -16,11 +16,8 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    bool tilize = false>
+    bool tilize = false /*unused*/>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0) {
-    // Tilize is only valid for A2D + no broadcast on Blackhole (Wormhole does not support tilize in this API).
-    static_assert(!tilize, "llk_math_eltwise_unary_datacopy_init: tilize is not supported on Wormhole");
-
     // is_int_fpu_en is only valid for A2D + no broadcast.
     static_assert(
         !is_int_fpu_en || (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE),

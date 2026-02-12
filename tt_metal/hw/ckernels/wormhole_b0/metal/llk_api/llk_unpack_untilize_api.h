@@ -31,8 +31,8 @@ inline void llk_unpack_untilize_uninit() {
     WAYPOINT("UPUD");
 }
 
-[[deprecated("Use pack_untilize instead.")]]
 template <bool first_pass = true>
+[[deprecated("Use pack_untilize instead.")]]
 inline void llk_unpack_untilize_pass(std::uint32_t operand, std::uint32_t block_tile_cols) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
