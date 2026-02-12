@@ -90,10 +90,7 @@ TtDeiTForImageClassificationWithTeacher::TtDeiTForImageClassificationWithTeacher
             throw std::runtime_error("Distillation classifier bias not found in state_dict: " + distill_bias_key);
         }
 
-        std::cout << "TtDeiTForImageClassificationWithTeacher initialized with " << num_labels_ << " classes" << std::endl;
-
     } catch (const std::exception& e) {
-        std::cerr << "Error initializing TtDeiTForImageClassificationWithTeacher: " << e.what() << std::endl;
         throw;
     }
 }
@@ -156,7 +153,6 @@ TtDeiTForImageClassificationWithTeacher::forward(
         return std::make_tuple(averaged_logits, cls_logits, distillation_logits, attentions_output, hidden_states_output);
 
     } catch (const std::exception& e) {
-        std::cerr << "Error in TtDeiTForImageClassificationWithTeacher forward pass: " << e.what() << std::endl;
         throw;
     }
 }
