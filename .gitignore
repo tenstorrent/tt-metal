@@ -149,3 +149,5 @@ models/experimental/petr/resources/*.pth
 
 *.out
 *.err
+
+.cache_*/

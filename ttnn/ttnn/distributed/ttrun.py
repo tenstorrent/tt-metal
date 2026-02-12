@@ -248,8 +248,6 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
             "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
             "TT_METAL_HOME": default_tt_metal_home,
             "TT_METAL_RUNTIME_ROOT": os.environ.get("TT_METAL_RUNTIME_ROOT", default_tt_metal_home),
-            "PYTHONPATH": os.environ.get("PYTHONPATH", str(ORIGINAL_CWD)),
-            "PYTHONHOME": os.environ.get("PYTHONHOME", str(ORIGINAL_CWD)),
             # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
             "LD_LIBRARY_PATH": os.environ.get(
                 "LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD))

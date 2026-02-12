@@ -19,6 +19,8 @@ from ttml.common.config import (
     TrainingConfig,
     load_config,
 )
+
+from socket import gethostname
 from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.utils import create_optimizer, initialize_device, set_seed
 
@@ -92,7 +94,7 @@ def main(config: str, worker_type: str):
             worker_type = "optimizer"
 
     mode = "2-tier" if is_two_tier else "3-tier"
-    print(f"Rank {rank}/{world_size}: Running as {worker_type} ({mode} mode)")
+    print(f"Rank {rank}/{world_size-1} on {gethostname()}: Running as {worker_type} ({mode} mode)")
 
     # Initialize socket manager
     socket_type = (

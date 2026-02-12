@@ -1,5 +1,5 @@
-metal-wh-16.closetbox.tenstorrent.com slots=1
-metal-wh-03.closetbox.tenstorrent.com slots=1
-metal-wh-04.closetbox.tenstorrent.com slots=1
-metal-wh-05.closetbox.tenstorrent.com slots=1
-metal-wh-06.closetbox.tenstorrent.com slots=1
+rank 0=metal-wh-03.closetbox.tenstorrent.com slot=0
+rank 1=metal-wh-05.closetbox.tenstorrent.com slot=0
+rank 2=metal-wh-06.closetbox.tenstorrent.com slot=0
+rank 3=metal-wh-04.closetbox.tenstorrent.com slot=0
+rank 4=metal-wh-01.closetbox.tenstorrent.com slot=0

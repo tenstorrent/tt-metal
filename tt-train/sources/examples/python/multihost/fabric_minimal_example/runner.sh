@@ -6,7 +6,6 @@
 
 # Set environmental variables
 export TT_METAL_HOME="/data/${USER}/tt-metal"
-export PYTHONPATH="${TT_METAL_HOME}:${PYTHONPATH}"
 source ${TT_METAL_HOME}/python_env/bin/activate
 export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
 

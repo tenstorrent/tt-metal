@@ -14,6 +14,6 @@ export HIERARCHICAL_ROOT="/data/${USER}/tt-metal/tt-train/sources/examples/pytho
 export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
 
 CONFIG_FILE="training_configs/training_shakespeare_tinyllama_3tier_fabric.yaml"
-HOST_CONFIG="4loudboxes"
+HOST_CONFIG="5loudboxes"
 
-tt-run --mpi-args "--hostfile ${HIERARCHICAL_ROOT}/configurations/${HOST_CONFIG}/hosts.txt -x TT_METAL_HOME --mca mpi_show_mca_params all --mca btl_tcp_if_include eno1 --mca oob_tcp_if_include eno1 --mca btl self,tcp --tag-output" --rank-binding ${HIERARCHICAL_ROOT}/configurations/${HOST_CONFIG}/rank_bindings.yaml python ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/training.py -c ${CONFIG_FILE}
+tt-run --mpi-args "--rankfile configurations/${HOST_CONFIG}/hosts.txt -x TT_METAL_HOME --mca mpi_show_mca_params all --mca btl_tcp_if_include eno1 --mca oob_tcp_if_include eno1 --mca btl self,tcp --tag-output" --rank-binding ${HIERARCHICAL_ROOT}/configurations/${HOST_CONFIG}/rank_bindings.yaml python ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/training.py -c ${CONFIG_FILE} --verbose
