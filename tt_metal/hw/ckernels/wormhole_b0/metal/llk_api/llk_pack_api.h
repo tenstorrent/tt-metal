@@ -104,16 +104,10 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
-
-    if (!isPackerConfiguredCorrectly) {
-        DPRINT_PACK(DPRINT << "llk_pack_init - Need to reconfigure packer." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces),
+        "");
 
     _llk_pack_init_<untilize, zero_output>(
         pack_dst_format[output_id], pack_src_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
@@ -164,19 +158,13 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_output_face_r_dim(output_id),
-        get_output_num_faces(output_id));
-
-    if (!isPackerConfiguredCorrectly) {
-        DPRINT_PACK(DPRINT << "llk_pack - Need to reconfigure packer." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            get_output_face_r_dim(output_id),
+            get_output_num_faces(output_id)),
+        "");
 
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
 }
@@ -195,16 +183,10 @@ inline void llk_pack_untilize_init(
     std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
     const std::uint32_t output_id = get_output_id(output);
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
-
-    if (!isPackerConfiguredCorrectly) {
-        DPRINT_PACK(DPRINT << "llk_pack_untilize_init - Need to reconfigure packer." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces),
+        "");
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         pack_dst_format[output_id], face_r_dim, num_faces);
@@ -233,16 +215,10 @@ inline void llk_pack_untilize(
             16;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-        const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
-
-        if (!isPackerConfiguredCorrectly) {
-            DPRINT_PACK(DPRINT << "llk_pack_untilize - Need to reconfigure packer." << ENDL());
-            // There is no mechanism to actually use message, no point in passing it to assert.
-            LLK_ASSERT(false, "");
-        }
-#endif
+        LLK_ASSERT(
+            are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+                pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces),
+            "");
 
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
             pack_tile_addr,
@@ -268,19 +244,13 @@ inline void llk_matmul_pack(
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-        const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id],
-            pack_dst_format[output_id],
-            get_output_face_r_dim(output_id),
-            get_output_num_faces(output_id));
-
-        if (!isPackerConfiguredCorrectly) {
-            DPRINT_PACK(DPRINT << "llk_pack - Need to reconfigure packer." << ENDL());
-            // There is no mechanism to actually use message, no point in passing it to assert.
-            LLK_ASSERT(false, "");
-        }
-#endif
+        LLK_ASSERT(
+            are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+                pack_src_format[output_id],
+                pack_dst_format[output_id],
+                get_output_face_r_dim(output_id),
+                get_output_num_faces(output_id)),
+            "");
 
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
     }
@@ -321,19 +291,13 @@ inline void llk_pack_rows(
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t pack_addr = get_output_tile_address<true, false>(output_id, output_index);
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_output_face_r_dim(output_id),
-        get_output_num_faces(output_id));
-
-    if (!isPackerConfiguredCorrectly) {
-        DPRINT_PACK(DPRINT << "llk_pack_rows - Need to reconfigure packer." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            get_output_face_r_dim(output_id),
+            get_output_num_faces(output_id)),
+        "");
 
     _llk_pack_rows_(dst_index, pack_addr);
 }
@@ -359,19 +323,13 @@ inline void llk_pack_fast_tilize_init(
     const uint32_t use_32bit_dest =
         pack_src_format[input_id] == (uint)DataFormat::Float32 || pack_src_format[input_id] == (uint)DataFormat::Tf32;
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[input_id],
-        pack_dst_format[output_id],
-        get_output_face_r_dim(output_id),
-        get_output_num_faces(output_id));
-
-    if (!isPackerConfiguredCorrectly) {
-        DPRINT_PACK(DPRINT << "llk_pack_fast_tilize_init - Need to reconfigure packer." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[input_id],
+            pack_dst_format[output_id],
+            get_output_face_r_dim(output_id),
+            get_output_num_faces(output_id)),
+        "");
 
     _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces);
 }
@@ -401,19 +359,13 @@ inline void llk_pack_fast_tilize_block(
 
     const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isPackerConfiguredCorrectly = are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_output_face_r_dim(output_id),
-        get_output_num_faces(output_id));
-
-    if (!isPackerConfiguredCorrectly) {
-        DPRINT_PACK(DPRINT << "llk_pack_fast_tilize_block - Need to reconfigure packer." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            get_output_face_r_dim(output_id),
+            get_output_num_faces(output_id)),
+        "");
 
     _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_units, num_faces);
 }
