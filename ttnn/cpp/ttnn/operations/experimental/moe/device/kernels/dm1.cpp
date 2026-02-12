@@ -129,13 +129,6 @@ void kernel_main() {
     uint32_t semaphore_value = 0;
     *my_semaphore_ptr = 0;
 
-    // Set state for the a2a writes
-    noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
-
-    // Set state for the semaphore write
-    noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
-        neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
-
     // TODO get height_blocks from token_counts;
     // noc_semaphore_wait(reinterpret_cast < volatile tt_l1_ptr uint32_t*(metadata_ready_semaphore_addr), 1);
     // uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
@@ -154,6 +147,14 @@ void kernel_main() {
         const uint32_t max_tokens_per_height_shard = detail::div_up(active_tokens, height_shard_dim);
         const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
         for (uint32_t hb = 0; hb < height_blocks; ++hb) {
+            // Set state for the a2a writes
+            noc_async_write_one_packet_set_state</*posted=*/true>(
+                neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
+
+            // Set state for the semaphore write
+            noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
+                neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
+
             // Assume data is already in the CB, but this will get plumbed to tilize in the future.
             cb_reserve_back(cb_s2c_in, num_w0_w1_tiles_h);
             cb_push_back(cb_s2c_in, num_w0_w1_tiles_h);
