@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import torch
 import torchvision.transforms as tv
 from PIL import Image
+from pydantic import BaseModel, validator
 from torchvision.transforms import functional as F
 from transformers import AutoModelForVision2Seq, AutoProcessor, pipeline
 
@@ -38,6 +39,52 @@ class TokenResult:
 class CompletionMessage:
     content: str
     role: Role = Role.assistant.value
+
+
+class BuiltinTool(Enum):
+    brave_search = "brave_search"
+    wolfram_alpha = "wolfram_alpha"
+    photogen = "photogen"
+    code_interpreter = "code_interpreter"
+
+
+Primitive = Union[str, int, float, bool, None]
+RecursiveType = Union[Primitive, List[Primitive], Dict[str, Primitive]]
+
+
+class ToolCall(BaseModel):
+    call_id: str
+    tool_name: Union[BuiltinTool, str]
+    arguments: Dict[str, RecursiveType]
+
+    @validator("tool_name", pre=True)
+    @classmethod
+    def validate_field(cls, v):
+        if isinstance(v, str):
+            try:
+                return BuiltinTool(v)
+            except ValueError:
+                return v
+        return v
+
+
+# class CompletionMessage(BaseModel):
+#     role: Literal[Role.assistant.value] = Role.assistant.value
+#     content: InterleavedTextMedia
+#     stop_reason: StopReason
+#     tool_calls: List[ToolCall] = Field(default_factory=list)
+
+
+class ChatPrediction:
+    generation: CompletionMessage
+    decoded_tokens: Optional[List[str]] = None
+    logprobs: Optional[List[List[float]]] = None
+
+
+class CompletionPrediction:
+    generation: str
+    decoded_tokens: Optional[List[str]] = None
+    logprobs: Optional[List[List[float]]] = None
 
 
 def sample_top_p(probs, p):
