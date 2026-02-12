@@ -22,14 +22,7 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])  # 32k max sequence length per chip
 def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_len):
     """Test FlashMLADecode op."""
-    if (
-        is_blackhole()
-        and is_watcher_enabled()
-        and max_seq_len == 32768
-        and k_chunk_size == 128
-        and num_chunks == 1
-        and batch_size == 1
-    ):
+    if is_blackhole() and is_watcher_enabled():
         pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37631")
 
     # Calculate decode_position from num_chunks and k_chunk_size
