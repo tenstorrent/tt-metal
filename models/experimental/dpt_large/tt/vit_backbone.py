@@ -390,11 +390,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
 
         hidden_states_tt: List[ttnn.Tensor] = [tokens_tt]
         for blk in self.tt_blocks[: self.config.num_hidden_layers]:
-            # Some TT kernels can fold batch into the token dimension. Keep a
-            # canonical [B,1,N,C] logical view between blocks.
-            tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
             tokens_tt = blk(tokens_tt, **mm_opts)
-            tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
             hidden_states_tt.append(tokens_tt)
 
         feats: Dict[int, Any] = {}
