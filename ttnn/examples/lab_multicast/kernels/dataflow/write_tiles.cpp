@@ -9,12 +9,13 @@
 // Each receiver writes its complete copy of the tensor to a separate section of the output buffer.
 void kernel_main() {
     ////////// RUNTIME ARGS //////////
-    uint32_t dst_base_addr = get_arg_val<uint32_t>(0);
-    uint32_t n_tiles = get_arg_val<uint32_t>(1);
-    uint32_t receiver_idx = get_arg_val<uint32_t>(2);
+    int arg_idx = 0;
+    uint32_t dst_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t n_tiles = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t receiver_idx = get_arg_val<uint32_t>(arg_idx++);
 
     ////////// BUFFER SETUP //////////
-    constexpr uint32_t cb_id_out0 = tt::CB::c_out0;  // CBIndex::c_16
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
     const uint32_t tile_size_bytes = get_tile_size(cb_id_out0);
 
     // Create address generator for the output buffer using TensorAccessorArgs.

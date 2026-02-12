@@ -9,18 +9,19 @@
 // Uses double-buffering for improved performance.
 void kernel_main() {
     ////////// RUNTIME ARGS //////////
-    uint32_t receiver_start_x = get_arg_val<uint32_t>(0);
-    uint32_t receiver_start_y = get_arg_val<uint32_t>(1);
-    uint32_t receiver_end_x = get_arg_val<uint32_t>(2);
-    uint32_t receiver_end_y = get_arg_val<uint32_t>(3);
-    uint32_t receivers_ready_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(4));
-    uint32_t tile_sent_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(5));
-    uint32_t src_base_addr = get_arg_val<uint32_t>(6);
-    uint32_t n_tiles = get_arg_val<uint32_t>(7);
-    uint32_t num_receivers = get_arg_val<uint32_t>(8);
+    int arg_idx = 0;
+    uint32_t receiver_start_x = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t receiver_start_y = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t receiver_end_x = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t receiver_end_y = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t receivers_ready_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t tile_sent_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t src_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t n_tiles = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_receivers = get_arg_val<uint32_t>(arg_idx++);
 
     ////////// BUFFER SETUP //////////
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;  // index=0
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
 
     // Create address generator for the input buffer using TensorAccessorArgs.
