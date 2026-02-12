@@ -2,69 +2,159 @@
 # This file defines groupings for a pipelined configuration with 48 stages (meshes)
 # Each mesh contains 1 tray (8 ASICs), arranged in 3 pods with 16 meshes each
 # The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD)
+# Uses predefined keywords: TRAY_1-TRAY_4, HOSTS, and MESH
 
+# TRAY_1: Top left corner is ASIC_LOCATION_1
+groupings {
+  preset_name: TRAY_1
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 5 asic_location: ASIC_LOCATION_6 },
+    { id: 6 asic_location: ASIC_LOCATION_7 },
+    { id: 7 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+    dim_types: [LINE, LINE]
+    num_connections: 2
+  }
+}
+
+# TRAY_2: Top right corner is ASIC_LOCATION_1
+groupings {
+  preset_name: TRAY_2
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_4 },
+    { id: 1 asic_location: ASIC_LOCATION_3 },
+    { id: 2 asic_location: ASIC_LOCATION_2 },
+    { id: 3 asic_location: ASIC_LOCATION_1 },
+    { id: 4 asic_location: ASIC_LOCATION_8 },
+    { id: 5 asic_location: ASIC_LOCATION_7 },
+    { id: 6 asic_location: ASIC_LOCATION_6 },
+    { id: 7 asic_location: ASIC_LOCATION_5 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+    dim_types: [LINE, LINE]
+    num_connections: 2
+  }
+}
+
+# TRAY_3: Bottom left corner is ASIC_LOCATION_1
+groupings {
+  preset_name: TRAY_3
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_5 },
+    { id: 1 asic_location: ASIC_LOCATION_6 },
+    { id: 2 asic_location: ASIC_LOCATION_7 },
+    { id: 3 asic_location: ASIC_LOCATION_8 },
+    { id: 4 asic_location: ASIC_LOCATION_1 },
+    { id: 5 asic_location: ASIC_LOCATION_2 },
+    { id: 6 asic_location: ASIC_LOCATION_3 },
+    { id: 7 asic_location: ASIC_LOCATION_4 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+    dim_types: [LINE, LINE]
+    num_connections: 2
+  }
+}
+
+# TRAY_4: Bottom right corner is ASIC_LOCATION_1
+groupings {
+  preset_name: TRAY_4
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_8 },
+    { id: 1 asic_location: ASIC_LOCATION_7 },
+    { id: 2 asic_location: ASIC_LOCATION_6 },
+    { id: 3 asic_location: ASIC_LOCATION_5 },
+    { id: 4 asic_location: ASIC_LOCATION_4 },
+    { id: 5 asic_location: ASIC_LOCATION_3 },
+    { id: 6 asic_location: ASIC_LOCATION_2 },
+    { id: 7 asic_location: ASIC_LOCATION_1 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+    dim_types: [LINE, LINE]
+    num_connections: 2
+  }
+}
+
+# HOSTS: 4 trays (TRAY_1, TRAY_2, TRAY_3, TRAY_4)
+groupings {
+  preset_name: HOSTS
+  instances: [
+    { id: 0 grouping_ref { preset_name: TRAY_1 } },
+    { id: 1 grouping_ref { preset_name: TRAY_2 } },
+    { id: 2 grouping_ref { preset_name: TRAY_3 } },
+    { id: 3 grouping_ref { preset_name: TRAY_4 } }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
+    dim_types: [LINE, RING]
+    num_connections: 2
+  }
+}
+
+# MESH: 4 instances arranged in 1x4 grid with row-major mesh connectivity
+groupings {
+  preset_name: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_name: HOSTS } },
+    { id: 1 grouping_ref { preset_name: HOSTS } },
+    { id: 2 grouping_ref { preset_name: HOSTS } },
+    { id: 3 grouping_ref { preset_name: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
+    dim_types: [LINE, RING]
+    num_connections: 4
+  }
+}
+
+# Custom meshes configurations for different test scenarios
+groupings {
+  custom_name: "meshes"
+  instances: [
+    { id: 0 grouping_ref { preset_name: TRAY_1 } },  # Each mesh = 2 trays, 16 ASICs
+    { id: 1 grouping_ref { preset_name: TRAY_2 } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+    dim_types: [LINE, LINE]
+    num_connections: 2
+  }
+}
 
 groupings {
-  name: "trays"
-  items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 },
-    { asic_location: ASIC_LOCATION_5 },
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
+  custom_name: "meshes"
+  instances: [
+    { id: 0 grouping_ref { preset_name: TRAY_1 } }  # Each mesh contains 1 tray, 8 ASICs
   ]
 }
 
 groupings {
-  name: "hosts"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 4 } }
+  custom_name: "meshes"
+  instances: [
+    { id: 0 grouping_ref { preset_name: HOSTS } }  # Each mesh = 1 host, 32 ASICs
   ]
 }
 
 groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 2 } } # Each mesh = 2 trays, 16 ASICs
+  custom_name: "meshes"
+  instances: [
+    { id: 0 grouping_ref { preset_name: HOSTS } },  # Each mesh = 4 hosts, 128 ASICs
+    { id: 1 grouping_ref { preset_name: HOSTS } },
+    { id: 2 grouping_ref { preset_name: HOSTS } },
+    { id: 3 grouping_ref { preset_name: HOSTS } }
   ]
-}
-
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 1 } }  # Each mesh contains 1 tray, 8 ASICs
-  ]
-}
-
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host, 32 ASICs
-  ]
-}
-
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 4 } }  # Each mesh = 4 hosts, 128 ASICs
-  ]
-}
-
-# Higher-level groupings for graph instances in test MGDs
-# These are needed for tests that use MGDs with graph instances
-groupings {
-  name: "fabric"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Fabric with 2 meshes (for dual_4x4 and dual_8x2)
-  ]
-}
-
-groupings {
-  name: "fabric"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 48 } }  # Fabric with 48 meshes (for bh_glx_split_4x2)
-  ]
+  row_major_mesh {
+    dims: [1, 4]
+    dim_types: [LINE, RING]
+    num_connections: 2
+  }
 }
