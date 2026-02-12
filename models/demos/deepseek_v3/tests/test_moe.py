@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -21,6 +23,13 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+TEST_CHECK_ITERS = 100
+CI_ACTIVE = os.getenv("CI") == "true"
+_CI_SKIP_MARK = pytest.mark.skipif(
+    CI_ACTIVE,
+    reason="CI runs traced coverage only.",
+)
+
 
 @pytest.fixture
 def reference_model(hf_config):
@@ -34,7 +43,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10485760},
     ],
     indirect=True,
 )
@@ -55,16 +64,35 @@ def reference_model(hf_config):
         else pytest.param(
             "prefill",
             seq_len,
-            marks=pytest.mark.skip(
-                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            marks=pytest.mark.skipif(
+                CI_ACTIVE,
+                reason=(
+                    f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+                ),
             ),
         )
         for seq_len in PREFILL_SEQ_LENS
     ],
 )
+@pytest.mark.parametrize(
+    "trace_mode",
+    [
+        pytest.param(False, id="eager"),
+        pytest.param(True, id="tracing"),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_real_weights",
+    [
+        pytest.param(True, id="real_weights"),
+        pytest.param(False, id="random_weights"),
+    ],
+)
 def test_forward_pass(
     mode,
     num_tokens,
+    trace_mode,
+    use_real_weights,
     set_deterministic_env,
     reference_model,
     hf_config,
@@ -74,10 +102,19 @@ def test_forward_pass(
     topk_fallback,
 ):
     """Test forward pass against reference model."""
+    if trace_mode and mode != "decode":
+        pytest.skip("Tracing is only supported for decode mode.")
+    if trace_mode and topk_fallback:
+        pytest.skip("Tracing not supported with topk_fallback.")
 
-    # Get state dict from actual model - pass directly to convert_weights
+    if use_real_weights:
+        model_for_reference = reference_model
+    else:
+        model_for_reference = DeepseekV3MoE(hf_config).eval()
+
+    # Get state dict from model - pass directly to convert_weights
     state_dict = add_inv_scale_to_state_dict(
-        reference_model.state_dict(),
+        model_for_reference.state_dict(),
         block_shape=hf_config.quantization_config["weight_block_size"],
     )
 
@@ -85,13 +122,18 @@ def test_forward_pass(
     torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
 
     # Reference forward pass
-    reference_model.eval()
-    reference_model.to(torch.bfloat16)
+    model_for_reference.eval()
+    model_for_reference.to(torch.bfloat16)
     with torch.no_grad():
-        reference_output = reference_model(torch_input)
+        reference_output = model_for_reference(torch_input)
 
     weight_config = get_test_weight_config(
-        MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+        MoE,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=not use_real_weights,
     )
 
     # Generate appropriate config using utility function
@@ -116,30 +158,54 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass using utility function
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(MoE, mode, tt_input, run_config)
 
-    # Verify output memory config matches expected
-    expected_output_memory_config = run_config["output_memory_config"]
-    actual_output_memory_config = tt_output.memory_config()
-    assert (
-        actual_output_memory_config == expected_output_memory_config
-    ), f"MoE output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+    def to_torch_output(tt_output: ttnn.Tensor) -> torch.Tensor:
+        expected_output_memory_config = run_config["output_memory_config"]
+        actual_output_memory_config = tt_output.memory_config()
+        assert (
+            actual_output_memory_config == expected_output_memory_config
+        ), f"MoE output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+        return ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        )
 
-    # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-    )
-
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
-
-    # Compare outputs using utility function
     logger.info(f"Mode: {mode}, Num tokens: {num_tokens}")
-    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+    if trace_mode:
+        # Iteration 0: eager compile run (not traced)
+        tt_output = run_module_forward(MoE, mode, tt_input, run_config)
+        ttnn.synchronize_device(mesh_device)
+        tt_output_torch = to_torch_output(tt_output)
+        assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+        ttnn.deallocate(tt_output)
+
+        # Reset CCL semaphore counters before trace capture
+        ccl.reset_sem_counters()
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_output = run_module_forward(MoE, mode, tt_input, run_config)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        for _ in range(TEST_CHECK_ITERS - 1):
+            ttnn.execute_trace(mesh_device, trace_id, blocking=True)
+        ttnn.synchronize_device(mesh_device)
+
+        tt_output_torch = to_torch_output(trace_output)
+        assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(trace_output)
+    else:
+        for iter_idx in range(TEST_CHECK_ITERS):
+            tt_output = run_module_forward(MoE, mode, tt_input, run_config)
+            ttnn.synchronize_device(mesh_device)
+            if iter_idx in (0, TEST_CHECK_ITERS - 1):
+                tt_output_torch = to_torch_output(tt_output)
+                assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+            ttnn.deallocate(tt_output)
+
+    ttnn.deallocate(tt_input)
 
 
 if __name__ == "__main__":

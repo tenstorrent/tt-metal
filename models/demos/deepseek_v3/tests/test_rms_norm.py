@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 
 import pytest
 import torch
@@ -19,10 +20,23 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+TEST_CHECK_ITERS = 100
+CI_ACTIVE = os.getenv("CI") == "true"
+_CI_SKIP_MARK = pytest.mark.skipif(
+    CI_ACTIVE,
+    reason="CI runs traced coverage only.",
+)
+
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 10485760,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -36,21 +50,33 @@ from models.demos.deepseek_v3.utils.test_utils import (
         else pytest.param(
             "prefill",
             seq_len,
-            marks=pytest.mark.skip(
-                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            marks=pytest.mark.skipif(
+                CI_ACTIVE,
+                reason=(
+                    f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+                ),
             ),
         )
         for seq_len in PREFILL_SEQ_LENS
     ],
 )
 @pytest.mark.parametrize(
+    "trace_mode",
+    [
+        pytest.param(False, marks=_CI_SKIP_MARK, id="eager"),
+        pytest.param(True, id="tracing"),
+    ],
+)
+@pytest.mark.parametrize(
     "reference_layernorm_path, RMSNormClass, hf_config_size_attr",
     [
-        (None, DistributedRMSNorm, "hidden_size"),
+        pytest.param(None, DistributedRMSNorm, "hidden_size", marks=_CI_SKIP_MARK),
         ("model.layers.0.input_layernorm", DistributedRMSNorm, "hidden_size"),
         ("model.layers.0.post_attention_layernorm", DistributedRMSNorm, "hidden_size"),
-        (None, RMSNorm, "kv_lora_rank"),  # TODO: not properly tested here, needs fixing
-        (None, RMSNorm, "q_lora_rank"),  # TODO: not properly tested here, needs fixing
+        pytest.param(
+            None, RMSNorm, "kv_lora_rank", marks=_CI_SKIP_MARK
+        ),  # TODO: not properly tested here, needs fixing
+        pytest.param(None, RMSNorm, "q_lora_rank", marks=_CI_SKIP_MARK),  # TODO: not properly tested here, needs fixing
         (
             "model.layers.0.self_attn.kv_a_layernorm",
             RMSNorm,
@@ -68,6 +94,7 @@ def test_forward_pass(
     hf_config_size_attr,
     mode,
     seq_len,
+    trace_mode,
     reference_layernorm_path,
     model_path,
     hf_config,
@@ -132,23 +159,49 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # Run TTNN forward pass
-    tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
+    def to_torch_output(tt_output: ttnn.Tensor) -> torch.Tensor:
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -1)),
+        )
+        if RMSNormClass is RMSNorm:
+            tt_output_torch = tt_output_torch[..., :hidden_size]
+        return tt_output_torch
 
-    # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -1)),
-    )
-    if RMSNormClass is RMSNorm:
-        tt_output_torch = tt_output_torch[..., :hidden_size]
+    if trace_mode:
+        # Iteration 0: eager compile run (not traced)
+        tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
+        ttnn.synchronize_device(mesh_device)
+        tt_output_torch = to_torch_output(tt_output)
+        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+        ttnn.deallocate(tt_output)
 
-    # Cleanup
+        # Reset CCL semaphore counters before trace capture
+        ccl.reset_sem_counters()
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        for _ in range(TEST_CHECK_ITERS - 1):
+            ttnn.execute_trace(mesh_device, trace_id, blocking=True)
+        ttnn.synchronize_device(mesh_device)
+
+        tt_output_torch = to_torch_output(trace_output)
+        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(trace_output)
+    else:
+        for iter_idx in range(TEST_CHECK_ITERS):
+            tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
+            ttnn.synchronize_device(mesh_device)
+            if iter_idx in (0, TEST_CHECK_ITERS - 1):
+                tt_output_torch = to_torch_output(tt_output)
+                assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+            ttnn.deallocate(tt_output)
+
     ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
-
-    # Check PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -29,6 +31,14 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers,
 )
+
+TEST_CHECK_ITERS = 100
+CI_ACTIVE = os.getenv("CI") == "true"
+_CI_SKIP_MARK = pytest.mark.skipif(
+    CI_ACTIVE,
+    reason="CI runs traced coverage only.",
+)
+pytestmark = pytest.mark.timeout(1200)
 
 
 def generate_reference_io(
@@ -64,10 +74,34 @@ def generate_reference_io(
     else:
         logger.info("Creating reference model with random weights")
         reference_model = DeepseekV3ForCausalLM(hf_config).eval().to(torch.bfloat16)
+        random_state_dict: dict[str, torch.Tensor] = {}
+        for name, tensor in reference_model.state_dict().items():
+            if torch.is_floating_point(tensor):
+                random_state_dict[name] = torch.randn_like(tensor) * 0.02
+            else:
+                random_state_dict[name] = tensor
         state_dict = add_inv_scale_to_state_dict(
-            reference_model.to(torch.bfloat16).state_dict(),
+            random_state_dict,
             block_shape=hf_config.quantization_config["weight_block_size"],
         )
+        float8_dtypes = tuple(
+            dt
+            for dt in (
+                getattr(torch, "float8_e4m3fn", None),
+                getattr(torch, "float8_e5m2", None),
+                getattr(torch, "float8_e5m2fnuz", None),
+            )
+            if dt is not None
+        )
+        for name, tensor in state_dict.items():
+            if torch.is_floating_point(tensor):
+                if float8_dtypes and tensor.dtype in float8_dtypes:
+                    cleaned = torch.nan_to_num(tensor.float(), nan=0.0, posinf=0.0, neginf=0.0)
+                    state_dict[name] = cleaned.to(tensor.dtype)
+                else:
+                    state_dict[name] = torch.nan_to_num(tensor, nan=0.0, posinf=0.0, neginf=0.0)
+        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+        reference_model.load_state_dict(dequantized_state_dict)
 
     torch_input = torch.randint(0, hf_config.vocab_size - 1, (batch_size, seq_len), dtype=torch.long)
     position_ids = None
@@ -150,6 +184,7 @@ def generate_reference_io(
 
 def run_test_forward_pass_dpmodel(
     use_real_weights,
+    trace_mode,
     mode,
     seq_len,
     batch_size_per_row,
@@ -162,6 +197,9 @@ def run_test_forward_pass_dpmodel(
     state_dict,
     decode_position_ids: int | None = None,
 ):
+    if trace_mode and mode != "decode":
+        pytest.skip("Tracing is only supported for decode mode.")
+
     # Check params
     if mode == "prefill":
         assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
@@ -186,8 +224,14 @@ def run_test_forward_pass_dpmodel(
     )
 
     # Set up model config
+    weight_cache_root = cache_path if use_real_weights else cache_path / "random_weights"
     weight_config = get_test_weight_config(
-        RowBatchedModel, hf_config_short, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+        RowBatchedModel,
+        hf_config_short,
+        (state_dict,),
+        weight_cache_root,
+        mesh_device,
+        force_recalculate_weight_config or not use_real_weights,
     )
     model_config = get_model_config(RowBatchedModel, mode, hf_config_short, mesh_device)
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
@@ -224,26 +268,61 @@ def run_test_forward_pass_dpmodel(
     rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
 
+    def run_forward() -> ttnn.Tensor:
+        if mode == "prefill":
+            return RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
+        return RowBatchedModel.forward_decode(tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables)
+
+    def check_outputs(tt_output: ttnn.Tensor) -> None:
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+        )
+        assert (
+            tt_output_torch.shape[-1] == hf_config_short.vocab_size
+        ), f"Output shape mismatch: {tt_output_torch.shape} vs {hf_config_short.vocab_size}"
+
+        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.97)
+
     # Forward pass
     logger.info("Running TTNN forward pass")
-    if mode == "prefill":
-        tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
+    if trace_mode:
+        # Iteration 0: eager compile run (not traced)
+        tt_output = run_forward()
+        ttnn.synchronize_device(mesh_device)
+        check_outputs(tt_output)
+        ttnn.deallocate(tt_output)
+
+        # Reset CCL semaphore counters before trace capture
+        ccl.reset_sem_counters()
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_output = run_forward()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        for _ in range(TEST_CHECK_ITERS - 1):
+            ttnn.execute_trace(mesh_device, trace_id, blocking=True)
+        ttnn.synchronize_device(mesh_device)
+
+        check_outputs(trace_output)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(trace_output)
     else:
-        tt_output = RowBatchedModel.forward_decode(
-            tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
-        )
+        for iter_idx in range(TEST_CHECK_ITERS):
+            tt_output = run_forward()
+            ttnn.synchronize_device(mesh_device)
+            if iter_idx in (0, TEST_CHECK_ITERS - 1):
+                check_outputs(tt_output)
+            ttnn.deallocate(tt_output)
 
-    ttnn.synchronize_device(mesh_device)
-
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
-    )
-    assert (
-        tt_output_torch.shape[-1] == hf_config_short.vocab_size
-    ), f"Output shape mismatch: {tt_output_torch.shape} vs {hf_config_short.vocab_size}"
-
-    # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.97)
+    ttnn.deallocate(tt_input)
+    if position_ids_tensor is not None:
+        ttnn.deallocate(position_ids_tensor)
+    for tt_page_table in tt_page_tables:
+        ttnn.deallocate(tt_page_table)
+    for rope_tensor in rope_tensors.values():
+        ttnn.deallocate(rope_tensor)
 
 
 # Base test cases - ranges will be expanded into individual test cases
@@ -259,8 +338,11 @@ BASE_TEST_CASES = [
         seq_len,
         1,
         None,
-        marks=pytest.mark.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        marks=pytest.mark.skipif(
+            CI_ACTIVE,
+            reason=(
+                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            ),
         ),
     )
     for seq_len in PREFILL_SEQ_LENS
@@ -272,13 +354,23 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10485760},
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "use_real_weights",
-    [True],  # Test only with real weights for now
+    [
+        pytest.param(True, id="real_weights"),
+        pytest.param(False, marks=_CI_SKIP_MARK, id="random_weights"),
+    ],
+)
+@pytest.mark.parametrize(
+    "trace_mode",
+    [
+        pytest.param(False, marks=_CI_SKIP_MARK, id="eager"),
+        pytest.param(True, id="tracing"),
+    ],
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row, decode_position_ids",
@@ -287,6 +379,7 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 )
 def test_forward_pass(
     use_real_weights,
+    trace_mode,
     mode,
     seq_len,
     batch_size_per_row,
@@ -309,6 +402,7 @@ def test_forward_pass(
 
     run_test_forward_pass_dpmodel(
         use_real_weights,
+        trace_mode,
         mode,
         seq_len,
         batch_size_per_row,

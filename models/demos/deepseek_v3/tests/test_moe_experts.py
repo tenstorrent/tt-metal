@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,14 @@ from models.demos.deepseek_v3.utils.test_utils import (
     get_test_weight_config,
     run_module_forward,
 )
+
+TEST_CHECK_ITERS = 100
+CI_ACTIVE = os.getenv("CI") == "true"
+_CI_SKIP_MARK = pytest.mark.skipif(
+    CI_ACTIVE,
+    reason="CI runs traced coverage only.",
+)
+SPARSITY_BLOCK_SIZE = 128
 
 
 class DeepseekV3MoEExperts(nn.Module):
@@ -80,16 +89,36 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
         else pytest.param(
             "prefill",
             seq_len,
-            marks=pytest.mark.skip(
-                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            marks=pytest.mark.skipif(
+                CI_ACTIVE,
+                reason=(
+                    f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+                ),
             ),
         )
         for seq_len in PREFILL_SEQ_LENS
     ],
 )
 @pytest.mark.parametrize(
-    "weight_type",
-    ["random", "real"],
+    "trace_mode",
+    [
+        pytest.param(False, marks=_CI_SKIP_MARK, id="eager"),
+        pytest.param(True, id="tracing"),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_real_weights",
+    [
+        pytest.param(True, id="real_weights"),
+        pytest.param(False, marks=_CI_SKIP_MARK, id="random_weights"),
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10485760},
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "module_path",
@@ -98,33 +127,42 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
 def test_forward_pass(
     mode: str,
     seq_len: int,
+    trace_mode: bool,
+    use_real_weights: bool,
     hf_config: Any,
     cache_path: Path,
     mesh_device: Any,
-    weight_type: str,
     module_path: str,
     model_path: Path,
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
 ):
+    if trace_mode and mode != "decode":
+        pytest.skip("Tracing is only supported for decode mode.")
+
     batch_size = 1
     num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
 
     reference_model = DeepseekV3MoEExperts(hf_config).eval()
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
 
-    if weight_type == "random":
+    if not use_real_weights:
         state_dict = add_inv_scale_to_state_dict(
             reference_model.state_dict(), block_shape=hf_config.quantization_config["weight_block_size"]
         )
     else:
-        assert weight_type == "real"
         state_dict = create_combined_state_dict(module_path, model_path, state_dict)
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
 
+    weight_cache_root = cache_path if use_real_weights else cache_path / "random_weights"
     weight_config = get_test_weight_config(
-        TTExperts, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+        TTExperts,
+        hf_config,
+        (state_dict,),
+        weight_cache_root,
+        mesh_device,
+        force_recalculate_weight_config or not use_real_weights,
     )
     model_config = get_model_config(TTExperts, mode, hf_config, mesh_device)
     model_state = TTExperts.create_state(hf_config, mesh_device)
@@ -138,65 +176,91 @@ def test_forward_pass(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
-
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(TTExperts, mode, tt_input, run_config)
-    expected_output_memory_config = run_config["output_memory_config"]
 
-    actual_output_memory_config = tt_output.memory_config()
-    assert (
-        actual_output_memory_config == expected_output_memory_config
-    ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+    def check_outputs(tt_output: ttnn.Tensor) -> None:
+        expected_output_memory_config = run_config["output_memory_config"]
+        actual_output_memory_config = tt_output.memory_config()
+        assert (
+            actual_output_memory_config == expected_output_memory_config
+        ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
-    TARGET_CHUNK_SIZE = 2048
-    num_chunks = (seq_len + TARGET_CHUNK_SIZE - 1) // TARGET_CHUNK_SIZE
+        TARGET_CHUNK_SIZE = 2048
+        CHUNK_SIZE_SEQ = ((TARGET_CHUNK_SIZE + SPARSITY_BLOCK_SIZE - 1) // SPARSITY_BLOCK_SIZE) * SPARSITY_BLOCK_SIZE
+        num_chunks = (seq_len + CHUNK_SIZE_SEQ - 1) // CHUNK_SIZE_SEQ
 
-    from models.common.utility_functions import comp_pcc
+        from models.common.utility_functions import comp_pcc
 
-    min_pcc = 0.98
-    passed = True
+        min_pcc = 0.98
+        passed = True
 
-    for chunk_idx in range(num_chunks):
-        start_seq = chunk_idx * TARGET_CHUNK_SIZE
-        end_seq = min(start_seq + TARGET_CHUNK_SIZE, seq_len)
-        chunk_seq_len = end_seq - start_seq
+        for chunk_idx in range(num_chunks):
+            start_seq = chunk_idx * CHUNK_SIZE_SEQ
+            end_seq = min(start_seq + CHUNK_SIZE_SEQ, seq_len)
+            chunk_seq_len = end_seq - start_seq
 
-        chunk_input = torch_input[:, :, start_seq:end_seq, :]
-        chunk_ref_output = reference_model(chunk_input)
+            chunk_input = torch_input[:, :, start_seq:end_seq, :]
+            chunk_ref_output = reference_model(chunk_input)
 
-        tt_output_chunk = ttnn.slice(
-            tt_output,
-            [0, 0, start_seq, 0],
-            [1, num_experts_per_device, end_seq, hf_config.hidden_size],
-        )
+            tt_output_chunk = ttnn.slice(
+                tt_output,
+                [0, 0, start_seq, 0],
+                [1, num_experts_per_device, end_seq, hf_config.hidden_size],
+            )
 
-        tt_output_chunk_torch = ttnn.to_torch(
-            tt_output_chunk,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
-        )
+            tt_output_chunk_torch = ttnn.to_torch(
+                tt_output_chunk,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
+            )
 
-        ttnn.deallocate(tt_output_chunk)
+            ttnn.deallocate(tt_output_chunk)
 
-        tt_output_chunk_torch = tt_output_chunk_torch.reshape(1, -1, chunk_seq_len, hf_config.hidden_size)
-        tt_output_chunk_torch = tt_output_chunk_torch[0].unsqueeze(1)
+            tt_output_chunk_torch = tt_output_chunk_torch.reshape(1, -1, chunk_seq_len, hf_config.hidden_size)
+            tt_output_chunk_torch = tt_output_chunk_torch[0].unsqueeze(1)
 
-        if chunk_ref_output.shape != tt_output_chunk_torch.shape:
-            chunk_ref_output = chunk_ref_output.unsqueeze(0)
+            if chunk_ref_output.shape != tt_output_chunk_torch.shape:
+                chunk_ref_output = chunk_ref_output.unsqueeze(0)
 
-        chunk_passed, chunk_pcc = comp_pcc(tt_output_chunk_torch, chunk_ref_output, pcc=0.98)
+            chunk_passed, chunk_pcc = comp_pcc(tt_output_chunk_torch, chunk_ref_output, pcc=0.98)
 
-        min_pcc = min(min_pcc, chunk_pcc)
-        if not chunk_passed:
-            passed = False
+            min_pcc = min(min_pcc, chunk_pcc)
+            if not chunk_passed:
+                passed = False
 
-        del chunk_ref_output
-        del tt_output_chunk_torch
-        del chunk_input
+            del chunk_ref_output
+            del tt_output_chunk_torch
+            del chunk_input
+
+        assert passed, f"PCC check failed! Min PCC: {min_pcc:.6f} < 0.98"
+
+    if trace_mode:
+        # Iteration 0: eager compile run (not traced)
+        tt_output = run_module_forward(TTExperts, mode, tt_input, run_config)
+        ttnn.synchronize_device(mesh_device)
+        check_outputs(tt_output)
+        ttnn.deallocate(tt_output)
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_output = run_module_forward(TTExperts, mode, tt_input, run_config)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        for _ in range(TEST_CHECK_ITERS - 1):
+            ttnn.execute_trace(mesh_device, trace_id, blocking=True)
+        ttnn.synchronize_device(mesh_device)
+
+        check_outputs(trace_output)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(trace_output)
+    else:
+        for iter_idx in range(TEST_CHECK_ITERS):
+            tt_output = run_module_forward(TTExperts, mode, tt_input, run_config)
+            ttnn.synchronize_device(mesh_device)
+            if iter_idx in (0, TEST_CHECK_ITERS - 1):
+                check_outputs(tt_output)
+            ttnn.deallocate(tt_output)
 
     ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
-
-    assert passed, f"PCC check failed! Min PCC: {min_pcc:.6f} < 0.98"
 
 
 if __name__ == "__main__":
