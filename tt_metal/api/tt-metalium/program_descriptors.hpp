@@ -16,6 +16,7 @@
 
 #include <bitset>
 #include <optional>
+#include <vector>
 
 /**
  * TODO (#34009): Move to experimental namespace
@@ -144,6 +145,15 @@ struct ProgramDescriptor {
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };
+
+/**
+ * Merge multiple ProgramDescriptors into a single one.
+ *
+ * @param descriptors Vector of ProgramDescriptors to merge.
+ * @return A new ProgramDescriptor containing all kernels, CBs, and semaphores.
+ * @throws TT_FATAL if any core ranges overlap between any of the descriptors.
+ */
+ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>& descriptors);
 
 }  // namespace tt::tt_metal
 

@@ -3,74 +3,84 @@
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run for the test.
-#   sku: Machine type to target (e.g. wh_galaxy, bh_galaxy).
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   timeout: The maximum allowed runtime for this job in minutes.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # Wormhole Galaxy e2e tests
 - name: Galaxy CCL tests
   cmd: pytest tests/nightly/tg/ccl
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 40
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-  timeout: 40
 
 - name: Galaxy Fabric unit tests
   cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 25
+    bh_galaxy:
+      timeout: 30
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: fabric
-  timeout: 25
 
 - name: Galaxy Fabric 2D Torus Nightly Tests
   cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml
-  sku: wh_galaxy
+  skus:
+    wh_galaxy:
+      timeout: 45
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: fabric
-  timeout: 45
 
 - name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
-  cmd: python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml
-  sku: wh_galaxy
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml
+  skus:
+    wh_galaxy:
+      timeout: 15
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: fabric
-  timeout: 15
 
 - name: Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests
-  cmd: python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml
-  sku: wh_galaxy
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml
+  skus:
+    wh_galaxy:
+      timeout: 15
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: fabric
-  timeout: 15
 
 # Blackhole Galaxy e2e tests
 - name: BH Galaxy CCL tests
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
-  sku: bh_galaxy
+  skus:
+    bh_galaxy:
+      timeout: 40
   owner_id: U05ACKAJTHS # Naif Tarafdar, Camilo Vega
   team: ttnn
-  timeout: 40
-
-- name: BH Galaxy Fabric unit tests
-  cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
-  sku: bh_galaxy
-  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
-  timeout: 30
 
 - name: BH Galaxy Fabric Torus Stability Tests
   cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml
-  sku: bh_galaxy
+  skus:
+    bh_galaxy:
+      timeout: 20
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: fabric
-  timeout: 20
 
 - name: BH Galaxy Socket Pipeline Latency SendRecv Single Galaxy
-  cmd: python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline --gtest_filter="*SendRecvPipelineSingleGalaxy*"
-  sku: bh_galaxy
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline --gtest_filter="*SendRecvPipelineSingleGalaxy*"
+  skus:
+    bh_galaxy:
+      timeout: 10
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: fabric
-  timeout: 10
