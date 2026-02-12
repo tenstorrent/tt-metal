@@ -644,6 +644,12 @@ class PreSDPA:
             ("matmul_in0", matmul_input_cb),
             ("matmul_out", matmul_output_cb),
             ("matmul_out_w_per_core", matmul_out_w),
+            ("matmul_half_boundary_col", matmul_half_boundary_col),
+            ("matmul_k_offset_half1", matmul_k_offset_half1),
+            ("matmul_half0_in1", matmul_half0_weights_cb),
+            ("matmul_half1_in1", matmul_half1_weights_cb),
+            ("matmul_k_per_core", matmul_k_per_core),
+            ("matmul_act_total_tiles", matmul_act_total_tiles),
         ]
 
         # Matmul2 compile-time args (different per RISC)
@@ -870,6 +876,12 @@ class PreSDPA:
             ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
             ("gather_reduce_noc0_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
             ("gather_reduce_noc1_receiver_semaphore_id", gather_reduce_noc1_receiver_semaphore_id),
+            ("gather_reduce_half0_dst_cb", rmsnorm2_input_cb),
+            ("gather_reduce_half1_dst_cb", gather_reduce_half1_scratch_cb),
+            ("gather_reduce_dst_num_tiles", rmsnorm2_num_tiles),
+        ]
+        # TRISC: compute-side gather-reduce destination CBs and tile count
+        gather_reduce_trisc_named_compile_time_args = [
             ("gather_reduce_half0_dst_cb", rmsnorm2_input_cb),
             ("gather_reduce_half1_dst_cb", gather_reduce_half1_scratch_cb),
             ("gather_reduce_dst_num_tiles", rmsnorm2_num_tiles),
@@ -1593,31 +1605,13 @@ class PreSDPA:
                         num_connections,
                     ]
 
-                # TRISC common runtime args (shared by all cores)
-                trisc_base_common_runtime_args = [
+                # TRISC common runtime args (shared scalar values)
+                trisc_common_runtime_args = [
                     epsilon_packed,  # idx 0
                     scalar_packed,  # idx 1
                     scalar2_packed,  # idx 2
                     kv_scalar_packed,  # idx 3
                 ]
-                trisc_matmul_common_runtime_args = [
-                    matmul_half_boundary_col,  # idx 4
-                    matmul_k_offset_half1,  # idx 5
-                    matmul_half0_weights_cb,  # idx 6
-                    matmul_half1_weights_cb,  # idx 7
-                    matmul_k_per_core,  # idx 8
-                    matmul_act_total_tiles,  # idx 9
-                ]
-                trisc_gather_reduce_common_runtime_args = [
-                    rmsnorm2_input_cb,  # idx 10 (half0 dst cb)
-                    gather_reduce_half1_scratch_cb,  # idx 11 (half1 dst cb)
-                    rmsnorm2_num_tiles,  # idx 12
-                ]
-                trisc_common_runtime_args = (
-                    trisc_base_common_runtime_args
-                    + trisc_matmul_common_runtime_args
-                    + trisc_gather_reduce_common_runtime_args
-                )
 
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
@@ -1656,10 +1650,11 @@ class PreSDPA:
                     + krope_brisc_named_compile_time_args,
                     # BRISC common runtime args: bcast args
                     brisc_common_runtime_args=brisc_bcast_common_args,
-                    # TRISC named compile-time args: rmsnorm compute + matmul + rmsnorm2 + matmul2 + matmul3 + dkv_matmul + kv_rmsnorm
+                    # TRISC named compile-time args: rmsnorm compute + matmul + gather-reduce + rmsnorm2 + matmul2 + matmul3 + dkv_matmul + kv_rmsnorm
                     trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
                     + matmul_trisc_named_compile_time_args
+                    + gather_reduce_trisc_named_compile_time_args
                     + rmsnorm2_trisc_named_compile_time_args
                     + matmul2_trisc_named_compile_time_args
                     + matmul3_trisc_named_compile_time_args

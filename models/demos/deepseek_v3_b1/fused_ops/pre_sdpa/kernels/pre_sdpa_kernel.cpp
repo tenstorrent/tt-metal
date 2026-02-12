@@ -404,8 +404,8 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
 
     // Matmul CTArgs type alias (out_w is compile-time for TRISC)
-    uint32_t matmul_half_boundary_col = get_common_arg_val<uint32_t>(4);  // matmul_half_boundary_col
-    uint32_t matmul_k_offset_half1 = get_common_arg_val<uint32_t>(5);     // matmul_k_offset_half1
+    constexpr uint32_t matmul_half_boundary_col = get_named_compile_time_arg_val("matmul_half_boundary_col");
+    constexpr uint32_t matmul_k_offset_half1 = get_named_compile_time_arg_val("matmul_k_offset_half1");
     bool is_half0 = (my_logical_x_ < matmul_half_boundary_col);
     uint32_t k_offset = is_half0 ? 0 : matmul_k_offset_half1;
 
@@ -413,23 +413,23 @@ void kernel_main() {
         deepseek_b1_ops::KNSlicedMatmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w_per_core")>;
 
     // Matmul compute args (from compile-time args, passed to op as runtime args)
-    uint32_t matmul_half0_in1 = get_common_arg_val<uint32_t>(6);  // matmul_half0_in1
-    uint32_t matmul_half1_in1 = get_common_arg_val<uint32_t>(7);  // matmul_half1_in1
+    constexpr uint32_t matmul_half0_in1 = get_named_compile_time_arg_val("matmul_half0_in1");
+    constexpr uint32_t matmul_half1_in1 = get_named_compile_time_arg_val("matmul_half1_in1");
     uint32_t matmul_in1 = is_half0 ? matmul_half0_in1 : matmul_half1_in1;
     deepseek_b1_ops::KNSlicedMatmul::ComputeArgs matmul_args{
         get_named_compile_time_arg_val("matmul_in0"),
         matmul_in1,
         get_named_compile_time_arg_val("matmul_out"),
         k_offset,
-        get_common_arg_val<uint32_t>(8),  // matmul_k_per_core
-        get_common_arg_val<uint32_t>(9),  // matmul_act_total_tiles
+        get_named_compile_time_arg_val("matmul_k_per_core"),
+        get_named_compile_time_arg_val("matmul_act_total_tiles"),
     };
 
     // Gather reduce compute args
     deepseek_b1_ops::GatherReduce::ComputeArgs gather_reduce_args{
-        get_common_arg_val<uint32_t>(10),  // gather_reduce_half0_dst_cb
-        get_common_arg_val<uint32_t>(11),  // gather_reduce_half1_dst_cb
-        get_common_arg_val<uint32_t>(12),  // gather_reduce_dst_num_tiles
+        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
