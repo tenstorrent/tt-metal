@@ -4,6 +4,7 @@
 
 #pragma once
 #include "chlkc_list.h"
+#include "llk_assert.h"
 #include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -119,7 +120,6 @@ template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t pack_tile_addr;
     if constexpr (out_of_order_output) {
-        LLK_ASSERT(output_tile_index > 0, "output_tile_index must be > 0 when out_of_order_output is true");
         pack_tile_addr = get_local_cb_interface(output_id).fifo_wr_ptr +
                          (std::uint32_t)(get_local_cb_interface(output_id).fifo_page_size) * output_tile_index - 1;
     } else {

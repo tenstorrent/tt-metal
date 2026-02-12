@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "llk_assert.h"
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
 
@@ -37,11 +38,11 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     LLK_ASSERT(kt_dim > 0, "kt_dim must be > 0");
 
     // Validate operand constraints
-    // In0 (SrcB): narrow_tile must be False
-    LLK_ASSERT(!get_operand_narrow_tile(operandA_id), "In0/SrcB: narrow_tile must be False");
+    // In0 (SrcB) = operandB_id: narrow_tile must be False
+    LLK_ASSERT(!get_operand_narrow_tile(operandB_id), "In0/SrcB: narrow_tile must be False");
 
-    // In1 (SrcA): face_r_dim must be 16
-    LLK_ASSERT(unpB_face_r_dim == 16, "In1/SrcA: face_r_dim must be 16");
+    // In1 (SrcA) = operandA_id: face_r_dim must be 16
+    LLK_ASSERT(unpA_face_r_dim == 16, "In1/SrcA: face_r_dim must be 16");
 
     _llk_unpack_AB_matmul_init_(
         transpose,
