@@ -6,7 +6,7 @@
 // #include "device/grid_sample_op.hpp"
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::grid_sample {
 

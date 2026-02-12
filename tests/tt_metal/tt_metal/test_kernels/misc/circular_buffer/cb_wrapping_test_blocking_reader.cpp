@@ -15,20 +15,13 @@
 void core_agnostic_main();
 
 #ifdef COMPILE_FOR_TRISC
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
-#ifdef TRISC_UNPACK
-    core_agnostic_main();
-#endif
-}
-}  // namespace NAMESPACE
+#include "api/compute/common.h"
 #else
 #include "api/dataflow/dataflow_api.h"
-void kernel_main() { core_agnostic_main(); }
 #endif
 
 #include <cstdint>
+#include "experimental/circular_buffer.h"
 
 using namespace tt;
 
@@ -69,9 +62,10 @@ void report_page(std::size_t i) {
 }
 
 void core_agnostic_main() {
+    experimental::CircularBuffer cb(CB_ID);
     for (auto i = 0ul; i < CHURN_LOOP_COUNT; i++) {
-        cb_wait_front(CB_ID, CB_STEP_SIZE);
-        cb_pop_front(CB_ID, CB_STEP_SIZE);
+        cb.wait_front(CB_STEP_SIZE);
+        cb.pop_front(CB_STEP_SIZE);
     }
 
     DPRINT << "Reader Wait" << ENDL();
@@ -79,8 +73,18 @@ void core_agnostic_main() {
     DPRINT << "Reader Wait Done" << ENDL();
 
     for (auto i = 0ul; i < 3; i++) {
-        cb_wait_front(CB_ID, CB_STEP_SIZE);
+        cb.wait_front(CB_STEP_SIZE);
         report_page(i);
-        cb_pop_front(CB_ID, CB_STEP_SIZE);
+        cb.pop_front(CB_STEP_SIZE);
     }
+}
+
+void kernel_main() {
+#ifdef COMPILE_FOR_TRISC
+#ifdef TRISC_UNPACK
+    core_agnostic_main();
+#endif
+#else
+    core_agnostic_main();
+#endif
 }

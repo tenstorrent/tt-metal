@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
-#include "fixed_point_arithmetic.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 #include "bilinear_weights_lut.hpp"
 
 //
@@ -174,8 +174,8 @@ struct BilinearIndexAdvancer {
         uint16_t& weight_bottom_left_bf16,
         uint16_t& weight_bottom_right_bf16) const {
         // Convert fixed-point coordinates to integer pixel positions
-        uint32_t y1_raw = fixed_to_int(y_coordinate);
-        uint32_t x1_raw = fixed_to_int(x_coordinate);
+        uint32_t y1_raw = fixed_point_arithmetic::fixed_to_int(y_coordinate);
+        uint32_t x1_raw = fixed_point_arithmetic::fixed_to_int(x_coordinate);
 
         // Compute the 4 neighbor positions with boundary clamping
         // The halo padding means actual data starts at index 1, not 0

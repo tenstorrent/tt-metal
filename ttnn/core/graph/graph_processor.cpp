@@ -57,7 +57,7 @@ nlohmann::json to_json(const std::vector<ttnn::graph::GraphProcessor::Vertex>& d
 
 namespace ttnn::graph {
 
-GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { begin_capture(mode); }
+GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { GraphProcessor::begin_capture(mode); }
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
@@ -303,9 +303,8 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
                     // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
                     // buffer.
                     return storage.mesh_buffer->get_backing_buffer();
-                } else {
-                    return t.buffer();
                 }
+                return t.buffer();
             }
             return nullptr;
         },
@@ -476,17 +475,19 @@ nlohmann::json GraphProcessor::end_graph_capture() {
     return res;
 }
 
-bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) { return do_block; }
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
+    return do_block;
+}
 
-bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
     return do_block;
 }
 

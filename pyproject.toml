@@ -67,3 +67,16 @@ fallback_version = "0.0.0.dev0"
 [tool.cibuildwheel]
 skip = "*-musllinux_*"
 build-verbosity = 2
+
+[tool.uv]
+# Use "copy" mode instead of the default "hardlink" or "symlink" modes.
+# This ensures packages are fully independent copies in the virtual environment,
+# which is more compatible with:
+# - Network filesystems (NFS, CIFS) that may not support hardlinks across mount points
+# - Container environments where the cache and venv may be on different volumes
+# - Scenarios where the uv cache might be cleared independently of the venv
+# Trade-off: Uses more disk space but provides better isolation and portability.
+#
+# To change: Set to "hardlink" for better disk space usage on local filesystems,
+# or "symlink" for fastest operations (requires same filesystem for cache and venv).
+link-mode = "copy"

@@ -17,6 +17,8 @@
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #endif
 
+// NOLINTBEGIN(misc-unused-parameters)
+
 // Forward declared from dataflow_api.h
 template <typename T>
 T get_arg_val(int arg_idx);
@@ -118,7 +120,7 @@ public:
 
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     FORCE_INLINE std::uint64_t get_shard_noc_addr(
-        const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        [[maybe_unused]] const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         uint32_t shard_id = 0;
         for (uint32_t i = 0; i < dspec().rank(); ++i) {
             // Check that shard_coord is within bounds
@@ -314,12 +316,14 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
-        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+        InterleavedAddrGen<IsDram>(
+            {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}) {}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
         DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
-        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+        InterleavedAddrGen<IsDram>(
+            {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}) {}
 
     // Locality APIs
     FORCE_INLINE
@@ -516,3 +520,4 @@ struct ShardView {
         return accessor.get_shard_noc_addr(shard_id, offset, noc);
     }
 };
+// NOLINTEND(misc-unused-parameters)

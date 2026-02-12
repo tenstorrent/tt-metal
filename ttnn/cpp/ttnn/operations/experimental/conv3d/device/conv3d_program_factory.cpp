@@ -11,12 +11,10 @@
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::conv3d::program {
+namespace ttnn::experimental::prim {
 
 Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
@@ -40,7 +38,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t H_in = input_tensor_shape[2];
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
-    auto [T_out, H_out, W_out] = ttnn::operations::experimental::conv3d::detail::compute_output_dims(
+    auto [T_out, H_out, W_out] = detail::compute_output_dims(
         T_in, H_in, W_in, operation_attributes.padding, operation_attributes.stride, operation_attributes.kernel_size);
     uint32_t C_out = operation_attributes.output_channels;
 
@@ -280,6 +278,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         cb_matmul_result_rm_id,
         cb_reduction_tiled_id,
         cb_worker_ack_back_id,
+        N,
         num_patches,
         matmul_M_t,
         matmul_K_t,
@@ -662,9 +661,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
 void Conv3dProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const Conv3dParams& /*operation_attributes*/,
+    const Conv3dInputs& tensor_args,
+    Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     auto& shared_vars = cached_program.shared_variables;
@@ -693,4 +692,4 @@ void Conv3dProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::conv3d::program
+}  // namespace ttnn::experimental::prim

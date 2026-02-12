@@ -40,9 +40,8 @@ protected:
             // setup tt-switch manager
             tt::tt_fabric::FabricSwitchManager::instance().setup(tt::tt_fabric::FabricConfig::FABRIC_2D);
             GTEST_SKIP() << "This test is only for compute mesh switch mesh just needs to setup tt-switch manager";
-        } else {
-            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
         }
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
     void TearDown() override {

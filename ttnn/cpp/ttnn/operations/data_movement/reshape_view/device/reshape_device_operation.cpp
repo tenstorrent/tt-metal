@@ -5,19 +5,19 @@
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
-ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+ReshapeViewDeviceOperation::program_factory_t ReshapeViewDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
-        return ReshapeRMProgramFactory{};
-    } else {
-        return ReshapeTiledProgramFactory{};
+        return ReshapeViewRMProgramFactory{};
     }
+    return ReshapeViewTiledProgramFactory{};
 }
 
-void ReshapeDeviceOperation::validate_on_program_cache_miss(
+void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor_a = tensor_args.input;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
@@ -31,12 +31,7 @@ void ReshapeDeviceOperation::validate_on_program_cache_miss(
         "Output tensor must have the same memory layout as input tensor");
 }
 
-void ReshapeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
-ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_output_specs(
+ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;
     auto mem_config = operation_attributes.output_mem_config;
@@ -55,49 +50,39 @@ ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_outp
             operation_attributes.padded_output_shape));
 }
 
-ReshapeDeviceOperation::tensor_return_value_t ReshapeDeviceOperation::create_output_tensors(
+tt::tt_metal::Tensor ReshapeViewDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
+tt::stl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.logical_shape();
-    const auto& input_dtype = input_tensor.dtype();
-    const auto layout = input_tensor.layout();
-    const auto& input_mem_config = input_tensor.memory_config();
+    log_trace(tt::LogOp, "ReshapeViewDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     // don't hash on operation_attributes_t::recreate_mapping_tensor
-
-    return tt::stl::hash::hash_objects(
-        program_factory.index(),
-        input_shape,
-        layout,
-        input_mem_config,
-        input_dtype,
+    return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
         operation_attributes.logical_output_shape,
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grid.has_value(),
         operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
-                                                       : CoreRangeSet(CoreRange({0, 0}, {0, 0})));
+                                                       : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        tensor_args,
+        program_factory.index());
 }
-}  // namespace ttnn::operations::data_movement::reshape
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::reshape::ReshapeDeviceOperation::tensor_return_value_t reshape(
+tt::tt_metal::Tensor reshape_view(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    using OperationType = ttnn::operations::data_movement::reshape::ReshapeDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<ReshapeViewDeviceOperation>(
+        ReshapeViewParams{
             logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, sub_core_grid},
-        OperationType::tensor_args_t{input});
+        ReshapeViewInputs{input});
 }
+
 }  // namespace ttnn::prim

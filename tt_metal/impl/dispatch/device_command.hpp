@@ -56,7 +56,9 @@ public:
 
     void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
 
-    void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr);
+    void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr);
+
+    void add_prefetch_relay_linear_h(uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr);
 
     void add_prefetch_relay_paged(
         uint8_t is_dram,
@@ -72,6 +74,13 @@ public:
         uint16_t num_sub_cmds,
         uint32_t offset_idx = 0);
 
+    void add_prefetch_relay_linear_packed(
+        uint32_t noc_xy_addr,
+        uint32_t total_length,
+        const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
+        uint16_t num_sub_cmds,
+        uint32_t offset_idx = 0);
+
     void add_prefetch_paged_to_ringbuffer(const CQPrefetchPagedToRingbufferCmd& paged_to_ringbuffer_info);
 
     void add_prefetch_set_ringbuffer_offset(uint32_t offset, bool update_wp = false);
@@ -81,6 +90,16 @@ public:
 
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(
+        uint8_t num_mcast_dests,
+        uint32_t noc_xy_addr,
+        DeviceAddr addr,
+        DeviceAddr data_sizeB,
+        const void* data = nullptr,
+        uint32_t write_offset_index = 0);
+
+    // Like add_dispatch_write_linear, but emits CQ_DISPATCH_CMD_WRITE_LINEAR_H (dispatch_h variant).
+    template <bool flush_prefetch = true, bool inline_data = false>
+    void add_dispatch_write_linear_h(
         uint8_t num_mcast_dests,
         uint32_t noc_xy_addr,
         DeviceAddr addr,
@@ -108,6 +127,19 @@ public:
         uint32_t page_size,
         uint32_t pages,
         const void* data = nullptr);
+
+    // Variant that allows specifying a different inline data size than write_paged pages * page_size
+    // Used when we need to pass through alignment prefix bytes directly via relay_inline
+    // Always inlines the data (no template parameter needed)
+    void add_dispatch_write_paged_with_custom_inline_size(
+        bool flush_prefetch,
+        uint8_t is_dram,
+        uint16_t start_page,
+        uint32_t base_addr,
+        uint32_t page_size,
+        uint32_t pages,
+        uint32_t inline_data_sizeB,
+        const void* data);
 
     template <bool inline_data = false>
     void add_dispatch_write_host(
@@ -186,6 +218,27 @@ public:
         uint32_t offset_idx = 0,
         uint32_t write_offset_index = 0);
 
+    // Add write packed large unicast, with no data.
+    void add_dispatch_write_packed_large_unicast(
+        uint8_t type,
+        uint16_t alignment,
+        uint16_t num_sub_cmds,
+        const std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
+        uint32_t offset_idx = 0,
+        uint32_t write_offset_index = 0);
+
+    // Add write packed large unicast, with data inlined.
+    void add_dispatch_write_packed_large_unicast(
+        uint8_t type,
+        uint16_t alignment,
+        uint16_t num_sub_cmds,
+        const std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
+        const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+        std::vector<uint8_t*>*
+            data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
+        uint32_t offset_idx = 0,
+        uint32_t write_offset_index = 0);
+
     template <typename CommandPtr, bool data = false>
     CommandPtr reserve_space(uint32_t size_to_writeB) {
         this->validate_cmd_write(size_to_writeB);
@@ -218,6 +271,17 @@ private:
         uint32_t payload_sizeB,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
+        uint32_t offset_idx,
+        uint32_t write_offset_index);
+
+    // Write packed large unicast cmd and subcmds, but not data.
+    void add_dispatch_write_packed_large_unicast_internal(
+        uint8_t type,
+        bool flush_prefetch,
+        uint16_t alignment,
+        uint32_t payload_sizeB,
+        uint16_t num_sub_cmds,
+        const std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
         uint32_t offset_idx,
         uint32_t write_offset_index);
 

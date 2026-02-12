@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operation_concepts.hpp"
 
@@ -16,7 +17,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ternary {
+namespace ttnn::experimental::prim {
 
 static_assert(
     ttnn::device_operation::DeviceOperationConcept<WhereDeviceOperation>,
@@ -32,7 +33,7 @@ static void fail_on_shape_mismatch(const Tensor& tensor_a, const Tensors&... oth
 }
 
 WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     ZoneScopedN("WhereDeviceOperation::select_program_factory");
     return ElementWiseMultiCoreWhereProgram{};
 }
@@ -67,7 +68,7 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
 }
 
 void WhereDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& args) {
     fail_on_shape_mismatch(args.condition_tensor, args.true_value_tensor, args.false_value_tensor);
 }
 
@@ -119,8 +120,8 @@ tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
 }
 
 bool WhereDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }
@@ -155,4 +156,4 @@ WhereDeviceOperation::invoke(
             .output_tensor = output_tensor}};
 }
 
-}  // namespace ttnn::operations::experimental::ternary
+}  // namespace ttnn::experimental::prim

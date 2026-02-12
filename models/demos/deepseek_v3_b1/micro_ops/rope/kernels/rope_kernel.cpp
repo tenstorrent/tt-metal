@@ -1,0 +1,94 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+// RoPE unified kernel
+// Single kernel file, compiles correctly for all RISC cores
+//
+// Computes: output = (input * cos) + (rotate_half(input) * sin)
+// where rotate_half(input) = input @ trans_mat
+//
+// NCRISC: Signals sharded input CBs (input, trans_mat, sin, cos)
+// BRISC: No-op
+// TRISC: Performs RoPE compute
+
+#include "../../../unified_kernels/kernel_op_api.hpp"
+#include "../../../unified_kernels/kernel_utils.hpp"
+#include "../../../unified_kernels/rope.hpp"
+
+// Compile-time role flags for dead code elimination via if constexpr
+struct Core {
+    static constexpr bool is_active_core = get_named_compile_time_arg_val("is_active_core") == 1;
+};
+
+void kernel_main() {
+// ============================================================================
+// Define args per RISC (different compile-time arg layout per processor)
+// ============================================================================
+#if defined(COMPILE_FOR_NCRISC)
+    // CTArgs type alias (required for Op template)
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    using RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<Wt, Ht>;
+
+    constexpr uint32_t in_cb = get_named_compile_time_arg_val("in_cb");
+    constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
+    constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
+    constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
+    // Setup sharded buffers: input CB contains Ht * Wt tiles total (consumed in Ht iterations),
+    // sin/cos CBs contain Wt tiles each (reused for all Ht heads)
+    unified_kernels::setup_sharded_buffer(in_cb, Wt);
+    unified_kernels::setup_sharded_buffer(cos_cb, Wt);
+    unified_kernels::setup_sharded_buffer(sin_cb, Wt);
+    unified_kernels::setup_sharded_buffer(trans_mat_cb, 1);
+
+    // Reader args: CB indices for sharded input signaling
+    deepseek_b1_ops::Rope::ReaderArgs rope_args{
+        .in_cb = in_cb,
+        .cos_cb = cos_cb,
+        .sin_cb = sin_cb,
+        .trans_mat_cb = trans_mat_cb,
+    };
+
+#elif defined(COMPILE_FOR_BRISC)
+    // CTArgs type alias (required for Op template)
+    using RopeCTArgs = deepseek_b1_ops::Rope::WriterCTArgs;
+
+    // Writer args (empty - no-op)
+    deepseek_b1_ops::Rope::WriterArgs rope_args{};
+
+#elif defined(COMPILE_FOR_TRISC)
+    // CTArgs type alias
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    using RopeCTArgs = deepseek_b1_ops::Rope::ComputeCTArgs<Wt, Ht>;
+
+    // CB indices (passed as runtime args to ComputeArgs)
+    constexpr uint32_t in_cb = get_named_compile_time_arg_val("in_cb");
+    constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
+    constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
+    constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
+    constexpr uint32_t rotated_in_interm_cb = get_named_compile_time_arg_val("rotated_in_interm_cb");
+    constexpr uint32_t cos_interm_cb = get_named_compile_time_arg_val("cos_interm_cb");
+    constexpr uint32_t sin_interm_cb = get_named_compile_time_arg_val("sin_interm_cb");
+    constexpr uint32_t out_cb = get_named_compile_time_arg_val("out_cb");
+
+    // Compute args: all CB indices
+    deepseek_b1_ops::Rope::ComputeArgs rope_args{
+        .in_cb = in_cb,
+        .cos_cb = cos_cb,
+        .sin_cb = sin_cb,
+        .trans_mat_cb = trans_mat_cb,
+        .rotated_in_interm_cb = rotated_in_interm_cb,
+        .cos_interm_cb = cos_interm_cb,
+        .sin_interm_cb = sin_interm_cb,
+        .out_cb = out_cb,
+    };
+#endif
+
+    // ========================================================================
+    // RoPE operation
+    // CTArgs, IsActiveCore
+    // ========================================================================
+    deepseek_b1_ops::Rope::Op<RopeCTArgs, Core::is_active_core> rope;
+    rope(rope_args);
+}

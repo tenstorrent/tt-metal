@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
@@ -216,4 +215,3 @@ void MAIN {
     cb_pop_front(cb_momentum, 1);
     cb_pop_front(cb_one, 1);
 }
-}  // namespace NAMESPACE

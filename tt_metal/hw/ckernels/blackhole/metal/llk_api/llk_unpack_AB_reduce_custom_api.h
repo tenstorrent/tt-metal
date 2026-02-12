@@ -85,4 +85,6 @@ inline void llk_unpack_AB_reduce_block_max_row(
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use standard LLK cleanup procedures for general-purpose operations.
  */
-inline void llk_unpack_AB_reduce_block_max_row_uninit() { _llk_unpack_AB_reduce_block_max_row_uninit_(); }
+inline void llk_unpack_AB_reduce_block_max_row_uninit() {
+    _llk_unpack_AB_reduce_block_max_row_uninit_(FACE_R_DIM, FACE_R_DIM);
+}

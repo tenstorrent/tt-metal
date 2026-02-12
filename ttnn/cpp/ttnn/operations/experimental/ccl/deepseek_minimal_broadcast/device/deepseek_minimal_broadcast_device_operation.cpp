@@ -5,21 +5,17 @@
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast {
+namespace ttnn::experimental::prim {
 
 DeepseekMinimalBroadcastDeviceOperation::program_factory_t
 DeepseekMinimalBroadcastDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return program::DeepseekMinimalBroadcastProgramFactory{};
-}
-
-void DeepseekMinimalBroadcastDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
+    return DeepseekMinimalBroadcastProgramFactory{};
 }
 
 void DeepseekMinimalBroadcastDeviceOperation::validate_on_program_cache_miss(
@@ -64,17 +60,17 @@ void DeepseekMinimalBroadcastDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be in tile size (1,32). Got tile size: ({}, {})",
         tile_height,
         tile_width);
-    // input shape should be (1,1536)
+    // input shape should be (1,7168)
     // To do add shape (1,7168) once fabric supports larger packets
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
-        input_shape[0] == 1 && input_shape[1] == 1536,
-        "Input tensor shape must be (1,1536). Got shape: ({}, {})",
+        input_shape[0] == 1 && input_shape[1] == 7168,
+        "Input tensor shape must be (1,7168). Got shape: ({}, {})",
         input_shape[0],
         input_shape[1]);
 }
 
-spec_return_value_t DeepseekMinimalBroadcastDeviceOperation::compute_output_specs(
+TensorSpec DeepseekMinimalBroadcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.logical_shape();
@@ -84,15 +80,25 @@ spec_return_value_t DeepseekMinimalBroadcastDeviceOperation::compute_output_spec
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));
 }
 
-tensor_return_value_t DeepseekMinimalBroadcastDeviceOperation::create_output_tensors(
+Tensor DeepseekMinimalBroadcastDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Use persistent output buffer if provided
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        return tensor_args.persistent_output_buffer.value();
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
 tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    log_trace(tt::LogOp, "DeepseekMinimalBroadcastDeviceOperation::compute_program_hash is called");
+
+    auto subdevice_id = operation_attributes.sub_device_id;
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return operation::hash_operation<DeepseekMinimalBroadcastDeviceOperation>(
@@ -102,29 +108,28 @@ tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_h
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
-        operation_attributes.sub_device_id,
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.device()->id(),
+        operation_attributes.secondary_cluster_axis,
+        operation_attributes.using_persistent_buffers,
+        subdevice_core_range_set,
+        tensor_args,
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::DeepseekMinimalBroadcastDeviceOperation::
-    tensor_return_value_t
-    deepseek_minimal_broadcast(
-        const ttnn::Tensor& input_tensor,
-        const MeshCoordinate& sender_coord,
-        uint32_t num_links,
-        const std::optional<MemoryConfig>& memory_config,
-        tt::tt_fabric::Topology topology,
-        std::optional<uint32_t> cluster_axis,
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    using OperationType =
-        ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::DeepseekMinimalBroadcastDeviceOperation;
+Tensor deepseek_minimal_broadcast(
+    const ttnn::Tensor& input_tensor,
+    const MeshCoordinate& sender_coord,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<uint32_t> secondary_cluster_axis,
+    const std::optional<Tensor>& persistent_output_buffer) {
+    using OperationType = ttnn::experimental::prim::DeepseekMinimalBroadcastDeviceOperation;
 
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
@@ -156,8 +161,11 @@ ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::DeepseekMinimal
         .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
         .topology = ccl_topology,
         .cluster_axis = cluster_axis,
-        .sub_device_id = sub_device_id};
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
+        .secondary_cluster_axis = secondary_cluster_axis,
+        .sub_device_id = sub_device_id,
+        .using_persistent_buffers = persistent_output_buffer.has_value()};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -6,9 +6,9 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::dropout {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct DropoutParams {
     const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
     const tt::tt_metal::MemoryConfig output_memory_config;
 
@@ -21,13 +21,9 @@ struct operation_attributes_t {
     const float scale = 1.0f;
 };
 
-struct tensor_args_t {
+struct DropoutInputs {
     const Tensor& input;
     std::optional<Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::dropout
+}  // namespace ttnn::experimental::prim

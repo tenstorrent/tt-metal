@@ -14,6 +14,12 @@ from ttnn._ttnn.graph import (
     end_graph_capture,
     extract_calltrace,
     extract_levelized_graph,
+    TensorInfo,
+    extract_peak_L1_memory_usage,
+    count_intermediate_and_output_tensors,
+    extract_output_info,
+    extract_output_tensors,
+    extract_resource_usage_per_core,
 )
 
 

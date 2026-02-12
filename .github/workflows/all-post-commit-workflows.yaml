@@ -7,12 +7,86 @@ on:
         required: false
         default: Release
         type: string
-      version:
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      platform:
         required: false
-        default: "22.04"
         type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04')"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+      with-retries:
+        required: false
+        type: boolean
+        default: false
+        description: "Re-run failed jobs (max 3)"
+      run-ttnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTNN unit tests"
+      run-models-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run model unit tests"
+      run-tt-train-cpp-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TT-Train C++ unit tests"
+      run-profiler-regression:
+        required: false
+        type: boolean
+        default: true
+        description: "Run profiler regression tests"
+      run-t3000-apc-fast-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run T3000 APC fast tests"
+      run-ops-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run ops unit tests"
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable watcher for long-running tests"
+      enable-lightweight-kernel-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable lightweight kernel asserts"
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
   workflow_dispatch:
     inputs:
+      with-retries:
+        default: false
+        type: boolean
+        description: "Re-run failed jobs (max 3)"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
       build-type:
         required: false
         default: Release
@@ -23,21 +97,61 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-      version:
+      enable-lto:
         required: false
-        default: "22.04"
-        type: choice
-        options:
-          - "22.04"
-          - "24.04"
-      with-retries:
         default: false
         type: boolean
-        description: "Re-run failed jobs (max 3)"
-      force-test-everything:
+        description: "Enable Link Time Optimization (LTO)"
+      run-ttnn-unit-tests:
+        required: false
         default: true
         type: boolean
-        description: "Force test everything regardless of file changes"
+        description: "Run TTNN unit tests"
+      run-models-unit-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run model unit tests"
+      run-tt-train-cpp-unit-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run TT-Train C++ unit tests"
+      run-profiler-regression:
+        required: false
+        default: true
+        type: boolean
+        description: "Run profiler regression tests"
+      run-t3000-apc-fast-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run T3000 APC fast tests"
+      run-ops-unit-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run ops unit tests"
+      enable-watcher:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable watcher for long-running tests"
+      enable-lightweight-kernel-asserts:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable lightweight kernel asserts"
+      enable-llk-asserts:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK asserts"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
   push:
     branches: ["main"]
 
@@ -52,6 +166,8 @@ permissions:
 
 run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
+  # NOTE: build-artifact.yaml handles platform parsing internally.
+  # Just pass platform and enable-lto inputs directly.
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -61,59 +177,43 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: ${{ inputs.version || '22.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
+      enable-lto: ${{ inputs.enable-lto || false }}
+      ref: ${{ inputs.ref || github.sha }}
 
-  find-changed-files:
+  tests-to-run:
     runs-on: ubuntu-latest
     outputs:
-      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
-      clang-tidy-config-changed: ${{ steps.find-changes.outputs.clang-tidy-config-changed }}
-      tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
-      tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
-      tt-metalium-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-tests-changed }}
-      tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-nn-tests-changed }}
-      tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
-      tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
-      tools-changed: ${{ steps.find-changes.outputs.tools-changed }}
-      submodule-changed: ${{ steps.find-changes.outputs.submodule-changed }}
-      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
-      docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
-      model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
-      models-changed: ${{ steps.find-changes.outputs.models-changed }}
-      test-metalium: ${{ steps.set-test-metalium.outputs.test-metalium }}
-      test-ttnn: ${{ steps.set-test-ttnn.outputs.test-ttnn }}
-      test-tt-train: ${{ steps.set-test-tt-train.outputs.test-tt-train }}
-      test-everything: ${{ steps.set-test-everything.outputs.test-everything }}
+      ttnn-unit-tests: ${{ steps.set-ttnn-unit-tests.outputs.should-run }}
+      models-unit-tests: ${{ steps.set-models-unit-tests.outputs.should-run }}
+      tt-train-cpp-unit-tests: ${{ steps.set-tt-train-cpp-unit-tests.outputs.should-run }}
+      run-profiler-regression: ${{ steps.set-run-profiler-regression.outputs.should-run }}
+      t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
+      ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
     steps:
-      - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@blozano-apc-savior
-      - id: set-test-metalium
+      - id: set-ttnn-unit-tests
         run: |
-          echo "test-metalium=${{ github.event_name != 'workflow_dispatch' ||
-                                 (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
-                                 steps.find-changes.outputs['cmake-changed'] == 'true' ||
-                                 steps.find-changes.outputs['submodule-changed'] == 'true' ||
-                                 steps.find-changes.outputs['tt-metalium-changed'] == 'true' ||
-                                 steps.find-changes.outputs['tt-metalium-tests-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
-      - id: set-test-ttnn
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttnn-unit-tests }}" >> "$GITHUB_OUTPUT"
+      - id: set-models-unit-tests
         run: |
-          echo "test-ttnn=${{ steps.set-test-metalium.outputs['test-metalium'] == 'true' ||
-                              steps.find-changes.outputs['tt-nn-changed'] == 'true' ||
-                              steps.find-changes.outputs['tt-nn-tests-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
-      - id: set-test-tt-train
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-models-unit-tests }}" >> "$GITHUB_OUTPUT"
+      - id: set-tt-train-cpp-unit-tests
         run: |
-          echo "test-tt-train=${{ steps.set-test-ttnn.outputs['test-ttnn'] == 'true' ||
-                                  steps.find-changes.outputs['tt-train-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
-      - id: set-test-everything
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-tt-train-cpp-unit-tests }}" >> "$GITHUB_OUTPUT"
+      - id: set-run-profiler-regression
         run: |
-          echo "test-everything=${{ github.event_name != 'workflow_dispatch' ||
-                                  (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
-                                  steps.find-changes.outputs['any-code-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-profiler-regression }}" >> "$GITHUB_OUTPUT"
+      - id: set-t3000-apc-fast-tests
+        run: |
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-t3000-apc-fast-tests }}" >> "$GITHUB_OUTPUT"
+      - id: set-ops-unit-tests
+        run: |
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}" >> "$GITHUB_OUTPUT"
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -121,17 +221,22 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 }
         ]
-    if: ${{ needs.find-changed-files.outputs.test-ttnn == 'true' }}
+    if: ${{ needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
+      timeout: ${{ inputs.enable-watcher && 240 || 40 }}
 
   # FD Model Tests
   models-unit-tests:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -139,16 +244,21 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ needs.tests-to-run.outputs.models-unit-tests == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
+      timeout: ${{ inputs.enable-watcher && 120 || 35 }}
 
   tt-train-cpp-unit-tests:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -156,7 +266,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.find-changed-files.outputs.test-tt-train == 'true' }}
+    if: ${{ needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -164,9 +274,13 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       gtest_filter: "*-*NIGHTLY_*"
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
 
   run-profiler-regression:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, tests-to-run]
 
     strategy:
       fail-fast: false
@@ -174,27 +288,36 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ needs.tests-to-run.outputs.run-profiler-regression == 'true' && !inputs.enable-watcher && !inputs.enable-lightweight-kernel-asserts}}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
+      post_commit_only: true
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
-    needs: [build-artifact, find-changed-files]
+    if: ${{ needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
+    needs: [build-artifact, tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}
 
   ops-unit-tests:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -202,7 +325,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
     uses: ./.github/workflows/ops-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -210,12 +333,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # Enable ops-sanity workflow after issue:30675 resolved
-  # ops-sanity:
-  #   needs: build-artifact
-  #   secrets: inherit
-  #   uses: ./.github/workflows/ops-sanity.yaml
-  #   with:
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      ref: ${{ inputs.ref || github.sha }}

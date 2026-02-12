@@ -29,6 +29,9 @@ struct Op2DSliceConfig {
 
 class OpSliceAttr {
 public:
+    using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
+    using RefTensor = std::reference_wrapper<ttnn::Tensor>;
+
     virtual ~OpSliceAttr() = default;
     using IOShape = std::tuple<uint32_t, uint32_t>;
     virtual std::tuple<IOShape, IOShape> get_input_slice(
@@ -41,7 +44,7 @@ public:
 
     virtual tt::tt_metal::MemoryConfig get_input_memory_config(
         const IOShape& output_slice_start, const IOShape& output_slice_end) const = 0;
-    virtual ttnn::Tensor run_L1_op(
+    virtual std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor,
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) = 0;
@@ -54,12 +57,14 @@ Op2DSliceConfig determine_slice_config(
     const ttnn::Shape& output_shape,
     std::optional<Op2DSliceConfig> slice_config_,
     tt::tt_metal::Layout output_layout,
-    tt::tt_metal::distributed::MeshDevice* device);
+    tt::tt_metal::distributed::MeshDevice* device,
+    bool conv_bypass = true);
 
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
-    ttnn::Tensor& output_tensor,
+    std::vector<OpSliceAttr::RefTensor>& output_tensor,
     OpSliceAttr* op_slice_attr,
-    std::optional<Op2DSliceConfig> dram_slice_config_);
+    std::optional<Op2DSliceConfig> dram_slice_config_,
+    bool conv_bypass = true);
 
 }  // namespace ttnn::operations::op_slicing

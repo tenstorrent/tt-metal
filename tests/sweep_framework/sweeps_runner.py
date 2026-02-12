@@ -45,6 +45,7 @@ class SweepsConfig:
     measure_perf: bool = False
     measure_perf_with_cache: bool = False
     measure_device_perf: bool = False
+    measure_memory: bool = False
     dry_run: bool = False
     sweeps_tag: str | None = None
     skip_modules: str | None = None
@@ -70,6 +71,7 @@ def create_config_from_args(args) -> SweepsConfig:
         measure_perf=args.perf,
         measure_perf_with_cache=args.perf_with_cache,
         measure_device_perf=args.device_perf,
+        measure_memory=args.measure_memory,
         dry_run=args.dry_run,
         sweeps_tag=args.tag,
         skip_modules=args.skip_modules,
@@ -280,19 +282,37 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
             test_vector = deserialize_vector_structured(test_vector)
             try:
                 if config.measure_perf_with_cache:
-                    status, message, e2e_perf, device_perf = run_with_cache_comparison(
+                    status, message, e2e_perf, device_perf, peak_memory = run_with_cache_comparison(
                         test_module, test_vector, device, config
                     )
-                    output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
+                    output_queue.put(
+                        [
+                            status,
+                            message,
+                            e2e_perf,
+                            device_perf if config.measure_device_perf else None,
+                            peak_memory if config.measure_memory else None,
+                        ]
+                    )
                 else:
-                    status, message, e2e_perf, device_perf = run_single(test_module, test_vector, device, config)
-                    output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
+                    status, message, e2e_perf, device_perf, peak_memory = run_single(
+                        test_module, test_vector, device, config
+                    )
+                    output_queue.put(
+                        [
+                            status,
+                            message,
+                            e2e_perf,
+                            device_perf if config.measure_device_perf else None,
+                            peak_memory if config.measure_memory else None,
+                        ]
+                    )
             except Exception as e:
                 if config.main_proc_verbose:
                     logger.exception(e)
                 status, message = False, str(e)
                 e2e_perf = None
-                output_queue.put([status, message, e2e_perf, None])
+                output_queue.put([status, message, e2e_perf, None, None])
 
 
 def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
@@ -355,11 +375,12 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     run(module_name, input_queue, output_queue, config)
 
                 response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf, device_perf = (
+                status, message, e2e_perf, device_perf, peak_memory = (
                     response[0],
                     response[1],
                     response[2],
                     response[3],
+                    response[4],
                 )
                 # Set base result message
                 result["message"] = message
@@ -439,6 +460,25 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     result["e2e_perf"] = e2e_perf
                 else:
                     result["e2e_perf"] = None
+
+                # Set memory metrics if available
+                if config.measure_memory and peak_memory:
+                    if isinstance(peak_memory, dict):
+                        # Extract per-core memory metrics
+                        result["peak_l1_memory_per_core"] = peak_memory.get("peak_total_per_core")
+                        result["peak_cb_per_core"] = peak_memory.get("peak_cb_per_core")
+                        result["peak_l1_buffers_per_core"] = peak_memory.get("peak_l1_per_core")
+                        result["num_cores"] = peak_memory.get("num_cores")
+                        result["peak_l1_memory_aggregate"] = peak_memory.get("peak_total_aggregate")
+                        result["peak_l1_memory_device"] = peak_memory.get("peak_l1_memory_device")
+                else:
+                    # No memory captured
+                    result["peak_l1_memory_per_core"] = None
+                    result["peak_cb_per_core"] = None
+                    result["peak_l1_buffers_per_core"] = None
+                    result["num_cores"] = None
+                    result["peak_l1_memory_aggregate"] = None
+                    result["peak_l1_memory_device"] = None
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
@@ -453,6 +493,12 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
+                result["peak_l1_memory_per_core"] = None
+                result["peak_cb_per_core"] = None
+                result["peak_l1_buffers_per_core"] = None
+                result["num_cores"] = None
+                result["peak_l1_memory_aggregate"] = None
+                result["peak_l1_memory_device"] = None
                 result["original_vector_data"] = original_vector_data
                 result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
@@ -545,6 +591,7 @@ def run_sweeps(
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
             "card_type": config.arch_name,
+            "runner_label": os.getenv("RUNNER_LABEL"),  # CI runner label (e.g., N150, N300, BH-LLMBox)
             "run_type": "sweeps",
             "run_contents": config.run_contents,
             "git_author": get_git_author(),
@@ -825,6 +872,13 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--measure-memory",
+        required=False,
+        action="store_true",
+        help="Capture L1 memory usage per core using graph trace (NO_DISPATCH mode). Memory data will be included in test results.",
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         required=False,
@@ -902,6 +956,12 @@ if __name__ == "__main__":
         logger.info("Performance measurement: Enabled (single run, uncached performance only)")
     else:
         logger.info("Performance measurement: Disabled")
+
+    # Log memory measurement configuration
+    if config.measure_memory:
+        logger.info("Memory measurement: Enabled (using graph trace NO_DISPATCH mode)")
+    else:
+        logger.info("Memory measurement: Disabled")
 
     if config.skip_on_timeout:
         logger.info("Timeout behavior: Skip remaining tests in suite when a test times out.")

@@ -27,8 +27,8 @@ using ::tt::tt_fabric::MeshId;
 using LogicalAdjacencyMap = std::map<FabricNodeId, std::vector<FabricNodeId>>;
 using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
 
-// ASIC position: (TrayID, ASICLocation) pair for pinning constraints
-using AsicPosition = std::pair<tt::tt_metal::TrayID, tt::tt_metal::ASICLocation>;
+// Use ASICPosition from tt::tt_metal namespace
+using AsicPosition = tt::tt_metal::ASICPosition;
 
 // Map from AsicID to its physical position (TrayID, ASICLocation)
 // Required only when using pinning constraints
@@ -149,11 +149,13 @@ std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt
  * neighbors from the physical system descriptor and filters them to only include neighbors that are also part of
  * the same mesh. The resulting map contains ASIC IDs mapped to their vectors of adjacent ASIC IDs within the mesh.
  *
+ * @param cluster_type The type of the cluster
  * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
  * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
  * @return std::map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
  */
 std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
+    tt::tt_metal::ClusterType cluster_type,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 

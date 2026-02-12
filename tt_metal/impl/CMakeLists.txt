@@ -5,6 +5,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
@@ -21,8 +22,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
@@ -69,6 +72,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/logger.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc_server_controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_debugging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
@@ -86,6 +90,16 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/host_api_capture_helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/tensor_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/alignment.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/page_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/memory_config/memory_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/distributed_tensor_configs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
@@ -182,7 +196,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${CMAKE_CURRENT_SOURCE_DIR}/profiler
-        ${PROJECT_SOURCE_DIR}/tt_metal/include
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)

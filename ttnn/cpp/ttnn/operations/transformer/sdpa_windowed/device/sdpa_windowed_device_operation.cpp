@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_program_factory.hpp"
 #include "ttnn/device.hpp"
@@ -14,17 +15,12 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa_windowed {
+namespace ttnn::prim {
 
 WindowedScaledDotProductAttentionDeviceOperation::program_factory_t
 WindowedScaledDotProductAttentionDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::WindowedSDPAProgramFactory{};
-}
-
-void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
-    validate_on_program_cache_miss(attrs, tensors);
+    return WindowedSDPAProgramFactory{};
 }
 
 void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache_miss(
@@ -139,14 +135,14 @@ void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache
     validate_padding(v);
 }
 
-spec_return_value_t WindowedScaledDotProductAttentionDeviceOperation::compute_output_specs(
+TensorSpec WindowedScaledDotProductAttentionDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     const auto& input = tensors.q;
     return TensorSpec(
         input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
 }
 
-tensor_return_value_t WindowedScaledDotProductAttentionDeviceOperation::create_output_tensors(
+Tensor WindowedScaledDotProductAttentionDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
@@ -165,7 +161,7 @@ tt::stl::hash::hash_t WindowedScaledDotProductAttentionDeviceOperation::compute_
     return hash;
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor>
 WindowedScaledDotProductAttentionDeviceOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& tensors, tensor_return_value_t& output_tensor) {
     Tensors input_tensors = {tensors.q, tensors.k, tensors.v, tensors.cu_window_seqlens};
@@ -198,11 +194,7 @@ WindowedScaledDotProductAttentionDeviceOperation::create_op_performance_model(
         input_tensors, output_tensor, ideal_dev_clock_cycles);
 }
 
-}  // namespace ttnn::operations::transformer::sdpa_windowed
-
-namespace ttnn::prim {
-ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation::tensor_return_value_t
-windowed_scaled_dot_product_attention(
+Tensor windowed_scaled_dot_product_attention(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
@@ -211,8 +203,7 @@ windowed_scaled_dot_product_attention(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    using OperationType =
-        ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation;
+    using OperationType = WindowedScaledDotProductAttentionDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .scale = scale,
@@ -227,4 +218,5 @@ windowed_scaled_dot_product_attention(
             .cu_window_seqlens = cu_window_seqlens,
         });
 }
+
 }  // namespace ttnn::prim

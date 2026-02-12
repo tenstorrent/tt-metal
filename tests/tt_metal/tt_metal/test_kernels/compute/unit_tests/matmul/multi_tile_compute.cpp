@@ -4,11 +4,11 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api.h"
+#include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_api.h"
+#include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
     const uint32_t in1_cb = get_compile_time_arg_val(1);
     const uint32_t out_cb = get_compile_time_arg_val(2);
@@ -19,6 +19,10 @@ void MAIN {
     const uint32_t out_c = get_compile_time_arg_val(7);
     const uint32_t in0_k = get_compile_time_arg_val(8);
 
+    experimental::CircularBuffer cb0(in0_cb);
+    experimental::CircularBuffer cb1(in1_cb);
+    experimental::CircularBuffer cb_out(out_cb);
+
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
     mm_init(in0_cb, in1_cb, out_cb);
@@ -26,8 +30,8 @@ void MAIN {
 
     uint32_t out_tile_index = 0;
     uint32_t in0_index_r_offset = 0;
-    cb_wait_front(in0_cb, in0_num_tiles);
-    cb_wait_front(in1_cb, in1_num_tiles);
+    cb0.wait_front(in0_num_tiles);
+    cb1.wait_front(in1_num_tiles);
     for (uint32_t r = 0; r < out_r; r++) {
         for (uint32_t c = 0; c < out_c; c++) {
             uint32_t in1_index_c_offset = 0;
@@ -41,14 +45,13 @@ void MAIN {
         }
         in0_index_r_offset += in0_k;
     }
-    cb_pop_front(in0_cb, in0_num_tiles);
-    cb_pop_front(in1_cb, in1_num_tiles);
+    cb0.pop_front(in0_num_tiles);
+    cb1.pop_front(in1_num_tiles);
 
-    cb_reserve_back(out_cb, out_num_tiles);
+    cb_out.reserve_back(out_num_tiles);
     for (uint32_t tile_index = 0; tile_index < out_num_tiles; tile_index++) {
         pack_tile(tile_index, out_cb);
     }
-    cb_push_back(out_cb, out_num_tiles);
+    cb_out.push_back(out_num_tiles);
     release_dst();
 }
-}  // namespace NAMESPACE

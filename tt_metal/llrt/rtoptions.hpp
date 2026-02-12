@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <string>
 #include <vector>
+#include <atomic>
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
@@ -26,6 +27,10 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
 
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
@@ -65,6 +70,7 @@ struct TargetSelection {
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
+    std::vector<tt_fabric::FabricNodeId> node_ids;  // Resolved to chip IDs in resolve_fabric_node_ids_to_chip_ids
     bool all_chips = false;
     tt_metal::HalProcessorSet processors;
     std::string file_name;  // File name to write output to.
@@ -133,6 +139,8 @@ class RunTimeOptions {
     bool is_cache_dir_env_var_set = false;
     std::string cache_dir_;
 
+    std::string logs_dir_ = (std::filesystem::current_path() / "").string();
+
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
     std::string system_kernel_dir;
@@ -153,6 +161,8 @@ class RunTimeOptions {
     bool lightweight_kernel_asserts = false;
 
     bool enable_llk_asserts = false;
+
+    bool disable_sfploadmacro = false;
 
     // Fabric profiling settings
     struct FabricProfilingSettings {
@@ -178,6 +188,7 @@ class RunTimeOptions {
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
+    bool experimental_noc_debug_dump_enabled = false;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
@@ -189,6 +200,7 @@ class RunTimeOptions {
 
     bool skip_loading_fw = false;
 
+    bool jit_analytics_enabled = false;
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
 
@@ -231,7 +243,7 @@ class RunTimeOptions {
     uint32_t arc_debug_buffer_size = 0;
 
     // Force disables using DMA for reads and writes
-    bool disable_dma_ops = false;
+    std::atomic<bool> disable_dma_ops = false;
 
     // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
@@ -270,6 +282,8 @@ class RunTimeOptions {
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
+    // Dispatch kernel progress update period in milliseconds (default 100ms)
+    uint32_t dispatch_progress_update_ms = 100;
 
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
@@ -290,6 +304,9 @@ class RunTimeOptions {
     // Disable XIP dump
     bool disable_xip_dump = false;
 
+    // Dump JIT build commands to stdout for debugging
+    bool dump_build_commands = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -300,6 +317,10 @@ public:
 
     bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
     const std::string& get_cache_dir() const;
+
+    // Returns the logs directory for generated output (dprint, watcher, profiler, etc.)
+    // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to current working directory
+    const std::string& get_logs_dir() const;
 
     bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;
@@ -364,6 +385,8 @@ public:
 
     bool get_llk_asserts() const { return enable_llk_asserts; }
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
+
+    bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -512,6 +535,8 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    void set_experimental_noc_debug_dump_enabled(bool enabled);
+    bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
@@ -530,6 +555,9 @@ public:
     bool get_tracy_mid_run_push() const { return tracy_mid_run_push; }
 
     bool get_skip_loading_fw() const { return skip_loading_fw; }
+
+    bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
+    void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
@@ -568,6 +596,8 @@ public:
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 
+    void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
+
     // Temporary API until all multi-device workloads are ported to run on fabric.
     // It's currently not possible to enable Erisc IRAM by default for all legacy CCL
     // workloads. In those workloads, erisc kernels are loaded every CCL op; the binary
@@ -579,8 +609,8 @@ public:
     uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
-    bool get_disable_dma_ops() const { return disable_dma_ops; }
-    void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+    bool get_disable_dma_ops() const { return disable_dma_ops.load(std::memory_order_relaxed); }
+    void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 
@@ -607,6 +637,7 @@ public:
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+    void set_enable_all_telemetry() { enable_fabric_telemetry = true; fabric_telemetry_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask; fabric_telemetry_settings.enabled = true; }
     const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
@@ -621,12 +652,34 @@ public:
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
+    // Set mock cluster descriptor from filename (prepends base path automatically)
+    // NOTE: Must be called before Cluster is created (e.g., in MetalContext constructor).
+    // Path depends on UMD's cluster_descriptor_examples directory structure.
+    void set_mock_cluster_desc(const std::string& filename) {
+        if (filename.empty()) {
+            return;
+        }
+        mock_cluster_desc_path =
+            get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+        // Set target device to Mock if simulator is not enabled
+        if (simulator_path.empty()) {
+            runtime_target_device_ = tt::TargetDevice::Mock;
+        }
+    }
+    void clear_mock_cluster_desc() {
+        mock_cluster_desc_path.clear();
+        // Only reset to Silicon if simulator is not enabled
+        if (simulator_path.empty()) {
+            runtime_target_device_ = tt::TargetDevice::Silicon;
+        }
+    }
 
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
+    uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
@@ -639,6 +692,8 @@ public:
 
     bool get_disable_xip_dump() const { return disable_xip_dump; }
 
+    bool get_dump_build_commands() const { return dump_build_commands; }
+
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
     void ParseAllFeatureEnv(const tt_metal::Hal& hal) {
@@ -647,11 +702,19 @@ public:
         }
     }
 
+    // Resolve FabricNodeIds to physical chip IDs using the control plane.
+    // This must be called after the control plane is initialized, since during
+    // rtoptions parsing we don't have access to the control plane yet.
+    void resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane);
+
 private:
     // Helper functions to parse feature-specific environment vaiables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
-    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
+    bool ParseFeatureChipIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if chips are specified
+    bool ParseFeatureNodeIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if nodes are specified
     void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);

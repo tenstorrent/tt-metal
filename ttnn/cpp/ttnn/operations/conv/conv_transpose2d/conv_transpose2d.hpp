@@ -14,6 +14,9 @@
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
+using ttnn::prim::Conv2dConfig;
+using ttnn::prim::Conv2dSliceConfig;
+
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
@@ -43,10 +46,10 @@ struct ConvTranpose2dOperation {
         uint32_t groups = 1,
         const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-        const std::optional<const conv2d::Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
+        const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
         bool mirror_kernel = true,
         bool return_output_dim = false,
         bool return_weights_and_bias = false);
@@ -69,7 +72,7 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
     DataType conv_output_dtype,
     Tensor& weight_tensor,
     std::optional<std::reference_wrapper<Tensor>> bias_tensor,
-    const conv2d::Conv2dConfig& conv_config_,
+    const Conv2dConfig& conv_config_,
     const DeviceComputeKernelConfig& compute_config,
     MeshDevice* device,
     bool mirror_kernel);

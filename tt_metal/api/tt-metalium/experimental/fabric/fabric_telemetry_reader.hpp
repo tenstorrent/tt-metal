@@ -10,6 +10,15 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <hostdevcommon/fabric_common.h>
 
+// Forward declarations
+namespace tt::umd {
+class Cluster;
+}
+
+namespace tt::tt_metal {
+class Hal;
+}
+
 namespace tt::tt_fabric {
 
 /**
@@ -34,5 +43,21 @@ struct FabricTelemetrySample {
  */
 [[nodiscard]] std::vector<FabricTelemetrySample> read_fabric_telemetry(
     const tt::tt_fabric::FabricNodeId& fabric_node_id);
+
+/**
+ * @brief Read telemetry snapshot for a specific Ethernet channel without MetalContext dependency.
+ *
+ * This overload allows reading telemetry when MetalContext is unavailable, as is the case in the telemetry collector.
+ * The caller must provide cluster and HAL references directly.
+ *
+ * @param cluster Reference to the UMD cluster for device access.
+ * @param hal Reference to the HAL for architecture-specific operations.
+ * @param chip_id Physical chip ID to query.
+ * @param channel Ethernet channel ID on that chip.
+ * @return Telemetry snapshot for the requested channel.
+ * @throws std::exception if chip_id or channel is invalid, or device access fails.
+ */
+[[nodiscard]] tt::tt_fabric::FabricTelemetrySnapshot read_fabric_telemetry(
+    tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, tt::tt_fabric::chan_id_t channel);
 
 }  // namespace tt::tt_fabric

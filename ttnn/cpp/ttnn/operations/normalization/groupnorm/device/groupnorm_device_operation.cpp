@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization::group_norm {
+namespace ttnn::prim {
 
 GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -36,14 +37,8 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
 
     if (batch >= num_virtual_rows) {
         return GroupNormNoMcastProgramFactory{};
-    } else {
-        return GroupNormMcastProgramFactory{};
     }
-}
-
-void GroupNormDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    return GroupNormMcastProgramFactory{};
 }
 
 void GroupNormDeviceOperation::validate_on_program_cache_miss(
@@ -210,7 +205,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t GroupNormDeviceOperation::compute_output_specs(
+TensorSpec GroupNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
@@ -238,7 +233,7 @@ spec_return_value_t GroupNormDeviceOperation::compute_output_specs(
         args.program_config);
 }
 
-tensor_return_value_t GroupNormDeviceOperation::create_output_tensors(
+Tensor GroupNormDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
@@ -257,15 +252,12 @@ tensor_return_value_t GroupNormDeviceOperation::create_output_tensors(
         args.program_config);
 }
 
-}  // namespace ttnn::operations::normalization::group_norm
-
-namespace ttnn::prim {
-ttnn::operations::normalization::group_norm::GroupNormDeviceOperation::tensor_return_value_t group_norm(
+Tensor group_norm(
     const Tensor& input,
     float eps,
     uint32_t num_groups,
     const MemoryConfig& output_mem_config,
-    const ttnn::operations::normalization::group_norm::GroupNormProgramConfig& program_config,
+    const GroupNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_welford,
     std::optional<Tensor> gamma,
@@ -273,7 +265,7 @@ ttnn::operations::normalization::group_norm::GroupNormDeviceOperation::tensor_re
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
     std::optional<Tensor> reciprocals) {
-    using OperationType = ttnn::operations::normalization::group_norm::GroupNormDeviceOperation;
+    using OperationType = GroupNormDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .eps = eps,
         .num_groups = num_groups,
@@ -292,4 +284,5 @@ ttnn::operations::normalization::group_norm::GroupNormDeviceOperation::tensor_re
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
+
 }  // namespace ttnn::prim

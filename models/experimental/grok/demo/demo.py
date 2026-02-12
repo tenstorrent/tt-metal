@@ -305,7 +305,8 @@ def run_grok_demo(user_input, batch_size, mesh_device, instruct_mode):
     ],
     ids=["general_weights", "instruct_weights"],
 )
-def test_grok8x7b_demo(t3k_mesh_device, input_prompts, instruct_weights):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_grok8x7b_demo(mesh_device, input_prompts, instruct_weights):
     return run_grok_demo(
-        user_input=input_prompts, batch_size=32, mesh_device=t3k_mesh_device, instruct_mode=instruct_weights
+        user_input=input_prompts, batch_size=32, mesh_device=mesh_device, instruct_mode=instruct_weights
     )

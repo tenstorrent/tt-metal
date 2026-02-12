@@ -98,4 +98,11 @@ float get_nan();
  */
 float get_inf();
 
+/**
+ * @brief Uses the hardware abstraction layer to get the maximum number of circular buffers per core.
+ *
+ * @return Maximum number of circular buffers
+ */
+uint32_t get_arch_num_circular_buffers();
+
 }  // namespace tt::tt_metal::hal

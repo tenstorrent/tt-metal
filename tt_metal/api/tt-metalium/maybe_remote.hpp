@@ -45,7 +45,8 @@ concept MaybeRemoteLike = requires(T t) {
  * exists on a remote host and is not directly accessible from the current process.
  */
 struct RemoteDevice {
-    // For RemoteDevice to work properly in STL containers and with std::variant, it needs to have comparison operators defined.
+    // For RemoteDevice to work properly in STL containers and with std::variant, it needs to have comparison operators
+    // defined.
     friend bool operator==(const RemoteDevice&, const RemoteDevice&) = default;
 };
 
@@ -122,7 +123,6 @@ public:
 
     // Debugging support
     [[nodiscard]] std::string to_string() const;
-
 };
 
 // Type aliases for common use cases
@@ -205,9 +205,8 @@ template <typename LocalFunc, typename RemoteFunc>
 auto MaybeRemote<T>::when(LocalFunc&& on_local, RemoteFunc&& on_remote) const -> decltype(auto) {
     if (is_local()) {
         return std::invoke(std::forward<LocalFunc>(on_local), std::get<T>(value_));
-    } else {
-        return std::invoke(std::forward<RemoteFunc>(on_remote));
     }
+    return std::invoke(std::forward<RemoteFunc>(on_remote));
 }
 
 // if_local for void return types
@@ -261,8 +260,7 @@ std::string MaybeRemote<T>::to_string() const {
             oss << "MaybeRemote{" << value << "}";
             return oss.str();
         },
-        []() -> std::string { return "MaybeRemote{remote}"; }
-    );
+        []() -> std::string { return "MaybeRemote{remote}"; });
 }
 
 // ============================================================================

@@ -13,9 +13,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -77,6 +80,11 @@ def create_parser() -> argparse.ArgumentParser:
         choices=["mlp", "moe"],
         help="When using --random-weights, request a single layer (mlp supported)",
     )
+    p.add_argument(
+        "--override-num-layers",
+        type=int,
+        help="Override the number of layers in the model. Defaults to None.",
+    )
     # Teacher-forcing / accuracy verification options
     p.add_argument("--token-accuracy", action="store_true", help="Enable teacher-forced decode and report accuracy")
     p.add_argument(
@@ -97,15 +105,37 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--generator",
-        choices=["pp", "bp"],
+        choices=["bp"],
         default="bp",
-        help="Select generator implementation: default = bp (batch parallel), pp (pipeline parallel).",
+        help="Select generator implementation: default = bp (batch parallel).",
     )
     p.add_argument(
         "--enable-trace",
         action="store_true",
         default=False,
         help="Enable trace for decode forward pass",
+    )
+    p.add_argument(
+        "--enable-mem-profile",
+        action="store_true",
+        default=False,
+        help="Enable TTNN memory profiling dumps during setup",
+    )
+    p.add_argument(
+        "--repeat-batches",
+        type=int,
+        default=1,
+        help="Number of times to repeat the generation process.",
+    )
+    p.add_argument(
+        "--signpost",
+        action="store_true",
+        help="Enable signpost for tracing.",
+    )
+    p.add_argument(
+        "--prefill-max-tokens",
+        type=int,
+        help="Maximum number of tokens to prefill.",
     )
     return p
 
@@ -212,14 +242,17 @@ def run_demo(
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
+    override_num_layers: int | None = None,
     token_accuracy: bool = False,
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = False,
-    override_num_layers: int | None = None,
+    enable_mem_profile: bool = False,
     repeat_batches: int = 1,
+    signpost: bool = False,
+    prefill_max_tokens: int = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -247,15 +280,25 @@ def run_demo(
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
-
-    fabric_config = ttnn.FabricConfig.FABRIC_1D
+    fabric_config = optimal_topology
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
-    ttnn.set_fabric_config(fabric_config)
+    ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
-        trace_region_size = 4880384 + int(0.20 * 4880384)  # 20% additional
+        # NOTE:
+        # The base trace region size below (~36.3 MiB) was empirically determined from
+        # vLLM decode workloads to be sufficient to keep the trace buffer from
+        # overflowing under typical DeepSeek-V3 demo settings (batch size, sequence
+        # length, and mesh configuration). We add 20% headroom as a conservative
+        # safety margin to accommodate variability across models / prompts without
+        # repeatedly re-tuning this value.
+        #
+        # If you are optimizing memory usage, this can be reduced after verifying
+        # that tracing completes without buffer exhaustion for your target workload.
+        BASE_TRACE_REGION_BYTES = 38_070_272
+        trace_region_size = BASE_TRACE_REGION_BYTES + int(0.20 * BASE_TRACE_REGION_BYTES)
         logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:
@@ -305,29 +348,24 @@ def run_demo(
                 ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
-            )
-        else:  # generator == "pp"
-            if enable_trace:
-                assert False, "Tracing is not supported for pp generator."
-            gen = DeepseekGeneratorPP(
-                mesh_device=mesh_device,
-                model_path=model_path,
-                cache_dir=cache_dir,
-                tokenizer=tokenizer,
-                random_weights=bool(random_weights),
-                dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(
-                    override_num_layers if override_num_layers is not None else (1 if random_weights else None)
-                ),
-                single_layer=(single_layer if random_weights else None),
+                enable_mem_profile=enable_mem_profile,
+                signpost=signpost,
+                prefill_max_tokens=prefill_max_tokens,
             )
         # Build the prompt list
+        pre_tokenized_prompts = None
         if random_weights:
             prompt_list = [""]
         else:
             if token_acc is not None:
-                # Prepare prompt text from reference tokens to align with teacher forcing
-                prompt_list = [token_acc.prepare_ref_tokens(gen.tokenizer)]
+                # Use pre-tokenized tokens directly to avoid re-encoding with chat template.
+                # This ensures the TT model uses the exact same token sequence as the reference.
+                if prompts:
+                    prompt_list = prompts
+                else:
+                    # Still need a placeholder prompt for the generator API
+                    prompt_list = [""]
+                pre_tokenized_prompts = [token_acc.get_prompt_token_ids() for _ in range(len(prompt_list))]
                 # If not overridden, ensure we don't decode past the available ground truth
                 max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
             else:
@@ -342,6 +380,7 @@ def run_demo(
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
             repeat_batches=repeat_batches,
+            pre_tokenized=pre_tokenized_prompts,
         )
 
         # Process all generations
@@ -352,7 +391,13 @@ def run_demo(
                 result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
             if token_acc is not None and i == 0:  # Only compute accuracy for first generation
                 acc = token_acc.compute_accuracy()
-                result.update({"accuracy_top1": acc.get("top1"), "accuracy_top5": acc.get("top5")})
+                result.update(
+                    {
+                        "accuracy_top1": acc.get("top1"),
+                        "accuracy_top5": acc.get("top5"),
+                        "predicted_tokens": token_acc._pred_tokens,
+                    }
+                )
             results.append(result)
 
         return {"generations": results, "statistics": statistics}
@@ -395,12 +440,16 @@ def main() -> None:
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
+        override_num_layers=args.override_num_layers,
         token_accuracy=bool(args.token_accuracy),
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
+        enable_mem_profile=args.enable_mem_profile,
+        signpost=args.signpost,
+        prefill_max_tokens=args.prefill_max_tokens,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing

@@ -38,7 +38,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
 }
 
 inline void moreh_linear_backward_validate(
-    const Tensor& output_grad,
+    const Tensor& /*output_grad*/,
     const Tensor& input,
     const Tensor& weight,
     const std::optional<const Tensor>& input_grad,

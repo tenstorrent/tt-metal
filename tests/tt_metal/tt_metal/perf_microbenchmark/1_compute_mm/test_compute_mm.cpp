@@ -307,15 +307,15 @@ int main(int argc, char** argv) {
         }
 
         if (not single_core) {
-            TT_ASSERT(dtype == 0, "multi core test only supports bfp8_b");
-            TT_ASSERT(packer_l1 == 0, "multi core test does not support packer_l1 arg");
+            TT_FATAL(dtype == 0, "multi core test only supports bfp8_b");
+            TT_FATAL(packer_l1 == 0, "multi core test does not support packer_l1 arg");
         }
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Env and Device Setup
         ////////////////////////////////////////////////////////////////////////////
         if (single_core) {
-            TT_ASSERT(fast_dispatch_mode, "single core test only supports in fast dispatch mode");
+            TT_FATAL(fast_dispatch_mode, "single core test only supports in fast dispatch mode");
         } else if (!fast_dispatch_mode) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
 
@@ -350,7 +350,7 @@ int main(int argc, char** argv) {
             data_format = dtype == 0 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
         }
         uint32_t single_tile_size = tt::tile_size(data_format);
-        TT_ASSERT(single_tile_size == (dtype == 0 ? (256 * 4) + (16 * 4) : 2048));
+        TT_FATAL(single_tile_size == (dtype == 0 ? (256 * 4) + (16 * 4) : 2048), "Unexpected tile size");
 
         auto grid_size = device->compute_with_storage_grid_size();
         if (single_core) {
@@ -372,13 +372,17 @@ int main(int argc, char** argv) {
                 M,
                 N,
                 K);
-            TT_ASSERT(false);
+            TT_FATAL(false, "Multi core matmul not supported with L1 memory constraints");
         }
 
         uint32_t num_blocks_y = ((Mt - 1) / per_core_Mt) + 1;
         uint32_t num_blocks_x = ((Nt - 1) / per_core_Nt) + 1;
         uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
-        TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
+        TT_FATAL(
+            num_blocks_total <= num_cores_x * num_cores_y,
+            "num_blocks_total {} exceeds available cores {}",
+            num_blocks_total,
+            num_cores_x * num_cores_y);
         CoreCoord core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
         if (core_range.y != num_cores_y || core_range.x != num_cores_x) {
             log_warning(
@@ -729,15 +733,12 @@ int main(int argc, char** argv) {
 //                      Function Implementation
 ////////////////////////////////////////////////////////////////////////////
 uint32_t get_l1_size(tt::ARCH arch) {
-    constexpr uint32_t GS_L1_SIZE = 1048576;
     constexpr uint32_t WH_L1_SIZE = 1499136;
     constexpr uint32_t BH_L1_SIZE = 1499136;
 
     uint32_t l1_size = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         l1_size = WH_L1_SIZE;
-    } else if (arch == tt::ARCH::GRAYSKULL) {
-        l1_size = GS_L1_SIZE;
     } else if (arch == tt::ARCH::BLACKHOLE) {
         l1_size = BH_L1_SIZE;
     }
@@ -747,7 +748,6 @@ uint32_t get_l1_size(tt::ARCH arch) {
 double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_clock) {
     constexpr double BH_FPU_BFP8_TFLOPS_PER_TENSIX = 2.97;
     constexpr double WH_FPU_BFP8_TFLOPS_PER_TENSIX = 2.05;
-    constexpr double GS_FPU_BFP8_TFLOPS_PER_TENSIX = 0.58;
 
     double rpeak_tflops = 0.0f;
     double clock = static_cast<double>(tt_npu_clock) / 1000;
@@ -755,9 +755,6 @@ double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_cl
     if (arch == tt::ARCH::WORMHOLE_B0) {
         rpeak_tflops =
             WH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
-    } else if (arch == tt::ARCH::GRAYSKULL) {
-        rpeak_tflops =
-            GS_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
     } else if (arch == tt::ARCH::BLACKHOLE) {
         rpeak_tflops =
             BH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
@@ -772,7 +769,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> get_aligned_input_tile_num(uint32_t M, 
         return ((value + (constants::TILE_WIDTH - 1)) / constants::TILE_WIDTH) * constants::TILE_WIDTH;
     };
 
-    TT_ASSERT(M != 0 && N != 0 && K != 0, "Matmul input size should not be zero");
+    TT_FATAL(M != 0 && N != 0 && K != 0, "Matmul input size should not be zero");
 
     uint32_t M_aligned = align_to_tile(M);
     uint32_t N_aligned = align_to_tile(N);
@@ -843,9 +840,6 @@ std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
         // TODO: apply packer_l1_acc
         // TODO: need to consider whether to set these variablias as arguments
         fp32_dest_acc_en = false;
-    } else if (arch == tt::ARCH::GRAYSKULL) {
-        math_fidelity = MathFidelity::HiFi4;
-        fp32_dest_acc_en = false;
     }
     return {math_fidelity, fp32_dest_acc_en};
 }
@@ -864,9 +858,8 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
         if (per_core_Mt % subblock_h == 0 and per_core_Nt % subblock_w == 0) {
             if (index >= choice) {
                 return {subblock_h, subblock_w};
-            } else {
-                index++;
             }
+            index++;
         }
     }
 
@@ -899,7 +892,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
 }
 
 tt_metal::Program create_program_single_core(
-    tt_metal::distributed::MeshDevice* device,
+    tt_metal::distributed::MeshDevice* /*device*/,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1120,10 +1113,10 @@ tt_metal::Program create_program(
     uint32_t out_subblock_w,
     uint32_t per_core_Mt,
     uint32_t per_core_Nt,
-    uint32_t in0_cb_addr,
-    uint32_t in1_cb_addr,
+    uint32_t /*in0_cb_addr*/,
+    uint32_t /*in1_cb_addr*/,
     uint32_t in2_cb_addr,
-    uint32_t out_cb_addr,
+    uint32_t /*out_cb_addr*/,
     uint32_t in0_addr,
     uint32_t in1_addr,
     uint32_t out_addr,
@@ -1395,7 +1388,7 @@ std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val
 }
 
 template <typename T>
-std::vector<T> get_row_slice(std::vector<T> data, int start_row_index, int num_rows, int rows, int cols) {
+std::vector<T> get_row_slice(std::vector<T> data, int start_row_index, int num_rows, int /*rows*/, int cols) {
     std::vector<T> result;
     for (int i = start_row_index * cols; i < (start_row_index + num_rows) * cols; i++) {
         result.push_back(data.at(i));
@@ -1427,9 +1420,9 @@ void prepare_inputs(
     uint32_t in0_addr,
     uint32_t in1_addr,
     uint32_t in2_cb_addr,
-    bool dtype,
+    bool /*dtype*/,
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
-    std::vector<std::vector<float>>& in1_bfp8_unpack_slice) {
+    std::vector<std::vector<float>>& /*in1_bfp8_unpack_slice*/) {
     bool pass = true;
     auto in0_vec = generate_fp32_random(Mt * Kt * constants::TILE_HW);
     std::vector<uint32_t> in2(single_tile_size / sizeof(uint32_t), 0);
@@ -1471,11 +1464,11 @@ void prepare_inputs(
             CoreCoord core = {(std::size_t)c, (std::size_t)r};
             auto* target_device = device->get_devices()[0];
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in0_addr, in0);
-            TT_ASSERT(pass);
+            TT_FATAL(pass, "Failed to write in0 to device L1");
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in1_addr, in1);
-            TT_ASSERT(pass);
+            TT_FATAL(pass, "Failed to write in1 to device L1");
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in2_cb_addr, in2);
-            TT_ASSERT(pass);
+            TT_FATAL(pass, "Failed to write in2 to device L1");
         }
     }
 }
@@ -1584,9 +1577,9 @@ bool validation(
     uint32_t in0_block_w,
     uint32_t out_addr,
     uint32_t single_tile_size,
-    bool fp32_dest_acc_en,
+    bool /*fp32_dest_acc_en*/,
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
-    std::vector<std::vector<float>>& in1_bfp8_unpack_slice) {
+    std::vector<std::vector<float>>& /*in1_bfp8_unpack_slice*/) {
     auto zero_vector = [](uint32_t r, uint32_t c) {
         std::vector<float> vec(r * c, (float)0);
         return vec;

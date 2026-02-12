@@ -129,7 +129,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
 
     auto applicable_to_coord = [&](const MeshCoordinate& coord,
                                    size_t cluster_axis,
-                                   size_t axis_size,
+                                   size_t /*axis_size*/,
                                    tt::tt_fabric::RoutingDirection direction) -> bool {
         auto boundary_mode = detail::get_boundary_mode(topology);
         int offset = positive_direction(direction) ? 1 : -1;

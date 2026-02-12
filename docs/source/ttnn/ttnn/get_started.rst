@@ -29,7 +29,7 @@ for details.
 Where To Go From Here
 ^^^^^^^^^^^^^^^^^^^^^
 
-Take a look at :ref:`more code examples<Using ttnn>` for TT-NN
+Take a look at :doc:`more code examples<tutorials/tutorials/ttnn_intro>` for TT-NN
 or :ref:`the other tutorials<Tutorials>` on using TT-NN with Jupyter Notebooks.
 
 If you're an internal TT-NN developer, please read and review the

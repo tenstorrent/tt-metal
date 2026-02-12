@@ -130,7 +130,7 @@ std::vector<ComplexTensor> _angle_bw(
 // complex conj
 // self: grad.conj()
 std::vector<ComplexTensor> _conj_bw(
-    const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    const ComplexTensor& grad, const ComplexTensor& /*input*/, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     ComplexTensor grad_result = ttnn::conj(grad, output_mem_config);
     grad_tensor.emplace_back(grad_result);

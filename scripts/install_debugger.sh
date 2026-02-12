@@ -15,18 +15,22 @@ if [[ -z "$REF" ]]; then
   exit 1
 fi
 
-# Uninstall tt-exalens if already installed
-echo "Installing tt-exalens version: $REF"
-python3 -m pip uninstall -y tt-exalens >/dev/null 2>&1 || true
-
-# Figure download link
-PYTHON_CP_VERSION="$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')"
-DOWNLOAD_LINK="https://github.com/tenstorrent/tt-exalens/releases/download/v$REF/tt_exalens-$REF-$PYTHON_CP_VERSION-$PYTHON_CP_VERSION-linux_x86_64.whl"
-
-# Check if download link exists
-if ! curl --head --silent --fail "$DOWNLOAD_LINK" >/dev/null 2>&1; then
-  echo "Prebuilt wheel not found for version $REF. Installing from source."
-  python3 -m pip install "git+https://github.com/tenstorrent/tt-exalens.git@v$REF"
+# Determine whether to use uv or pip
+if command -v uv &>/dev/null; then
+  PIP_CMD="uv pip"
+  # uv needs --index-strategy unsafe-best-match to check all indexes for best version
+  # (test.pypi.org has older versions of some transitive deps like deprecation)
+  UV_INDEX_STRATEGY="--index-strategy unsafe-best-match"
+  echo "Using uv for package management"
 else
-  python3 -m pip install "$DOWNLOAD_LINK"
+  PIP_CMD="python3 -m pip"
+  UV_INDEX_STRATEGY=""
+  echo "uv not found, falling back to pip"
 fi
+
+# Uninstall tt-exalens if already installed
+$PIP_CMD uninstall -y tt-exalens >/dev/null 2>&1 || true
+
+# Install tt-exalens to the requested version
+echo "Installing tt-exalens version: $REF"
+$PIP_CMD install $UV_INDEX_STRATEGY --extra-index-url https://test.pypi.org/simple/ tt-exalens=="$REF"

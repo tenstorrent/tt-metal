@@ -11,6 +11,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -49,10 +50,21 @@ class DeepseekV3LMHead(nn.Module):
     "mode,seq_len",
     [
         ("decode", 32),
-        ("prefill", 1024),
-        ("prefill", 2048),
+    ]
+    + [
+        ("prefill", seq_len)
+        if seq_len == 128
+        else pytest.param(
+            "prefill",
+            seq_len,
+            marks=pytest.mark.skip(
+                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            ),
+        )
+        for seq_len in PREFILL_SEQ_LENS
     ],
 )
+@pytest.mark.requires_device(["TG"])
 def test_forward_pass(
     mode: str,
     seq_len: int,

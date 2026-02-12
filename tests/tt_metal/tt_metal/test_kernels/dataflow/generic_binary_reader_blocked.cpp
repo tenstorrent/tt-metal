@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/endpoints.h"
 
 // This kernel is used to read untilized src0 data from DRAM and copy it to L1 in tilized layout.
 // For layout transformation, it uses a list of source addresses (a vector in L1 written by the host) to perform

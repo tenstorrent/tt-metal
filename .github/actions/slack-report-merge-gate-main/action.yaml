@@ -2,7 +2,7 @@ name: "Report Workflow Status to Slack"
 description: "Report the workflow status to Slack to help identify breakages faster."
 inputs:
   owner:
-    description: "The Slack ID of the person to be tagged."
+    description: "The Slack ID of the person or group to be tagged (user IDs start with U, group IDs start with S)."
     default: "U014XCQ9CF8" # @Raymond Kim
   slack_webhook_url:
     description: "Webhook URL for the Slack channel to be posted to. Generated via slack app!"
@@ -13,7 +13,22 @@ runs:
     - name: Format Slack User Mentions
       id: format_mentions
       run: |
-        MENTIONS=$(echo "<@${{ inputs.owner }}>" | sed 's/,/> <@/g')
+        # Split comma-separated IDs and format each appropriately
+        # User IDs (U...) use <@U...>, Group IDs (S...) use <!subteam^S...>
+        MENTIONS=""
+        IFS=',' read -ra IDS <<< "${{ inputs.owner }}"
+        for ID in "${IDS[@]}"; do
+          ID=$(echo "$ID" | xargs)  # trim whitespace
+          [[ -z "$ID" ]] && continue  # skip empty IDs
+          if [[ "$ID" =~ ^S ]]; then
+            # Group/subteam ID
+            MENTIONS="${MENTIONS}<!subteam^${ID}> "
+          else
+            # User ID
+            MENTIONS="${MENTIONS}<@${ID}> "
+          fi
+        done
+        MENTIONS=$(echo "$MENTIONS" | sed 's/[[:space:]]*$//')  # trim trailing space
         echo "mentions=$MENTIONS" >> $GITHUB_OUTPUT
       shell: bash
     - name: Report Github Pipeline Status Slack Action

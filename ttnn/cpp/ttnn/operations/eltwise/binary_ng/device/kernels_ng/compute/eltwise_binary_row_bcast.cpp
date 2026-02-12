@@ -4,15 +4,14 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/bcast.h"
 
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
@@ -81,4 +80,3 @@ void MAIN {
         cb_pop_front(cb_right, num_tiles_per_cycle);
     }
 }
-}  // namespace NAMESPACE

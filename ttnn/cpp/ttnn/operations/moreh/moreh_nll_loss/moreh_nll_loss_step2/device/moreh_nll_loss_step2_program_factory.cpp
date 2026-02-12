@@ -22,7 +22,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& divisor,
     const Tensor& output,
-    const std::string& reduction,
+    const std::string& /*reduction*/,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
@@ -205,7 +205,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& divisor,
     const Tensor& output,
-    const std::string& reduction,
+    const std::string& /*reduction*/,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     // split work
@@ -388,7 +388,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& divisor,
     const Tensor& output,
-    const std::string& reduction,
+    const std::string& /*reduction*/,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
@@ -599,7 +599,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t MorehNllLossStep2Dev
     if (rank == 2) {
         return moreh_nll_loss_step2_impl_2d(
             input, target, weight, divisor, output, reduction, ignore_index, compute_kernel_config);
-    } else if (rank == 3) {
+    }
+    if (rank == 3) {
         return moreh_nll_loss_step2_impl_3d(
             input, target, weight, divisor, output, reduction, ignore_index, compute_kernel_config);
     }

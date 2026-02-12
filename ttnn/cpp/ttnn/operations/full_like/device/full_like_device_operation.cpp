@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "full_like_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <optional>
 
@@ -12,7 +13,7 @@
 namespace ttnn::operations::full_like {
 
 FullLikeOperation::program_factory_t FullLikeOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 
@@ -33,11 +34,6 @@ void FullLikeOperation::validate(const operation_attributes_t& operation_attribu
 }
 
 void FullLikeOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate(operation_attributes, tensor_args);
-}
-
-void FullLikeOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate(operation_attributes, tensor_args);
 }

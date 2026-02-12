@@ -4,6 +4,7 @@
 
 import os
 import math
+import time
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -151,7 +152,20 @@ def run_test_sdpa_tt(
 
 
 def run_sdpa_noncausal(
-    device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=None, use_mask=True, rmse_threshold=None
+    device,
+    b,
+    nh,
+    nkv,
+    sq,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    sk=None,
+    use_mask=True,
+    rmse_threshold=None,
+    bcast_mask_batch_dim=False,
+    bcast_mask_head_dim=True,
 ):
     torch.manual_seed(1234)
     if sk is None:
@@ -181,14 +195,14 @@ def run_sdpa_noncausal(
         mask = torch.bernoulli(
             torch.full(
                 (
-                    b,
+                    1 if bcast_mask_batch_dim else b,
+                    1 if bcast_mask_head_dim else nh,
                     sq,
                     sk,
                 ),
                 0.25,
             )
         )
-        mask = mask.unsqueeze(1)
         mask = mask * -1e9
         tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -227,7 +241,7 @@ def run_sdpa_noncausal(
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", [32, 128, 512], ids=["q32", "q128", "q512"])
+@pytest.mark.parametrize("q_chunk_size", [32, 96, 128, 192, 512], ids=["q32", "q96", "q128", "q192", "q512"])
 @pytest.mark.parametrize("k_chunk_size", [128, 512], ids=["k128", "k512"])
 @pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
 @pytest.mark.parametrize("b", [1, 2], ids=["b1", "b2"])
@@ -261,7 +275,7 @@ def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
 @pytest.mark.parametrize(
     "memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_interleaved", "l1_interleaved"]
 )
-@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
+@pytest.mark.parametrize("q_chunk_size", [128, 192, 256], ids=["q128", "q192", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
@@ -455,6 +469,51 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
     run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=sk)
 
 
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [32, 128], ids=["q32", "q128"])
+@pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k64", "k128"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    (
+        [128, 4, 4, 128, 32],  # Boltz
+        [1, 16, 16, 128, 64],  # Boltz
+        [2, 8, 1, 160, 64],  # Padded: K-only (q32/k64,k128) and Q+K (q128/k64,k128)
+    ),
+)
+@pytest.mark.parametrize("bcast_mask_batch_dim", [True, False], ids=["bcast-mask-batch-dim", "no-bcast-mask-batch-dim"])
+@pytest.mark.parametrize("bcast_mask_head_dim", [True, False], ids=["bcast-mask-head-dim", "no-bcast-mask-head-dim"])
+def test_sdpa_noncausal_mask(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    bcast_mask_batch_dim,
+    bcast_mask_head_dim,
+):
+    rmse_threshold = 0.007
+    run_sdpa_noncausal(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        rmse_threshold=rmse_threshold,
+        use_mask=True,
+        bcast_mask_batch_dim=bcast_mask_batch_dim,
+        bcast_mask_head_dim=bcast_mask_head_dim,
+    )
+
+
 def run_test_chunked_sdpa(
     device,
     b,
@@ -469,8 +528,19 @@ def run_test_chunked_sdpa(
     q_dtype,
     k_dtype,
     use_high_precision_compute,
+    flexible=False,
     grid_size=None,
+    trace=False,
 ):
+    """Run chunked SDPA over paged K/V and compare to PyTorch SDPA.
+
+    flexible: If True, pass chunk_start_idx as a device tensor (ttnn.Tensor [1] int32).
+              If False, pass chunk_start_idx as a Python int (legacy). Use flexible for
+              trace capture/replay or prefix caching so the offset can change without recompile.
+    trace: If True, compile once, capture one SDPA call, then replay for each chunk after
+           updating Q and chunk_start_idx_tensor on device. Requires flexible=True and a
+           device created with trace_region_size (see test parametrization).
+    """
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
@@ -548,26 +618,113 @@ def run_test_chunked_sdpa(
     tt_paged_V = ttnn.Tensor(page_cache(V), k_dtype).to(ttnn.TILE_LAYOUT).to(device)
     page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
-    for chunk_idx in range(num_prefill_chunks):
-        # Chunk Q
-        Q_chunk = Q[:, :, chunk_idx * prefill_chunk_size : (chunk_idx + 1) * prefill_chunk_size]
-        tt_Q_chunk = ttnn.Tensor(Q_chunk, q_dtype).to(ttnn.TILE_LAYOUT).to(device)
-        chunk_start_idx = chunk_idx * prefill_chunk_size
+    def _params_str(chunk_idx=None, op="sdpa"):
+        parts = [
+            f"b={b} nh={nh} nkv={nkv} s={s} d={d}",
+            f"q_chunk={q_chunk_size} k_chunk={k_chunk_size}",
+            f"prefill_chunk={prefill_chunk_size} page_block={page_block_size}",
+            f"flexible={flexible} trace={trace}",
+        ]
+        if chunk_idx is not None:
+            parts.append(f"chunk_idx={chunk_idx}/{num_prefill_chunks}")
+        parts.append(f"op={op}")
+        return " | ".join(parts)
 
+    if trace:
+        # trace=True requires flexible (chunk_start_idx_tensor) so replay can update offset on device
+        assert flexible, "trace=True requires flexible=True"
+        # Persistent device tensors for capture and replay (same buffers used by trace)
+        tt_Q_chunk = ttnn.Tensor(Q[:, :, 0:prefill_chunk_size], q_dtype).to(ttnn.TILE_LAYOUT).to(device)
+        chunk_start_idx_tensor = ttnn.Tensor(torch.tensor([0], dtype=torch.int32), ttnn.int32).to(device)
+        # Compile: run chunk 0 once
+        ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_Q_chunk,
+            tt_paged_K,
+            tt_paged_V,
+            page_table_tt,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        # Capture: record one SDPA call
+        tid = ttnn.begin_trace_capture(device, cq_id=0)
         tt_back = ttnn.transformer.chunked_scaled_dot_product_attention(
             tt_Q_chunk,
             tt_paged_K,
             tt_paged_V,
             page_table_tt,
-            chunk_start_idx,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
-        tt_back = tt_back.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-        gt_chunk = gt[:, :, chunk_idx * prefill_chunk_size : (chunk_idx + 1) * prefill_chunk_size]
-        out_pass, out_pcc = comp_pcc(gt_chunk, tt_back, 0.998)
-        logger.debug(f"python vs pytorch: {out_pcc}")
-        assert out_pass
+        ttnn.end_trace_capture(device, tid, cq_id=0)
+
+        # Execute: for each chunk, update inputs on device and replay; use replay output for PCC
+        for chunk_idx in range(num_prefill_chunks):
+            Q_chunk = Q[:, :, chunk_idx * prefill_chunk_size : (chunk_idx + 1) * prefill_chunk_size]
+            chunk_start_idx = chunk_idx * prefill_chunk_size
+            ttnn.copy(
+                ttnn.Tensor(Q_chunk, q_dtype).to(ttnn.TILE_LAYOUT).to(device),
+                tt_Q_chunk,
+            )
+            ttnn.copy(
+                ttnn.Tensor(torch.tensor([chunk_start_idx], dtype=torch.int32), ttnn.int32).to(device),
+                chunk_start_idx_tensor,
+            )
+            ttnn.synchronize_device(device)
+            t0 = time.perf_counter()
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+            ttnn.synchronize_device(device)
+            elapsed = time.perf_counter() - t0
+            logger.info(f"execute_trace time={elapsed:.4f}s | {_params_str(chunk_idx=chunk_idx, op='replay')}")
+            tt_back_cpu = tt_back.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+            gt_chunk = gt[:, :, chunk_idx * prefill_chunk_size : (chunk_idx + 1) * prefill_chunk_size]
+            out_pass, out_pcc = comp_pcc(gt_chunk, tt_back_cpu, 0.998)
+            logger.debug(f"trace replay chunk {chunk_idx} vs pytorch: {out_pcc}")
+            assert out_pass
+        ttnn.release_trace(device, tid)
+    else:
+        for chunk_idx in range(num_prefill_chunks):
+            # Chunk Q
+            Q_chunk = Q[:, :, chunk_idx * prefill_chunk_size : (chunk_idx + 1) * prefill_chunk_size]
+            tt_Q_chunk = ttnn.Tensor(Q_chunk, q_dtype).to(ttnn.TILE_LAYOUT).to(device)
+            chunk_start_idx = chunk_idx * prefill_chunk_size
+
+            if flexible:
+                chunk_start_idx_tensor = ttnn.Tensor(torch.tensor([chunk_start_idx], dtype=torch.int32), ttnn.int32).to(
+                    device
+                )
+                ttnn.synchronize_device(device)
+                t0 = time.perf_counter()
+                tt_back = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    tt_Q_chunk,
+                    tt_paged_K,
+                    tt_paged_V,
+                    page_table_tt,
+                    chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                )
+            else:
+                ttnn.synchronize_device(device)
+                t0 = time.perf_counter()
+                tt_back = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    tt_Q_chunk,
+                    tt_paged_K,
+                    tt_paged_V,
+                    page_table_tt,
+                    chunk_start_idx,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                )
+            ttnn.synchronize_device(device)
+            elapsed = time.perf_counter() - t0
+            logger.info(f"chunked_sdpa time={elapsed:.4f}s | {_params_str(chunk_idx=chunk_idx, op='sdpa')}")
+            tt_back = tt_back.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+            gt_chunk = gt[:, :, chunk_idx * prefill_chunk_size : (chunk_idx + 1) * prefill_chunk_size]
+            out_pass, out_pcc = comp_pcc(gt_chunk, tt_back, 0.998)
+            logger.debug(f"python vs pytorch: {out_pcc}")
+            assert out_pass
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
@@ -577,6 +734,15 @@ def run_test_chunked_sdpa(
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
 @pytest.mark.parametrize("prefill_chunk_size", [1024, 2048])
 @pytest.mark.parametrize("page_block_size", [64, 128])
+# @pytest.mark.parametrize("flexible", [False, True], ids=["legacy", "flexible"])
+@pytest.mark.parametrize("flexible", [True], ids=["flexible"])
+# @pytest.mark.parametrize("flexible", [False], ids=["legacy"])
+@pytest.mark.parametrize(
+    "trace,device_params",
+    [(False, {}), (True, {"trace_region_size": 256 * 1024})],
+    indirect=["device_params"],
+    ids=["no_trace", "trace"],
+)
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
     [
@@ -594,10 +760,16 @@ def test_sdpa_chunked(
     k_chunk_size,
     prefill_chunk_size,
     page_block_size,
+    flexible,
+    trace,
     q_dtype,
     k_dtype,
     use_high_precision_compute=False,
 ):
+    """Chunked SDPA: legacy (chunk_start_idx int) vs flexible (chunk_start_idx_tensor).
+    When trace=True, device is created with trace_region_size; test captures one SDPA then replays per chunk."""
+    if trace and not flexible:
+        pytest.skip("Trace is not supported for legacy chunked SDPA")
     for _ in range(2):
         run_test_chunked_sdpa(
             device,
@@ -613,11 +785,17 @@ def test_sdpa_chunked(
             q_dtype,
             k_dtype,
             use_high_precision_compute,
+            flexible=flexible,
+            trace=trace,
         )
 
-    # Print number of program cache entries
-    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
-        device.num_program_cache_entries()
+    # Program cache: non-trace path only runs SDPA (1 entry). Trace path also runs two
+    # ttnn.copy calls per chunk (Q chunk and chunk_start_idx_tensor), so 3 entries total.
+    expected_entries = 3 if trace else 1
+    assert (
+        device.num_program_cache_entries() == expected_entries
+    ), "Program cache should have {} entry/entries but has {}".format(
+        expected_entries, device.num_program_cache_entries()
     )
 
 
@@ -1215,6 +1393,81 @@ def test_sdpa_sliding_window(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_ch
     run_test_sdpa_sliding_window(
         device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sliding_window, rmse_threshold=rmse_threshold
     )
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
+@pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
+def test_sdpa_sliding_window_program_cache_key_includes_window(device, dtype, q_chunk_size, k_chunk_size):
+    """
+    Regression test: SDPA program cache must distinguish different sliding_window_size values.
+
+    This matters because sliding_window_size is embedded in SDPA kernel compile-time args; reusing a cached
+    program compiled for a different window size can silently produce incorrect outputs.
+    """
+    b, nh, nkv, s, d = 1, 8, 1, 1024, 128
+    window_a, window_b = 64, 128
+    assert window_a != window_b
+
+    # Keep program_config identical so the only change is sliding_window_size.
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    # Reference for each window
+    K_rep = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    V_rep = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    mask_a = create_sliding_window_mask_prefill(b, nh, s, window_a, True)
+    mask_b = create_sliding_window_mask_prefill(b, nh, s, window_b, True)
+    gt_a = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, attn_mask=mask_a, is_causal=False)
+    gt_b = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, attn_mask=mask_b, is_causal=False)
+
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+
+    # Run A then B back-to-back to exercise program caching in one process/device.
+    out_a = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=True,
+        sliding_window_size=window_a,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    out_b = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=True,
+        sliding_window_size=window_b,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    out_a = ttnn.to_torch(out_a)[:, :, :s, :]
+    out_b = ttnn.to_torch(out_b)[:, :, :s, :]
+
+    # Tolerances aligned with other SDPA sliding window tests.
+    out_pass_a, _ = comp_pcc(gt_a, out_a, 0.994)
+    out_pass_b, _ = comp_pcc(gt_b, out_b, 0.994)
+    assert out_pass_a
+    assert out_pass_b
 
 
 def reference_sdpa_with_attention_sinks(Q, K, V, S, is_causal=True, sliding_window=0):

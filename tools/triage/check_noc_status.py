@@ -8,8 +8,8 @@ Usage:
     check_noc_status.py
 
 Description:
-    This script checks if there are any mismatches between values of number of NOC transactions
-    stored in global variables from risc firmware and NOC status registers.
+    This script checks if there are any mismatches between values of number of NOC transactions stored in global
+    variables from risc firmware and NOC status registers. These values should be in sync when the NoC is idle.
 
 Owner:
     jbaumanTT
@@ -17,12 +17,14 @@ Owner:
 
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import MemoryAccess
+from ttexalens.memory_access import MemoryAccess
 from ttexalens.tt_exalens_lib import read_register
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, log_check_location, run_script
+from ttexalens.umd_device import TimeoutDeviceRegisterError
+
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
@@ -53,7 +55,7 @@ def check_noc_status(
     message = f"{risc_name} NOC{noc_id}: "
     passed = True
 
-    loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    loc_mem_access = MemoryAccess.create(location.noc_block.get_risc_debug(risc_name))
 
     # Skip check when operating in dynamic NOC mode.
     # DM_DEDICATED_NOC is 0 as defined in dev firmware headers (see dev_msgs.h).
@@ -87,6 +89,8 @@ def check_noc_status(
         try:
             reg_val = read_register(location=location, register=reg, noc_id=noc_id)
             var_val = fw_elf.get_global(var, loc_mem_access)[noc_id]
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception as e:
             message += "    " + str(e) + "\n"
             passed = False
@@ -97,7 +101,11 @@ def check_noc_status(
             message += f"    {reg} {var} {reg_val} {var_val}\n"
             passed = False
     if not passed:
-        message = "Mismatched state: \n" + message
+        message = (
+            "Mismatched state: \n"
+            + message
+            + "\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung."
+        )
 
     log_check_location(location, passed, message)
 

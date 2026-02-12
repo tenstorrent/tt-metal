@@ -435,6 +435,10 @@ class test_dispatch_cores(default_setup):
     detectOps = False
 
 
+class test_dispatch_cores_extended_worker(test_dispatch_cores):
+    pass
+
+
 class test_ethernet_dispatch_cores(default_setup):
     timerAnalysis = {
         "Ethernet CQ Dispatch": {

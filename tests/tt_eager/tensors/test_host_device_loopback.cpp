@@ -53,7 +53,7 @@ bool test_multi_tile_multi_dram_bank_loopback(distributed::MeshDevice* device) {
     return pass;
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

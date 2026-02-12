@@ -8,10 +8,11 @@
 #include "impl/debug/inspector/rpc_server_generated.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
-#include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "program.hpp"
 #include <memory>
+#include <tt-metalium/experimental/inspector.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel.hpp"
 
@@ -205,7 +206,7 @@ void Inspector::program_set_binary_status(
 }
 
 void Inspector::mesh_device_created(
-    const distributed::MeshDevice* mesh_device, std::optional<int> parent_mesh_id) noexcept {
+    const distributed::MeshDeviceImpl* mesh_device, std::optional<int> parent_mesh_id) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -226,7 +227,7 @@ void Inspector::mesh_device_created(
     }
 }
 
-void Inspector::mesh_device_destroyed(const distributed::MeshDevice* mesh_device) noexcept {
+void Inspector::mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_device) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -245,7 +246,7 @@ void Inspector::mesh_device_destroyed(const distributed::MeshDevice* mesh_device
     }
 }
 
-void Inspector::mesh_device_initialized(const distributed::MeshDevice* mesh_device) noexcept {
+void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_device) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -341,6 +342,47 @@ void Inspector::mesh_workload_set_program_binary_status(
         data->logger.log_mesh_workload_set_program_binary_status(mesh_workload_data, mesh_id, status);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh workload set program binary status: {}", e.what());
+    }
+}
+
+void Inspector::mesh_workload_set_operation_name_and_parameters(
+    const distributed::MeshWorkloadImpl* mesh_workload,
+    std::string_view operation_name,
+    std::string_view operation_parameters) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
+        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
+        mesh_workload_data.name = std::string(operation_name);
+        mesh_workload_data.parameters = std::string(operation_parameters);
+        // Keep log/event name stable for tooling compatibility.
+        data->logger.log_mesh_workload_operation_name_and_parameters(
+            mesh_workload_data, operation_name, operation_parameters);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh workload set metadata: {}", e.what());
+    }
+}
+
+void Inspector::mesh_workload_set_runtime_id(
+    const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+
+        std::lock_guard<std::mutex> lock(data->runtime_ids_mutex);
+        data->runtime_ids.push_back({mesh_workload->get_id(), runtime_id});
+
+        // Keep only the last MAX_RUNTIME_ID_ENTRIES
+        if (data->runtime_ids.size() > inspector::Data::MAX_RUNTIME_ID_ENTRIES) {
+            data->runtime_ids.pop_front();
+        }
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log workload runtime ID: {}", e.what());
     }
 }
 
@@ -465,5 +507,25 @@ void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
         TT_INSPECTOR_LOG("Failed to set FW compile hash: {}", e.what());
     }
 }
+
+namespace experimental::inspector {
+
+bool IsEnabled() {
+    return Inspector::is_enabled();
+}
+
+void EmitMeshWorkloadAnnotation(
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    std::string_view operation_name,
+    std::string_view operation_parameters) {
+    tt::tt_metal::Inspector::mesh_workload_set_operation_name_and_parameters(
+        &workload.impl(), operation_name, operation_parameters);
+}
+
+void EmitMeshWorkloadRuntimeId(tt::tt_metal::distributed::MeshWorkload& workload, uint64_t runtime_id) {
+    tt::tt_metal::Inspector::mesh_workload_set_runtime_id(&workload.impl(), runtime_id);
+}
+
+}  // namespace experimental::inspector
 
 }  // namespace tt::tt_metal

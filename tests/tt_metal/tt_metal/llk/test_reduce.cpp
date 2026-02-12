@@ -40,6 +40,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -86,36 +87,33 @@ float get_scaler(const ReduceConfig& test_config) {
     // but the scaler is 1
     if (test_config.reduce_type != ReduceType::AVG) {
         return 1.0f;
-    } else {
-        // If PoolType is AVG, the scaler depends on PoolDim, but the op is SUM
-        switch (test_config.reduce_dim) {
-            case ReduceDim::H: return (1.0f / H);
-            case ReduceDim::W: return (1.0f / W);
-            case ReduceDim::HW: return (1.0f / (H * W));
-            default: {
-                TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim);
-                break;
-            }
+    }  // If PoolType is AVG, the scaler depends on PoolDim, but the op is SUM
+    switch (test_config.reduce_dim) {
+        case ReduceDim::H: return (1.0f / H);
+        case ReduceDim::W: return (1.0f / W);
+        case ReduceDim::HW: return (1.0f / (H * W));
+        default: {
+            TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim);
+            break;
         }
     }
 }
 
 void set_math_fid_masks_binary(
     uint16_t& srca_fid_mask, uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_umd_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: {
             break;
         }
         case MathFidelity::HiFi2: {
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             ;
             break;
         }
         case MathFidelity::LoFi: {
             srca_fid_mask = 0xFFF8;
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             break;
         }
         default: {
@@ -521,9 +519,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                    continue;
-                }
                 for (bool dst_full_sync_en : {true, false}) {
                     ReduceConfig test_config = {
                         .shape = shape,
@@ -630,9 +625,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                    continue;
-                }
                 for (bool dst_full_sync_en : {true, false}) {
                     ReduceConfig test_config = {
                         .shape = shape,
@@ -704,9 +696,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWTinyTiles) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                    continue;
-                }
                 for (bool dst_full_sync_en : {true, false}) {
                     ReduceConfig test_config = {
                         .tile_shape = tile_shape,

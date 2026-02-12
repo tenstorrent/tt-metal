@@ -9,9 +9,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct ReshapeViewParams {
     ttnn::Shape logical_output_shape;
     ttnn::Shape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -19,11 +19,8 @@ struct operation_attributes_t {
     std::optional<CoreRangeSet> sub_core_grid;
 };
 
-struct tensor_args_t {
+struct ReshapeViewInputs {
     Tensor input;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::prim

@@ -6,6 +6,8 @@
 
 #include "hw/inc/api/compile_time_args.h"
 #include "hw/inc/api/dataflow/dataflow_api.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/endpoints.h"
 #include "hw/inc/internal/tt-1xx/risc_common.h"
 
 template <bool use_legacy_api>

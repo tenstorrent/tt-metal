@@ -28,7 +28,7 @@ struct ExecuteStridedAllGatherMinimalMatmulAsync {
         std::optional<uint32_t> cluster_axis = std::nullopt,
         const std::optional<const Tensor>& bias = std::nullopt,
         const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt,
-        const std::optional<const minimal_matmul::MinimalMatmulConfig>& config = std::nullopt,
+        const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,

@@ -4,8 +4,7 @@
 
 #include <cstdint>
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // expands to hlk_relu_config(nullptr, 1); for relu only
 
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
@@ -40,4 +39,3 @@ void MAIN {
     DEINIT_RELU
     // expands to hlk_relu_config(nullptr, 0); for relu only
 }
-}  // namespace NAMESPACE

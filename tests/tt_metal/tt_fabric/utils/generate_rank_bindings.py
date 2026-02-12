@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import os
 import subprocess
 import sys
@@ -41,6 +42,8 @@ def generate_tray_to_pcie_device_mapping(mapping_file):
 def generate_rank_binding_yaml(
     tray_to_pcie_device_mapping, rank_bindings, rank_to_tray_mapping, mesh_graph_desc_path, output_file
 ):
+    # Create a deep copy to avoid mutating the original bindings
+    rank_bindings = copy.deepcopy(rank_bindings)
     # Populate TT_VISIBLE_DEVICES for each rank based on tray mapping
     for binding in rank_bindings:
         rank = binding["rank"]
@@ -85,9 +88,10 @@ def validate_device_mapping(tray_to_pcie_device_mapping):
     num_devices = 0
     for tray in tray_to_pcie_device_mapping["device_mapping"]:
         num_devices += len(tray_to_pcie_device_mapping["device_mapping"][tray])
-    if tray_to_pcie_device_mapping["arch"] != "WORMHOLE_B0" or num_devices != 32:
+    if tray_to_pcie_device_mapping["arch"] not in ["WORMHOLE_B0", "BLACKHOLE"] or num_devices != 32:
+        arch = tray_to_pcie_device_mapping["arch"]
         logger.error(
-            "Customized splitting of PCIe devices across processes is currently supported only for WORMHOLE Galaxies"
+            f"Customized splitting of PCIe devices across processes is currently supported only for Wormhole and Blackhole Galaxies. Found arch: {arch}, num_devices: {num_devices}"
         )
         sys.exit(1)
 
@@ -105,6 +109,38 @@ def generate_supported_rank_bindings():
         2: [3],
         3: [4],
     }
+    # Process Rank ID To Tray ID Mapping for 2x4 cyclic mesh configuration
+    WH_GLX_2X4_CYCLIC_RANK_TO_TRAY_MAPPING = {
+        0: [1],
+        1: [3],
+        2: [4],
+        3: [2],
+    }
+    # Process Rank ID To Tray ID Mapping for 4x4 + 2x4 + 2x4 (3 mesh) configuration
+    WH_GLX_4X4_2X4_3_MESH_RANK_TO_TRAY_MAPPING = {
+        0: [1, 2],  # 4x4 mesh needs 2 trays (16 devices)
+        1: [3],  # 2x4 mesh needs 1 tray (8 devices)
+        2: [4],  # 2x4 mesh needs 1 tray (8 devices)
+    }
+    # Process Rank ID To Tray ID Mapping for 2x4 + 2x4 + 2x8 (3 mesh) configuration
+    WH_GLX_2X8_2X4_3_MESH_RANK_TO_TRAY_MAPPING = {
+        0: [1],  # 2x4 mesh needs 1 tray (8 devices)
+        1: [3],  # 2x4 mesh needs 1 tray (8 devices)
+        2: [2, 4],  # 2x8 mesh needs 2 trays (16 devices)
+    }
+    # Process Rank ID To Tray ID Mapping when spawning 2 processes on a BH Galaxy
+    # Trays 1+2 form the top 4x4 half, trays 3+4 form the bottom 4x4 half
+    BH_GLX_DUAL_RANK_TO_TRAY_MAPPING = {
+        0: [1, 3],
+        1: [2, 4],
+    }
+    # Process Rank ID To Tray ID Mapping when spawning 4 processes on a BH Galaxy
+    BH_GLX_QUAD_RANK_TO_TRAY_MAPPING = {
+        0: [1],
+        1: [3],
+        2: [4],
+        3: [2],
+    }
 
     # Rank bindings for Dual Mesh Setup (1 process per mesh)
     DUAL_MESH_RANK_BINDINGS = [
@@ -116,6 +152,44 @@ def generate_supported_rank_bindings():
         {
             "rank": 1,
             "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+    ]
+
+    # Rank bindings for Dual Mesh Setup (1 process per mesh) for BLACKHOLE
+    DUAL_MESH_BLACKHOLE_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+    ]
+
+    # Rank bindings for Quad Mesh Setup (1 process per mesh) for BLACKHOLE
+    QUAD_MESH_BLACKHOLE_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 2,
+            "mesh_id": 2,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 3,
+            "mesh_id": 3,
             "mesh_host_rank": 0,
         },
     ]
@@ -167,33 +241,146 @@ def generate_supported_rank_bindings():
         },
     ]
 
+    CYCLIC_MESH_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 2,
+            "mesh_id": 2,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 3,
+            "mesh_id": 3,
+            "mesh_host_rank": 0,
+        },
+    ]
+
+    # Rank bindings for Tri Mesh Setup: 4x4 + 2x4 + 2x4 (1 process per mesh, 3 meshes)
+    TRI_MESH_4X4_2X4_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 2,
+            "mesh_id": 2,
+            "mesh_host_rank": 0,
+        },
+    ]
+
+    # Rank bindings for Tri Mesh Setup: 2x4 + 2x4 + 2x8 (1 process per mesh, 3 meshes)
+    TRI_MESH_2X8_2X4_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 2,
+            "mesh_id": 2,
+            "mesh_host_rank": 0,
+        },
+    ]
+
     mapping_file = "tray_to_pcie_device_mapping.yaml"
     generate_tray_to_pcie_device_mapping(mapping_file)
     with open(mapping_file, "r") as f:
         tray_to_pcie_device_mapping = yaml.safe_load(f)
     validate_device_mapping(tray_to_pcie_device_mapping)
 
-    generate_rank_binding_yaml(
-        tray_to_pcie_device_mapping,
-        DUAL_MESH_RANK_BINDINGS,
-        WH_GLX_DUAL_RANK_TO_TRAY_MAPPING,
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_mesh.textproto",
-        "4x4_multi_mesh_rank_binding.yaml",
-    )
-    generate_rank_binding_yaml(
-        tray_to_pcie_device_mapping,
-        DUAL_BIG_MESH_RANK_BINDINGS,
-        WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_big_mesh.textproto",
-        "4x4_multi_big_mesh_rank_binding.yaml",
-    )
-    generate_rank_binding_yaml(
-        tray_to_pcie_device_mapping,
-        QUAD_MESH_RANK_BINDINGS,
-        WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x2_multi_mesh.textproto",
-        "4x2_multi_mesh_rank_binding.yaml",
-    )
+    arch = tray_to_pcie_device_mapping["arch"]
+    if arch == "WORMHOLE_B0":
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            DUAL_MESH_RANK_BINDINGS,
+            WH_GLX_DUAL_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_mesh.textproto",
+            "4x4_multi_mesh_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            DUAL_BIG_MESH_RANK_BINDINGS,
+            WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_big_mesh.textproto",
+            "4x4_multi_big_mesh_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            QUAD_MESH_RANK_BINDINGS,
+            WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x2_multi_mesh.textproto",
+            "4x2_multi_mesh_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            CYCLIC_MESH_RANK_BINDINGS,
+            WH_GLX_2X4_CYCLIC_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_2x4_mesh_graph_descriptor.textproto",
+            "2x4_multi_mesh_cyclic_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            TRI_MESH_4X4_2X4_RANK_BINDINGS,
+            WH_GLX_4X4_2X4_3_MESH_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_2x4_3_mesh.textproto",
+            "4x4_2x4_3_mesh_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            TRI_MESH_2X8_2X4_RANK_BINDINGS,
+            WH_GLX_2X8_2X4_3_MESH_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_2x8_2x4_3_mesh.textproto",
+            "2x8_2x4_3_mesh_rank_binding.yaml",
+        )
+    elif arch == "BLACKHOLE":
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            DUAL_MESH_BLACKHOLE_RANK_BINDINGS,
+            BH_GLX_DUAL_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4x4_mesh_graph_descriptor.textproto",
+            "bh_4x4_multi_mesh_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            DUAL_MESH_BLACKHOLE_RANK_BINDINGS,
+            BH_GLX_DUAL_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4x4_z_mesh_graph_descriptor.textproto",
+            "bh_4x4_z_multi_mesh_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            QUAD_MESH_BLACKHOLE_RANK_BINDINGS,
+            BH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4x2_mesh_graph_descriptor.textproto",
+            "bh_4x2_multi_mesh_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            QUAD_MESH_BLACKHOLE_RANK_BINDINGS,
+            BH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto",
+            "bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml",
+        )
 
 
 if __name__ == "__main__":

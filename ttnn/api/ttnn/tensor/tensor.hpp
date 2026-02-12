@@ -4,39 +4,25 @@
 
 #pragma once
 
-#include <array>
-#include <atomic>
 #include <cstdint>
-#include <functional>
+
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <tuple>
-#include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
-#include <tt-metalium/host_buffer.hpp>
-#include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
+
+#include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt_stl/reflection.hpp>
+
 #include <tt_stl/optional_reference.hpp>
-#include "ttnn/tensor/memory_config/memory_config.hpp"
-#include "ttnn/tensor/layout/layout.hpp"
-#include "types.hpp"
 
 namespace tt::tt_metal {
 
@@ -160,9 +146,6 @@ public:
     template <typename T>
     [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
-    template <typename T>
-    [[nodiscard]] T item(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
-
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
         ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
@@ -273,8 +256,6 @@ public:
     static std::uint64_t next_tensor_id();
 
 private:
-    static std::atomic<std::uint64_t> tensor_id_counter;
-
     // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
     // If not set, the tensor can either be on host or allocated on a single device.
     // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
@@ -284,65 +265,40 @@ private:
     void deallocate_impl(bool force);
 };
 
-Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
-
-[[deprecated]] Tensor create_device_tensor(
-    const tt::tt_metal::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config = MemoryConfig{},
-    const std::optional<Tile>& tile = std::nullopt);
-
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
-void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_host")]] void memcpy(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_host")]] void memcpy(
     void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
 
-void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
+    Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
-
-// Allocates a tensor on device.
-Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-
-// Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
-// shard.
-Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-
-// Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
-void write_tensor(
-    const Tensor& src, Tensor& dst, bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
+[[deprecated("Use tt::tt_metal::(copy_to_device  or  copy_to_host)")]] void memcpy(
+    Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
 
-namespace ops {
-Tensor view(
-    const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape, const tt::tt_metal::Shape& new_padded_shape);
-Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
-Tensor to_dtype(const Tensor& tensor, DataType dtype);
-
-}  // namespace ops
-
 }  // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor);
 
 namespace ttnn {
 

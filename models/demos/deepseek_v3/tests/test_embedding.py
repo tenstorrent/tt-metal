@@ -10,6 +10,7 @@ from loguru import logger
 from torch.nn import Embedding as EmbeddingReference
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -33,13 +34,40 @@ from models.demos.deepseek_v3.utils.test_utils import (
 @pytest.mark.parametrize(
     "EmbeddingClass,mode,batch_size_or_seq_len",
     [
-        (Embedding1D, "decode", 32),
-        (Embedding2D, "decode", 128),
+        pytest.param(Embedding1D, "decode", 32, marks=pytest.mark.requires_device(["TG"])),
+        pytest.param(Embedding2D, "decode", 128, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"])),
     ]
     + [
-        (EmbeddingClass, "prefill", seq_len)
-        for seq_len in (128, 512, 2048)
-        for EmbeddingClass in (Embedding1D, Embedding2D)
+        pytest.param(Embedding1D, "prefill", seq_len, marks=pytest.mark.requires_device(["TG"]))
+        if seq_len == 128
+        else pytest.param(
+            Embedding1D,
+            "prefill",
+            seq_len,
+            marks=[
+                pytest.mark.requires_device(["TG"]),
+                pytest.mark.skip(
+                    f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+                ),
+            ],
+        )
+        for seq_len in PREFILL_SEQ_LENS
+    ]
+    + [
+        pytest.param(Embedding2D, "prefill", seq_len, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]))
+        if seq_len == 128
+        else pytest.param(
+            Embedding2D,
+            "prefill",
+            seq_len,
+            marks=[
+                pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+                pytest.mark.skip(
+                    f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+                ),
+            ],
+        )
+        for seq_len in PREFILL_SEQ_LENS
     ],
 )
 @pytest.mark.parametrize(

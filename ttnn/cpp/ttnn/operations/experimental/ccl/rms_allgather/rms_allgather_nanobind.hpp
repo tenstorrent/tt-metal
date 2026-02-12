@@ -9,6 +9,6 @@
 namespace ttnn::operations::experimental::ccl {
 
 namespace nb = nanobind;
-void bind_fused_rms_1_1_32_8192(nb::module_& mod);
+void bind_fused_rms_minimal(nb::module_& mod);
 
 }  // namespace ttnn::operations::experimental::ccl

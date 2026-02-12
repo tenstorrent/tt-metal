@@ -10,9 +10,9 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 ## Test Flow
 Data is loaded into an L1 circular buffer by the reader kernel and written out to DRAM from the same L1 buffer by the writer kernel. A compute kernel is omitted as these tests are purely for data movement. Hardware barriers ensure data validity and completion of transactions.
 
-Test attributes such as transaction sizes, number of transactions, core locations, and DRAM channels as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
+Test attributes such as transaction sizes, number of transactions, core locations, and DRAM channels as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through an equality check.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:

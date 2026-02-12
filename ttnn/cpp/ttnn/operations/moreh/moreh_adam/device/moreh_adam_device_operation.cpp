@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_adam_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <cstdint>
 
@@ -13,7 +14,7 @@
 
 namespace ttnn::operations::moreh::moreh_adam {
 void MorehAdamOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& params_in = tensor_args.param_in;
     const auto& grad = tensor_args.grad;
     const auto& exp_avg_in = tensor_args.exp_avg_in;
@@ -48,17 +49,12 @@ void MorehAdamOperation::validate_inputs(
 }
 
 MorehAdamOperation::program_factory_t MorehAdamOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // For now we litteraly don't care and return a single factory. Whatever
     return ProgramFactory{};
 }
 
 void MorehAdamOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehAdamOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };

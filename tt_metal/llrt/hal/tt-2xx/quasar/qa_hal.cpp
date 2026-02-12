@@ -78,13 +78,12 @@ public:
             flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
             flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
         } else {
-            flags += fmt::format(
-                "-Wl,--defsym=__kn_text={} ",
-                MEM_DM_KERNEL_BASE + (params.processor_id * MEM_DM_KERNEL_SIZE));  // this is for legacy kernels
+            flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_DM_KERNEL_BASE);  // this is for legacy kernels
             flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
             flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
             flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+            flags +=
+                fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE + (params.processor_id * MEM_DM_LOCAL_SIZE));
             flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
             flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
         }
@@ -168,7 +167,6 @@ public:
         // TODO: Use correct tt-qsr cpu options #32893
         std::string cflags =
             params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensixbh ";
-        cflags += "-mno-tt-tensix-optimize-replay ";
         cflags += "-fno-extern-tls-init ";
         cflags += "-ftls-model=local-exec ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
@@ -330,7 +328,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
             case DispatchFeature::ETH_MAILBOX_API: return true;
             // Active eth kernel config buffer is not needed until 2 ERISCs
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
-            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             default: TT_THROW("Invalid Quasar dispatch feature {}", static_cast<int>(feature));
         }
@@ -349,6 +347,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->noc_stream_remote_dest_buf_start_reg_index_ = 0;                   // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
+    this->has_stream_registers_ = false;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;

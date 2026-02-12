@@ -9,21 +9,15 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::update {
+namespace ttnn::experimental::prim {
 
 PagedUpdateCacheDeviceOperation::program_factory_t PagedUpdateCacheDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
     if (operation_attributes.mesh_coords.has_value()) {
-        return program::PagedUpdateCacheMeshWorkloadFactory{};
-    } else {
-        return program::PagedUpdateCacheProgramFactory{};
+        return PagedUpdateCacheMeshWorkloadFactory{};
     }
-}
-
-void PagedUpdateCacheDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
+    return PagedUpdateCacheProgramFactory{};
 }
 
 void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
@@ -196,13 +190,13 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
 }
 
 PagedUpdateCacheDeviceOperation::spec_return_value_t PagedUpdateCacheDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation
     return tensor_args.cache_tensor.tensor_spec();
 }
 
 PagedUpdateCacheDeviceOperation::tensor_return_value_t PagedUpdateCacheDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // In-place operation, return the cache tensor
     return tensor_args.cache_tensor;
 }
@@ -223,12 +217,11 @@ tt::stl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
         args.compute_kernel_config, args.share_cache, args.mesh_coords, tensor_args, program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::update
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::paged_cache::update::PagedUpdateCacheDeviceOperation::tensor_return_value_t
-paged_update_cache(
+ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t paged_update_cache(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const std::vector<uint32_t>& update_idxs,
@@ -238,7 +231,7 @@ paged_update_cache(
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
-    using OperationType = ttnn::operations::experimental::paged_cache::update::PagedUpdateCacheDeviceOperation;
+    using OperationType = ttnn::experimental::prim::PagedUpdateCacheDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;

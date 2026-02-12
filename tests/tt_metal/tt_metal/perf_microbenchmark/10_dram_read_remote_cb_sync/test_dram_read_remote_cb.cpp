@@ -378,7 +378,7 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
 
 bool validation_bfp8_b(
     const tt::deprecated::Tensor<float>& input_tensor,
-    const tt::DataFormat& data_format,
+    const tt::DataFormat&  /*data_format*/,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
@@ -421,7 +421,7 @@ bool validation_bfp8_b(
 
 bool validation_fp16(
     const tt::deprecated::Tensor<bfloat16>& input_tensor,
-    const tt::DataFormat& data_format,
+    const tt::DataFormat&  /*data_format*/,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
@@ -464,8 +464,8 @@ bool validation_fp16(
 
 bool validation_mixed_df(
     const tt::deprecated::Tensor<bfloat16>& input_tensor_fp16,
-    const tt::deprecated::Tensor<float>& input_tensor_fp8,
-    const tt::DataFormat& data_format,
+    const tt::deprecated::Tensor<float>&  /*input_tensor_fp8*/,
+    const tt::DataFormat&  /*data_format*/,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
@@ -687,7 +687,7 @@ int main(int argc, char** argv) {
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception");
         }
 
         log_info(tt::LogTest, "num_mixed_df_layers: {} ", num_mixed_df_layers);
@@ -740,12 +740,7 @@ int main(int argc, char** argv) {
         [[maybe_unused]] CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
         CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord}}};
-        CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
-        if (device->arch() == tt::ARCH::GRAYSKULL) {
-            l1_receiver_core_coord_range = CoreRange{CoreCoord{0, 1}, CoreCoord{0, num_receivers}};
-        } else {
-            l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
-        }
+        CoreRange l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
             { dram_reader_core_coord, l1_receiver_core }

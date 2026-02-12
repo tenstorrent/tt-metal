@@ -22,7 +22,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace ttnn::operations::experimental::detail;
 
-namespace ttnn::operations::experimental::slice_write::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 constexpr uint32_t cb_input_index = 0;
@@ -205,9 +205,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 }  // namespace
 
 SliceWriteTiledShardedInputProgramFactory::cached_program_t SliceWriteTiledShardedInputProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
@@ -332,9 +330,9 @@ SliceWriteTiledShardedInputProgramFactory::cached_program_t SliceWriteTiledShard
 
 void SliceWriteTiledShardedInputProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SliceWriteParams& /*operation_attributes*/,
+    const SliceWriteInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& src_tensor = tensor_args.input;
     const auto& dst_tensor = tensor_return_value;
 
@@ -364,4 +362,4 @@ void SliceWriteTiledShardedInputProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::slice_write::program
+}  // namespace ttnn::experimental::prim

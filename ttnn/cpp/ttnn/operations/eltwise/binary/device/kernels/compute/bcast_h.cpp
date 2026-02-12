@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/bcast.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
@@ -40,4 +39,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

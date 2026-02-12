@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_getitem_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include <cstdint>
@@ -66,22 +67,16 @@ void MorehGetItemOperation::validate_inputs(
     TT_FATAL(dtype == output_tensor.value().dtype(), "Output tensor must have the same dtype as input tensor!");
 }
 MorehGetItemOperation::program_factory_t MorehGetItemOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto input_layout = input_tensor.layout();
     if (input_layout == Layout::ROW_MAJOR) {
         return MorehGetItemRmFactory();
-    } else {
-        return MorehGetItemTilizedFactory();
     }
+    return MorehGetItemTilizedFactory();
 }
 
 void MorehGetItemOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehGetItemOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
@@ -138,12 +133,10 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         uint32_t start_dim = operation_attributes.index_dims.front();
         uint32_t last_dim = operation_attributes.index_dims.back();
         for (uint32_t input_dim = 0; input_dim < input_rank; input_dim++) {
-            if (input_dim < start_dim) {
+            if (input_dim < start_dim || last_dim < input_dim) {
                 output_size_vec.push_back(input_shape[input_dim]);
             } else if (start_dim == input_dim) {
                 output_size_vec.push_back(index_size);
-            } else if (last_dim < input_dim) {
-                output_size_vec.push_back(input_shape[input_dim]);
             }
         }
 
@@ -175,7 +168,8 @@ ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation::tensor_return_val
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config) {
     using OperationType = ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{index_dims, memory_config.value_or(input.memory_config())};
+    auto operation_attributes =
+        OperationType::operation_attributes_t{index_dims, memory_config.value_or(input.memory_config())};
     auto tensor_args = OperationType::tensor_args_t{input, index_tensors, output};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

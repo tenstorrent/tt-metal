@@ -102,7 +102,7 @@ jobs:
         if: ${{ matrix.test-group.test-type == 'unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
       - name: Validate weight cache
         if: ${{ matrix.test-group.test-type == 'module' }}
@@ -113,7 +113,7 @@ jobs:
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

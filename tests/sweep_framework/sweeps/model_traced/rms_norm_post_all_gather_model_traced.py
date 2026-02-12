@@ -39,17 +39,23 @@ def run(
     input_a_layout,
     input_a_memory_config,
     input_b_dtype=None,
-    input_b_layout=None,
     input_b_memory_config=None,
-    output_memory_config=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,  # Accept any extra parameters (like input_c_*)
 ) -> list:
     torch.manual_seed(0)
 
-    shape = input_shape if isinstance(input_shape, (tuple, list)) else (1, 1, 32, 32)
+    # Handle both sample suite (tuple) and model_traced suite (dict)
+    if isinstance(input_shape, dict) and "self" in input_shape:
+        # This is model_traced suite - dict with 'self' (input) and 'other' (weight) keys
+        shape = input_shape["self"] if isinstance(input_shape["self"], tuple) else tuple(input_shape["self"])
+        # Note: weight shape is in input_shape["other"], but we derive it from input shape's last dimension
+    elif isinstance(input_shape, (tuple, list)):
+        shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
+    else:
+        shape = (1, 1, 32, 32)
+
     eps = 1e-5
 
     # Tensor creation

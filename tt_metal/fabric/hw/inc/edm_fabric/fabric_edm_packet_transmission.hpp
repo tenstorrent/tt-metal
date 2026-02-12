@@ -298,17 +298,48 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     packet_header->routing_fields.value = cached_routing_fields.value - decrement_val;
 }
 
+/**
+ * Update packet header for next hop (1D Low Latency routing)
+ *
+ * ExtensionWords=0 (≤16 hops): Compiles to single shift instruction
+ * ExtensionWords>0 (>16 hops): Includes refill logic
+ */
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
-    uint64_t routing_value = cached_routing_fields.value;
-    if ((routing_value >> 32) == 0) [[likely]] {
-        uint32_t lower_bits = static_cast<uint32_t>(routing_value);
-        packet_header->routing_fields.value =
-            static_cast<uint64_t>(lower_bits >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH);
+    using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
+
+    // Shift to consume current hop (always happens)
+    uint32_t new_value = cached_routing_fields.value >> LowLatencyFields::FIELD_WIDTH;
+
+    // Refill logic - only included when ExtensionWords > 0 (>16 hops)
+#if defined(FABRIC_1D_PKT_HDR_EXTENSION_WORDS) && (FABRIC_1D_PKT_HDR_EXTENSION_WORDS > 0)
+    // route_buffer exists: include refill logic for >16 hop packets
+    constexpr uint32_t EXT = FABRIC_1D_PKT_HDR_EXTENSION_WORDS;
+
+    if (new_value == 0) [[unlikely]] {
+        // Refill from buffer[0]
+        new_value = cached_routing_fields.route_buffer[0];
+
+// Shift buffer left
+#pragma unroll
+        for (uint32_t i = 0; i < EXT - 1; i++) {
+            const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
+                cached_routing_fields.route_buffer[i + 1];
+        }
+        const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[EXT - 1] = 0;
     } else {
-        packet_header->routing_fields.value = routing_value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+// No refill needed - just copy buffer as-is
+#pragma unroll
+        for (uint32_t i = 0; i < EXT; i++) {
+            const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
+                cached_routing_fields.route_buffer[i];
+        }
     }
+#endif
+
+    // Write new value (always happens)
+    packet_header->routing_fields.value = new_value;
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(

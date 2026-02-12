@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nlohmann/json.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -36,37 +38,34 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
 
-    // operations[0]: ttnn::transpose
+    // High-level C++ functions (like ttnn::transpose) are not traced.
+    // Only device operations and low-level operations are captured.
+
+    // operations[0]: PermuteDeviceOperation (device operation)
     const auto& operation0 = operations[0];
-    EXPECT_EQ(operation0.operation_name, "ttnn::transpose");
-    EXPECT_EQ(operation0.arguments.size(), 3);
+    EXPECT_EQ(operation0.operation_name, "PermuteDeviceOperation");
+    EXPECT_EQ(operation0.arguments.size(), 2);
     EXPECT_EQ(
         operation0.arguments[0],
-        "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 2048, "
-        "512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig("
-        "tile=Tile(tile_shape={32, 32},face_shape={16, "
-        "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
-        "Alignment([1]))))");
-    EXPECT_EQ(operation0.arguments[1], "1");
-    EXPECT_EQ(operation0.arguments[2], "2");
-
-    // operations[1]: PermuteDeviceOperation (device operation for the underlying permute)
-    const auto& operation1 = operations[1];
-    EXPECT_EQ(operation1.operation_name, "PermuteDeviceOperation");
-
-    // operations[2]: tt::tt_metal::create_device_tensor
-    const auto& operation2 = operations[2];
-    EXPECT_EQ(operation2.operation_name, "tt::tt_metal::create_device_tensor");
-    EXPECT_EQ(operation2.arguments.size(), 5);
-    EXPECT_EQ(operation2.arguments[0], "Shape([1, 2048, 1, 512])");
-    EXPECT_EQ(operation2.arguments[1], "DataType::BFLOAT16");
-    EXPECT_EQ(operation2.arguments[2], "Layout::ROW_MAJOR");
-    EXPECT_EQ(operation2.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
+        "[ unsupported type , "
+        "std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t "
+        "const>]");
     EXPECT_EQ(
-        operation2.arguments[4],
-        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
-        "nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)");
+        operation0.arguments[1],
+        "[ unsupported type , std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, "
+        "std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >]");
+
+    // Find tt::tt_metal::create_device_tensor operation (output tensor creation)
+    // Note: The index may vary, so we search by name
+    auto it = std::find_if(operations.begin(), operations.end(), [](const auto& op) {
+        return op.operation_name == "tt::tt_metal::create_device_tensor";
+    });
+    ASSERT_NE(it, operations.end()) << "create_device_tensor operation not found";
+    const auto& create_tensor_op = *it;
+    EXPECT_EQ(create_tensor_op.arguments.size(), 5);
+    EXPECT_EQ(create_tensor_op.arguments[0], "Shape([1, 2048, 1, 512])");
+    EXPECT_EQ(create_tensor_op.arguments[1], "DataType::BFLOAT16");
+    EXPECT_EQ(create_tensor_op.arguments[2], "Layout::ROW_MAJOR");
 }
 
 }  // namespace

@@ -1844,4 +1844,68 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     });
 }
 
+// clang-format off
+/**
+ * Sparse multicast unicast write: issues a unicast write with sparse multicast routing metadata.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                             | Type                                       | Required |
+ * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
+ * | client_interface           | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
+ * | packet_header              | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
+ * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
+ * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
+ * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
+ * | hops                       | Sparse multicast hop bitmask            | uint16_t                                   | True     |
+ */
+// clang-format on
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
+    uint16_t hops) {
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+
+    packet_header->to_chip_sparse_multicast(
+        tt::tt_fabric::SparseMulticastRoutingCommandHeader<PACKET_HEADER_TYPE>{hops});
+    packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
+    client_interface->wait_for_empty_write_slot();
+    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
+    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+}
+
+// clang-format off
+/**
+ * Sparse multicast unicast write (route variant): issues writes for all headers in the route using sparse multicast routing metadata.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                             | Type                                       | Required |
+ * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
+ * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&             | True     |
+ * | route_id                   | Route containing packet headers         | uint8_t                                    | True     |
+ * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
+ * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
+ * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
+ * | hops                       | Per-header sparse multicast hop bitmask | uint16_t*                                  | True     |
+ */
+// clang-format on
+FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
+    uint16_t* hops) {
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& slot = connection_manager.get(i);
+        fabric_sparse_multicast_noc_unicast_write(
+            &slot.sender, packet_header, src_addr, size, noc_unicast_command_header, hops[i]);
+    });
+}
+
 }  // namespace tt::tt_fabric::linear::experimental

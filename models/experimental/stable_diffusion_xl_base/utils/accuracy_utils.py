@@ -114,8 +114,38 @@ def calculate_accuracy_metrics(images, prompts, coco_statistics_path):
     return accuracy_metrics
 
 
-def create_report_json(metadata, accuracy_metrics):
+def get_benchmark_summary(metadata):
+    targets = get_model_targets(metadata["model_name"])
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
+    return [
+        {
+            "model": metadata["model_name"],
+            "device": metadata["device"],
+            "avg_gen_time": avg_gen_end_to_end,
+            "target_checks": {
+                "functional": {
+                    "avg_gen_time": targets["perf"]["functional"],
+                    "avg_gen_time_check": 2 if targets["perf"]["functional"] >= avg_gen_end_to_end else 3,
+                },
+                "complete": {
+                    "avg_gen_time": targets["perf"]["complete"],
+                    "avg_gen_time_check": 2 if targets["perf"]["complete"] >= avg_gen_end_to_end else 3,
+                },
+                "target": {
+                    "avg_gen_time": targets["perf"]["target"],
+                    "avg_gen_time_check": 2 if targets["perf"]["target"] >= avg_gen_end_to_end else 3,
+                },
+            },
+            "average_denoising_time": profiler.get("denoising_loop"),
+            "average_vae_time": profiler.get("vae_decode"),
+            "min_gen_time": min(profiler.times["end_to_end_generation"]),
+            "max_gen_time": max(profiler.times["end_to_end_generation"]),
+            "average_encoding_time": profiler.get("encode_prompts"),
+        }
+    ]
+
+
+def create_report_json(metadata, accuracy_metrics):
     model_name, device_name = metadata["model_name"], metadata["device"]
     average_clip_score, deviation_clip_score = (
         accuracy_metrics["average_clip_score"],
@@ -123,37 +153,10 @@ def create_report_json(metadata, accuracy_metrics):
     )
     fid_score, num_prompts = accuracy_metrics["fid_score"], metadata["num_prompts"]
 
-    targets = get_model_targets(model_name)
-
     report_json = {
         "model": model_name,
         "metadata": metadata,
-        "benchmarks_summary": [
-            {
-                "model": model_name,
-                "device": device_name,
-                "avg_gen_time": avg_gen_end_to_end,
-                "target_checks": {
-                    "functional": {
-                        "avg_gen_time": targets["perf"]["functional"],
-                        "avg_gen_time_check": 2 if targets["perf"]["functional"] >= avg_gen_end_to_end else 3,
-                    },
-                    "complete": {
-                        "avg_gen_time": targets["perf"]["complete"],
-                        "avg_gen_time_check": 2 if targets["perf"]["complete"] >= avg_gen_end_to_end else 3,
-                    },
-                    "target": {
-                        "avg_gen_time": targets["perf"]["target"],
-                        "avg_gen_time_check": 2 if targets["perf"]["target"] >= avg_gen_end_to_end else 3,
-                    },
-                },
-                "average_denoising_time": profiler.get("denoising_loop"),
-                "average_vae_time": profiler.get("vae_decode"),
-                "min_gen_time": min(profiler.times["end_to_end_generation"]),
-                "max_gen_time": max(profiler.times["end_to_end_generation"]),
-                "average_encoding_time": profiler.get("encode_prompts"),
-            }
-        ],
+        "benchmarks_summary": get_benchmark_summary(metadata),
         "evals": [
             {
                 "model": model_name,

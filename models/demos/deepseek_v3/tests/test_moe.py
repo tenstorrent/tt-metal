@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 
 # Import from local reference files instead of HuggingFace
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -44,15 +45,26 @@ def reference_model(hf_config):
     ],
 )
 @pytest.mark.parametrize(
-    "mode,seq_len",
+    "mode,num_tokens",
     [
         ("decode", 128),
-        ("prefill", 2048),
+    ]
+    + [
+        ("prefill", seq_len)
+        if seq_len == 128
+        else pytest.param(
+            "prefill",
+            seq_len,
+            marks=pytest.mark.skip(
+                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            ),
+        )
+        for seq_len in PREFILL_SEQ_LENS
     ],
 )
 def test_forward_pass(
     mode,
-    seq_len,
+    num_tokens,
     set_deterministic_env,
     reference_model,
     hf_config,
@@ -62,7 +74,6 @@ def test_forward_pass(
     topk_fallback,
 ):
     """Test forward pass against reference model."""
-    batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights
     state_dict = add_inv_scale_to_state_dict(
@@ -71,7 +82,7 @@ def test_forward_pass(
     )
 
     # Create input tensor
-    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
+    torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
 
     # Reference forward pass
     reference_model.eval()
@@ -127,7 +138,7 @@ def test_forward_pass(
     ttnn.deallocate(tt_output)
 
     # Compare outputs using utility function
-    logger.info(f"Mode: {mode}, Seq len: {seq_len}")
+    logger.info(f"Mode: {mode}, Num tokens: {num_tokens}")
     assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
 
 

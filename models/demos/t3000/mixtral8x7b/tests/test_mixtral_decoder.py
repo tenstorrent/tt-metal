@@ -23,7 +23,8 @@ from ttnn import ConcatMeshToTensor
     ),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch):
     """
     b: batch
     s: sequence length
@@ -42,16 +43,16 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
     else:
         raise ValueError(f"Batch size {batch} not supported")
 
-    model_args = TtModelArgs(t3k_mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
+    model_args = TtModelArgs(mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith("layers.0."))}
     reference_model = TransformerBlock(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
     # Initialize TT model
-    tt_ccl = TT_CCL(t3k_mesh_device)
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtTransformerBlock(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         tt_ccl=tt_ccl,
         state_dict=state_dict,
         args=model_args,
@@ -86,7 +87,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
         tt_out_b1sh = tt_model(decode_input_b1sh, start_pos_ids, None, current_rot_mat)
 
         tt_output_torch_b1h = (
-            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
             .squeeze(1)
             .view(32, 1, -1)
         )[:batch, ...]

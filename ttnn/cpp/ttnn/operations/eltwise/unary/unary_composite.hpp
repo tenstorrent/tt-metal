@@ -114,8 +114,8 @@ constexpr auto transform_args_lambda(Func func, Lambda lambda, Args&&... args) -
 }
 
 template <typename T, typename Lambda>
-auto transform_first_matching_arg(Lambda lambda) {
-    static_assert(!std::is_same<T, T>::value, "No matching type found");
+auto transform_first_matching_arg(Lambda /*lambda*/) {
+    static_assert(!std::is_same_v<T, T>, "No matching type found");
 }
 
 template <typename T, typename Lambda, typename First, typename... Rest>

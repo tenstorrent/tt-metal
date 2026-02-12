@@ -18,6 +18,6 @@ static constexpr uint32_t close_connection_request_value = 2;
 // default assigned stream ID for the worker connection credits
 // worker writes to the auto-inc register of this stream ID to notify
 // fabric router of new packets availale.
-static constexpr uint32_t sender_channel_0_free_slots_stream_id = 21;
+static constexpr uint32_t sender_channel_0_free_slots_stream_id = 22;
 
 };  // namespace tt::tt_fabric::connection_interface

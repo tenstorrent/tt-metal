@@ -3,18 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rand_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <memory>
 
 namespace ttnn::operations::rand {
 
 RandDeviceOperation::program_factory_t RandDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 
 void RandDeviceOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(operation_attributes.from < operation_attributes.to, "Rand: `from` argument must be < `to` argument");
 }
 
@@ -23,13 +24,8 @@ void RandDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void RandDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
 TensorSpec RandDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     return ttnn::TensorSpec(
         operation_attributes.shape,
         tt::tt_metal::TensorLayout(
@@ -39,7 +35,7 @@ TensorSpec RandDeviceOperation::compute_output_specs(
 }
 
 RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     return create_device_tensor(
         ttnn::TensorSpec(
             operation_attributes.shape,

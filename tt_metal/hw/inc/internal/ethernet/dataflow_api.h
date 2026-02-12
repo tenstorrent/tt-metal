@@ -12,8 +12,12 @@
 #include "internal/ethernet/erisc.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "noc_nonblocking_api.h"
-#include "api/dataflow/dataflow_api.h"
 #include "internal/ethernet/tunneling.h"
+#if defined(KERNEL_BUILD)
+#include "api/dataflow/dataflow_api.h"
+#else
+#include "internal/dataflow/dataflow_api_common.h"
+#endif
 /**
  * Indicates if the ethernet transaction queue is busy ingesting a command at this moment,
  *

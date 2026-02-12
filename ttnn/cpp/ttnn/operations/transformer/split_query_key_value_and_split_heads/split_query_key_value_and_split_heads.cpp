@@ -188,26 +188,25 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             sequence_size,
             sequence_size_padded,
             transpose_key);
-    } else {
-        const auto input_tensor_4d = ttnn::experimental::view(
-            input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
-        std::optional<Tensor> input_tensor_kv_4d = std::nullopt;
-        if (input_tensor_kv.has_value()) {
-            auto padded_input_shape_kv = input_tensor_kv.value().padded_shape();
-            input_tensor_kv_4d = ttnn::experimental::view(
-                input_tensor_kv.value(),
-                ttnn::Shape{padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]});
-        }
-        const auto outputs = ttnn::experimental::nlp_create_qkv_heads(
-            input_tensor_4d,
-            input_tensor_kv_4d,
-            num_heads,
-            num_kv_heads.value_or(num_heads),
-            transpose_key,
-            memory_config.value_or(input_tensor.memory_config()));
-        return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
-            outputs, sequence_size, sequence_size_padded, transpose_key);
     }
+    const auto input_tensor_4d = ttnn::experimental::view(
+        input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
+    std::optional<Tensor> input_tensor_kv_4d = std::nullopt;
+    if (input_tensor_kv.has_value()) {
+        auto padded_input_shape_kv = input_tensor_kv.value().padded_shape();
+        input_tensor_kv_4d = ttnn::experimental::view(
+            input_tensor_kv.value(),
+            ttnn::Shape{padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]});
+    }
+    const auto outputs = ttnn::experimental::nlp_create_qkv_heads(
+        input_tensor_4d,
+        input_tensor_kv_4d,
+        num_heads,
+        num_kv_heads.value_or(num_heads),
+        transpose_key,
+        memory_config.value_or(input_tensor.memory_config()));
+    return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
+        outputs, sequence_size, sequence_size_padded, transpose_key);
 }
 
 }  // namespace ttnn::operations::transformer

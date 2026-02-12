@@ -7,11 +7,11 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/softmax.h"
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/bcast.h"
+#include "api/compute/softmax.h"
+#include "api/compute/reduce.h"
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
@@ -64,8 +64,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     cb_wait_front(cb_out, block_w);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t block_h = get_compile_time_arg_val(0);
     constexpr uint32_t block_w = get_compile_time_arg_val(1);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
@@ -259,4 +258,3 @@ void MAIN {
         cb_pop_front(cb_exps, block_w);
     }
 }
-}  // namespace NAMESPACE

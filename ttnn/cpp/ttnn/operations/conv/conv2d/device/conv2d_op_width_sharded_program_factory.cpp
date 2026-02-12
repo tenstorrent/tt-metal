@@ -17,7 +17,11 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-namespace ttnn::operations::conv::conv2d::program {
+namespace ttnn::prim {
+
+namespace unary = ttnn::operations::unary;
+using ttnn::operations::conv::conv_skip_mcast;
+using ttnn::operations::conv::SkipMcast;
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
     const ttnn::Shape& conv_activation_shape,
@@ -41,9 +45,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
 }
 
 Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
@@ -655,9 +657,9 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
 
 void Conv2dWidthShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const Conv2dParams& /*operation_attributes*/,
+    const Conv2dInputs& tensor_args,
+    Tensor& output_tensor) {
     auto* src_buffer_a = tensor_args.a.buffer();
     auto* src_buffer_b = tensor_args.b.buffer();
     auto& program = cached_program.program;
@@ -682,4 +684,4 @@ void Conv2dWidthShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::conv::conv2d::program
+}  // namespace ttnn::prim

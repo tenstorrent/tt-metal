@@ -9,8 +9,22 @@
 namespace ttnn::operations::experimental {
 
 Tensor DropoutOperation::invoke(
-    const Tensor& input_tensor, float prob, float scale, uint32_t seed, bool use_per_device_seed) {
-    return ttnn::prim::dropout(input_tensor, prob, scale, seed, use_per_device_seed, DataType::BFLOAT16);
+    const Tensor& input_tensor,
+    float prob,
+    float scale,
+    uint32_t seed,
+    bool use_per_device_seed,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ttnn::prim::dropout(
+        input_tensor,
+        prob,
+        scale,
+        seed,
+        use_per_device_seed,
+        DataType::BFLOAT16,
+        memory_config,
+        optional_output_tensor);
 }
 
 }  // namespace ttnn::operations::experimental

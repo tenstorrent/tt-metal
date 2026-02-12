@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import glob
+import os
+
 import pathlib
 import shutil
 import sys
@@ -21,6 +24,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.database
+import ttnn.operation_tracer
 
 
 def compare_tensors_using_pcc(
@@ -366,6 +370,75 @@ class FastOperation:
     def __hash__(self):
         return hash(self.python_fully_qualified_name)
 
+    def _enhance_type_error_message(self, original_error, function_args, function_kwargs):
+        """
+        Parse pybind11/nanobind TypeError and create a concise error message showing
+        how the function was called vs available signatures.
+        Returns None if this is not a pybind11/nanobind type error that we can enhance.
+        """
+        import re
+
+        # Only enhance pybind11/nanobind type errors
+        if not (
+            "incompatible function arguments" in original_error
+            and ("Invoked with:" in original_error or "Invoked with types:" in original_error)
+        ):
+            return None
+
+        def clean(s):
+            return s.replace("ttnn._ttnn.tensor.", "ttnn.").replace("ttnn._ttnn.operations.", "ttnn.")
+
+        def pretty_type(v):
+            t = type(v)
+            if t.__module__ == "builtins":
+                return t.__name__
+            return clean(f"{t.__module__}.{t.__name__}")
+
+        name = self.python_fully_qualified_name.split(".")[-1]
+
+        # Parse signatures from the original error message
+        sigs = []
+        lines = original_error.split("\n")
+        i = 0
+        while i < len(lines):
+            stripped = lines[i].strip()
+            if re.match(r"^\d+\.", stripped):  # Lines starting with "1.", "2.", etc.
+                # Found a signature, combine lines until we find the return type
+                sig_lines = []
+                j = i
+                while j < len(lines):
+                    sig_lines.append(lines[j].strip())
+                    if "-> " in lines[j]:  # Found the return type, signature is complete
+                        break
+                    j += 1
+                signature = " ".join(sig_lines)
+
+                # Extract just the parameters from the signature
+                match = re.search(r"__call__\(self,\s*(.+?)\)\s*->", signature)
+                if not match:
+                    match = re.search(r"\(self:[^,]+,\s*(.+?)\)\s*->", signature)
+
+                if match:
+                    params_str = clean(match.group(1).strip())
+                    sigs.append(f"{name}({params_str})")
+
+                i = j + 1
+            else:
+                i += 1
+
+        # Format the call with actual argument types
+        args = [pretty_type(a) for a in function_args]
+        kwargs = [
+            f"{k}={v!r}" if isinstance(v, (bool, str, type(None))) else f"{k}={v}" for k, v in function_kwargs.items()
+        ]
+        called = f"{name}({', '.join(args + kwargs)})"
+
+        return (
+            f"\n{self.python_fully_qualified_name}(): incompatible function arguments.\n\n"
+            f"Called with:\n  {called}\n\n"
+            f"Available signatures:\n  " + "\n  ".join(sigs or ["<unknown>"])
+        )
+
     def __call__(self, *function_args, **function_kwargs):
         cq_id = None
         if "queue_id" in function_kwargs:
@@ -373,11 +446,17 @@ class FastOperation:
         elif "cq_id" in function_kwargs:
             cq_id = function_kwargs.pop("cq_id")
 
-        if cq_id is None:
-            result = self.function(*function_args, **function_kwargs)
-        else:
-            with command_queue(cq_id):
+        try:
+            if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
+            else:
+                with command_queue(cq_id):
+                    result = self.function(*function_args, **function_kwargs)
+        except TypeError as e:
+            enhanced_msg = self._enhance_type_error_message(str(e), function_args, function_kwargs)
+            if enhanced_msg:
+                raise TypeError(enhanced_msg) from e
+            raise
 
         return result
 
@@ -421,7 +500,8 @@ class Operation:
         return hash(self.python_fully_qualified_name)
 
     def __post_init__(self):
-        function = self.function
+        # Wrap function for parameter tracing (if tracing enabled)
+        function = ttnn.operation_tracer.wrap_function_for_tracing(self.function, self.python_fully_qualified_name)
 
         self.preprocess_golden_function_inputs = (
             self.preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
@@ -596,6 +676,8 @@ class Operation:
                         cluster_descriptor_path = pathlib.Path(ttnn.CONFIG.report_path) / "cluster_descriptor.yaml"
                         if not cluster_descriptor_path.exists():
                             save_cluster_descriptor(str(cluster_descriptor_path))
+                        if not glob.glob(str(ttnn.CONFIG.report_path) + "/physical_chip_mesh_coordinate_mapping*.yaml"):
+                            save_mesh_descriptor(ttnn.CONFIG.report_path)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
                         ttnn.database.insert_stack_trace(
                             ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
@@ -978,3 +1060,18 @@ def save_cluster_descriptor(dest_path):
         return None
 
     shutil.copy(temp_path, dest_path)
+
+
+def save_mesh_descriptor(dest_path):
+    if not "TT_METAL_HOME" in os.environ:
+        logger.warning("Not copying mesh descriptor - TT_METAL_HOME not set")
+        return
+
+    mesh_descriptor_paths = glob.glob(f"{os.environ['TT_METAL_HOME']}/generated/fabric/*.yaml")
+
+    if not mesh_descriptor_paths:
+        logger.warning("Mesh descriptor not found")
+        return
+
+    for path in mesh_descriptor_paths:
+        shutil.copy(path, dest_path)

@@ -8,11 +8,12 @@
 #include "all_gather_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::ccl {
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return AllGatherProgram{};
 }
 
@@ -143,25 +144,30 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
 
 ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor = tensor_args.input_tensor;
+    log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
+
     auto subdevice_id = operation_attributes.subdevice_id;
-    auto* mesh_device = input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }
-    TT_FATAL(
-        subdevice_core_range_set.num_cores() != 0,
-        "There are no cores available to run ALL Gather after considering sub device and sub core grid");
+
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.cluster_axis,
         operation_attributes.memory_config,
-        subdevice_core_range_set,
         operation_attributes.topology,
-        input_tensor);
+        operation_attributes.chunks_per_sync,
+        operation_attributes.num_workers_per_link,
+        operation_attributes.num_buffers_per_channel,
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::ccl
@@ -176,6 +182,9 @@ ttnn::Tensor all_gather(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     using OperationType = ttnn::operations::ccl::AllGatherDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -186,6 +195,9 @@ ttnn::Tensor all_gather(
             .subdevice_id = subdevice_id,
             .topology = topology,
             .num_links = num_links,
+            .chunks_per_sync = chunks_per_sync,
+            .num_workers_per_link = num_workers_per_link,
+            .num_buffers_per_channel = num_buffers_per_channel,
             .sub_core_grid = sub_core_grid},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }

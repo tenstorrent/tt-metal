@@ -19,13 +19,11 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::untilize_with_unpadding::program {
+namespace ttnn::prim {
 
 UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpaddingSingleCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    const auto& a = tensor_args.input_tensor;
+    const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
+    const auto& a = input;
     bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
@@ -177,8 +175,7 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         unpack_to_dest_mode[src0_cb_index] =
@@ -210,13 +207,13 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
 
 void UntilizeWithUnpaddingSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& tensor_return_value) {
+    const UntilizeWithUnpaddingParams& /*operation_attributes*/,
+    const Tensor& input,
+    const Tensor& output) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
     auto& core = shared_vars.core;
 
     CoreCoord core_0 = corerange_to_cores(core).at(0);
@@ -230,4 +227,4 @@ void UntilizeWithUnpaddingSingleCoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::untilize_with_unpadding::program
+}  // namespace ttnn::prim

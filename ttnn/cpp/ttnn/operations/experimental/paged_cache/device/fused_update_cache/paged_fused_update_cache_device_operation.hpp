@@ -14,23 +14,20 @@
 #include "paged_tiled_fused_update_cache_program_factory.hpp"
 #include "paged_row_major_fused_update_cache_program_factory.hpp"
 
-namespace ttnn::operations::experimental::paged_cache::fused_update {
+namespace ttnn::experimental::prim {
 
 struct PagedFusedUpdateCacheDeviceOperation {
-    using operation_attributes_t = fused_update::operation_attributes_t;
-    using tensor_args_t = fused_update::tensor_args_t;
-    using spec_return_value_t = fused_update::spec_return_value_t;
-    using tensor_return_value_t = fused_update::tensor_return_value_t;
+    using operation_attributes_t = PagedFusedUpdateCacheParams;
+    using tensor_args_t = PagedFusedUpdateCacheInputs;
+    using spec_return_value_t = PagedFusedUpdateCacheResultSpec;
+    using tensor_return_value_t = PagedFusedUpdateCacheResult;
     using program_factory_t = std::variant<
-        program::tiled::PagedTiledFusedUpdateCacheProgramFactory,
-        program::rm::PagedRowMajorFusedUpdateCacheProgramFactory,
-        program::tiled::PagedTiledFusedUpdateCacheMeshWorkloadFactory,
-        program::rm::PagedRowMajorFusedUpdateCacheMeshWorkloadFactory>;
+        PagedTiledFusedUpdateCacheProgramFactory,
+        PagedRowMajorFusedUpdateCacheProgramFactory,
+        PagedTiledFusedUpdateCacheMeshWorkloadFactory,
+        PagedRowMajorFusedUpdateCacheMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(
@@ -46,12 +43,11 @@ struct PagedFusedUpdateCacheDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache::fused_update
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::paged_cache::fused_update::PagedFusedUpdateCacheDeviceOperation::tensor_return_value_t
-paged_fused_update_cache(
+ttnn::experimental::prim::PagedFusedUpdateCacheResult paged_fused_update_cache(
     const Tensor& cache_tensor1,
     const Tensor& input_tensor1,
     const Tensor& cache_tensor2,

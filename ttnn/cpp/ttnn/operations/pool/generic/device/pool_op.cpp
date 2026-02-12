@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
 
 #include <tt-metalium/math.hpp>
 #include <utility>
@@ -23,7 +25,7 @@ void validate_pool2d(
     const Pool2DType pool_type,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config,
-    const std::optional<const int32_t> divisor_override,
+    const std::optional<const int32_t> /*divisor_override*/,
     const bool return_indices,
     const Layout& output_layout) {
     // check the input tensor
@@ -41,17 +43,10 @@ void validate_pool2d(
         auto input_h = sliding_window_config.input_hw.first;
         auto input_w = sliding_window_config.input_hw.second;
         TT_FATAL(
-            input_h * input_w <= std::numeric_limits<uint16_t>::max(),
-            "Input HW {} will overflow uint16 indices max {}",
+            input_h * input_w <= std::numeric_limits<uint32_t>::max(),
+            "Input HW {} will overflow uint32 indices max {}",
             input_h * input_w,
-            std::numeric_limits<uint16_t>::max());
-        auto kernel_h = sliding_window_config.window_hw.first;
-        auto kernel_w = sliding_window_config.window_hw.second;
-        TT_FATAL(
-            kernel_h * kernel_w <= 32,
-            "only kernel sizes less than or equal to 32 are supported, got {}x{}",
-            kernel_h,
-            kernel_w);
+            std::numeric_limits<uint32_t>::max());
 
         TT_FATAL(output_layout == Layout::ROW_MAJOR, "Only ROW_MAJOR supported when return_indices is true");
     }
@@ -95,7 +90,7 @@ void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
-    const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+    const operation_attributes_t& op_attr, const tensor_args_t& /*tensor*/) {
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& out_mem_config = op_attr.memory_config_;
     const auto& output_dtype = op_attr.output_dtype_;
@@ -143,9 +138,12 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
     auto output_spec_data = compute_output_specs(op_attr, tensor);
     if (op_attr.return_indices_) {
+        DataType index_dtype = get_index_data_type(
+            op_attr.sliding_window_config_.input_hw.first, op_attr.sliding_window_config_.input_hw.second);
+
         // the index output spec is the same as the input spec just with a different data type
         tt::tt_metal::TensorLayout output_layout_ind(
-            DataType::UINT16,
+            index_dtype,
             output_spec_data.page_config(),
             output_spec_data.memory_config(),
             output_spec_data.tensor_layout().get_alignment());
@@ -153,9 +151,8 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
         return {
             create_device_tensor(output_spec_data, tensor.input_tensor_.device()),
             create_device_tensor(output_spec_ind, tensor.input_tensor_.device())};
-    } else {
-        return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
     }
+    return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
 tt::stl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
@@ -225,7 +222,8 @@ std::vector<ttnn::Tensor> pool2d(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
-    uint32_t memory_used) {
+    uint32_t memory_used,
+    bool config_tensor_in_dram) {
     using OperationType = ttnn::operations::pool::Pool2D;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -238,7 +236,8 @@ std::vector<ttnn::Tensor> pool2d(
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,
-            .memory_used = memory_used},
+            .memory_used = memory_used,
+            .config_tensor_in_dram = config_tensor_in_dram},
         OperationType::tensor_args_t{input_tensor});
 }
 }  // namespace ttnn::prim

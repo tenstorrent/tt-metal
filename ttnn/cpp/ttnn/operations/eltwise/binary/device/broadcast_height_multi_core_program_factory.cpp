@@ -211,7 +211,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
 void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;

@@ -6,22 +6,24 @@
 
 #include "device/sdpa_fw_device_operation.hpp"
 
-namespace ttml::metal::ops::sdpa_fw {
+namespace ttml::metal {
 
-std::vector<std::optional<ttnn::Tensor>> SDPAForwardOperation::invoke(
+std::vector<std::optional<ttnn::Tensor>> sdpa_fw(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,
+    AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& mask,
     const float dropout_probability,
     const bool return_intermediates) {
-    auto result = ttnn::prim::ttml_sdpa_fw(query, key, value, mask, dropout_probability, return_intermediates);
+    auto result =
+        ttnn::prim::ttml_sdpa_fw(query, key, value, mask_type, mask, dropout_probability, return_intermediates);
 
     if (result.size() == 1U) {
         return {result[0], std::nullopt};
     }
 
     return {result[0], result[1]};  // maybe I need to return more than 2 tensors in the future
-};
+}
 
-}  // namespace ttml::metal::ops::sdpa_fw
+}  // namespace ttml::metal

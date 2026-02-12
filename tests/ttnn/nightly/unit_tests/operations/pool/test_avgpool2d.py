@@ -14,6 +14,9 @@ from models.demos.deepseek_v3.utils.config_helpers import (
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS
 
+SliceWidth = ttnn.Op2DDRAMSliceWidth
+SliceHeight = ttnn.Op2DDRAMSliceHeight
+
 
 # helper to correct torch output for asymmetric padding
 def correct_torch_asym_pad(
@@ -104,6 +107,8 @@ def run_avg_pool2d(
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
     compute_kernel_config=None,
     use_reshaped_tensor=True,
+    dram_slice_config=None,
+    config_tensor_in_dram=False,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -205,6 +210,8 @@ def run_avg_pool2d(
         dtype=out_dtype,
         output_layout=output_layout,
         compute_kernel_config=compute_kernel_config,
+        dram_slice_config=dram_slice_config,
+        config_tensor_in_dram=config_tensor_in_dram,
     )
 
     if run_twice:
@@ -226,6 +233,8 @@ def run_avg_pool2d(
             dtype=out_dtype,
             output_layout=output_layout,
             compute_kernel_config=compute_kernel_config,
+            dram_slice_config=dram_slice_config,
+            config_tensor_in_dram=config_tensor_in_dram,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -400,6 +409,7 @@ def test_run_avg_pool2d(
         shard_scheme=shard_scheme,
         in_dtype=in_dtype,
         run_twice=True,
+        config_tensor_in_dram=False,
     )
 
 
@@ -468,6 +478,7 @@ def test_avg_pool2d_output_formats_and_layouts(
         in_dtype=in_dtype,
         output_layout=output_layout,
         out_dtype=out_dtype,
+        config_tensor_in_dram=False,
     )
 
 
@@ -514,4 +525,5 @@ def test_avg_pool2d_compute_kernel_config(
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         in_dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
+        config_tensor_in_dram=False,
     )

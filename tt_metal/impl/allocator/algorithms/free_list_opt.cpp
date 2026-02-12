@@ -121,8 +121,8 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
                     break;
-                } else if (
-                    block_size_[block_index] >= alloc_size &&
+                }
+                if (block_size_[block_index] >= alloc_size &&
                     (target_block_index == -1 || block_size_[block_index] < block_size_[target_block_index])) {
                     target_block_index = block_index;
                     segregated_list = &free_blocks;
@@ -359,6 +359,15 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::allocated_addresses(
     return allocated_addresses;
 }
 
+std::optional<DeviceAddr> FreeListOpt::get_allocation_size(DeviceAddr absolute_address) const {
+    DeviceAddr addr = absolute_address - offset_bytes_;
+    auto block_index_opt = get_block_index_from_alloc_table(addr);
+    if (!block_index_opt.has_value()) {
+        return std::nullopt;
+    }
+    return block_size_[*block_index_opt];
+}
+
 size_t FreeListOpt::alloc_meta_block(
     DeviceAddr address, DeviceAddr size, ssize_t prev_block, ssize_t next_block, bool is_allocated) {
     size_t idx;
@@ -524,7 +533,8 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
             continue;
-        } else if (block_is_allocated_[i]) {
+        }
+        if (block_is_allocated_[i]) {
             TT_FATAL(
                 block_address_[i] >= shrunk_address,
                 "Shrink size {} cuts into allocated block at address {}",
@@ -645,6 +655,15 @@ bool FreeListOpt::is_address_in_alloc_table(DeviceAddr address) const {
         }
     }
     return false;
+}
+std::optional<size_t> FreeListOpt::get_block_index_from_alloc_table(DeviceAddr address) const {
+    size_t bucket = hash_device_address(address);
+    for (const auto& [addr, block_index] : allocated_block_table_[bucket]) {
+        if (addr == address) {
+            return block_index;
+        }
+    }
+    return std::nullopt;
 }
 std::optional<size_t> FreeListOpt::get_and_remove_from_alloc_table(DeviceAddr address) {
     size_t bucket = hash_device_address(address);

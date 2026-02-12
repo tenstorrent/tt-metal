@@ -6,7 +6,6 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <cstdint>
-#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -45,6 +44,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -94,7 +94,8 @@ struct TestInfo {
     bool use_left_cores{false};
 };
 
-// Returns the address of the last core in the last column of the mesh. Picks a configuration that works with worst-case harvesting, for consistency.
+// Returns the address of the last core in the last column of the mesh. Picks a configuration that works with worst-case
+// harvesting, for consistency.
 std::tuple<uint32_t, uint32_t> get_core_count() {
     uint32_t core_x = 0;
     uint32_t core_y = 0;
@@ -370,7 +371,7 @@ bool initialize_program(
     }
 
     if (info.erisc_enabled) {
-        auto erisc_cores = mesh_device->get_device(0, 0)->get_active_ethernet_cores(true);
+        auto erisc_cores = mesh_device->impl().get_device(0, 0)->get_active_ethernet_cores(true);
         if (info.erisc_count > erisc_cores.size()) {
             log_fatal(
                 tt::LogTest,
@@ -582,7 +583,7 @@ CoreType dispatch_core_type_to_core_type(DispatchCoreType dispatch_core_type) {
 
 // Helper function to create standard programs
 std::array<tt_metal::Program, 2> create_standard_programs(
-    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType dispatch_core_type) {
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType /*dispatch_core_type*/) {
     std::array<tt_metal::Program, 2> programs;
     if (!initialize_program(info, mesh_device, programs[0], info.slow_kernel_cycles) ||
         !initialize_program(info, mesh_device, programs[1], info.fast_kernel_cycles)) {
@@ -730,7 +731,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         }
 
         // Set benchmark counters before timing (all values are known at this point)
-        set_benchmark_counters(state, info, mesh_device->get_device(0, 0), executor.total_program_iterations);
+        set_benchmark_counters(state, info, mesh_device->impl().get_device(0, 0), executor.total_program_iterations);
 
         // Run warmup
         executor.warmup_programs();
@@ -753,14 +754,13 @@ static int pgm_dispatch(T& state, TestInfo info) {
     if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
-    } else {
-        if constexpr (std::is_same_v<T, benchmark::State>) {
-            state.SkipWithError("Test failed");
-        } else {
-            log_info(LogTest, "Test failed");
-        }
-        return 1;
     }
+    if constexpr (std::is_same_v<T, benchmark::State>) {
+        state.SkipWithError("Test failed");
+    } else {
+        log_info(LogTest, "Test failed");
+    }
+    return 1;
 }
 
 static void BM_pgm_dispatch(benchmark::State& state, TestInfo info) {
@@ -991,20 +991,28 @@ BENCHMARK_CAPTURE(
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     10000_kernel_all_cores_all_processors_32_cbs_trace,
-    TestInfo{.warmup_iterations = 5000, .slow_kernel_cycles = 10000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
+    TestInfo{
+        .warmup_iterations = 5000, .slow_kernel_cycles = 10000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     5000_kernel_all_cores_all_processors_32_cbs_trace,
-    TestInfo{.warmup_iterations = 5000, .slow_kernel_cycles = 5000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
+    TestInfo{
+        .warmup_iterations = 5000, .slow_kernel_cycles = 5000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
 // Intended to be GO-latency-bound
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch_vary_slow_cycles,
     256_bytes_brisc_only_all_processors_trace,
-    TestInfo{.warmup_iterations = 5000, .kernel_size = 256, .ncrisc_enabled = false, .trisc_enabled = false, .use_trace = true, .use_all_cores = true})
+    TestInfo{
+        .warmup_iterations = 5000,
+        .kernel_size = 256,
+        .ncrisc_enabled = false,
+        .trisc_enabled = false,
+        .use_trace = true,
+        .use_all_cores = true})
     ->Apply(KernelCycleArgs)
     ->UseManualTime();
 BENCHMARK_CAPTURE(

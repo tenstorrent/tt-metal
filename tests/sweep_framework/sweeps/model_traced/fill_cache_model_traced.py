@@ -49,7 +49,6 @@ def run(
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,  # Accept any extra parameters the loader might pass

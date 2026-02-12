@@ -7,16 +7,16 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #define EXP_APPROX_MODE false
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/compute_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
 struct OutputCBs {
     uint32_t l_cb;
@@ -24,7 +24,7 @@ struct OutputCBs {
     uint32_t m_cb;
 };
 
-template <uint32_t scale_fp32>
+template <uint32_t scale_fp32, uint32_t Sq_chunk_t, uint32_t vDHt>
 inline OutputCBs reduce_fct(
     uint32_t cb_out_o,
     uint32_t cb_out_accumulate_im_2,
@@ -43,8 +43,6 @@ inline OutputCBs reduce_fct(
     uint32_t cb_s2_temp,
     uint32_t cb_l1_temp,
     uint32_t cb_l2_temp,
-    uint32_t Sq_chunk_t,
-    uint32_t vDHt,
     uint32_t loop_size) {
     constexpr int mode = VectorMode::R;
     const uint32_t out_tiles = Sq_chunk_t * vDHt;
@@ -65,10 +63,10 @@ inline OutputCBs reduce_fct(
     max_block<mode>(cb_m_in, cb_prev_max, cb_m_temp, Sq_chunk_t);
 
     // P1 = exp((m1 - m_new) * scale) - store in cb_exp_max_diff_2
-    sub_exp_block<scale_fp32, mode>(cb_m_in, cb_m_temp, cb_exp_max_diff_2, Sq_chunk_t);
+    sub_exp_block<scale_fp32>(cb_m_in, cb_m_temp, cb_exp_max_diff_2, Sq_chunk_t);
 
     // P2 = exp((m2 - m_new) * scale) - store in cb_exp_max_diff
-    sub_exp_block<scale_fp32, mode>(cb_prev_max, cb_m_temp, cb_exp_max_diff, Sq_chunk_t);
+    sub_exp_block<scale_fp32>(cb_prev_max, cb_m_temp, cb_exp_max_diff, Sq_chunk_t);
 
     // s1 * P1 (element-wise)
     mul_block_inplace(cb_s1_temp, cb_exp_max_diff_2, Sq_chunk_t);
@@ -80,18 +78,16 @@ inline OutputCBs reduce_fct(
     add_block_inplace<true>(cb_s1_temp, cb_s2_temp, Sq_chunk_t);
 
     //  l1 * P1 -> cb_l1_temp (broadcast column 0 of P1)
-    mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff_2, cb_l1_temp, Sq_chunk_t, vDHt);
+    mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(cb_out_accumulate_im, cb_exp_max_diff_2, cb_l1_temp);
 
     //  l2 * P2 -> cb_l2_temp (broadcast column 0 of P2)
-    mul_block_bcast_cols(cb_out_accumulate_im_2, cb_exp_max_diff, cb_l2_temp, Sq_chunk_t, vDHt);
+    mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(cb_out_accumulate_im_2, cb_exp_max_diff, cb_l2_temp);
 
     //  l_new = l1 * P1 + l2 * P2
     add_block_inplace<true>(cb_l1_temp, cb_l2_temp, out_tiles);
 
     return {cb_l1_temp, cb_s1_temp, cb_m_temp};
 }
-
-namespace NAMESPACE {
 
 constexpr uint32_t cb_out_o = get_compile_time_arg_val(0);                // l (output)
 constexpr uint32_t cb_out_accumulate_im_2 = get_compile_time_arg_val(1);  // l2 (input)
@@ -118,7 +114,7 @@ constexpr uint32_t int_l_cb = get_compile_time_arg_val(21);
 constexpr uint32_t int_s_cb = get_compile_time_arg_val(22);
 constexpr uint32_t int_m_cb = get_compile_time_arg_val(23);
 
-void MAIN {
+void kernel_main() {
     // this kernel receives l, m, s tensors from the reader and perform the following computations
     // - inputs: l1, s1, m1 and l2, s2, m2; output: l, s, m
     //----> m = max(m1, m2)
@@ -136,7 +132,7 @@ void MAIN {
 
     mm_init(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);
 
-    OutputCBs output_cbs = reduce_fct<scale_fp32>(
+    OutputCBs output_cbs = reduce_fct<scale_fp32, Sq_chunk_t, vDHt>(
         cb_out_o,
         cb_out_accumulate_im_2,
         cb_out_accumulate_im,
@@ -154,8 +150,6 @@ void MAIN {
         cb_s2_temp,
         cb_l1_temp,
         cb_l2_temp,
-        Sq_chunk_t,
-        vDHt,
         loop_size);
 
     if (loop_size == 1) {
@@ -181,7 +175,7 @@ void MAIN {
         cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
 
         // do final reduction
-        OutputCBs output_cbs2 = reduce_fct<scale_fp32>(
+        OutputCBs output_cbs2 = reduce_fct<scale_fp32, Sq_chunk_t, vDHt>(
             cb_out_o,
             int_l_cb,
             cb_out_accumulate_im,
@@ -199,14 +193,12 @@ void MAIN {
             cb_s2_temp,
             cb_l1_temp,
             cb_l2_temp,
-            Sq_chunk_t,
-            vDHt,
             loop_size);
 
         // final division
         move_block<false>(output_cbs2.s_cb, cb_s_temp, Sq_chunk_t);
-        recip_block_inplace<vector_mode>(cb_s_temp, Sq_chunk_t);
-        mul_block_bcast_cols_inplace(output_cbs2.l_cb, cb_s_temp, Sq_chunk_t, vDHt);
+        recip_block_inplace(cb_s_temp, Sq_chunk_t);
+        mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(output_cbs2.l_cb, cb_s_temp);
 
         move_block<true>(output_cbs2.l_cb, cb_out_o, out_chunk_tiles);
         move_block<true>(output_cbs2.m_cb, cb_cur_max, Sq_chunk_t);
@@ -219,5 +211,3 @@ void MAIN {
         cb_pop_front(int_s_cb, Sq_chunk_t);
     }
 }
-
-}  // namespace NAMESPACE

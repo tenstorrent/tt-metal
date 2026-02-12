@@ -18,9 +18,9 @@ on:
         default: ""
         type: string
       ignore-commits:
-        description: "Comma-separated list of commit SHAs to ignore when analyzing version bumps"
+        description: "Comma-separated list of commit SHAs to ignore when analyzing version bumps (defaults to DEFAULT_IGNORE_COMMITS env var)"
         required: false
-        default: "72e9419a1be562889e1f008cf3e2db495f9e0aa9" # Ignore the commit that bumps to v0.65.0
+        default: ""
         type: string
 
   schedule:
@@ -34,6 +34,20 @@ permissions:
   actions: write
   id-token: write
 
+# =============================================================================
+# Default commit SHAs to ignore when analyzing version bumps.
+# This is defined once here to avoid duplication in input defaults and fallbacks.
+# =============================================================================
+env:
+  # Comma-separated list of commit SHAs to ignore when analyzing version bumps.
+  # To add more commits, add new lines ending with a comma (except the last):
+  #   DEFAULT_IGNORE_COMMITS: >-
+  #     SHA1,
+  #     SHA2,
+  #     SHA3
+  DEFAULT_IGNORE_COMMITS: >-
+    72e9419a1be562889e1f008cf3e2db495f9e0aa9
+
 # Some explanation:
 # is-release-candidate is always true, unless the workflow is manually dispatched on a tag
 # should-create-release is used to avoid creating a duplicate release
@@ -46,7 +60,14 @@ jobs:
     outputs:
       is-release-candidate: ${{ steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate }}
       tag-type: ${{ steps.get-is-release-candidate-and-tag-type.outputs.tag-type }}
+      default-ignore-commits: ${{ steps.set-defaults.outputs.ignore-commits }}
     steps:
+      - name: Set default values
+        id: set-defaults
+        # Note: The `env` context is NOT available when passing inputs to reusable workflows
+        # (i.e., in `uses:` with `with:`), so we must expose env values via job outputs.
+        run: |
+          echo "ignore-commits=${{ env.DEFAULT_IGNORE_COMMITS }}" >> "$GITHUB_OUTPUT"
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -108,8 +129,8 @@ jobs:
       bump_each_commit: false
       # tag-type is now set in release-precheck and passed as output
       tag-type: ${{ needs.release-precheck.outputs.tag-type }}
-      force-bump-type: ${{ inputs.force-bump-type }}
-      ignore-commits: ${{ inputs.ignore-commits }}
+      force-bump-type: ${{ inputs.force-bump-type || '' }}
+      ignore-commits: ${{ inputs.ignore-commits || needs.release-precheck.outputs.default-ignore-commits }}
       dry-run: ${{ inputs.dry-run || false }}
 
 
@@ -120,9 +141,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [22.04, 24.04]
+        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
     with:
-      version: ${{ matrix.version }}
+      platform: ${{ matrix.platform }}
       dry-run: ${{ inputs.dry-run || false }}
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
@@ -141,7 +162,7 @@ jobs:
       - name: Download ALL wheels (separate folders)
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          pattern: eager-dist-*
+          pattern: ttnn-dist-*
           path: artifacts
           merge-multiple: false
 

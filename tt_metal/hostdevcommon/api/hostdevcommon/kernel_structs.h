@@ -7,6 +7,8 @@
 
 namespace tt {
 
+// Note: Max CB count is architecture-dependent.
+// Use hal.get_arch_num_circular_buffers() for runtime validation.
 enum CBIndex : std::uint8_t {
     c_0 = 0,
     c_1 = 1,
@@ -40,7 +42,38 @@ enum CBIndex : std::uint8_t {
     c_29 = 29,
     c_30 = 30,
     c_31 = 31,
-    SIZE = 32
+    c_32 = 32,
+    c_33 = 33,
+    c_34 = 34,
+    c_35 = 35,
+    c_36 = 36,
+    c_37 = 37,
+    c_38 = 38,
+    c_39 = 39,
+    c_40 = 40,
+    c_41 = 41,
+    c_42 = 42,
+    c_43 = 43,
+    c_44 = 44,
+    c_45 = 45,
+    c_46 = 46,
+    c_47 = 47,
+    c_48 = 48,
+    c_49 = 49,
+    c_50 = 50,
+    c_51 = 51,
+    c_52 = 52,
+    c_53 = 53,
+    c_54 = 54,
+    c_55 = 55,
+    c_56 = 56,
+    c_57 = 57,
+    c_58 = 58,
+    c_59 = 59,
+    c_60 = 60,
+    c_61 = 61,
+    c_62 = 62,
+    c_63 = 63,
 };
 
 // Deprecated and to be deleted.

@@ -1,0 +1,73 @@
+node_descriptors {
+  key: "1x_bh_quietbox"
+  value {
+    motherboard: "SIENAD8-2L2T"
+    boards {
+      board { tray_id: 1 board_type: "P150" }
+      board { tray_id: 2 board_type: "P150" }
+      board { tray_id: 3 board_type: "P150" }
+      board { tray_id: 4 board_type: "P150" }
+    }
+    # note - Tray 3/4 may be physically swapped on the BH QBAE depending on the motherboard
+    port_type_connections {
+      key: "QSFP_DD"
+      value {
+        connections { port_a { tray_id: 1 port_id: 2 } port_b { tray_id: 4 port_id: 2 } }
+        connections { port_a { tray_id: 1 port_id: 3 } port_b { tray_id: 2 port_id: 3 } }
+        connections { port_a { tray_id: 2 port_id: 2 } port_b { tray_id: 3 port_id: 2 } }
+        connections { port_a { tray_id: 3 port_id: 3 } port_b { tray_id: 4 port_id: 3 } }
+      }
+    }
+  }
+}
+
+graph_templates {
+  key: "2x_bh_quietbox"
+  value {
+    children {
+      name: "forge-qbae-01"
+      node_ref { node_descriptor: "1x_bh_quietbox" }
+    }
+    children {
+      name: "forge-qbae-02"
+      node_ref { node_descriptor: "1x_bh_quietbox" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+
+        # forge-qbae-01 to forge-qbae-02 connections on Port 1
+        connections {
+          port_a { path: ["forge-qbae-01"] tray_id: 1 port_id: 1 }
+          port_b { path: ["forge-qbae-02"] tray_id: 1 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["forge-qbae-01"] tray_id: 2 port_id: 1 }
+          port_b { path: ["forge-qbae-02"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["forge-qbae-01"] tray_id: 3 port_id: 1 }
+          port_b { path: ["forge-qbae-02"] tray_id: 3 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["forge-qbae-01"] tray_id: 4 port_id: 1 }
+          port_b { path: ["forge-qbae-02"] tray_id: 4 port_id: 1 }
+        }
+      }
+    }
+  }
+}
+
+# Root instance
+# Note - key is significant and must match hostname
+root_instance {
+  template_name: "2x_bh_quietbox"
+  child_mappings {
+    key: "forge-qbae-01"
+    value { host_id: 0 }
+  }
+  child_mappings {
+    key: "forge-qbae-02"
+    value { host_id: 1 }
+  }
+}
