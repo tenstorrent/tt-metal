@@ -1207,70 +1207,86 @@ bool write_to_device_buffer(
     if (is_sharded(buffer.buffer_layout())) {
         // Check alignment for sharded buffer pinned transfer
         if (has_pinned_inputs && is_unpadded) {
-            auto device_id = buffer.device()->id();
-            auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
-            if (noc_addr_pair_opt.has_value()) {
-                remote_chip = noc_addr_pair_opt->device_id != device_id;
-                const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
-                const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
-                const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
-                const uint64_t pinned_size = pinned_memory->get_buffer_size();
+            // Check if average host range size is large enough to benefit from pinned transfer.
+            // Each relay-linear-packed batch handles at most CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS
+            // host ranges; skip pinned if total data per batch would be < 512kB, as otherwise we can't pipeline the reads well.
+            auto buffer_page_mapping = buffer.get_buffer_page_mapping();
+            uint32_t total_host_range_count = 0;
+            for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
+                for (const auto& core_page_mapping : buffer_page_mapping->core_page_mappings[core_id]) {
+                    total_host_range_count += core_page_mapping.host_ranges.size();
+                }
+            }
+            constexpr uint64_t pinned_min_batch_size = 512 * 1024;
+            bool batch_large_enough = total_host_range_count == 0 ||
+                static_cast<uint64_t>(buffer.size()) * CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS >=
+                    pinned_min_batch_size * total_host_range_count;
 
-                // Get L1 alignment requirement
-                const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+            if (batch_large_enough) {
+                auto device_id = buffer.device()->id();
+                auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
+                if (noc_addr_pair_opt.has_value()) {
+                    remote_chip = noc_addr_pair_opt->device_id != device_id;
+                    const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
+                    const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
+                    const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
+                    const uint64_t pinned_size = pinned_memory->get_buffer_size();
 
-                // Check all source and destination addresses for L1 alignment
-                bool all_aligned = true;
-                auto buffer_page_mapping = buffer.get_buffer_page_mapping();
-                const std::vector<CoreCoord>& cores = buffer_page_mapping->all_cores;
+                    // Get L1 alignment requirement
+                    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
-                for (uint32_t core_id = 0; core_id < buffer.num_cores() && all_aligned; ++core_id) {
-                    for (const BufferCorePageMapping& core_page_mapping :
-                         buffer_page_mapping->core_page_mappings[core_id]) {
-                        // Check destination L1 address alignment
-                        uint32_t dst_address =
-                            buffer.address() + core_page_mapping.device_start_page * buffer.aligned_page_size();
-                        if (buffer.is_dram()) {
-                            dst_address += buffer.device()->allocator()->get_bank_offset(
-                                BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
-                        }
-                        if (dst_address % l1_alignment != 0) {
-                            all_aligned = false;
-                            break;
-                        }
+                    // Check all source and destination addresses for L1 alignment
+                    bool all_aligned = true;
+                    const std::vector<CoreCoord>& cores = buffer_page_mapping->all_cores;
 
-                        // Check source address alignment for each host range
-                        for (const auto& host_range : core_page_mapping.host_ranges) {
-                            uint64_t src_offset =
-                                static_cast<uint64_t>(host_range.host_page_start) * buffer.page_size();
-                            const uint8_t* src_region_start = src_ptr + src_offset;
-                            uint32_t data_length = host_range.num_pages * buffer.page_size();
-                            const uint8_t* src_region_end = src_region_start + data_length;
-
-                            // Check if within pinned region
-                            if (src_region_start < pinned_host_base ||
-                                src_region_end > pinned_host_base + pinned_size) {
+                    for (uint32_t core_id = 0; core_id < buffer.num_cores() && all_aligned; ++core_id) {
+                        for (const BufferCorePageMapping& core_page_mapping :
+                             buffer_page_mapping->core_page_mappings[core_id]) {
+                            // Check destination L1 address alignment
+                            uint32_t dst_address =
+                                buffer.address() + core_page_mapping.device_start_page * buffer.aligned_page_size();
+                            if (buffer.is_dram()) {
+                                dst_address += buffer.device()->allocator()->get_bank_offset(
+                                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+                            }
+                            if (dst_address % l1_alignment != 0) {
                                 all_aligned = false;
                                 break;
                             }
 
-                            // Check L1 alignment of source
-                            if (reinterpret_cast<uintptr_t>(src_region_start) % l1_alignment != 0) {
-                                all_aligned = false;
+                            // Check source address alignment for each host range
+                            for (const auto& host_range : core_page_mapping.host_ranges) {
+                                uint64_t src_offset =
+                                    static_cast<uint64_t>(host_range.host_page_start) * buffer.page_size();
+                                const uint8_t* src_region_start = src_ptr + src_offset;
+                                uint32_t data_length = host_range.num_pages * buffer.page_size();
+                                const uint8_t* src_region_end = src_region_start + data_length;
+
+                                // Check if within pinned region
+                                if (src_region_start < pinned_host_base ||
+                                    src_region_end > pinned_host_base + pinned_size) {
+                                    all_aligned = false;
+                                    break;
+                                }
+
+                                // Check L1 alignment of source
+                                if (reinterpret_cast<uintptr_t>(src_region_start) % l1_alignment != 0) {
+                                    all_aligned = false;
+                                    break;
+                                }
+                            }
+
+                            if (!all_aligned) {
                                 break;
                             }
-                        }
-
-                        if (!all_aligned) {
-                            break;
                         }
                     }
-                }
 
-                if (all_aligned) {
-                    pinned_src_addr = pinned_noc_base;
-                    pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
-                    use_pinned_transfer = true;
+                    if (all_aligned) {
+                        pinned_src_addr = pinned_noc_base;
+                        pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
+                        use_pinned_transfer = true;
+                    }
                 }
             }
         }
