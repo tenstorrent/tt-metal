@@ -215,7 +215,7 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
 @pytest.mark.parametrize(
     "tensor_shape, output_end",
     [
-        # ([3, 64, 64], [1, 50, 62]),
+        ([3, 64, 64], [1, 50, 62]),
         ([3, 64, 64], [1, 31, 62]),
         # ([4, 4, 3, 64, 64], [2, 3, 0, 31, 31]),
         #   ([4, 3, 64, 64], [2, 0, 31, 31]),

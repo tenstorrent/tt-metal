@@ -6,6 +6,11 @@
 #include <array>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/debug/dprint.h"
+
+namespace {
+FORCE_INLINE uint32_t div_up(uint32_t x, uint32_t y) { return (x + y - 1) / y; }
+}  // namespace
 
 void kernel_main() {
     // run-time args
@@ -36,7 +41,7 @@ void kernel_main() {
     constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
 
-    auto write_tiles_in_current_block = [&](uint32_t block_height_index,
+    auto write_tiles_in_current_block = [&](uint32_t start_row,
                                             uint32_t width_wise_output_block_start_index,
                                             uint32_t num_unpadded_cols_per_input_block,
                                             uint32_t num_cols_already_processed_in_first_output_block,
@@ -60,7 +65,7 @@ void kernel_main() {
             // writes we'll be writing to the beginning of a page and not require an offset.
 
             // Output page_id that we are going to be writing to
-            uint32_t num_rows_already_processed = block_height_index * tile_height + j;
+            uint32_t num_rows_already_processed = start_row + j;
             uint32_t num_pages_already_processed_in_previous_rows =
                 num_rows_already_processed * num_output_blocks_across_width;
             uint32_t output_page_id =
@@ -143,23 +148,25 @@ void kernel_main() {
                 }
                 element_id_input /= input_tensor_shape[i];
             }
+
             if (!block_is_in_output_tensor) {  // This input block is entirely outside the output tensor, so skip it
                 cb_wait_front(cb_id_out0, num_tiles_per_input_block);
                 cb_pop_front(cb_id_out0, num_tiles_per_input_block);
                 continue;
             }
 
-            uint32_t element_id_output = 0;
-            uint32_t stride = 1;
-            for (int i = tensor_rank - 1; i >= 0; --i) {
-                element_id_output += global_coord[i] * stride;
-                stride *= output_tensor_shape[i];
+            uint32_t num_output_tensor_planes_before_current_block = 1;
+            for (int i = tensor_rank - 3; i >= 0; --i) {
+                num_output_tensor_planes_before_current_block *= global_coord[i];
             }
-            uint32_t row_tile_id_output = (element_id_output / output_tensor_width) / tile_height;
-            uint32_t col_tile_id_output = global_coord[tensor_rank - 1] / tile_width;
-            uint32_t tile_id_in_output = row_tile_id_output * num_tiles_per_output_row + col_tile_id_output;
+            uint32_t start_row = num_output_tensor_planes_before_current_block * output_tensor_shape[tensor_rank - 2] +
+                                 global_coord[tensor_rank - 2];
 
-            uint32_t height_wise_input_block_index = tile_id_in_output / num_tiles_per_output_row;  // Needs to change
+            uint32_t tile_id_in_output = div_up(output_tensor_shape[tensor_rank - 2], tile_height) *
+                                             num_tiles_per_output_row * num_output_tensor_planes_before_current_block +
+                                         (global_coord[tensor_rank - 2] / tile_height) * num_tiles_per_output_row +
+                                         global_coord[tensor_rank - 1] / tile_width;
+
             uint32_t tile_index_width = tile_id_in_output % num_tiles_per_output_row;
             uint32_t width_wise_input_block_index = tile_index_width / num_tiles_per_input_block;
 
@@ -181,7 +188,7 @@ void kernel_main() {
             uint32_t num_cols_already_processed_in_first_output_block =
                 input_block_global_col_index % num_cols_per_output_block;
             write_tiles_in_current_block(
-                height_wise_input_block_index,
+                start_row,
                 width_wise_output_block_start_index,
                 num_unpadded_cols_per_input_block,
                 num_cols_already_processed_in_first_output_block,
