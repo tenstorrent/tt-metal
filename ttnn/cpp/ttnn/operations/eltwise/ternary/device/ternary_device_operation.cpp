@@ -264,7 +264,8 @@ tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() 
         memory_config,
         get_dtype(),
         compute_kernel_config,
-        sub_core_grids);
+        sub_core_grids,
+        worker_grid);
 }
 
 void TernaryDeviceOperation::validate_on_program_cache_miss(
@@ -521,6 +522,11 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_c->tensor_spec(),
             compute_output_specs(args, tensor_args));
 
+        // Include true/false tensor volumes so "true broadcast, false full" and "true full, false
+        // broadcast" get distinct cache keys (broadcast_type alone is the same for both).
+        const auto b_shape = input_b->padded_shape();
+        const auto c_shape = input_c->padded_shape();
+
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
             program_factory.index(),
@@ -531,6 +537,8 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_c.value().dtype(),
             input_c.value().memory_config(),
             a_shape.volume(),
+            b_shape.volume(),
+            c_shape.volume(),
             shard_volumes);
 
     } else if (variant == TernaryVariant::TTS) {
@@ -542,6 +550,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         const auto shard_volumes = get_shard_volumes(
             input_a.tensor_spec(), input_b->tensor_spec(), std::nullopt, compute_output_specs(args, tensor_args));
 
+        const auto b_shape = input_b->padded_shape();
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
             program_factory.index(),
@@ -550,6 +559,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_b.value().dtype(),
             input_b.value().memory_config(),
             a_shape.volume(),
+            b_shape.volume(),
             shard_volumes);
     } else if (variant == TernaryVariant::TST) {
         TT_ASSERT(
@@ -560,6 +570,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         const auto shard_volumes = get_shard_volumes(
             input_a.tensor_spec(), std::nullopt, input_c->tensor_spec(), compute_output_specs(args, tensor_args));
 
+        const auto c_shape = input_c->padded_shape();
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
             program_factory.index(),
@@ -568,6 +579,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_c.value().dtype(),
             input_c.value().memory_config(),
             a_shape.volume(),
+            c_shape.volume(),
             shard_volumes);
     }
 
