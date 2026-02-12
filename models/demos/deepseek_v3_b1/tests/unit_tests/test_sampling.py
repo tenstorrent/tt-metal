@@ -162,23 +162,14 @@ def test_sampling_argmax_mesh_2x2_axis_x(mesh_device, seed, final_core_idx):
     logger.info(
         f"Testing sampling argmax mesh(2x2): seed={seed}, final_core_idx={final_core_idx}, final_mesh_coord={final_mesh_coord}"
     )
+    torch.manual_seed(seed)
 
-    # Build per-device inputs, then shard device dimension with mesh mapper.
-    torch_scores_per_device = []
-    torch_indices_per_device = []
-    for dev_idx in range(num_devices):
-        torch.manual_seed(seed + dev_idx)
-        scores_dev = torch.randn(scores_shape_per_device, dtype=torch.bfloat16)
-        # Make global index space unique across devices for deterministic tie-break checks.
-        idx_base = dev_idx * scores_shape_per_device[1]
-        indices_dev = (torch.arange(scores_shape_per_device[1], dtype=torch.int32) + idx_base).reshape(
-            scores_shape_per_device
-        )
-        torch_scores_per_device.append(scores_dev)
-        torch_indices_per_device.append(indices_dev)
-
-    torch_scores_all = torch.stack(torch_scores_per_device, dim=0)
-    torch_indices_all = torch.stack(torch_indices_per_device, dim=0)
+    # Build all device inputs in one shot, then shard device dimension with mesh mapper.
+    torch_scores_all = torch.randn((num_devices, *scores_shape_per_device), dtype=torch.bfloat16)
+    # Make global index space unique across devices for deterministic tie-break checks.
+    torch_indices_all = torch.arange(num_devices * scores_shape_per_device[1], dtype=torch.int32).reshape(
+        num_devices, *scores_shape_per_device
+    )
     torch_expected_idx = SamplingOp.golden(
         torch_scores_all.reshape(1, -1), torch_indices_all.reshape(1, -1), k=1, p=1.0
     )

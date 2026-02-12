@@ -13,6 +13,17 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 
 
+def _round_up(value: int, alignment: int) -> int:
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+def _is_singleton_prefix_shape(shape, expected_last_dim: int) -> bool:
+    dims = tuple(int(d) for d in shape)
+    if not dims or dims[-1] != expected_last_dim:
+        return False
+    return all(d == 1 for d in dims[:-1])
+
+
 class SamplingOp:
     """
     Sampling micro-op entry point.
@@ -57,8 +68,8 @@ class SamplingOp:
         Execute sampling.
 
         Args:
-            scores_tensor: [1, 160 * num_cores] bfloat16, WIDTH_SHARDED with shard shape [1, 160].
-            indices_tensor: [1, 160 * num_cores] uint32, WIDTH_SHARDED with shard shape [1, 160].
+            scores_tensor: [1, shard_width * num_cores] bfloat16, WIDTH_SHARDED with shard shape [1, shard_width].
+            indices_tensor: [1, shard_width * num_cores] uint32, WIDTH_SHARDED with shard shape [1, shard_width].
             output_index_tensor: [1, 1] uint32, sharded on final core.
             k: sampling k; currently only k=1 supported.
             p: top-p threshold (unused for k=1).
@@ -75,21 +86,31 @@ class SamplingOp:
         # p is intentionally unused in k=1 path, keep for stable API
         _ = p
 
-        mesh_mode_requested = any(
-            x is not None for x in (global_semaphore, global_stage2_semaphore, fabric_scratch_tensor)
-        )
+        mesh_device = scores_tensor.device()
+        mesh_mode_requested = mesh_device.get_num_devices() > 1
         if mesh_mode_requested:
-            return SamplingOp._op_mesh_2x2_axis_x(
-                scores_tensor=scores_tensor,
-                indices_tensor=indices_tensor,
-                output_index_tensor=output_index_tensor,
-                final_core_coord=final_core_coord,
-                final_mesh_coord=final_mesh_coord,
-                global_semaphore=global_semaphore,
-                global_stage2_semaphore=global_stage2_semaphore,
-                fabric_scratch_tensor=fabric_scratch_tensor,
-                mesh_axis=mesh_axis,
-            )
+            if global_semaphore is None:
+                raise ValueError("global_semaphore is required in mesh mode")
+            if global_stage2_semaphore is None:
+                raise ValueError("global_stage2_semaphore is required in mesh mode")
+            if fabric_scratch_tensor is None:
+                raise ValueError("fabric_scratch_tensor is required in mesh mode")
+            if final_mesh_coord is None:
+                raise ValueError("final_mesh_coord is required in mesh mode")
+            if mesh_axis != "x":
+                raise NotImplementedError("Sampling mesh mode currently supports only mesh_axis='x'")
+            if mesh_device.shape[0] >= 2 and mesh_device.shape[1] == 2:
+                return SamplingOp._op_mesh_2x2_axis_x(
+                    scores_tensor=scores_tensor,
+                    indices_tensor=indices_tensor,
+                    output_index_tensor=output_index_tensor,
+                    final_core_coord=final_core_coord,
+                    final_mesh_coord=final_mesh_coord,
+                    global_semaphore=global_semaphore,
+                    global_stage2_semaphore=global_stage2_semaphore,
+                    fabric_scratch_tensor=fabric_scratch_tensor,
+                    mesh_axis=mesh_axis,
+                )
         return SamplingOp._op_single_device(
             scores_tensor=scores_tensor,
             indices_tensor=indices_tensor,
@@ -118,22 +139,19 @@ class SamplingOp:
         assert scores_tensor.dtype == ttnn.bfloat16, "Scores tensor must be bfloat16"
         assert indices_tensor.dtype == ttnn.uint32, "Indices tensor must be uint32"
         assert output_index_tensor.dtype == ttnn.uint32, "Output index tensor must be uint32"
-        assert tuple(scores_shard_spec.shape) == (
-            1,
-            160,
-        ), f"Expected scores shard shape (1, 160), got {scores_shard_spec.shape}"
-        assert tuple(indices_shard_spec.shape) == (
-            1,
-            160,
-        ), f"Expected indices shard shape (1, 160), got {indices_shard_spec.shape}"
-        assert tuple(scores_tensor.shape) == (
-            1,
-            160 * num_cores,
-        ), f"Expected scores shape (1, {160 * num_cores}), got {scores_tensor.shape}"
-        assert tuple(indices_tensor.shape) == (
-            1,
-            160 * num_cores,
-        ), f"Expected indices shape (1, {160 * num_cores}), got {indices_tensor.shape}"
+        assert scores_shard_spec.shape[0] == 1, f"Expected scores shard height 1, got {scores_shard_spec.shape[0]}"
+        assert indices_shard_spec.shape[0] == 1, f"Expected indices shard height 1, got {indices_shard_spec.shape[0]}"
+        assert (
+            scores_shard_spec.shape[1] == indices_shard_spec.shape[1]
+        ), f"Scores/indices shard widths must match, got {scores_shard_spec.shape[1]} and {indices_shard_spec.shape[1]}"
+        num_values = int(scores_shard_spec.shape[1])
+        assert num_values > 0, "Sampling shard width must be > 0"
+        assert _is_singleton_prefix_shape(
+            scores_tensor.shape, num_values * num_cores
+        ), f"Expected scores shape [1, ..., 1, {num_values * num_cores}], got {scores_tensor.shape}"
+        assert _is_singleton_prefix_shape(
+            indices_tensor.shape, num_values * num_cores
+        ), f"Expected indices shape [1, ..., 1, {num_values * num_cores}], got {indices_tensor.shape}"
         assert tuple(output_index_tensor.shape) == (
             1,
             1,
@@ -159,36 +177,55 @@ class SamplingOp:
         final_is_sender = any(core.x == output_core.x and core.y == output_core.y for core in sender_cores)
         expected_remote_incs = num_cores - 1 if final_is_sender else num_cores
 
-        winner_cb = 2
-        gather_cb = 3
+        winner_cb = 0
+        gather_cb = 1
         semaphore_id = 0
-        winner_page_bytes = 16
+        l1_alignment = 16
+        winner_payload_bytes = 8  # bf16 score + uint32 index
+        winner_page_bytes = _round_up(winner_payload_bytes, l1_alignment)
 
         ncrisc_named_compile_time_args = [
-            ("sampling_num_values", 160),
+            ("sampling_num_values", num_values),
             ("sampling_winner_page_bytes", winner_page_bytes),
             ("sampling_num_senders", num_cores),
             ("sampling_expected_remote_incs", expected_remote_incs),
             ("sampling_winner_cb", winner_cb),
             ("sampling_gather_cb", gather_cb),
             ("sampling_receiver_semaphore_id", semaphore_id),
+            ("sampling_local_ready_semaphore_id", 1),
             ("sampling_mesh_mode", 0),
             ("sampling_stage1_sender", 0),
             ("sampling_stage1_receiver", 0),
             ("sampling_stage2_sender", 0),
             ("sampling_stage2_receiver", 0),
-            ("sampling_stage1_remote_slot_offset", 0),
+            ("sampling_stage1_slot_base_offset", 0),
+            ("sampling_stage1_num_slots", 0),
+            ("sampling_stage1_expected_remote_incs", 0),
             ("sampling_stage1_local_slot_offset", 0),
-            ("sampling_stage2_remote_slot_offset", 0),
+            ("sampling_stage2_slot_base_offset", 0),
+            ("sampling_stage2_num_slots", 0),
+            ("sampling_stage2_expected_remote_incs", 0),
             ("sampling_stage2_local_slot_offset", 0),
             ("sampling_mesh_send_slot_offset", 0),
+            ("sampling_mesh_local_send_slot_offset", 0),
         ]
 
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
             core_ranges=all_cores,
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            brisc_named_compile_time_args=ncrisc_named_compile_time_args,
             ncrisc_common_runtime_args=[
+                int(scores_tensor.buffer_address()),
+                int(indices_tensor.buffer_address()),
+                int(output_index_tensor.buffer_address()),
+                int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).x),
+                int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).y),
+                0,
+                0,
+                0,
+            ],
+            brisc_common_runtime_args=[
                 int(scores_tensor.buffer_address()),
                 int(indices_tensor.buffer_address()),
                 int(output_index_tensor.buffer_address()),
@@ -288,12 +325,12 @@ class SamplingOp:
 
         mesh_device = scores_tensor.device()
         mesh_shape = mesh_device.shape
-        if tuple(mesh_shape) != (2, 2):
-            raise ValueError(f"Sampling mesh mode currently requires a (2,2) mesh, got {mesh_shape}")
-        if tuple(final_mesh_coord) != (1, 1):
-            raise ValueError(
-                f"Sampling mesh mode currently expects final_mesh_coord=(1,1) for axis-x flow, got {final_mesh_coord}"
-            )
+        mesh_rows, mesh_cols = int(mesh_shape[0]), int(mesh_shape[1])
+        if mesh_rows < 2 or mesh_cols != 2:
+            raise ValueError(f"Sampling mesh mode currently requires an (R,2) mesh with R>=2, got {mesh_shape}")
+        target_row, target_col = int(final_mesh_coord[0]), int(final_mesh_coord[1])
+        if not (0 <= target_row < mesh_rows and 0 <= target_col < mesh_cols):
+            raise ValueError(f"final_mesh_coord {final_mesh_coord} out of bounds for mesh shape {mesh_shape}")
 
         scores_per_device = ttnn.get_device_tensors(scores_tensor)
         indices_per_device = ttnn.get_device_tensors(indices_tensor)
@@ -315,13 +352,15 @@ class SamplingOp:
         winner_cb = 2
         gather_cb = 3
         semaphore_id = 0
-        winner_page_bytes = 16
-        stage_slot_offsets = {
-            "stage1_remote_slot": 0 * winner_page_bytes,
-            "stage1_local_slot": 1 * winner_page_bytes,
-            "stage2_remote_slot": 2 * winner_page_bytes,
-            "stage2_local_slot": 3 * winner_page_bytes,
-        }
+        l1_alignment = 16
+        winner_payload_bytes = 8  # bf16 score + uint32 index
+        winner_page_bytes = _round_up(winner_payload_bytes, l1_alignment)
+        stage1_slot_base_offset = 0
+        stage1_num_slots = mesh_rows
+        stage2_slot_base_offset = stage1_slot_base_offset + stage1_num_slots * winner_page_bytes
+        stage2_num_slots = mesh_cols
+        required_scratch_bytes = (stage1_num_slots + stage2_num_slots) * winner_page_bytes
+        local_ready_semaphore_id = 1
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for row in range(mesh_shape[0]):
@@ -349,8 +388,30 @@ class SamplingOp:
                     raise ValueError("Output tensor must be single-core sharded per device in mesh mode")
                 if scratch_shard_spec.grid.num_cores() != 1:
                     raise ValueError("fabric_scratch_tensor must be single-core sharded per device")
-                if tuple(scores_shard_spec.shape) != (1, 160) or tuple(indices_shard_spec.shape) != (1, 160):
-                    raise ValueError("Mesh mode expects input shard shape (1,160) on all devices")
+                if scores_shard_spec.shape[0] != 1 or indices_shard_spec.shape[0] != 1:
+                    raise ValueError(
+                        f"Mesh mode expects input shard height 1, got scores {scores_shard_spec.shape} and indices {indices_shard_spec.shape}"
+                    )
+                if scores_shard_spec.shape[1] != indices_shard_spec.shape[1]:
+                    raise ValueError(
+                        f"Mesh mode expects matching input shard widths, got scores {scores_shard_spec.shape[1]} and indices {indices_shard_spec.shape[1]}"
+                    )
+                num_values = int(scores_shard_spec.shape[1])
+                if num_values <= 0:
+                    raise ValueError(f"Mesh mode expects input shard width > 0, got {num_values}")
+                if not _is_singleton_prefix_shape(scores_tensor_device.shape, num_values * num_cores):
+                    raise ValueError(
+                        f"Mesh mode expects per-device scores shape [1, ..., 1, {num_values * num_cores}], got {scores_tensor_device.shape}"
+                    )
+                if not _is_singleton_prefix_shape(indices_tensor_device.shape, num_values * num_cores):
+                    raise ValueError(
+                        f"Mesh mode expects per-device indices shape [1, ..., 1, {num_values * num_cores}], got {indices_tensor_device.shape}"
+                    )
+                scratch_capacity_bytes = int(scratch_shard_spec.shape[0]) * int(scratch_shard_spec.shape[1]) * 4
+                if scratch_capacity_bytes < required_scratch_bytes:
+                    raise ValueError(
+                        f"fabric_scratch_tensor shard too small: need >= {required_scratch_bytes} bytes, got {scratch_capacity_bytes} bytes"
+                    )
                 if scratch_tensor_device.buffer_address() is None:
                     raise ValueError("fabric_scratch_tensor must be materialized in device memory")
 
@@ -368,52 +429,71 @@ class SamplingOp:
                 final_is_sender = any(c.x == final_core_coord.x and c.y == final_core_coord.y for c in sender_cores)
                 expected_remote_incs = num_cores - 1 if final_is_sender else num_cores
 
-                is_stage1_sender = row == 0
-                is_stage1_receiver = row == 1
-                is_stage2_sender = row == 1 and col == 0
-                is_stage2_receiver = row == final_mesh_coord[0] and col == final_mesh_coord[1]
+                is_stage1_sender = row != target_row
+                is_stage1_receiver = row == target_row
+                is_stage2_sender = row == target_row and col != target_col
+                is_stage2_receiver = row == target_row and col == target_col
                 is_mesh_sender_core = is_stage1_sender or is_stage2_sender
 
                 # Sender destination and slot metadata (used only for mesh sender cores).
                 if is_stage1_sender:
-                    dest_coord = ttnn.MeshCoordinate(1, col)
-                    send_slot_offset = stage_slot_offsets["stage1_remote_slot"]
+                    dest_coord = ttnn.MeshCoordinate(target_row, col)
+                    send_slot_offset = stage1_slot_base_offset + row * winner_page_bytes
                 elif is_stage2_sender:
-                    dest_coord = ttnn.MeshCoordinate(final_mesh_coord[0], final_mesh_coord[1])
-                    send_slot_offset = stage_slot_offsets["stage2_remote_slot"]
+                    dest_coord = ttnn.MeshCoordinate(target_row, target_col)
+                    send_slot_offset = stage2_slot_base_offset + col * winner_page_bytes
                 else:
                     dest_coord = ttnn.MeshCoordinate(row, col)
                     send_slot_offset = 0
 
                 ncrisc_named_compile_time_args = [
-                    ("sampling_num_values", 160),
+                    ("sampling_num_values", num_values),
                     ("sampling_winner_page_bytes", winner_page_bytes),
                     ("sampling_num_senders", num_cores),
                     ("sampling_expected_remote_incs", expected_remote_incs),
                     ("sampling_winner_cb", winner_cb),
                     ("sampling_gather_cb", gather_cb),
                     ("sampling_receiver_semaphore_id", semaphore_id),
+                    ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
                     ("sampling_mesh_mode", 1),
                     ("sampling_stage1_sender", 1 if is_stage1_sender else 0),
                     ("sampling_stage1_receiver", 1 if is_stage1_receiver else 0),
                     ("sampling_stage2_sender", 1 if is_stage2_sender else 0),
                     ("sampling_stage2_receiver", 1 if is_stage2_receiver else 0),
-                    ("sampling_stage1_remote_slot_offset", stage_slot_offsets["stage1_remote_slot"]),
-                    ("sampling_stage1_local_slot_offset", stage_slot_offsets["stage1_local_slot"]),
-                    ("sampling_stage2_remote_slot_offset", stage_slot_offsets["stage2_remote_slot"]),
-                    ("sampling_stage2_local_slot_offset", stage_slot_offsets["stage2_local_slot"]),
+                    ("sampling_stage1_slot_base_offset", stage1_slot_base_offset),
+                    ("sampling_stage1_num_slots", stage1_num_slots),
+                    ("sampling_stage1_expected_remote_incs", mesh_rows - 1),
+                    ("sampling_stage1_local_slot_offset", stage1_slot_base_offset + row * winner_page_bytes),
+                    ("sampling_stage2_slot_base_offset", stage2_slot_base_offset),
+                    ("sampling_stage2_num_slots", stage2_num_slots),
+                    ("sampling_stage2_expected_remote_incs", mesh_cols - 1),
+                    ("sampling_stage2_local_slot_offset", stage2_slot_base_offset + col * winner_page_bytes),
                     ("sampling_mesh_send_slot_offset", send_slot_offset),
+                    (
+                        "sampling_mesh_local_send_slot_offset",
+                        (
+                            stage1_slot_base_offset + row * winner_page_bytes
+                            if is_stage1_sender
+                            else stage2_slot_base_offset + col * winner_page_bytes
+                        ),
+                    ),
                 ]
 
                 # Mesh sender cores get sender metadata before fabric route args.
-                per_core_ncrisc_runtime_args = []
+                per_core_brisc_runtime_args = []
                 if is_mesh_sender_core:
                     dest_idx = dest_coord[0] * mesh_shape[1] + dest_coord[1]
                     sender_dst_sem_addr = global_sem_addr if is_stage1_sender else global_stage2_sem_addr
-                    per_core_ncrisc_runtime_args.append(
+                    local_send_slot_offset = (
+                        stage1_slot_base_offset + row * winner_page_bytes
+                        if is_stage1_sender
+                        else stage2_slot_base_offset + col * winner_page_bytes
+                    )
+                    per_core_brisc_runtime_args.append(
                         (
                             final_core_coord,
                             [
+                                local_send_slot_offset,
                                 int(mesh_device.get_fabric_node_id(dest_coord).mesh_id),
                                 int(mesh_device.get_fabric_node_id(dest_coord).chip_id),
                                 int(scratch_per_device[dest_idx].buffer_address()) + send_slot_offset,
@@ -426,7 +506,18 @@ class SamplingOp:
                     kernel_source="models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
                     core_ranges=all_cores,
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+                    brisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     ncrisc_common_runtime_args=[
+                        int(scores_tensor_device.buffer_address()),
+                        int(indices_tensor_device.buffer_address()),
+                        int(output_tensor_device.buffer_address()),
+                        int(scores_tensor_device.device().worker_core_from_logical_core(final_core_coord).x),
+                        int(scores_tensor_device.device().worker_core_from_logical_core(final_core_coord).y),
+                        int(scratch_tensor_device.buffer_address()),
+                        global_sem_addr,
+                        global_stage2_sem_addr,
+                    ],
+                    brisc_common_runtime_args=[
                         int(scores_tensor_device.buffer_address()),
                         int(indices_tensor_device.buffer_address()),
                         int(output_tensor_device.buffer_address()),
@@ -464,7 +555,7 @@ class SamplingOp:
                         ),
                     ],
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        ncrisc_args=per_core_ncrisc_runtime_args,
+                        brisc_args=per_core_brisc_runtime_args,
                     ),
                 )
                 kernel_result = unified_kernel.get_kernel_descriptors()
@@ -496,16 +587,21 @@ class SamplingOp:
                     core_ranges=all_cores,
                     initial_value=0,
                 )
+                local_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                    id=local_ready_semaphore_id,
+                    core_ranges=all_cores,
+                    initial_value=0,
+                )
 
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
                     cbs=[winner_cb_descriptor, gather_cb_descriptor],
-                    semaphores=[receiver_semaphore_descriptor],
+                    semaphores=[receiver_semaphore_descriptor, local_ready_semaphore_descriptor],
                 )
 
                 if is_mesh_sender_core:
                     sender_group = kernel_result.get_group_by_arg("sampling_mesh_sender_core", 1)
-                    sender_kernel_idx = sender_group.ncrisc_kernel_index
+                    sender_kernel_idx = sender_group.brisc_kernel_index
                     fabric_rt_args = ttnn.setup_fabric_connection(
                         src_fabric_node_id=mesh_device.get_fabric_node_id(coord),
                         dst_fabric_node_id=mesh_device.get_fabric_node_id(dest_coord),

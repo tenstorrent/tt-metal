@@ -12,15 +12,15 @@
 // - Final core waits for all remote semaphore increments, then reduces all
 //   gathered slots to one final index (tie-break: lowest index).
 //
-// Mesh extension (2x2, axis-x first):
-// - Stage 1: (0,0)->(1,0), (0,1)->(1,1) on final cores, then local compare on row 1.
-// - Stage 2: (1,0)->(1,1), then final compare at (1,1) and output write.
+// Mesh extension (R x 2, axis-x first):
+// - Stage 1: for each column, all rows send to target_row on final cores, then local compare on target_row.
+// - Stage 2: on target_row, non-target columns send to target_col, then final compare at target coord.
 // - Inter-device transfers use a fabric packet with fused NOC write + semaphore increment.
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "api/numeric/bfloat16.h"
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -34,7 +34,7 @@ struct Core {
     static constexpr bool is_mesh_sender_core = get_named_compile_time_arg_val("sampling_mesh_sender_core") == 1;
 };
 
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 template <typename packet_header_t>
 FORCE_INLINE void set_unicast_route(
     volatile tt_l1_ptr packet_header_t* header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t num_hops) {
@@ -43,12 +43,6 @@ FORCE_INLINE void set_unicast_route(
     } else {
         fabric_set_unicast_route<false>(header, num_hops);
     }
-}
-
-FORCE_INLINE bool is_better_candidate(
-    uint16_t candidate_score, uint32_t candidate_index, uint16_t best_score, uint32_t best_index) {
-    return bfloat16_greater(candidate_score, best_score) ||
-           ((candidate_score == best_score) && (candidate_index < best_index));
 }
 
 FORCE_INLINE void write_winner_slot(uint32_t slot_addr, uint16_t score, uint32_t index) {
@@ -66,6 +60,14 @@ FORCE_INLINE void read_winner_slot(uint32_t slot_addr, uint16_t& score, uint32_t
 }
 #endif
 
+#if defined(COMPILE_FOR_NCRISC)
+FORCE_INLINE bool is_better_candidate(
+    uint16_t candidate_score, uint32_t candidate_index, uint16_t best_score, uint32_t best_index) {
+    return bfloat16_greater(candidate_score, best_score) ||
+           ((candidate_score == best_score) && (candidate_index < best_index));
+}
+#endif
+
 void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     constexpr uint32_t num_values = get_named_compile_time_arg_val("sampling_num_values");
@@ -75,16 +77,24 @@ void kernel_main() {
     constexpr uint32_t winner_cb = get_named_compile_time_arg_val("sampling_winner_cb");
     constexpr uint32_t gather_cb = get_named_compile_time_arg_val("sampling_gather_cb");
     constexpr uint32_t semaphore_id = get_named_compile_time_arg_val("sampling_receiver_semaphore_id");
+    constexpr uint32_t local_ready_semaphore_id = get_named_compile_time_arg_val("sampling_local_ready_semaphore_id");
     constexpr bool mesh_mode = get_named_compile_time_arg_val("sampling_mesh_mode") == 1;
     constexpr bool stage1_sender = get_named_compile_time_arg_val("sampling_stage1_sender") == 1;
     constexpr bool stage1_receiver = get_named_compile_time_arg_val("sampling_stage1_receiver") == 1;
     constexpr bool stage2_sender = get_named_compile_time_arg_val("sampling_stage2_sender") == 1;
     constexpr bool stage2_receiver = get_named_compile_time_arg_val("sampling_stage2_receiver") == 1;
-    constexpr uint32_t stage1_remote_slot_offset = get_named_compile_time_arg_val("sampling_stage1_remote_slot_offset");
+    constexpr uint32_t stage1_slot_base_offset = get_named_compile_time_arg_val("sampling_stage1_slot_base_offset");
+    constexpr uint32_t stage1_num_slots = get_named_compile_time_arg_val("sampling_stage1_num_slots");
+    constexpr uint32_t stage1_expected_remote_incs =
+        get_named_compile_time_arg_val("sampling_stage1_expected_remote_incs");
     constexpr uint32_t stage1_local_slot_offset = get_named_compile_time_arg_val("sampling_stage1_local_slot_offset");
-    constexpr uint32_t stage2_remote_slot_offset = get_named_compile_time_arg_val("sampling_stage2_remote_slot_offset");
+    constexpr uint32_t stage2_slot_base_offset = get_named_compile_time_arg_val("sampling_stage2_slot_base_offset");
+    constexpr uint32_t stage2_num_slots = get_named_compile_time_arg_val("sampling_stage2_num_slots");
+    constexpr uint32_t stage2_expected_remote_incs =
+        get_named_compile_time_arg_val("sampling_stage2_expected_remote_incs");
     constexpr uint32_t stage2_local_slot_offset = get_named_compile_time_arg_val("sampling_stage2_local_slot_offset");
-    constexpr uint32_t mesh_send_slot_offset = get_named_compile_time_arg_val("sampling_mesh_send_slot_offset");
+    constexpr uint32_t mesh_local_send_slot_offset =
+        get_named_compile_time_arg_val("sampling_mesh_local_send_slot_offset");
 
     const uint32_t scores_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_common_arg_val<uint32_t>(1);
@@ -159,26 +169,26 @@ void kernel_main() {
         }
 
         if constexpr (mesh_mode) {
-            // Stage 1 receiver: combine local row-1 winner with row-0 remote winner.
+            // Stage 1 receiver: combine local winner with remote winners from all non-target rows.
             if constexpr (stage1_receiver) {
                 write_winner_slot(scratch_addr + stage1_local_slot_offset, global_best_score, global_best_index);
                 auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_sem_addr);
-                noc_semaphore_wait(global_sem_ptr, 1);
+                noc_semaphore_wait(global_sem_ptr, stage1_expected_remote_incs);
                 noc_semaphore_set(global_sem_ptr, 0);
 
-                uint16_t s0 = NEG_INF_BFLOAT16;
-                uint16_t s1 = NEG_INF_BFLOAT16;
-                uint32_t i0 = 0xFFFFFFFF;
-                uint32_t i1 = 0xFFFFFFFF;
-                read_winner_slot(scratch_addr + stage1_remote_slot_offset, s0, i0);
-                read_winner_slot(scratch_addr + stage1_local_slot_offset, s1, i1);
-                if (is_better_candidate(s0, i0, s1, i1)) {
-                    global_best_score = s0;
-                    global_best_index = i0;
-                } else {
-                    global_best_score = s1;
-                    global_best_index = i1;
+                uint16_t stage1_best_score = NEG_INF_BFLOAT16;
+                uint32_t stage1_best_index = 0xFFFFFFFF;
+                for (uint32_t slot = 0; slot < stage1_num_slots; ++slot) {
+                    uint16_t s = NEG_INF_BFLOAT16;
+                    uint32_t i = 0xFFFFFFFF;
+                    read_winner_slot(scratch_addr + stage1_slot_base_offset + slot * winner_page_bytes, s, i);
+                    if (is_better_candidate(s, i, stage1_best_score, stage1_best_index)) {
+                        stage1_best_score = s;
+                        stage1_best_index = i;
+                    }
                 }
+                global_best_score = stage1_best_score;
+                global_best_index = stage1_best_index;
             }
         }
 
@@ -187,63 +197,32 @@ void kernel_main() {
             output_ptr[0] = global_best_index;
         } else {
             if constexpr (Core::is_mesh_sender_core && (stage1_sender || stage2_sender)) {
-                // Sender metadata and fabric connection args are appended by host.
-                size_t arg_idx = 0;
-                const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t dst_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-
-                cb_reserve_back(winner_cb, 1);
-                const uint32_t local_slot_addr = get_write_ptr(winner_cb);
-                write_winner_slot(local_slot_addr, global_best_score, global_best_index);
-                cb_push_back(winner_cb, 1);
-                cb_wait_front(winner_cb, 1);
-
-                constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-                auto route_id = PacketHeaderPool::allocate_header_n(1);
-                volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
-                set_unicast_route(
-                    packet_header, static_cast<uint16_t>(dst_chip_id), static_cast<uint16_t>(dst_mesh_id), 1);
-                packet_header->to_noc_fused_unicast_write_atomic_inc(
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                        get_noc_addr(final_noc_x, final_noc_y, dst_l1_addr),
-                        get_noc_addr(final_noc_x, final_noc_y, dst_sem_addr),
-                        1,
-                        false},
-                    winner_page_bytes);
-
-                auto fabric_sender =
-                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-                fabric_sender.open();
-                fabric_sender.wait_for_empty_write_slot();
-                fabric_sender.send_payload_without_header_non_blocking_from_address(local_slot_addr, winner_page_bytes);
-                fabric_sender.send_payload_flush_blocking_from_address(
-                    reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
-                fabric_sender.close();
-                noc_async_full_barrier();
-                cb_pop_front(winner_cb, 1);
+                // BRISC owns fabric send; publish sender payload then signal local-ready.
+                write_winner_slot(scratch_addr + mesh_local_send_slot_offset, global_best_score, global_best_index);
+                auto local_ready_sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(local_ready_semaphore_id));
+                noc_semaphore_set(local_ready_sem_ptr, 1);
             }
 
             if constexpr (stage2_receiver) {
                 write_winner_slot(scratch_addr + stage2_local_slot_offset, global_best_score, global_best_index);
                 auto global_stage2_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_stage2_sem_addr);
-                noc_semaphore_wait(global_stage2_sem_ptr, 1);
+                noc_semaphore_wait(global_stage2_sem_ptr, stage2_expected_remote_incs);
                 noc_semaphore_set(global_stage2_sem_ptr, 0);
 
-                uint16_t s0 = NEG_INF_BFLOAT16;
-                uint16_t s1 = NEG_INF_BFLOAT16;
-                uint32_t i0 = 0xFFFFFFFF;
-                uint32_t i1 = 0xFFFFFFFF;
-                read_winner_slot(scratch_addr + stage2_remote_slot_offset, s0, i0);
-                read_winner_slot(scratch_addr + stage2_local_slot_offset, s1, i1);
-                if (is_better_candidate(s0, i0, s1, i1)) {
-                    global_best_score = s0;
-                    global_best_index = i0;
-                } else {
-                    global_best_score = s1;
-                    global_best_index = i1;
+                uint16_t stage2_best_score = NEG_INF_BFLOAT16;
+                uint32_t stage2_best_index = 0xFFFFFFFF;
+                for (uint32_t slot = 0; slot < stage2_num_slots; ++slot) {
+                    uint16_t s = NEG_INF_BFLOAT16;
+                    uint32_t i = 0xFFFFFFFF;
+                    read_winner_slot(scratch_addr + stage2_slot_base_offset + slot * winner_page_bytes, s, i);
+                    if (is_better_candidate(s, i, stage2_best_score, stage2_best_index)) {
+                        stage2_best_score = s;
+                        stage2_best_index = i;
+                    }
                 }
+                global_best_score = stage2_best_score;
+                global_best_index = stage2_best_index;
                 auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_addr);
                 output_ptr[0] = global_best_index;
             }
@@ -251,7 +230,50 @@ void kernel_main() {
     }
 
 #elif defined(COMPILE_FOR_BRISC)
-    // No-op for k=1 argmax fast path.
+    constexpr uint32_t winner_page_bytes = get_named_compile_time_arg_val("sampling_winner_page_bytes");
+    constexpr uint32_t local_ready_semaphore_id = get_named_compile_time_arg_val("sampling_local_ready_semaphore_id");
+
+    if constexpr (Core::is_final_core && Core::is_mesh_sender_core) {
+        const uint32_t final_noc_x = get_common_arg_val<uint32_t>(3);
+        const uint32_t final_noc_y = get_common_arg_val<uint32_t>(4);
+        const uint32_t scratch_addr = get_common_arg_val<uint32_t>(5);
+
+        // Wait for NCRISC to publish winner payload to scratch.
+        auto local_ready_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(local_ready_semaphore_id));
+        noc_semaphore_wait(local_ready_sem_ptr, 1);
+        noc_semaphore_set(local_ready_sem_ptr, 0);
+
+        // Sender metadata and fabric connection args are appended by host.
+        size_t arg_idx = 0;
+        const uint32_t local_slot_offset = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t dst_l1_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t local_slot_addr = scratch_addr + local_slot_offset;
+
+        constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+        auto route_id = PacketHeaderPool::allocate_header_n(1);
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+        set_unicast_route(packet_header, static_cast<uint16_t>(dst_chip_id), static_cast<uint16_t>(dst_mesh_id), 1);
+        packet_header->to_noc_fused_unicast_write_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                get_noc_addr(final_noc_x, final_noc_y, dst_l1_addr),
+                get_noc_addr(final_noc_x, final_noc_y, dst_sem_addr),
+                1,
+                false},
+            winner_page_bytes);
+        auto fabric_sender =
+            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+        fabric_sender.open();
+        fabric_sender.wait_for_empty_write_slot();
+        fabric_sender.send_payload_without_header_non_blocking_from_address(local_slot_addr, winner_page_bytes);
+        fabric_sender.send_payload_flush_blocking_from_address(
+            reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
+        fabric_sender.close();
+        noc_async_full_barrier();
+    }
 
 #elif defined(COMPILE_FOR_TRISC)
     // No-op for k=1 argmax fast path.
