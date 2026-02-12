@@ -29,8 +29,6 @@ protected:
 };
 
 TEST_F(AdamWFullTest, AdamWTest) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
     using namespace ttml::ops;
     ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
