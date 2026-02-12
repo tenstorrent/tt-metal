@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "autograd/tensor.hpp"
 #include "models/common/transformer_common.hpp"
 #include "modules/rotary_embedding.hpp"
@@ -40,12 +42,12 @@ public:
     explicit GroupedQueryAttention(const GQAConfig& config);
 
     [[nodiscard]] autograd::TensorPtr operator()(
-        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+        const autograd::TensorPtr& x, const std::optional<autograd::TensorPtr>& mask) override;
 
     // Forward with KV cache for inference
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& x,
-        const autograd::TensorPtr& mask,
+        const ttml::autograd::TensorPtr& mask,
         std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
         const uint32_t layer_idx,
         const uint32_t new_tokens);

@@ -5,6 +5,8 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
+#include "metal/ops/ring_sdpa_workload/ring_sdpa_bw_device_operation.hpp"
+#include "metal/ops/ring_sdpa_workload/ring_sdpa_device_operation.hpp"
 
 namespace ttml::ops::distributed {
 
@@ -47,6 +49,6 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    bool use_causal_mask = false);
+    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal);
 
 }  // namespace ttml::ops::distributed

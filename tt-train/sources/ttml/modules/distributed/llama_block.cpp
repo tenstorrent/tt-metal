@@ -76,7 +76,7 @@ DistributedLlamaBlock::DistributedLlamaBlock(
 }
 
 autograd::TensorPtr DistributedLlamaBlock::operator()(
-    const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
+    const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) {
     auto residual = input;
     auto h = (*m_attention_norm)(input);
     h = (*m_attention)(h, mask);  // TODO: pass in start_pos, freqs_cis for RoPE here

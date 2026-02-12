@@ -346,8 +346,8 @@ static void TestRingAttention(
         mask_tensor = autograd::create_tensor(mask_tt);
     }
 
-    auto output_tensor =
-        ops::distributed::ring_attention_sdpa(query_tensor, key_tensor, value_tensor, mask_tensor, use_mask);
+    auto output_tensor = ops::distributed::ring_attention_sdpa(
+        query_tensor, key_tensor, value_tensor, mask_tensor, ttml::metal::AttentionMaskType::Causal);
 
     // Gather output from all devices
     auto output_xtensors = core::to_xtensor<float>(output_tensor->get_value(), core::IdentityComposer{});

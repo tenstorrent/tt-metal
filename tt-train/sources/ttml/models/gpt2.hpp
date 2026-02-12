@@ -6,6 +6,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <optional>
+
 #include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
 #include "modules/module_base.hpp"
@@ -51,7 +53,7 @@ public:
     virtual ~Transformer() = default;
     void load_from_safetensors(const std::filesystem::path& model_path) override;
     ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
+        const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) override;
 };
 
 [[nodiscard]] TransformerConfig read_config(const YAML::Node& config);

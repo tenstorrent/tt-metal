@@ -5,6 +5,7 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -28,7 +29,7 @@ enum class WeightTyingType {
 };
 
 autograd::TensorPtr memory_efficient_runner(
-    auto&& forward_impl, const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
+    auto&& forward_impl, const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) {
     if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
         return forward_impl(input, mask);
     }

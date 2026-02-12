@@ -71,11 +71,7 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
 }
 
 ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
-    auto& pctx = autograd::ctx().get_parallelism_context();
-    std::optional<uint32_t> cp_axis = pctx.get_cp_axis();
-    const bool use_cp = cp_axis.has_value() && pctx.get_cp_size() > 1;
-
+    const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
     auto q = (*m_q_linear)(x);
     auto kv = (*m_kv_linear)(x);
 
@@ -90,12 +86,13 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
 
     // Apply attention: use ring_attention_sdpa if CP is enabled, otherwise regular SDPA
     autograd::TensorPtr attention;
-    if (use_cp) {
+    auto& pctx = autograd::ctx().get_parallelism_context();
+    if (pctx.is_cp_enabled() && pctx.get_cp_size() > 1) {
         /*
          * TODO: add support for non-causal mask
          */
         attention = ops::distributed::ring_attention_sdpa(
-            query_with_heads, key_with_heads, value_with_heads, std::nullopt, /* use_causal_mask */ true);
+            query_with_heads, key_with_heads, value_with_heads, std::nullopt, ttml::metal::AttentionMaskType::Causal);
     } else {
         attention = ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
     }

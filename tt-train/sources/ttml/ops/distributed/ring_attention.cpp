@@ -18,8 +18,6 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
-#include "metal/ops/ring_sdpa_workload/ring_sdpa_bw_device_operation.hpp"
-#include "metal/ops/ring_sdpa_workload/ring_sdpa_device_operation.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
@@ -34,7 +32,7 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    bool use_causal_mask) {
+    const ttml::metal::AttentionMaskType mask_type) {
     auto& pctx = autograd::ctx().get_parallelism_context();
     std::optional<uint32_t> cp_axis = pctx.get_cp_axis();
     const uint32_t cp_size = pctx.get_cp_size();
@@ -117,13 +115,9 @@ autograd::TensorPtr ring_attention_sdpa(
         // For causal masking, initialize intermediate_tensor to "no contribution" values
         // Devices that are skipped will keep these values, indicating zero contribution
         // (output_tensor doesn't need to be zeroed - skipped devices will have weight=0 in online softmax)
-        if (use_causal_mask) {
+        if (mask_type == ttml::metal::AttentionMaskType::Causal) {
             ttnn::copy(no_contrib_intermediate, intermediate_tensor);
         }
-
-        // Determine mask type for the workload
-        ttml::metal::AttentionMaskType mask_type =
-            use_causal_mask ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
 
         // Call the cached device operation
         // No mask tensors needed - SDPA kernel generates causal mask internally
@@ -239,16 +233,12 @@ autograd::TensorPtr ring_attention_sdpa(
                                       v_current,  // V at end of forward (position v1)
                                       ring_size,
                                       cp_axis_value,
-                                      use_causal_mask]() mutable {
+                                      mask_type]() mutable {
         // Get gradient w.r.t. output
         const auto& grad_output = out->get_grad();
         const auto& query_tensor = query->get_value();
         auto* mesh_device = query_tensor.device();
         auto [batch_num, heads, seq_len_local, dim] = query_tensor.logical_shape().to_array_4D();
-
-        // Determine mask type for backward pass
-        ttml::metal::AttentionMaskType bw_mask_type =
-            use_causal_mask ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
 
         // Initialize gradient accumulators using raw ttnn::Tensor
         ttnn::Tensor grad_Q_accum = ttnn::zeros_like(query_tensor);
@@ -305,7 +295,7 @@ autograd::TensorPtr ring_attention_sdpa(
                 ring_size,
                 cp_axis_value,
                 step_idx,
-                bw_mask_type,
+                mask_type,
                 ttml::metal::ops::ring_sdpa::RingDirection::Backward);
 
             // RECOMPUTE: Calculate effective weight from recomputed intermediate and final global stats
@@ -336,7 +326,7 @@ autograd::TensorPtr ring_attention_sdpa(
                 ring_size,
                 cp_axis_value,
                 step_idx,
-                bw_mask_type,
+                mask_type,
                 ttml::metal::ops::ring_sdpa::RingDirection::Backward);
 
             // Accumulate grad_Q locally (Q doesn't move in the ring)
@@ -357,7 +347,7 @@ autograd::TensorPtr ring_attention_sdpa(
                 ring_size,
                 cp_axis_value,
                 step_idx,
-                bw_mask_type,
+                mask_type,
                 ttml::metal::ops::ring_sdpa::RingDirection::Backward);
 
             // Accumulate into grad_K/V buffers
