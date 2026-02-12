@@ -1,20 +1,20 @@
 // SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <compute_kernel_api/eltwise_binary_sfpu.h>
-#include <compute_kernel_api/reconfig_data_format.h>
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/copy_dest_values.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/matmul.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/tile_move_copy.h"
 
 // ----------------------------------------------------------------------
 // SwiGLU Forward Compute Kernel with Packer L1 Accumulation
@@ -32,6 +32,8 @@ constexpr uint32_t block_size = get_compile_time_arg_val(2);
 constexpr uint32_t Wt = get_compile_time_arg_val(3);
 constexpr uint32_t hidden_Wt = get_compile_time_arg_val(4);
 
+// Round up to block_size alignment - ensures all CB operations use block_size multiples.
+// Padding tiles contain garbage but are never read by matmul (k loops only to k_block_size).
 constexpr uint32_t hidden_Wt_rounded_up = ((hidden_Wt + block_size - 1) / block_size) * block_size;
 constexpr uint32_t tiles_per_batch = block_size * block_size;
 
@@ -203,7 +205,7 @@ inline void compute_M_for_r() {
             tile_regs_release();
         }
 
-        // Pack padding tiles for incomplete k_block (only when hidden_Wt % block_size != 0)
+        // Pad to block_size alignment (garbage tiles, never read by matmul)
         if (k_block_size < block_size) {
             tile_regs_acquire();
             tile_regs_commit();
@@ -215,7 +217,7 @@ inline void compute_M_for_r() {
             tile_regs_release();
         }
 
-        // Batch: push full block at once
+        // Always push block_size tiles (block alignment invariant)
         cb_push_back(cb_m_idx, block_size);
     }
 

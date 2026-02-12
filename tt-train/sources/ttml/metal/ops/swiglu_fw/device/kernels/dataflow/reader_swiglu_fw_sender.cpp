@@ -34,7 +34,7 @@ void kernel_main() {
     const uint32_t w3_address = get_arg_val<uint32_t>(ra++);
     const uint32_t max_rows_for_sync = get_arg_val<uint32_t>(ra++);
 
-    // Multicast bounding box
+    // Multicast bounding box and semaphores
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(ra++);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(ra++);
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(ra++);
@@ -42,6 +42,17 @@ void kernel_main() {
     const uint32_t num_receivers_excluding_self = get_arg_val<uint32_t>(ra++);
     const uint32_t mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
     const uint32_t mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
+
+    const McastLoopbackConfig mcast_cfg = {
+        .sender_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(mcast_sender_semaphore_addr),
+        .receiver_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(mcast_receiver_semaphore_addr),
+        .receiver_sem_addr = mcast_receiver_semaphore_addr,
+        .noc_start_x = mcast_dest_noc_start_x,
+        .noc_start_y = mcast_dest_noc_start_y,
+        .noc_end_x = mcast_dest_noc_end_x,
+        .noc_end_y = mcast_dest_noc_end_y,
+        .num_receivers = num_receivers_excluding_self,
+    };
 
     const uint32_t tile_bytes = get_tile_size(cb_w1_idx);
 
@@ -53,14 +64,6 @@ void kernel_main() {
     const auto w2_address_generator = TensorAccessor(w2_args, w2_address, tile_bytes);
     const auto w3_address_generator = TensorAccessor(w3_args, w3_address, tile_bytes);
 
-    volatile tt_l1_ptr uint32_t* mcast_sender_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_sender_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* mcast_receiver_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_receiver_semaphore_addr);
-
-    // Loop for max_rows_for_sync iterations (same weight data for all cores per row).
-    // Weight data is the SAME for every row - the sender reads and multicasts each block
-    // once per row iteration so all cores stay synchronized.
     for (uint32_t r = 0; r < max_rows_for_sync; ++r) {
         // ---- Phase A: Mcast W1/W3 for all p_blocks × k_blocks ----
         for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
@@ -69,10 +72,8 @@ void kernel_main() {
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
-
                 const uint32_t weight_tile_start = p_block_start * hidden_Wt + k_block_start;
 
-                // Batched mcast W1 with LOOPBACK
                 mcast_sender_read_batched_rows_and_send_loopback(
                     cb_w1_idx,
                     w1_address_generator,
@@ -83,16 +84,8 @@ void kernel_main() {
                     p_block_size,
                     hidden_Wt,
                     tile_bytes,
-                    mcast_sender_sem_ptr,
-                    mcast_receiver_sem_ptr,
-                    mcast_receiver_semaphore_addr,
-                    mcast_dest_noc_start_x,
-                    mcast_dest_noc_start_y,
-                    mcast_dest_noc_end_x,
-                    mcast_dest_noc_end_y,
-                    num_receivers_excluding_self);
+                    mcast_cfg);
 
-                // Batched mcast W3 with LOOPBACK
                 mcast_sender_read_batched_rows_and_send_loopback(
                     cb_w3_idx,
                     w3_address_generator,
@@ -103,14 +96,7 @@ void kernel_main() {
                     p_block_size,
                     hidden_Wt,
                     tile_bytes,
-                    mcast_sender_sem_ptr,
-                    mcast_receiver_sem_ptr,
-                    mcast_receiver_semaphore_addr,
-                    mcast_dest_noc_start_x,
-                    mcast_dest_noc_start_y,
-                    mcast_dest_noc_end_x,
-                    mcast_dest_noc_end_y,
-                    num_receivers_excluding_self);
+                    mcast_cfg);
             }
         }
 
@@ -123,27 +109,19 @@ void kernel_main() {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
-                // W2 in row-major CB layout: [k0_c0..k0_c3, k1_c0..k1_c3, ...]
-                // This enables matmul_block in the compute kernel
+                // W2 in row-major CB layout for matmul_block compatibility
                 const uint32_t w2_first_row_start = k_block_start * Wt + c_block_start;
                 mcast_sender_read_batched_rows_and_send_loopback(
                     cb_w2_idx,
                     w2_address_generator,
                     w2_first_row_start,
-                    block_size,    // tiles_per_row (c tiles)
-                    block_size,    // num_rows (k tiles)
-                    c_block_size,  // valid_tiles_per_row
-                    k_block_size,  // valid_num_rows
-                    Wt,            // row_stride (width of W2 matrix)
+                    block_size,
+                    block_size,
+                    c_block_size,
+                    k_block_size,
+                    Wt,
                     tile_bytes,
-                    mcast_sender_sem_ptr,
-                    mcast_receiver_sem_ptr,
-                    mcast_receiver_semaphore_addr,
-                    mcast_dest_noc_start_x,
-                    mcast_dest_noc_start_y,
-                    mcast_dest_noc_end_x,
-                    mcast_dest_noc_end_y,
-                    num_receivers_excluding_self);
+                    mcast_cfg);
             }
         }
     }
