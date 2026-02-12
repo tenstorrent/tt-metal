@@ -14,6 +14,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 
@@ -42,6 +43,8 @@ protected:
 // 4. Compare TTML kernel results with PyTorch reference results
 // ============================================================================
 TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
@@ -57,6 +60,8 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
 }
 
 TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
@@ -90,6 +95,8 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -132,6 +139,8 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -173,6 +182,8 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
 // Same test methodology as Section 1, but using rmsnorm_composite() instead.
 // ============================================================================
 TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Forward) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
@@ -188,6 +199,8 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Forward) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Backward) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
@@ -221,6 +234,8 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Backward) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Forward_Batch) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -259,6 +274,8 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Forward_Batch) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -401,11 +418,15 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
 // ============================================================================
 
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Basic_Small) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     CompareKernelVsComposite({1U, 1U, 2U, 32U});
 }
 
 // Test aligned dimensions (C % 32 == 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C = 1024 (32 * 32), fits in L1 cache
     CompareKernelVsComposite({1U, 1U, 1U, 1024U});
 
@@ -415,24 +436,32 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
 
 // Test aligned dimensions (C % 32 == 0) that fit in L1 except for gamma
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_L1ExceptGamma) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C = 8192 (1 << 13), fits in L1 except gamma parameter
     CompareKernelVsComposite({1U, 1U, 1U, 8192U});
 }
 
 // Test aligned dimensions (C % 32 == 0) that don't fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_DoesNotFitInL1) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C = 16384 (1 << 14), does not fit in L1 cache
     CompareKernelVsComposite({1U, 1U, 1U, 16384U});
 }
 
 // Test aligned dimensions (C % 32 == 0) with very large C
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_VeryLargeC) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C = 1048576 (1 << 20), very large C dimension (1M elements)
     CompareKernelVsComposite({1U, 1U, 1U, 1048576U});
 }
 
 // Test unaligned dimensions (C % 32 != 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FitsInL1) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C = 1023 (32 * 31 + 31), requires masking, fits in L1
     CompareKernelVsComposite({1U, 1U, 1U, 1023U});
 
@@ -442,12 +471,16 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FitsInL1) {
 
 // Test unaligned dimensions (C % 32 != 0) that don't fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_DoesNotFitInL1) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C = 16383 (1 << 14 - 1), requires masking, does not fit in L1
     CompareKernelVsComposite({1U, 1U, 1U, 16383U});
 }
 
 // Test unaligned dimensions (C % 32 != 0) with very large C
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_VeryLargeC) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // C = 1048575 (1 << 20 - 1), very large C with masking
     CompareKernelVsComposite({1U, 1U, 1U, 1048575U});
 
@@ -457,29 +490,39 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_VeryLargeC) {
 
 // Test block_size = 1 (C is odd)
 TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize1_OddC) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     CompareKernelVsComposite({1U, 1U, 1U, 33U});   // C = 33 (odd)
     CompareKernelVsComposite({1U, 1U, 1U, 127U});  // C = 127 (odd)
 }
 
 // Test block_size = 2 (C is even)
 TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     CompareKernelVsComposite({1U, 1U, 1U, 34U});   // C = 34 (even)
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
 }
 
 // Test training-like shapes with NanoLlama dimensions
 TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     // NanoLlama training shape: batch=64, seq_len=256, hidden_dim=384
     CompareKernelVsComposite({64U, 1U, 256U, 384U});
 }
 
 // Test training-like shapes with LLaMA 7B dimensions
 TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     CompareKernelVsComposite({1U, 1U, 512U, 4096U});
 }
 
 // Test small batch and sequence dimensions (non-1 values)
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -490,6 +533,8 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
 
 // Test different masking patterns with larger batches
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";

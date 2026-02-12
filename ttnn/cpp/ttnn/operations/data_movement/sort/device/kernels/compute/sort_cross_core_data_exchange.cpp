@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/binary_max_min.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/binary_max_min.h"
 
 #include "sort_common.hpp"
 

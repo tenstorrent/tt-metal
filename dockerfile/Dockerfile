@@ -76,6 +76,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Install yq (YAML processor) for CI workflows
+# Note: mikefarah/yq is not available in apt, download binary from GitHub releases
+ARG YQ_VERSION=v4.44.6
+RUN wget -q "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq && \
+    chmod +x /usr/local/bin/yq
+
 # Set up virtual environment using uv
 
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -99,7 +105,7 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
 # bundle uv with the venv for portable usage
-RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools
+RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools==80
 
 RUN git config --global --add safe.directory '*'
 
@@ -138,9 +144,12 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requireme
 # Configure PyTorch CPU index and install Python packages using uv
 # index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
 # that are not explicitly listed in the requirements.txt files
+# no-build-isolation is for pulling in pkg_resources from the system package
+# which setuptools removed in version 82. The old setuptools wheels apparently
+# do not automatically pull in pkg_resources
 RUN umask 000 && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
-    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
@@ -205,6 +214,14 @@ RUN if [ "$UBUNTU_VERSION" != "24.04" ]; then \
 
 COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Configure SSH for MPI multihost jobs readiness
+RUN adduser --uid 1001 --shell /bin/bash user
+RUN usermod -aG sudo user
+RUN echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
+
+RUN mkdir -p /run/sshd
+RUN echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 

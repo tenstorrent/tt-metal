@@ -242,7 +242,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
+          sparse-checkout-cone-mode: true
       - id: parse
         uses: ./.github/actions/parse-platform
         with:
@@ -282,6 +282,9 @@ jobs:
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
 
       - name: Download artifacts from workflow run
         id: download

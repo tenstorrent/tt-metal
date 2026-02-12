@@ -22,6 +22,19 @@
 #define FACE_SIZE (FACE_WIDTH * FACE_HEIGHT)
 #define FACES_PER_TILE_WIDTH (TILE_WIDTH / FACE_WIDTH)
 
+template <bool B>
+struct IndexType;
+
+template <>
+struct IndexType<true> {
+    using type = uint32_t;
+};
+
+template <>
+struct IndexType<false> {
+    using type = uint16_t;
+};
+
 // Zero out a single page (where wr ptr points) for a given circular buffer.
 template <uint32_t cb_id>
 ALWI void zero_out_page() {
@@ -52,6 +65,38 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unco
     }
 
     return true;
+}
+
+template <
+    typename IndexType,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    uint32_t fill_c,
+    uint32_t column_stride,
+    uint32_t row_stride,
+    bool is_large_kernel,
+    uint32_t sticks_per_chunk,
+    uint32_t in_idx_cb_id>
+void fill_indexes(uint32_t init_index) {
+    volatile tt_l1_ptr IndexType* idx_ptr =
+        reinterpret_cast<volatile tt_l1_ptr IndexType*>(get_write_ptr(in_idx_cb_id));
+    uint32_t kernel_idx = 0;
+
+    for (uint32_t h = 0; h < kernel_h; ++h) {
+        uint32_t hw = h * kernel_w;
+        for (uint32_t w = 0; w < kernel_w; ++w, ++hw) {
+            if (!is_large_kernel || hw < sticks_per_chunk) {
+                volatile tt_l1_ptr IndexType* base_ptr = &idx_ptr[hw * TILE_WIDTH];
+                IndexType index = static_cast<IndexType>(init_index + kernel_idx);
+
+                for (uint32_t c = 0; c < fill_c; ++c) {
+                    base_ptr[c] = index;
+                }
+            }
+            kernel_idx += column_stride;
+        }
+        kernel_idx += row_stride;
+    }
 }
 
 template <uint32_t cb_id, uint32_t clear_value_cb_id>
@@ -94,17 +139,18 @@ template <
     uint32_t dilation_w,
     bool is_large_kernel,
     uint32_t sticks_per_chunk,
-    uint16_t right_inc,
-    uint16_t down_left_wrap_inc,
-    uint16_t up_left_wrap_inc,
-    uint16_t intra_kernel_right_inc,
-    uint16_t intra_kernel_down_left_wrap_inc,
+    uint32_t right_inc,
+    uint32_t down_left_wrap_inc,
+    uint32_t up_left_wrap_inc,
+    uint32_t intra_kernel_right_inc,
+    uint32_t intra_kernel_down_left_wrap_inc,
     uint32_t in_idx_cb_id,
     uint32_t right_inc_cb_id,
     uint32_t down_left_wrap_inc_cb_id,
     uint32_t up_left_wrap_inc_cb_id,
     uint32_t intra_kernel_right_inc_cb_id,
-    uint32_t intra_kernel_down_left_wrap_inc_cb_id>
+    uint32_t intra_kernel_down_left_wrap_inc_cb_id,
+    bool indexes_32_bit>
 ALWI void initialize_return_indices_data() {
     // since kernels can start in padded regions we need to have "indexes" in these regions
     // we choose a paradigm where we padding indexes must satisfy the following conditions:
@@ -118,26 +164,26 @@ ALWI void initialize_return_indices_data() {
     // and since all negative values correspond to padding indexes which will never be a max
 
     // Calculate initial index based on padding conditions
-    uint16_t init_index = 0;
+    uint32_t init_index = 0;
     constexpr uint32_t window_size_hw = kernel_h * kernel_w;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
-    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(2);
-    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(3);
+    const uint32_t start_row = get_arg_val<uint32_t>(2);
+    const uint32_t start_col = get_arg_val<uint32_t>(3);
 
     if (start_row <= pad_t) {
         // top left is in top padding, we increment from the padding index in the top left
         // of the padded tensor
-        uint16_t global_top_left_pad_idx = -(uint16_t)pad_l - (uint16_t)pad_t * (uint16_t)in_w;
+        uint32_t global_top_left_pad_idx = -pad_l - pad_t * in_w;
         init_index = global_top_left_pad_idx + start_col + start_row * in_w;
     } else if (start_col <= pad_l) {
         // top left is in left padding, we increment from the padding index in the leftmost
         // column of the starting row of the padded tensor
-        uint16_t leftmost_valid_index = (start_row - (uint16_t)pad_t) * (uint16_t)in_w;
-        uint16_t start_row_left_pad_idx = leftmost_valid_index - (uint16_t)pad_l;
+        uint32_t leftmost_valid_index = (start_row - pad_t) * in_w;
+        uint32_t start_row_left_pad_idx = leftmost_valid_index - pad_l;
         init_index = start_row_left_pad_idx + start_col;
     } else {
         // top left is in valid region, we choose the valid index
-        init_index = (start_row - (uint16_t)pad_t) * (uint16_t)in_w + (start_col - (uint16_t)pad_l);
+        init_index = (start_row - pad_t) * in_w + (start_col - pad_l);
     }
 
     constexpr uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
@@ -146,34 +192,36 @@ ALWI void initialize_return_indices_data() {
     constexpr uint32_t column_stride = dilation_w;
     constexpr uint32_t row_stride = dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
 
-    // initialize the index CB - TODO for c > 1 we could optimize by storing two values per write
+    // initialize the index CB
     cb_reserve_back(in_idx_cb_id, 1);
-    volatile tt_l1_ptr uint16_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(in_idx_cb_id));
-    uint16_t kernel_idx = 0;
-    for (uint32_t h = 0; h < kernel_h; ++h) {
-        uint16_t hw_base = h * kernel_w;
-        for (uint32_t w = 0; w < kernel_w; ++w) {
-            uint16_t hw = hw_base + w;
-            if (!is_large_kernel || hw < sticks_per_chunk) {
-                // only fill up to sticks_per_chunk for large kernels
-                for (uint32_t c = 0; c < fill_c; ++c) {
-                    uint16_t index = init_index + kernel_idx;
-                    idx_ptr[hw * TILE_WIDTH + c] = index;
-                }
-            }
-            kernel_idx += column_stride;
-        }
-        kernel_idx += row_stride;
-    }
+    fill_indexes<
+        typename IndexType<indexes_32_bit>::type,
+        kernel_h,
+        kernel_w,
+        fill_c,
+        column_stride,
+        row_stride,
+        is_large_kernel,
+        sticks_per_chunk,
+        in_idx_cb_id>(init_index);
     cb_push_back(in_idx_cb_id, 1);
 
     // initialize the increment CBs
-    auto fill_inc = [&](uint32_t cb_id, uint16_t inc) __attribute__((always_inline)) {
-        uint32_t inc_32_bit = (uint32_t)inc | ((uint32_t)inc << 16);
+    auto fill_inc = [&](uint32_t cb_id, uint32_t inc) __attribute__((always_inline)) {
         volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
-        for (uint32_t k = 0; k < window_size_hw; ++k) {
-            for (uint32_t c = 0; c < fill_c_32_bit; ++c) {
-                ptr[k * HALF_TILE_WIDTH + c] = inc_32_bit;
+        if constexpr (indexes_32_bit) {
+            for (uint32_t k = 0; k < window_size_hw; ++k) {
+                for (uint32_t c = 0; c < fill_c; ++c) {
+                    ptr[k * TILE_WIDTH + c] = inc;
+                }
+            }
+        } else {
+            uint16_t inc_16 = static_cast<uint16_t>(inc);
+            uint32_t inc_packed = static_cast<uint32_t>(inc_16) | (static_cast<uint32_t>(inc_16) << 16);
+            for (uint32_t k = 0; k < window_size_hw; ++k) {
+                for (uint32_t c = 0; c < fill_c_32_bit; ++c) {
+                    ptr[k * HALF_TILE_WIDTH + c] = inc_packed;
+                }
             }
         }
     };
@@ -228,7 +276,8 @@ template <
     uint32_t out_idx_cb_id,
     uint32_t reader_id,
     uint32_t pack_tmp_cb_id,
-    uint32_t pack_idx_tmp_cb_id>
+    uint32_t pack_idx_tmp_cb_id,
+    uint32_t indexes_32_bit>
 ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
@@ -296,11 +345,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                                 output_faces * FACE_WIDTH * BYTES_PER_ELEM);
 
                             cb_wait_front(pack_idx_tmp_cb_id, 1);
+                            constexpr uint32_t BYTES_PER_ELEM_IDX = indexes_32_bit ? 4 : 2;
                             noc_async_read_one_packet(
                                 get_noc_addr(get_read_ptr(pack_idx_tmp_cb_id)),
                                 get_write_ptr(out_idx_cb_id),
-                                output_faces * FACE_WIDTH * BYTES_PER_ELEM);
-
+                                output_faces * FACE_WIDTH * BYTES_PER_ELEM_IDX);
                             noc_async_read_barrier();
                             cb_pop_front(pack_tmp_cb_id, 1);
                             cb_pop_front(pack_idx_tmp_cb_id, 1);
@@ -318,42 +367,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
             }
         }
     }
-}
-
-template <
-    bool one_scalar_per_core,
-    uint32_t in_scalar_cb_id,
-    uint32_t reader_nindices,
-    bool split_reader,
-    uint32_t multi_buffering_factor>
-ALWI void fill_scalar(
-    uint32_t& scalar_start,
-    uint32_t& scalar_end,
-    uint32_t& scalar_value,
-    uint32_t& scalar_index,
-    uint32_t& counter,
-    volatile uint16_t* config_ptr) {
-    constexpr uint32_t num_readers = split_reader ? 2 : 1;
-    cb_reserve_back(in_scalar_cb_id, 1);
-
-    while (counter >= scalar_end && scalar_end < reader_nindices) {
-        scalar_index++;
-        scalar_start = scalar_end;
-        scalar_value = config_ptr[3 * scalar_index + 1];
-        scalar_end = config_ptr[3 * scalar_index + 2];
-    }
-
-    // We want to fill the scalar CB the fewest times possible, this will be min(scalar_end - scalar_start, num_readers
-    // * multi_buffering_factor)
-    if (counter < scalar_start + num_readers * multi_buffering_factor) {
-        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
-        // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
-        // between the first and second face.
-        fill_with_val(get_write_ptr(in_scalar_cb_id), FACE_WIDTH, scalar_value, false);
-    }
-    counter += num_readers;
-
-    cb_push_back(in_scalar_cb_id, 1);
 }
 
 /**
@@ -408,9 +421,9 @@ void kernel_main() {
     constexpr bool return_indices = (bool)get_compile_time_arg_val(37);
     constexpr uint32_t pad_t = get_compile_time_arg_val(38);
     constexpr uint32_t pad_l = get_compile_time_arg_val(39);
-    constexpr uint16_t right_inc = get_compile_time_arg_val(40);
-    constexpr uint16_t down_left_wrap_inc = get_compile_time_arg_val(41);
-    constexpr uint16_t up_left_wrap_inc = get_compile_time_arg_val(42);
+    constexpr uint32_t right_inc = get_compile_time_arg_val(40);
+    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(41);
+    constexpr uint32_t up_left_wrap_inc = get_compile_time_arg_val(42);
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
@@ -418,12 +431,13 @@ void kernel_main() {
     constexpr uint32_t intra_kernel_down_left_wrap_inc = get_compile_time_arg_val(47);
     constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(48);
     constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(49);
-    constexpr uint32_t config_in_dram = get_compile_time_arg_val(50);
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(51);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(52);
-    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(53);
-    constexpr uint32_t reader_page_size = get_compile_time_arg_val(54);
-    constexpr uint32_t reader_tensor_args_index = 55;
+    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(50);
+    constexpr uint32_t config_in_dram = get_compile_time_arg_val(51);
+    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(52);
+    constexpr uint32_t config_page_size = get_compile_time_arg_val(53);
+    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(54);
+    constexpr uint32_t reader_page_size = get_compile_time_arg_val(55);
+    constexpr uint32_t reader_tensor_args_index = 56;
 
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
 
@@ -473,7 +487,8 @@ void kernel_main() {
             down_left_wrap_inc_cb_id,
             up_left_wrap_inc_cb_id,
             intra_kernel_right_inc_cb_id,
-            intra_kernel_down_left_wrap_inc_cb_id>();
+            intra_kernel_down_left_wrap_inc_cb_id,
+            indexes_32_bit>();
     }
 
     // initialize the scalar CB
@@ -551,7 +566,8 @@ void kernel_main() {
                 out_idx_cb_id,
                 reader_id,
                 pack_tmp_cb_id,
-                pack_idx_tmp_cb_id>(ind, in_l1_read_base_addr);
+                pack_idx_tmp_cb_id,
+                indexes_32_bit>(ind, in_l1_read_base_addr);
         }
     }
 }  // kernel_main()
