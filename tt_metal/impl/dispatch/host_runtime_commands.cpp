@@ -4,6 +4,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
+#include <event.hpp>
 #include <host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
@@ -58,5 +59,23 @@ void ValidateBufferRegion(
         region.size);
 }
 }  // namespace detail
+
+bool EventQuery(const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch always returns true to avoid infinite blocking. Unclear if this is safe for all situations.
+        return true;
+    }
+    detail::DispatchStateCheck(true);
+    event->wait_until_ready();  // Block until event populated. Parent thread.
+    bool event_completed = event->device->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id;
+    log_trace(
+        tt::LogMetal,
+        "Returning event_completed: {} for host query on Event(device_id: {} cq_id: {} event_id: {})",
+        event_completed,
+        event->device->id(),
+        event->cq_id,
+        event->event_id);
+    return event_completed;
+}
 
 }  // namespace tt::tt_metal
