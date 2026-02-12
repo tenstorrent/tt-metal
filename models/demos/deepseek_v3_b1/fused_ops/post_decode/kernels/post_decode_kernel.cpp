@@ -1,21 +1,36 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Post-decode unified kernel
-// Single kernel file, compiles correctly for all RISC cores
+// Post-Decode Unified Kernel: Mcast + Matmul for LM Head Vocab Projection
 //
-// Mcast + Matmul: broadcast input_a from sender core to matmul cores, then matmul
+// Single .cpp compiled for all three RISC processors (NCRISC, BRISC, TRISC).
+// Compile-time role flags (is_mcast_sender_core, is_mcast_receiver_core, is_matmul_core)
+// enable dead code elimination via `if constexpr`, so each core only runs its assigned path.
 //
-// NCRISC: Mcast receiver (receiver cores) / sharded buffer setup
-// BRISC:  Mcast sender (sender core)
-// TRISC:  Performs matmul compute via Matmul::Op
+// Data flow:
+//   1. Mcast:  Sender core broadcasts input [1, K] to all cores in the device grid
+//   2. Matmul: Each matmul core computes [1, K] x [K, N_per_core] -> [1, N_per_core]
+//
+// RISC responsibilities:
+//   NCRISC: Mcast receiver (semaphore wait + CB push) and sharded buffer setup
+//           (mcast_src on sender core, weight shards on matmul cores)
+//   BRISC:  Mcast sender (reads mcast_src CB, NOC multicasts to all receiver cores)
+//   TRISC:  Matmul compute (reads in0 from mcast_dst CB, in1 from weights CB, writes to out CB)
+//
+// CB layout (see op.py PostDecode class constants for index definitions):
+//   CB 0  (mcast_src):   Input tensor on sender core (tensor-backed)
+//   CB 1  (mcast_dst):   Mcast destination / matmul in0 on all cores (intermediate)
+//   CB 2  (matmul_in1):  Vocab weights on matmul cores (tensor-backed)
+//   CB 16 (matmul_out):  Matmul output on matmul cores (tensor-backed)
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/mcast.hpp"
 
-// Compile-time role flags for dead code elimination via if constexpr
+// Per-core role flags set by UnifiedCompileTimeCoreDescriptor in op.py.
+// Each flag is specialized per core group at compile time, enabling if constexpr
+// to eliminate dead code paths (e.g., sender-only code on receiver cores).
 struct Core {
     static constexpr bool is_mcast_sender_core = get_named_compile_time_arg_val("is_mcast_sender_core") == 1;
     static constexpr bool is_mcast_receiver_core = get_named_compile_time_arg_val("is_mcast_receiver_core") == 1;
@@ -24,10 +39,12 @@ struct Core {
 
 void kernel_main() {
 // ============================================================================
-// Define args per RISC (different compile-time arg layout per processor)
+// Per-RISC compile-time arg setup
+// Each RISC receives different named compile-time args from op.py and
+// constructs the appropriate Mcast/Matmul arg structs for its role.
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
-    // Mcast receiver args
+    // --- NCRISC: Mcast receiver + sharded buffer setup ---
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
         get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
@@ -35,18 +52,18 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
 
-    // Matmul CTArgs (NCRISC is no-op for matmul compute)
+    // Matmul reader args (NCRISC is a no-op for matmul; compute runs on TRISC)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
 
-    // Setup sharded persistent buffers
-    // Mcast source buffer on sender core (so BRISC can read it)
+    // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
+    // Sender core: register mcast_src CB (CB 0) backed by input_tensor
     if constexpr (Core::is_mcast_sender_core) {
         constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
         constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
         unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
     }
-    // Matmul weight buffers on matmul cores
+    // Matmul cores: register matmul_in1 CB (CB 2) backed by vocab weight shards
     if constexpr (Core::is_matmul_core) {
         constexpr uint32_t in1_cb = get_named_compile_time_arg_val("matmul_in1");
         constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("matmul_k_num_tiles");
@@ -55,11 +72,13 @@ void kernel_main() {
     }
 
 #elif defined(COMPILE_FOR_BRISC)
-    // Mcast sender args
+    // --- BRISC: Mcast sender ---
+    // Template params: <num_cores, is_sender_in_receiver_grid, loopback>
+    // loopback=false because sender does not consume its own multicast data
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
         get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid") == 1,
-        false>;  // loopback = false (sender does not need its own mcast data)
+        false>;
 
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
     constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
@@ -77,25 +96,26 @@ void kernel_main() {
         get_write_ptr(mcast_dst_cb),
     };
 
-    // Matmul CTArgs (BRISC is no-op for matmul)
+    // Matmul writer args (BRISC is a no-op for matmul; compute runs on TRISC)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
 #elif defined(COMPILE_FOR_TRISC)
-    // Mcast CTArgs (no-op for TRISC)
+    // --- TRISC: Matmul compute ---
+    // Mcast is a no-op on TRISC (data movement handled by NCRISC/BRISC)
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
 
-    // Matmul CTArgs - out_w, transpose are compile-time for TRISC
+    // Matmul compute: [1, K] x [K, N_per_core] -> [1, N_per_core]
+    // out_w (output tiles per core) is a compile-time template param for loop unrolling
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w")>;
 
-    // Named compile-time args
-    constexpr uint32_t in0_cb = get_named_compile_time_arg_val("matmul_in0");
-    constexpr uint32_t in1_cb = get_named_compile_time_arg_val("matmul_in1");
-    constexpr uint32_t out_cb = get_named_compile_time_arg_val("matmul_out");
+    // CB indices and tile count from op.py compile-time args
+    constexpr uint32_t in0_cb = get_named_compile_time_arg_val("matmul_in0");  // CB 1: mcast_dst
+    constexpr uint32_t in1_cb = get_named_compile_time_arg_val("matmul_in1");  // CB 2: vocab weights
+    constexpr uint32_t out_cb = get_named_compile_time_arg_val("matmul_out");  // CB 16: matmul output
     constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("matmul_k_num_tiles");
 
-    // Compute args
     deepseek_b1_ops::Matmul::ComputeArgs matmul_args{
         .in0 = in0_cb,
         .in1 = in1_cb,
@@ -105,23 +125,27 @@ void kernel_main() {
 #endif
 
     // ========================================================================
-    // Mcast: sender core -> matmul cores
+    // Phase 1: Mcast — broadcast input from sender core to all device cores
+    //
+    // Template params: <CTArgs, IsSender, IsMcastGridCore, IsReceiverCore, PopSrc>
+    //   IsMcastGridCore: participates in semaphore-based sync (all receivers)
+    //   IsReceiverCore:  performs CB reserve/push for incoming data (all receivers)
+    //   PopSrc:          sender pops mcast_src CB after send (frees tensor-backed buffer)
     // ========================================================================
-    deepseek_b1_ops::Mcast::Op<
-        McastCTArgs,
-        Core::is_mcast_sender_core,
-        Core::is_mcast_receiver_core,  // IsMcastGridCore (for semaphore wait)
-        Core::is_mcast_receiver_core,  // IsReceiverCore (for CB reserve/push)
-        true>                          // pop_src
-        mcast;
+    deepseek_b1_ops::Mcast::
+        Op<McastCTArgs, Core::is_mcast_sender_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
+            mcast;
     mcast.init(mcast_args);
     mcast(mcast_args);
     mcast.teardown();
 
     // ========================================================================
-    // Matmul operation
-    // Reads in0 from mcast_dst CB, in1 from weight shard
-    // pop_in0=true, pop_in1=true
+    // Phase 2: Matmul — each matmul core computes local GEMM with its weight shard
+    //
+    // Template params: <CTArgs, IsActive, PopIn0, PopIn1>
+    //   IsActive: only matmul cores execute; others are no-ops
+    //   PopIn0:   pop mcast_dst CB (CB 1) after read (frees intermediate buffer)
+    //   PopIn1:   pop matmul_in1 CB (CB 2) after read (frees weight buffer)
     // ========================================================================
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, true> matmul;
     matmul(matmul_args);

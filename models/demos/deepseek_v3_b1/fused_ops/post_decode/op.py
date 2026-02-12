@@ -3,20 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Mcast + Matmul fused operation.
+Post-Decode: Mcast + Matmul fused operation for LM head vocab projection.
 
-Multicasts input_tensor from a single sender core to multiple matmul cores,
-then each matmul core computes a local matmul with its weight shard.
+Multicasts input_tensor from a single sender core to all cores in the device grid,
+then each matmul core computes a local matmul with its vocab weight shard.
 
-- Input A (in0): [1, K] on sender core
-- Input B (in1): [K, N_total] width-sharded across matmul cores as [K, N_per_core]
-- Output: [1, N_total] width-sharded across matmul cores as [1, N_per_core]
-- Sender multicasts input_tensor to all matmul cores, each computes local matmul
+- input_tensor (in0): [1, K] on sender core
+- vocab_tensor (in1): [K, N_total] width-sharded across matmul cores as [K, N_per_core]
+- output: [1, N_total] width-sharded across matmul cores as [1, N_per_core]
 
 CB Layout:
 - CB 0: mcast_src (input_tensor on sender core, tensor-backed)
-- CB 1: mcast_dst / matmul_in0 (all mcast grid cores, intermediate)
-- CB 2: matmul_in1 (weights on matmul cores, tensor-backed)
+- CB 1: mcast_dst / matmul_in0 (all device grid cores, intermediate)
+- CB 2: matmul_in1 (vocab weights on matmul cores, tensor-backed)
 - CB 16: matmul_out (output on matmul cores, tensor-backed)
 """
 
@@ -31,9 +30,10 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 
 class PostDecode:
     """
-    Implements multiplication by vocab tensor in LM head.
-    Vocab tensor is width sharded.
-    Mcast + Matmul implementation using ttnn.generic_op.
+    Post-decode LM head vocab projection: mcast + matmul via ttnn.generic_op.
+
+    Sender core multicasts input_tensor to all device cores, then each matmul
+    core computes [1, K] x [K, N_per_core] with its width-sharded vocab weight shard.
     """
 
     @staticmethod
@@ -60,14 +60,13 @@ class PostDecode:
         """
         Execute mcast + matmul operation using generic_op.
 
-        Multicasts input_tensor from its sender core to all cores in the mcast grid,
-        then each matmul core computes a local matmul with its weight shard.
+        Multicasts input_tensor from its sender core to all cores in the full device grid,
+        then each matmul core computes a local matmul with its vocab weight shard.
 
         Args:
-            input_tensor: Input tensor A [1, K] in L1 (single sender core)
-            vocab_tensor: Input tensor B [K, N_total] width-sharded across matmul cores as [K, N_per_core]
-            output_tensor: Pre-allocated output tensor [1, N_total] width-sharded across matmul cores
-            mcast_grid: CoreRange for mcast destination grid (rectangular, includes sender + matmul cores)
+            input_tensor: Input tensor [1, K] height-sharded in L1 on a single sender core
+            vocab_tensor: Vocab weights [K, N_total] width-sharded across matmul cores as [K, N_per_core]
+            output_tensor: Pre-allocated output [1, N_total] width-sharded across matmul cores
             fp32_dest_acc_en: Whether to enable FP32 accumulation
 
         Returns:
@@ -110,8 +109,7 @@ class PostDecode:
         # Matmul cores: from vocab_tensor (multiple cores with weight shards)
         matmul_core_grid = vocab_tensor.memory_config().shard_spec.grid
 
-        # Mcast grid (rectangular, includes sender + matmul cores)
-
+        # Mcast grid = full device compute grid (includes sender + all matmul cores)
         device_grid_size = device.compute_with_storage_grid_size()
         mcast_grid = ttnn.CoreRange(
             ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1)
@@ -160,9 +158,9 @@ class PostDecode:
         # ====================================================================
         # CB indices
         # ====================================================================
-        mcast_src_cb = 0  # Input A on sender core (tensor-backed)
+        mcast_src_cb = 0  # input_tensor on sender core (tensor-backed)
         mcast_dst_cb = 1  # Mcast destination = matmul in0 (all mcast grid cores, intermediate)
-        matmul_in1_cb = 2  # Matmul weights on matmul cores (tensor-backed)
+        matmul_in1_cb = 2  # vocab_tensor weights on matmul cores (tensor-backed)
         matmul_out_cb = 16  # Matmul output on matmul cores (tensor-backed)
 
         # ====================================================================
@@ -222,10 +220,10 @@ class PostDecode:
         # ====================================================================
         # Circular buffer descriptors
         # ====================================================================
-        # CB 0: Mcast source — input_tensor on sender core (tensor-backed)
+        # CB 0: Mcast source — input_tensor on sender core (tensor-backed, read by BRISC)
         mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mcast_src_cb, input_tensor)
 
-        # CB 1: Mcast destination — intermediate buffer on all mcast grid cores
+        # CB 1: Mcast destination — intermediate buffer on all device grid cores
         mcast_dst_tile_descriptor = ttnn.TileDescriptor(in0_tile)
         mcast_dst_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=mcast_dst_cb,
@@ -239,7 +237,7 @@ class PostDecode:
             format_descriptors=[mcast_dst_cb_format],
         )
 
-        # CB 2: Matmul weights — tensor-backed on matmul cores
+        # CB 2: Matmul weights — vocab_tensor, tensor-backed on matmul cores
         matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_in1_cb, vocab_tensor)
 
         # CB 16: Matmul output — tensor-backed on matmul cores
