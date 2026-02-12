@@ -26,7 +26,7 @@ math is in Fp32 format
 */
 template <ckernel::MathFidelity math_fidelity>
 inline void llk_math_matmul_init(const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
-    _llk_math_matmul_init_<math_fidelity>(NUM_FIDELITY_PHASES) > (ct_dim, rt_dim);
+    _llk_math_matmul_init_<math_fidelity>(ct_dim, rt_dim);
 }
 
 /**
