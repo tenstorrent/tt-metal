@@ -46,7 +46,7 @@
   timeout: 15
 
 - name: t3k_fabric_stability_tests
-  cmd: TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability.yaml
+  cmd: TT_MESH_ID=0 TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability.yaml
   sku: wh_llmbox
   owner_id: U08FXFFH7L0 # Abhishek Agarwal
   team: fabric
