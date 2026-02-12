@@ -1261,9 +1261,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                         }
                         mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + num_iter_index, num_iter);
                     } else {
-                        // Height sharded: just need vc for DRAM reads
-                        vc = vc == 3 ? 0 : vc + 1;
-                        mm_in1_sender_writer_args.push_back(vc);
+                        // Height sharded: no additional runtime args needed
+                        // (bank/offset computed from compile-time args + batch index)
                     }
                 }
                 if (fuse_op) {

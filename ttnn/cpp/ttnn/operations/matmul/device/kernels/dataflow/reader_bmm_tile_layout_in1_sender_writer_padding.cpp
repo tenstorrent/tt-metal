@@ -151,8 +151,6 @@ void kernel_main() {
 #endif  // IN1_DRAM_SHARDED
 
 #ifdef IN1_DRAM_HEIGHT_SHARDED
-    const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
-
     constexpr uint32_t in1_KtNt_per_batch = get_compile_time_arg_val(after_bias_offset);        // K*N tiles per batch
     constexpr uint32_t in1_batches_per_bank = get_compile_time_arg_val(after_bias_offset + 1);  // batches per DRAM bank
 #endif  // IN1_DRAM_HEIGHT_SHARDED
@@ -263,8 +261,9 @@ void kernel_main() {
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
 #ifdef IN1_DRAM_SHARDED
-                    // Reset DRAM read offset for each output block — in1 K×N data
-                    // is the same for all (bh, bw) output blocks
+                    // Reset DRAM read offset for each bh block — the inner dim loop
+                    // advances through K, and each output row block re-reads the same
+                    // in1 columns from K=0. (bw is always 1 for DRAM-sharded senders.)
                     uint32_t l1_read_addr_in1_offset = 0;
 #endif  // IN1_DRAM_SHARDED
 

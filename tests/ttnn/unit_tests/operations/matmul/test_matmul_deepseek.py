@@ -787,7 +787,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
             "in1_dtype": ttnn.bfloat8_b,
             "expected_pcc": 0.999,
         },
-        # Batched matmuls - in0 DRAM interleaved, in1 DRAM WIDTH sharded
+        # Batched matmuls - in0 DRAM interleaved, in1 DRAM HEIGHT sharded
         # wkv_b1 (8 banks): batch=16, 2 per bank, no padding
         {
             "batch": 16,
@@ -815,7 +815,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
         "wkv_b2_12banks",
     ],
 )
-@pytest.mark.parametrize("seq_len", [128])  # , 1024, 4096, 8192])  # 32768, 131072])
+@pytest.mark.parametrize("seq_len", [128])  # Longer sequence lengths are 1024, 4096, 8192, 32768, 131072
 @skip_for_blackhole("Deepseek tests target Wormhole")
 def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
     """
@@ -834,6 +834,11 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
     tile_w = 32
     tile_h = 32
     num_dram_banks = test_case.get("num_dram_banks", 12)
+
+    device_banks = device.dram_grid_size().x
+
+    if device_banks < num_dram_banks:
+        pytest.skip("Device has less DRAM banks than required for test")
 
     if batch == 1:
         # --- Unbatched: in1 DRAM WIDTH sharded ---
