@@ -285,6 +285,7 @@ Tests:
       - type: all_to_all
 
   - name: "FlowControlAllToAllUnicastMesh"
+    skip: [watcher]
     sync: true
     enable_flow_control: true
     fabric_setup:

@@ -189,6 +189,7 @@ Tests:
               device: [0, 1]
 
   - name: "AllToAllUnicastMesh"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
 
