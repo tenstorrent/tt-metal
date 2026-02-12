@@ -54,6 +54,23 @@ export TT_SYMBIOTE_DISPATCHER=CPU
 export TT_SYMBIOTE_DISPATCHER=CPU && export TT_SYMBIOTE_RUN_MODE=DPL_NO_ERROR_PROP && pytest tests/test_speech_t5.py
 ```
 
+## Before committing
+
+Run the repo’s linters/formatters so pre-commit doesn’t block your commit:
+
+- **Python** (black, autoflake, etc.): from repo root,
+  ```bash
+  ./models/experimental/tt_symbiote/lint_before_commit.sh
+  # or: ./models/experimental/tt_symbiote/lint_before_commit.sh path/to/file.py
+  ```
+- **C/C++** (clang-tidy): from repo root (requires `build/compile_commands.json`),
+  ```bash
+  scripts/run_clang_tidy_before_commit.sh
+  # or: scripts/run_clang_tidy_before_commit.sh path/to/file.cpp
+  ```
+
+Pre-commit runs both when you commit; you can also run `pre-commit run` or `pre-commit run --all-files`.
+
 ## Quick Start
 
 ```python
