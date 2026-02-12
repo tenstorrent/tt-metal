@@ -41,7 +41,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("core_noc_y")>;
 
         // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
-        using WriterCTArgs = Sender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using WriterCTArgs = Sender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         Sender::RTArgs args{};
         args.tensor_address = get_common_arg_val<uint32_t>(0);
@@ -61,8 +61,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("remote_sender_noc_y"),
             get_named_compile_time_arg_val("num_standard_tiles"),
             get_named_compile_time_arg_val("cb_residual"),
-            get_named_compile_time_arg_val("has_residual"),
-            get_named_compile_time_arg_val("using_persistent_buffer")>;
+            get_named_compile_time_arg_val("has_residual")>;
 
         // Dummy ComputeCTArgs - not used by NCRISC but needed for Op template
         using ComputeCTArgs = Receiver::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0>;
@@ -97,8 +96,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("remote_receiver_noc_x"),
             get_named_compile_time_arg_val("remote_receiver_noc_y"),
             get_named_compile_time_arg_val("dst_num_hops"),
-            get_named_compile_time_arg_val("num_connections"),
-            get_named_compile_time_arg_val("using_persistent_buffer")>;
+            get_named_compile_time_arg_val("num_connections")>;
 
         Sender::RTArgs args{};
         args.receiver_base_address = get_common_arg_val<uint32_t>(0);

@@ -75,8 +75,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_is_sender"),
         get_named_compile_time_arg_val("bcast_core_noc_x"),
         get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
-        get_named_compile_time_arg_val("bcast_is_active_broadcaster")>;
+        get_named_compile_time_arg_val("bcast_is_secondary_sender")>;
 
     // CCL Broadcast reader runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
@@ -211,12 +210,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_core_noc_y"),
         get_named_compile_time_arg_val("bcast_is_secondary_sender"),
         get_named_compile_time_arg_val("bcast_has_secondary_target"),
-        get_named_compile_time_arg_val("bcast_has_reverse_secondary_connection"),
         get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
         get_named_compile_time_arg_val("bcast_range_hops_forward"),
         get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("bcast_range_hops_backward"),
-        get_named_compile_time_arg_val("bcast_using_persistent_buffers")>;
+        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
 
     // CCL Broadcast writer runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
