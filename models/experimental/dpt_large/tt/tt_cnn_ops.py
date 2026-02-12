@@ -33,6 +33,23 @@ def _to_row_major(x):
     return x
 
 
+def _ensure_interleaved(x, *, target_memory_config=None):
+    _require_ttnn()
+    if target_memory_config is None:
+        target_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    try:
+        mc = ttnn.get_memory_config(x)
+    except Exception:
+        mc = None
+    if mc is not None:
+        try:
+            if mc.is_sharded():
+                return ttnn.to_memory_config(x, target_memory_config)
+        except Exception:
+            pass
+    return x
+
+
 def ensure_tt_device_tensor(x, tt_device):
     _require_ttnn()
     if tt_device is None:
@@ -106,6 +123,9 @@ def tt_upsample_nchw(
         mode=mode,
         memory_config=memory_config,
     )
+    # Some TTNN upsample configurations return sharded outputs; permute/transpose
+    # can be invalid for those shard specs. Ensure interleaved before NCHW permute.
+    y_nhwc = _ensure_interleaved(y_nhwc)
 
     out_h = h * (sf[0] if isinstance(sf, list) else sf)
     out_w = w * (sf[1] if isinstance(sf, list) else sf)
@@ -150,6 +170,7 @@ def tt_resize_to_nchw(
 def tt_depth_to_space_nchw(x, block_size: int):
     _require_ttnn()
     x = _to_row_major(x)
+    x = _ensure_interleaved(x)
     b, c_mul, h, w = _shape4(x)
     scale = int(block_size)
     scale_sq = scale * scale
