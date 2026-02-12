@@ -21,9 +21,6 @@
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
-using ttnn::prim::Conv2dConfig;
-using ttnn::prim::Conv2dSliceConfig;
-
 void bind_conv_transpose2d(nb::module_& mod) {
     const auto* doc = R"doc(
         Applies a 2D transposed convolution operator over an input image composed of several input planes.
