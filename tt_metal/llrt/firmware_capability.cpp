@@ -21,8 +21,9 @@ void compare_requested_and_actual_capabilities(
     switch (arch) {
         case tt::ARCH::BLACKHOLE: {
             constexpr tt::umd::semver_t k_min_2_erisc_version(1, 7, 0);
-            // Disable if eth firmware is not known to be safe
-            const bool eth_fw_ok = fw_versions.eth_fw && (fw_versions.eth_fw.value() >= k_min_2_erisc_version);
+            // If ethernet firmware cannot be queried assume it's ok
+            // This occurs on the simulator
+            const bool eth_fw_ok = !fw_versions.eth_fw || (fw_versions.eth_fw.value() >= k_min_2_erisc_version);
             if (requested.enable_2_erisc_mode && !eth_fw_ok) {
                 log_warning(
                     tt::LogLLRuntime,
