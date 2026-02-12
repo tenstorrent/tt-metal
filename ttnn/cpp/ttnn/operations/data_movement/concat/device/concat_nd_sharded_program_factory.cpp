@@ -32,7 +32,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
-    const auto& input_tensors = tensor_args.input_tensors;
+    const std::vector<Tensor>& input_tensors = tensor_args.input_tensors;
     Tensor& output = tensor_return_value;
     const uint32_t num_input_tensors = static_cast<uint32_t>(input_tensors.size());
 
@@ -40,7 +40,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     TT_FATAL(input_tensors[0].nd_shard_spec().has_value(), "First input must be ND sharded");
     TT_FATAL(output.nd_shard_spec().has_value(), "Output must be ND sharded");
 
-    const auto& first_nd_spec = input_tensors[0].nd_shard_spec().value();
+    const NdShardSpec& first_nd_spec = input_tensors[0].nd_shard_spec().value();
     const CoreRangeSet all_cores = first_nd_spec.grid;
     const ShardOrientation orientation = first_nd_spec.orientation;
     const bool is_row_major = (orientation == ShardOrientation::ROW_MAJOR);
@@ -50,10 +50,26 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
 
     Program program = CreateProgram();
 
-    // All inputs and output share the same grid; use first input's buffer for alignment/page size.
+    // All inputs and output must share the same aligned page size; the kernels use a single page_size.
+    // (Tensor buffers can have different page sizes when shard shapes or layouts differ.)
     const uint32_t page_size = input_tensors[0].buffer()->aligned_page_size();
+    for (uint32_t i = 1; i < num_input_tensors; ++i) {
+        TT_FATAL(
+            input_tensors[i].buffer()->aligned_page_size() == page_size,
+            "ND sharded concat requires all inputs to have the same aligned page size (input 0: {}, input {}: {})",
+            page_size,
+            i,
+            input_tensors[i].buffer()->aligned_page_size());
+    }
+    TT_FATAL(
+        output.buffer()->aligned_page_size() == page_size,
+        "ND sharded concat requires output to have the same aligned page size as inputs (inputs: {}, output: {})",
+        page_size,
+        output.buffer()->aligned_page_size());
+
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const uint32_t cb_dst_id = 16;
+    const uint32_t cb_dst_id =
+        16;  // TODO:Z decide if it must be 31(wormhole) or 61(blackhole) or constant from somewhere
     TT_FATAL(num_input_tensors <= cb_dst_id, "ND sharded concat supports at most {} inputs", cb_dst_id);
 
     // Distribution specs from buffers (already set when tensors are allocated with ND sharding).
