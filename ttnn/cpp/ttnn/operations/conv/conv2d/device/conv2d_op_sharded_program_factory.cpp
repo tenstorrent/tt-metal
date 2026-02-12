@@ -122,6 +122,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
     config.num_cores_with_non_meaningful_work = tt::div_up(total_remaining_tiles_to_push, single_core_height_ntiles);
 
     std::vector<CoreCoord> all_input_cores;
+    all_input_cores.reserve(input_cores.num_cores());
     for (const CoreRange& range : input_cores.ranges()) {
         for (const CoreCoord& core : range) {
             all_input_cores.push_back(core);
@@ -1359,6 +1360,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     }
 
     std::vector<CoreCoord> mcast_sender_cores_vec;
+    mcast_sender_cores_vec.reserve(mcast_sender_cores.num_cores());
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         std::vector<CoreCoord> core_range_vec = grid_to_cores(core_range.start_coord, core_range.end_coord, true);
         mcast_sender_cores_vec.insert(mcast_sender_cores_vec.end(), core_range_vec.begin(), core_range_vec.end());

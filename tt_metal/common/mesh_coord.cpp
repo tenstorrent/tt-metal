@@ -27,6 +27,7 @@ namespace {
 // Returns the last valid coordinate for the provided `shape`.
 MeshCoordinate shape_back(const MeshShape& shape) {
     tt::stl::SmallVector<uint32_t> coords;
+    coords.reserve(shape.dims());
     for (int i = 0; i < shape.dims(); i++) {
         coords.push_back(shape[i] - 1);
     }
@@ -38,6 +39,7 @@ std::vector<size_t> find_diff_dimensions(const MeshCoordinateRange& a, const Mes
     TT_ASSERT(a.dims() == b.dims(), "Cannot compare ranges with different dimensions: {} != {}", a.dims(), b.dims());
 
     std::vector<size_t> diff_dims;
+    diff_dims.reserve(a.dims());
     for (size_t i = 0; i < a.dims(); ++i) {
         if (a.start_coord()[i] != b.start_coord()[i] || a.end_coord()[i] != b.end_coord()[i]) {
             diff_dims.push_back(i);
@@ -263,6 +265,7 @@ MeshCoordinate::BoundaryMode MeshCoordinateRange::get_boundary_mode() const {
 
 MeshShape MeshCoordinateRange::shape() const {
     tt::stl::SmallVector<uint32_t> shape_dims;
+    shape_dims.reserve(dims());
     if (!wraparound_shape_.has_value()) {
         for (size_t i = 0; i < dims(); ++i) {
             shape_dims.push_back(end_[i] - start_[i] + 1);
@@ -485,6 +488,8 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
                 // Can replace `it` + `merged` with a single new range.
                 tt::stl::SmallVector<uint32_t> new_start;
                 tt::stl::SmallVector<uint32_t> new_end;
+                new_start.reserve(merged.dims());
+                new_end.reserve(merged.dims());
                 for (size_t i = 0; i < merged.dims(); ++i) {
                     new_start.push_back(std::min(merged.start_coord()[i], it->start_coord()[i]));
                     new_end.push_back(std::max(merged.end_coord()[i], it->end_coord()[i]));
@@ -530,6 +535,8 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
         // Calculate the bounding box of all ranges
         tt::stl::SmallVector<uint32_t> bb_start;
         tt::stl::SmallVector<uint32_t> bb_end;
+        bb_start.reserve(ranges_[0].dims());
+        bb_end.reserve(ranges_[0].dims());
 
         for (size_t dim = 0; dim < ranges_[0].dims(); ++dim) {
             uint32_t min_start = ranges_[0].start_coord()[dim];
@@ -592,6 +599,8 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
         if (parent.start_coord()[diff_dim] < intersection.start_coord()[diff_dim]) {
             tt::stl::SmallVector<uint32_t> left_start;
             tt::stl::SmallVector<uint32_t> left_end;
+            left_start.reserve(parent.dims());
+            left_end.reserve(parent.dims());
             for (size_t i = 0; i < parent.dims(); ++i) {
                 if (i == diff_dim) {
                     left_start.push_back(parent.start_coord()[i]);
@@ -608,6 +617,8 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
         if (intersection.end_coord()[diff_dim] < parent.end_coord()[diff_dim]) {
             tt::stl::SmallVector<uint32_t> right_start;
             tt::stl::SmallVector<uint32_t> right_end;
+            right_start.reserve(parent.dims());
+            right_end.reserve(parent.dims());
             for (size_t i = 0; i < parent.dims(); ++i) {
                 if (i == diff_dim) {
                     right_start.push_back(intersection.end_coord()[i] + 1);
@@ -632,6 +643,11 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
 
 std::vector<MeshCoordinate> MeshCoordinateRangeSet::coords() const {
     std::vector<MeshCoordinate> coords;
+    size_t total_size = 0;
+    for (const auto& range : ranges_) {
+        total_size += range.shape().mesh_size();
+    }
+    coords.reserve(total_size);
     for (const auto& range : ranges_) {
         for (const auto& coord : range) {
             coords.push_back(coord);
