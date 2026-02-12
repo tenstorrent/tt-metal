@@ -198,16 +198,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.encoder_parallel_config,
         )
 
-        if not cache.initialize_from_cache(
+        cache.load_model(
             self.tt_umt5_encoder,
-            self.text_encoder.state_dict(),
-            os.path.basename(self.checkpoint_name),
-            "text_encoder",
-            self.encoder_parallel_config,
-            tuple(self.mesh_device.shape),
-        ):
-            logger.info("Loading UMT5 text encoder weights from PyTorch state dict")
-            self.tt_umt5_encoder.load_torch_state_dict(self.text_encoder.state_dict())
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="text_encoder",
+            parallel_config=self.encoder_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self.text_encoder.state_dict(),
+        )
 
         if not self.dynamic_load:
             self._load_transformer1()
@@ -229,11 +227,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         cache.load_model(
             self.tt_vae,
-            model_name=checkpoint_name.rsplit("/", 1)[-1],
+            model_name=os.path.basename(self.checkpoint_name),
             subfolder="vae",
             parallel_config=self.vae_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
-            dtype="bf16",
             get_torch_state_dict=lambda: self.vae.state_dict(),
         )
 
@@ -324,7 +321,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ),
         )
         encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis)
+            tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis)
         )
         pipeline_class_ = pipeline_class or WanPipeline
         return pipeline_class_(
@@ -405,10 +402,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt: Union[str, List[str]] = None,
         num_videos_per_prompt: int = 1,
         max_sequence_length: int = 226,
-        dtype: Optional[torch.dtype] = None,
     ):
-        dtype = dtype or self.text_encoder.dtype
-
         prompt = [prompt] if isinstance(prompt, str) else prompt
         prompt = [prompt_clean(u) for u in prompt]
         batch_size = len(prompt)
@@ -425,7 +419,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
         seq_lens = mask.gt(0).sum(dim=1).long()
 
-        # prompt_embeds = self.text_encoder(text_input_ids.to(device), mask.to(device)).last_hidden_state
         tt_prompt = ttnn.from_torch(
             text_input_ids,
             layout=ttnn.TILE_LAYOUT,
@@ -470,7 +463,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         max_sequence_length: int = 226,
-        dtype: Optional[torch.dtype] = None,
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -493,8 +485,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
-            dtype: (`torch.dtype`, *optional*):
-                torch dtype
         """
         prompt = [prompt] if isinstance(prompt, str) else prompt
         if prompt is not None:
@@ -507,7 +497,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prompt=prompt,
                 num_videos_per_prompt=num_videos_per_prompt,
                 max_sequence_length=max_sequence_length,
-                dtype=dtype,
             )
 
         if do_classifier_free_guidance and negative_prompt_embeds is None:
@@ -530,7 +519,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prompt=negative_prompt,
                 num_videos_per_prompt=num_videos_per_prompt,
                 max_sequence_length=max_sequence_length,
-                dtype=dtype,
             )
 
         return prompt_embeds, negative_prompt_embeds
@@ -780,19 +768,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             batch_size = prompt_embeds.shape[0]
 
         # 3. Encode input prompt
-        if profiler:
-            profiler.start("encoder", profiler_iteration)
-        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            do_classifier_free_guidance=self.do_classifier_free_guidance,
-            num_videos_per_prompt=num_videos_per_prompt,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            max_sequence_length=max_sequence_length,
-        )
-        if profiler:
-            profiler.end("encoder", profiler_iteration)
+        with profiler("encoder", profiler_iteration) if profiler else nullcontext():
+            prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                do_classifier_free_guidance=self.do_classifier_free_guidance,
+                num_videos_per_prompt=num_videos_per_prompt,
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                max_sequence_length=max_sequence_length,
+            )
 
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -873,7 +858,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     if cond_latents is not None:
                         cond_latents, _ = current_model.preprocess_spatial_input_host(cond_latents)
 
-                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.prepare_rope_features(latents)
+                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.get_rope_features(latents)
                     rope_args = {
                         "rope_cos_1HND": rope_cos_1HND,
                         "rope_sin_1HND": rope_sin_1HND,
@@ -973,11 +958,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self.vae_parallel_config.width_parallel.mesh_axis: 3,
                 },
             )
-            if profiler:
-                profiler.start("vae", profiler_iteration)
-            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
-            if profiler:
-                profiler.end("vae", profiler_iteration)
+            with profiler("vae", profiler_iteration) if profiler else nullcontext():
+                tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3

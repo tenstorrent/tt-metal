@@ -203,7 +203,7 @@ def test_pipeline_performance(
 
     with benchmark_profiler("run", iteration=0):
         with torch.no_grad():
-            result = pipeline(
+            pipeline(
                 prompt=prompts[0],
                 image_prompt=image_prompt,
                 height=height,
@@ -214,7 +214,32 @@ def test_pipeline_performance(
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
-    # Check output
+    # Performance measurement runs
+    logger.info("Running performance measurement iterations...")
+    num_perf_runs = 1  # For now use 1 prompt to minimize test time.
+
+    # reset the profiler
+    benchmark_profiler = BenchmarkProfiler()
+    for i in range(num_perf_runs):
+        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
+
+        # Run pipeline with different prompt
+        prompt_idx = (i + 1) % len(prompts)
+        with benchmark_profiler("run", iteration=i):
+            with torch.no_grad():
+                result = pipeline(
+                    prompt=prompts[prompt_idx],
+                    image_prompt=image_prompt,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=num_inference_steps,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
+                )
+
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+        # Check output
     if hasattr(result, "frames"):
         frames = result.frames
     else:
@@ -234,34 +259,10 @@ def test_pipeline_performance(
     # Remove batch dimension
     frames = frames[0]
     try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
+        export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
+        print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
     except AttributeError as e:
         logger.info(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")
-
-    # Performance measurement runs
-    logger.info("Running performance measurement iterations...")
-    num_perf_runs = 1  # For now use 1 prompt to minimize test time.
-
-    for i in range(num_perf_runs):
-        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
-
-        # Run pipeline with different prompt
-        prompt_idx = (i + 1) % len(prompts)
-        with benchmark_profiler("run", iteration=i):
-            with torch.no_grad():
-                pipeline(
-                    prompt=prompts[prompt_idx],
-                    image_prompt=image_prompt,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
-                    num_inference_steps=num_inference_steps,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
-                )
-
-        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
