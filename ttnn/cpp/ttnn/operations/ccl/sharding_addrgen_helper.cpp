@@ -24,6 +24,7 @@ uint32_t get_sharding_core_count(const tt::tt_metal::Tensor& t) {
 
 std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
     std::vector<CoreCoord> coordinates;
+    coordinates.reserve(get_sharding_core_count(t));
     const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();

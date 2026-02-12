@@ -31,6 +31,7 @@ namespace {
 std::vector<IDevice*> get_devices_from_coordinates(
     const MeshDeviceViewImpl& mesh, const std::vector<MeshCoordinate>& coords) {
     std::vector<IDevice*> devices;
+    devices.reserve(coords.size());
     for (const auto& coord : coords) {
         if (auto* device = mesh.get_device(coord)) {
             devices.push_back(device);

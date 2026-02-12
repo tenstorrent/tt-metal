@@ -283,6 +283,7 @@ void MeshCommandQueueBase::enqueue_write(
     auto lock = lock_api_function_();
     // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
     std::vector<distributed::ShardDataTransfer> shard_data_transfers;
+    shard_data_transfers.reserve(host_buffer.shard_coords().size());
     for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
         auto buf = host_buffer.get_shard(host_buffer_coord);
         if (buf.has_value()) {

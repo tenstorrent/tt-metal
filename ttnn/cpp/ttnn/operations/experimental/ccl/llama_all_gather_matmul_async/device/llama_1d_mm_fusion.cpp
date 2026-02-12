@@ -551,6 +551,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {  // runtime args for mm cores
         const auto& core = worker_cores_vec[i];
         /* in0 - multicast receiver setup (no ring topology needed) */

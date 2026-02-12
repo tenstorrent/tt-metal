@@ -134,6 +134,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     bool math_approx_mode,
     const std::vector<UnpackToDestMode>& unpack_to_dest_mode) {
     std::vector<KernelHandle> compute_kernel_ids{};
+    compute_kernel_ids.reserve(args.size());
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
         compute_kernel_id = CreateComputeKernel(
@@ -175,6 +176,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     const std::vector<ComputeKernelArg>& args,
     const ComputeKernelConfig& config) {
     std::vector<KernelHandle> compute_kernel_ids{};
+    compute_kernel_ids.reserve(args.size());
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
         compute_kernel_id = CreateComputeKernel(program, file_name, arg, config);
@@ -208,6 +210,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     tt::DataFormat data_format,
     const std::vector<CircularBufferArg>& args) {
     std::vector<CBHandle> cb_ids{};
+    cb_ids.reserve(args.size());
     CBHandle cb_id{};
     for (const auto& arg : args) {
         cb_id = CreateCircularBuffer(program, core_range, data_format, arg);

@@ -183,7 +183,11 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             num_output_pages_per_block += num_accum_pages * dim_pages;
         }
     }
-    std::vector<uint32_t> common_reader_kernel_args = {0, 0, 0};
+    std::vector<uint32_t> common_reader_kernel_args;
+    common_reader_kernel_args.reserve(3 + src_addr.size() + num_pages_per_block.size());
+    common_reader_kernel_args.emplace_back(0);
+    common_reader_kernel_args.emplace_back(0);
+    common_reader_kernel_args.emplace_back(0);
     common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.cbegin(), src_addr.cend());
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_pages_per_block.cbegin(), num_pages_per_block.cend());

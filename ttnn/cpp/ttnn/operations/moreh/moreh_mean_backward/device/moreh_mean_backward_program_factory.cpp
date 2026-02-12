@@ -181,6 +181,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         }
 
         std::vector<uint32_t> reader_rt_args;
+        reader_rt_args.reserve(4 + output_grad_dim.size() + input_grad_dim.size() + need_bcast_dim.size());
         reader_rt_args.push_back(output_grad.buffer()->address());
         reader_rt_args.push_back(num_tiles_per_core);
         reader_rt_args.push_back(tile_offset);

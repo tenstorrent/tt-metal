@@ -195,10 +195,13 @@ Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
+    const auto rank = input_tensor.padded_shape().rank();
     ttsl::SmallVector<uint32_t> padded_shape;
     ttsl::SmallVector<uint32_t> input_tensor_start;
+    padded_shape.reserve(rank);
+    input_tensor_start.reserve(rank);
 
-    for (auto index = 0; index < static_cast<int>(input_tensor.padded_shape().rank()) - 2; index++) {
+    for (auto index = 0; index < static_cast<int>(rank) - 2; index++) {
         padded_shape.push_back(input_tensor.padded_shape()[index]);
         input_tensor_start.push_back(0);
     }
