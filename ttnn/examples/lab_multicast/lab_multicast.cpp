@@ -273,8 +273,6 @@ void multicast_tensor_tensix(
     // Semaphores are used for synchronization between the coordinator and receiver cores.
     // receivers_ready_semaphore: receivers signal when they're ready to receive a tile
     // tile_sent_semaphore: coordinator signals when a tile has been multicast
-    // For simplicity, we create semaphores on all cores, although not all cores
-    // will use all the semaphores.
     uint32_t receivers_ready_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
     uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, INVALID);
 
