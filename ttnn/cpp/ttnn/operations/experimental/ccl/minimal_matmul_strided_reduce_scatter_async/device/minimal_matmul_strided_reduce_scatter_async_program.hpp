@@ -7,12 +7,14 @@
 #include "minimal_matmul_strided_reduce_scatter_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct MinimalMatmulStridedReduceScatterAsyncProgramFactory {
     struct shared_variables_t {
-        StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables;
+        operations::experimental::ccl::strided_reduce_scatter_async::detail::StridedReduceScatterProgramArtifacts
+            rs_shared_variables;
         MinimalMatmulProgramFactory::shared_variables_t mm_shared_variables;
     };
 

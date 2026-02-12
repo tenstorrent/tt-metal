@@ -22,7 +22,6 @@
 #include <algorithm>
 
 /* Fusion includes */
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
@@ -56,21 +55,27 @@ namespace ttnn::prim {
 std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer,
-    uint32_t dim,
+    const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    CoreCoord strided_all_gather_core_grid_offset,
+    CoreCoord reduce_scatter_core_grid_offset,
     uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config_ag,
+    const std::optional<MemoryConfig>& memory_config_mm,
+    const MemoryConfig& rs_output_mem_config,
+    const std::optional<MemoryConfig>& rs_intermediate_mem_config,
     ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
     const std::optional<const Tensor>& bias,
-    const std::optional<MemoryConfig>& memory_config_mm,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     std::optional<const ttnn::experimental::prim::MinimalMatmulConfig> config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<bool> read_local_slice_from_input);
+    std::optional<uint32_t> chunk_width_in_mm_blocks,
+    const std::optional<Tensor>& optional_rs_intermediate_tensor,
+    const std::optional<Tensor>& optional_rs_output_tensor);
 
 }  // namespace ttnn::prim
