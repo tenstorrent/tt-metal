@@ -13,6 +13,7 @@ from PIL import Image
 
 from ..tt.config import DPTLargeConfig
 from ..tt.fallback import DPTFallbackPipeline
+from ..tt.perf_counters import PERF_COUNTERS, reset_perf_counters
 
 
 def _collect_images(args) -> list[str]:
@@ -61,7 +62,7 @@ def main():
         type=str,
         default="eager",
         choices=("eager", "trace", "trace_2cq"),
-        help="Execution mode for TT neck/head path.",
+        help="Execution mode for TT path. trace/trace_2cq execute a captured full-model trace (backbone+neck+head).",
     )
     args = parser.parse_args()
 
@@ -104,26 +105,47 @@ def main():
         else:
             cpu_pipeline = DPTFallbackPipeline(config=config, device="cpu")
 
+        assert cpu_pipeline is not None
+        pixel_values_list = [cpu_pipeline._prepare(img) for img in images]
+        tt_inputs_host_list = None
+        if use_tt and str(args.tt_execution_mode).lower() in ("trace", "trace_2cq"):
+            import ttnn  # type: ignore
+
+            # Host-side TT tensors; copied into a persistent device input buffer for trace execution.
+            tt_inputs_host_list = [
+                ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for pv in pixel_values_list
+            ]
+
         # Warmup around the selected pipeline only.
         for _ in range(args.warmup):
             if use_tt:
                 assert tt_pipeline is not None
-                _ = tt_pipeline.forward(images[0], normalize=True)
+                if tt_inputs_host_list is not None:
+                    _ = tt_pipeline.forward_tt_host_tensor(tt_inputs_host_list[0], normalize=True)
+                else:
+                    _ = tt_pipeline.forward_pixel_values(pixel_values_list[0], normalize=True)
             else:
                 assert cpu_pipeline is not None
-                _ = cpu_pipeline.run_depth_cpu(images[0], normalize=True)
+                _ = cpu_pipeline.forward_pixel_values(pixel_values_list[0], normalize=True)
+
+        if use_tt:
+            # Steady-state guard: after warmup, do not allow any silent host fallbacks.
+            reset_perf_counters()
 
         timings = []
         depth = None
         for _ in range(args.repeat):
             start = time.perf_counter()
-            for img in images:
+            for i in range(len(pixel_values_list)):
                 if use_tt:
                     assert tt_pipeline is not None
-                    depth = tt_pipeline.forward(img, normalize=True)
+                    if tt_inputs_host_list is not None:
+                        depth = tt_pipeline.forward_tt_host_tensor(tt_inputs_host_list[i], normalize=True)
+                    else:
+                        depth = tt_pipeline.forward_pixel_values(pixel_values_list[i], normalize=True)
                 else:
                     assert cpu_pipeline is not None
-                    depth = cpu_pipeline.run_depth_cpu(img, normalize=True)
+                    depth = cpu_pipeline.forward_pixel_values(pixel_values_list[i], normalize=True)
             end = time.perf_counter()
             timings.append((end - start) * 1000)
 
@@ -132,7 +154,10 @@ def main():
 
         latency_ms_mean = float(np.mean(timings))
         latency_ms_std = float(np.std(timings))
-        fps = 1000.0 / latency_ms_mean if latency_ms_mean > 0 else 0.0
+        num_images_per_iter = max(1, len(pixel_values_list))
+        per_image_ms_mean = latency_ms_mean / float(num_images_per_iter)
+        per_image_ms_std = latency_ms_std / float(num_images_per_iter)
+        fps = 1000.0 / per_image_ms_mean if per_image_ms_mean > 0 else 0.0
         inference_time_s = latency_ms_mean / 1000.0
         inference_time_std_s = latency_ms_std / 1000.0
         throughput_iter_per_s = (1.0 / inference_time_s) if inference_time_s > 0 else 0.0
@@ -140,9 +165,13 @@ def main():
         compile_time_s = max(first_run_s - inference_time_s, 0.0)
         perf = dict(
             mode="tt" if use_tt else "cpu",
+            tt_execution_mode=str(args.tt_execution_mode) if use_tt else "cpu",
             latency_ms_mean=latency_ms_mean,
             latency_ms_std=latency_ms_std,
             total_ms=latency_ms_mean,
+            num_images_per_iter=num_images_per_iter,
+            per_image_ms_mean=per_image_ms_mean,
+            per_image_ms_std=per_image_ms_std,
             fps=fps,
             inference_time_s=inference_time_s,
             inference_time_std_s=inference_time_std_s,
@@ -162,6 +191,16 @@ def main():
         if use_tt and tt_pipeline is not None and getattr(tt_pipeline, "last_perf", None) is not None:
             perf["stage_breakdown_ms"] = tt_pipeline.last_perf
             perf["stage_breakdown_s"] = _stage_breakdown_to_seconds(tt_pipeline.last_perf)
+            perf["fallback_counts"] = dict(tt_pipeline.last_perf.get("fallback_counts", {}))
+        else:
+            perf["fallback_counts"] = PERF_COUNTERS.snapshot()
+
+        if use_tt:
+            counts = perf["fallback_counts"]
+            if int(counts.get("vit_backbone_fallback_count", 0)) != 0 or int(
+                counts.get("reassembly_readout_fallback_count", 0)
+            ) != 0:
+                raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
 
         if args.dump_depth:
             Path(args.dump_depth).parent.mkdir(parents=True, exist_ok=True)
@@ -185,6 +224,7 @@ def main():
             num_tokens=(args.image_size // 16) * (args.image_size // 16) + 1,
             device=args.device,
             dtype="bfloat16",
+            tt_execution_mode=perf.get("tt_execution_mode", "unknown"),
             mode=perf.get("mode", "unknown"),
             latency_ms=perf.get("total_ms", 0),
             inference_time_s=perf.get("inference_time_s", 0.0),
@@ -194,6 +234,7 @@ def main():
             fps=perf.get("fps", 0),
             stage_breakdown_ms=perf.get("stage_breakdown_ms", {}),
             stage_breakdown_s=perf.get("stage_breakdown_s", {}),
+            fallback_counts=perf.get("fallback_counts", {}),
         )
 
         if args.dump_perf:

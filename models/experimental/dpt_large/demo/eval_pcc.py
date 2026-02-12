@@ -14,6 +14,7 @@ import numpy as np
 from models.common.utility_functions import comp_pcc
 from ..tt.config import DPTLargeConfig
 from ..tt.fallback import DPTFallbackPipeline
+from ..tt.perf_counters import PERF_COUNTERS, reset_perf_counters
 
 
 def _collect_images(args) -> list[str]:
@@ -33,28 +34,71 @@ def _fps_from_ms(latency_ms: float) -> float:
 
 
 def time_pipeline(pipeline, images: list[str], warmup: int, repeat: int):
+    prepare = None
+    if hasattr(pipeline, "fallback") and hasattr(pipeline.fallback, "_prepare"):
+        prepare = pipeline.fallback._prepare
+    elif hasattr(pipeline, "_prepare"):
+        prepare = pipeline._prepare
+
+    pixel_values_list = None
+    if prepare is not None and hasattr(pipeline, "forward_pixel_values"):
+        pixel_values_list = [prepare(img) for img in images]
+
+    tt_inputs_host_list = None
+    exec_mode = str(getattr(getattr(pipeline, "config", None), "tt_execution_mode", "eager")).lower()
+    if pixel_values_list is not None and hasattr(pipeline, "forward_tt_host_tensor") and exec_mode in ("trace", "trace_2cq"):
+        import ttnn  # type: ignore
+
+        tt_inputs_host_list = [
+            ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for pv in pixel_values_list
+        ]
+
     for _ in range(max(0, int(warmup))):
-        _ = pipeline.forward(images[0], normalize=True)
+        if tt_inputs_host_list is not None:
+            _ = pipeline.forward_tt_host_tensor(tt_inputs_host_list[0], normalize=True)
+        elif pixel_values_list is not None:
+            _ = pipeline.forward_pixel_values(pixel_values_list[0], normalize=True)
+        else:
+            _ = pipeline.forward(images[0], normalize=True)
+
+    # Steady-state guard: after warmup, do not allow any silent host fallbacks.
+    if hasattr(pipeline, "config") and not bool(getattr(pipeline.config, "allow_cpu_fallback", True)):
+        reset_perf_counters()
 
     timings_ms: list[float] = []
     last = None
     for _ in range(max(1, int(repeat))):
         start = time.perf_counter()
-        for img in images:
-            last = pipeline.forward(img, normalize=True)
+        if tt_inputs_host_list is not None:
+            for tth in tt_inputs_host_list:
+                last = pipeline.forward_tt_host_tensor(tth, normalize=True)
+        elif pixel_values_list is not None:
+            for pv in pixel_values_list:
+                last = pipeline.forward_pixel_values(pv, normalize=True)
+        else:
+            for img in images:
+                last = pipeline.forward(img, normalize=True)
         end = time.perf_counter()
         timings_ms.append((end - start) * 1000.0)
 
     total_ms_mean = float(np.mean(timings_ms))
     per_image_ms = total_ms_mean / max(1, len(images))
-    return {
+    stats = {
         "repeat_total_ms": timings_ms,
         "total_ms_mean": total_ms_mean,
         "total_ms_std": float(np.std(timings_ms)),
         "per_image_ms": per_image_ms,
         "fps": _fps_from_ms(per_image_ms),
         "last_output": last,
+        "fallback_counts": PERF_COUNTERS.snapshot(),
     }
+    if hasattr(pipeline, "config") and not bool(getattr(pipeline.config, "allow_cpu_fallback", True)):
+        counts = stats["fallback_counts"]
+        if int(counts.get("vit_backbone_fallback_count", 0)) != 0 or int(
+            counts.get("reassembly_readout_fallback_count", 0)
+        ) != 0:
+            raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
+    return stats
 
 
 def main():
@@ -79,7 +123,7 @@ def main():
         type=str,
         default="eager",
         choices=("eager", "trace", "trace_2cq"),
-        help="Execution mode for TT neck/head path.",
+        help="Execution mode for TT path. trace/trace_2cq execute a captured full-model trace (backbone+neck+head).",
     )
     parser.add_argument("--dump-json", type=str, default=None, help="Write a JSON summary.")
     args = parser.parse_args()
@@ -113,6 +157,7 @@ def main():
         "num_images": len(images),
         "image_size": int(args.image_size),
         "pretrained": bool(args.pretrained),
+        "tt_execution_mode": str(args.tt_execution_mode) if bool(args.tt_run) else None,
         "cpu": {k: v for k, v in cpu_stats.items() if k != "last_output"},
     }
 

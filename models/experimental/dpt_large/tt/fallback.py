@@ -153,17 +153,21 @@ class DPTFallbackPipeline:
         return norm
 
     # ------------------------------------------------------------------ public
-    def run_depth_cpu(self, image_path: str, normalize: bool = True) -> np.ndarray:
-        pixel_values = self._prepare(image_path)
+    def forward_pixel_values(self, pixel_values: torch.Tensor, normalize: bool = True) -> np.ndarray:
         depth = self._forward(pixel_values)
         if normalize:
             depth = self._normalize_depth(depth)
         return depth.cpu().numpy()
 
+    def run_depth_cpu(self, image_path: str, normalize: bool = True) -> np.ndarray:
+        pixel_values = self._prepare(image_path)
+        return self.forward_pixel_values(pixel_values, normalize=normalize)
+
     # Small convenience wrapper so evaluation helpers can treat CPU and TT
     # pipelines uniformly.
     def forward(self, image_path: str, normalize: bool = True) -> np.ndarray:
-        return self.run_depth_cpu(image_path, normalize=normalize)
+        pixel_values = self._prepare(image_path)
+        return self.forward_pixel_values(pixel_values, normalize=normalize)
 
 
 def run_depth_cpu(image_path: str, config: DPTLargeConfig | None = None, **kwargs) -> np.ndarray:

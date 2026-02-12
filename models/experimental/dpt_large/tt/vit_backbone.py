@@ -12,6 +12,7 @@ import torch
 
 from .tt_modules import build_attn_padding_mask_4d, pad_tokens_3d, unpad_tokens_3d
 from .config import DPTLargeConfig
+from .perf_counters import inc_vit_backbone_fallback
 
 LOG = logging.getLogger(__name__)
 
@@ -84,6 +85,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         self.tt_blocks = []
         self._attn_mask_cache = {}
         self._pos_embed_cache = {}
+        self._tt_pos_embed_cache = {}
+        self._tt_cls_cache = {}
         self.used_tt_encoder_last_forward: bool = False
         # TTNN defaults to l1_small_size=0 in some runtimes, which can force
         # kernels down slow fallback paths or fail allocation in conv/halo ops.
@@ -151,6 +154,16 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             ]
             self.tt_pos_embed = sd["dpt.embeddings.position_embeddings"]
             self.tt_cls_token = sd["dpt.embeddings.cls_token"]
+            # Avoid first-iteration host work and host->device copies on the hot path.
+            try:
+                import ttnn  # type: ignore
+
+                h_out = int(self.config.image_size // int(self.config.patch_size))
+                w_out = int(self.config.image_size // int(self.config.patch_size))
+                _ = self._pos_embed_tt_for_hw(h_out, w_out, ttnn=ttnn)
+                _ = self._cls_token_tt(batch=1, ttnn=ttnn)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ backbone implementations
     def _pos_embed_for_hw(self, h_patches: int, w_patches: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
@@ -194,6 +207,48 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         self._pos_embed_cache[cache_key] = resized
         return resized
 
+    def _pos_embed_tt_for_hw(self, h_patches: int, w_patches: int, *, ttnn):
+        """
+        Cached TT positional embeddings for the runtime patch grid.
+
+        Returned tensor is on device and row-major layout: [1, N+1, C].
+        """
+        cache_key = (int(h_patches), int(w_patches))
+        cached = self._tt_pos_embed_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        pos_torch = self._pos_embed_for_hw(
+            int(h_patches),
+            int(w_patches),
+            dtype=torch.float32,
+            device=torch.device("cpu"),
+        )
+        pos_tt = ttnn.from_torch(
+            pos_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.tt_device,
+        )
+        self._tt_pos_embed_cache[cache_key] = pos_tt
+        return pos_tt
+
+    def _cls_token_tt(self, *, batch: int, ttnn):
+        """Cached TT cls token expanded to the given batch: [B, 1, C] row-major."""
+        b = int(batch)
+        cached = self._tt_cls_cache.get(b)
+        if cached is not None:
+            return cached
+        cls_torch = self.tt_cls_token.expand(b, -1, -1).contiguous()
+        cls_tt = ttnn.from_torch(
+            cls_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.tt_device,
+        )
+        self._tt_cls_cache[b] = cls_tt
+        return cls_tt
+
     def _forward_cpu_backbone(self, pixel_values: torch.Tensor, return_tt: bool = False) -> ViTBackboneOutputs:
         """Reference CPU backbone using HF DPT encoder."""
         patch = self.config.patch_size
@@ -222,61 +277,91 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         """Return True when we should run the TT encoder path (any supported config)."""
         return self.tt_device is not None and self.config.enable_tt_device
 
-    def _forward_tt_encoder(self, pixel_values: torch.Tensor, return_tt: bool = False) -> ViTBackboneOutputs:
-        """General TT encoder path using TTTransformerBlock stack for small and large configs."""
+    def _forward_tt_encoder_from_tt_input(self, tt_in, return_tt: bool = False) -> ViTBackboneOutputs:
+        """
+        TT encoder path that assumes the input is already a TT tensor on device.
+
+        Expected input:
+            tt_in: ttnn.Tensor [B, C, H, W] on `self.tt_device`.
+        """
         import ttnn  # type: ignore
 
         if self.tt_device is None or self.tt_patch is None or not self.tt_blocks:
-            # Fallback to CPU backbone if TT is unavailable or misconfigured.
-            return self._forward_cpu_backbone(pixel_values, return_tt=return_tt)
+            raise RuntimeError("TT encoder is not initialized")
 
-        # Pixel input: torch [B, C, H, W] -> TT tensor.
-        tt_in = ttnn.from_torch(
-            pixel_values,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.tt_device,
-        )
         # Patch embedding via TT conv.
         x = self.tt_patch(tt_in)  # TT tensor [B, C, H_out, W_out]
 
-        # Convert to host to form tokens and add CLS + positional embeddings.
-        x_host = x.cpu()
-        if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-            x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-        x_torch = x_host.to_torch()  # [B, C, H_out, W_out]
-        B, C, H, W = x_torch.shape
-        h_out, w_out = int(H), int(W)
-        patch_tokens = x_torch.reshape(B, C, H * W).permute(0, 2, 1)  # [B, N, C]
+        patch = int(self.config.patch_size)
+        h_cfg = int(self.config.image_size // patch)
+        w_cfg = int(self.config.image_size // patch)
 
-        cls = self.tt_cls_token.expand(B, -1, -1)  # [B, 1, C]
-        tokens_torch = torch.cat([cls, patch_tokens], dim=1)  # [B, N+1, C]
-        pos_embed = self._pos_embed_for_hw(H, W, dtype=tokens_torch.dtype, device=tokens_torch.device)
-        tokens_torch = tokens_torch + pos_embed
+        # Form tokens and add CLS + positional embeddings fully on device.
+        try:
+            B = int(x.shape[0])
+            C = int(x.shape[1])
+            h_out = int(x.shape[2])
+            w_out = int(x.shape[3])
+
+            # Sanity: for bring-up we expect square grids matching config.
+            if (h_out, w_out) != (h_cfg, w_cfg):
+                h_out, w_out = h_cfg, w_cfg
+
+            patch_nhwc = ttnn.permute(x, (0, 2, 3, 1))  # [B,H,W,C]
+            patch_nhwc = ttnn.to_layout(patch_nhwc, ttnn.ROW_MAJOR_LAYOUT)
+            patch_tokens = ttnn.reshape(patch_nhwc, (int(B), int(h_out) * int(w_out), int(C)))  # [B,N,C]
+            cls_tt = self._cls_token_tt(batch=int(B), ttnn=ttnn)  # [B,1,C]
+            tokens_tt3 = ttnn.concat([cls_tt, patch_tokens], dim=1)  # [B,N+1,C]
+            pos_tt = self._pos_embed_tt_for_hw(int(h_out), int(w_out), ttnn=ttnn)  # [1,N+1,C]
+            tokens_tile = ttnn.to_layout(tokens_tt3, ttnn.TILE_LAYOUT)
+            pos_tile = ttnn.to_layout(pos_tt, ttnn.TILE_LAYOUT)
+            tokens_tile = ttnn.add(tokens_tile, pos_tile, dtype=ttnn.bfloat16)
+            tokens_tt3 = ttnn.to_layout(tokens_tile, ttnn.ROW_MAJOR_LAYOUT)
+        except Exception:
+            inc_vit_backbone_fallback()
+            if not bool(getattr(self.config, "allow_cpu_fallback", True)):
+                raise
+            # Conservative fallback: materialize patch embeddings on host, build the
+            # token embedding sequence on host, then move back to device.
+            x_host = x.cpu()
+            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
+                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
+            x_torch = x_host.to_torch()  # [B, C, H_out, W_out]
+            B, C, H, W = x_torch.shape
+            h_out, w_out = int(H), int(W)
+            patch_tokens_torch = x_torch.reshape(B, C, H * W).permute(0, 2, 1)  # [B, N, C]
+            cls = self.tt_cls_token.expand(B, -1, -1)  # [B, 1, C]
+            tokens_torch = torch.cat([cls, patch_tokens_torch], dim=1)  # [B, N+1, C]
+            pos_embed = self._pos_embed_for_hw(H, W, dtype=tokens_torch.dtype, device=tokens_torch.device)
+            tokens_torch = tokens_torch + pos_embed
+            tokens_tt3 = ttnn.from_torch(
+                tokens_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.tt_device,
+            )
 
         # Perf path only: pad sequence to tile multiple for sharded program configs.
-        orig_len = tokens_torch.shape[1]
+        orig_len = int(tokens_tt3.shape[1])
         pad_seq = bool(getattr(self.config, "tt_perf_encoder", False))
+        seq_len = int(orig_len)
         if pad_seq:
-            tokens_torch, orig_len = pad_tokens_3d(tokens_torch, pad_multiple=32)
+            padded_len = ((seq_len + 31) // 32) * 32
+            if padded_len != seq_len:
+                tokens_tt3 = ttnn.pad(tokens_tt3, [(0, 0), (0, int(padded_len - seq_len)), (0, 0)], value=0.0)
+                seq_len = int(padded_len)
 
-        tokens_tt = ttnn.from_torch(
-            tokens_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.tt_device,
-        )
+        tokens_tt = ttnn.to_layout(tokens_tt3, ttnn.TILE_LAYOUT)
         # Keep [B,1,N,C] through encoder blocks to reduce per-layer reshapes.
-        tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(tokens_torch.shape[1]), int(tokens_torch.shape[2])))
+        tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
 
-        mm_opts = self.tt_layer_cfg.matmul_opts(seq_len=tokens_torch.shape[1]) if self.tt_layer_cfg else {}
-        if pad_seq and orig_len < tokens_torch.shape[1]:
-            # Provide an attention mask so padded tokens do not participate in attention.
+        mm_opts = self.tt_layer_cfg.matmul_opts(seq_len=int(seq_len)) if self.tt_layer_cfg else {}
+        if pad_seq and orig_len < seq_len:
             mm_opts["valid_seq_len"] = int(orig_len)
-            cache_key = (int(tokens_torch.shape[1]), int(orig_len))
+            cache_key = (int(seq_len), int(orig_len))
             attn_mask_tt = self._attn_mask_cache.get(cache_key)
             if attn_mask_tt is None:
-                mask_torch = build_attn_padding_mask_4d(tokens_torch.shape[1], orig_len, dtype=torch.float32)
+                mask_torch = build_attn_padding_mask_4d(int(seq_len), int(orig_len), dtype=torch.float32)
                 attn_mask_tt = ttnn.from_torch(
                     mask_torch,
                     dtype=ttnn.bfloat16,
@@ -285,6 +370,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 )
                 self._attn_mask_cache[cache_key] = attn_mask_tt
             mm_opts["attn_mask"] = attn_mask_tt
+
         hidden_states_tt: List[ttnn.Tensor] = [tokens_tt]
         for blk in self.tt_blocks[: self.config.num_hidden_layers]:
             tokens_tt = blk(tokens_tt, **mm_opts)
@@ -319,7 +405,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                         n_total = int(orig_len)
                     token_maps[idx + 1] = tokens_tt4
 
-                    # Drop CLS (position 0) and reshape patch tokens -> NCHW feature map on device.
+                    # Drop CLS and reshape patch tokens -> NCHW feature map on device.
                     if n_total <= 1:
                         raise RuntimeError(f"Unexpected token sequence length: {n_total}")
                     patch_tt4 = ttnn.slice(
@@ -335,6 +421,9 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                     nhwc = ttnn.reshape(patch_tt4, (int(b), int(h_out), int(w_out), int(c)))
                     feats[idx + 1] = ttnn.permute(nhwc, (0, 3, 1, 2))
                 except Exception:
+                    inc_vit_backbone_fallback()
+                    if not bool(getattr(self.config, "allow_cpu_fallback", True)):
+                        raise
                     # Conservative fallback: materialize tokens/features on host to
                     # keep correctness if runtime reshape/slice semantics change.
                     h_host = h_tt.cpu()
@@ -352,17 +441,18 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                     token_maps[idx + 1] = tokens_layer
 
                     patch_tokens = tokens_layer[:, 1:, :]  # drop CLS
-                    B, N, C = patch_tokens.shape
-                    if N != int(h_out) * int(w_out):
-                        raise RuntimeError(f"Unexpected patch token length: {N} vs {int(h_out) * int(w_out)}")
-                    feats[idx + 1] = patch_tokens.transpose(1, 2).reshape(B, C, int(h_out), int(w_out))
+                    b_t, n_t, c_t = patch_tokens.shape
+                    if n_t != int(h_out) * int(w_out):
+                        raise RuntimeError(f"Unexpected patch token length: {n_t} vs {int(h_out) * int(w_out)}")
+                    feats[idx + 1] = patch_tokens.transpose(1, 2).reshape(b_t, c_t, int(h_out), int(w_out))
             else:
+                # Non-perf mode isn't expected to be used with TT tracing. Keep the
+                # host path for compatibility.
                 h_host = h_tt.cpu()
                 if hasattr(h_host, "layout") and h_host.layout == ttnn.TILE_LAYOUT:
                     h_host = h_host.to(ttnn.ROW_MAJOR_LAYOUT)
                 tokens_layer = h_host.to_torch()
                 if tokens_layer.dim() == 4:
-                    # Encoder blocks keep [B,1,N,C] in TT fast path.
                     if tokens_layer.shape[1] != 1:
                         raise RuntimeError(f"Unexpected TT token shape: {tuple(tokens_layer.shape)}")
                     tokens_layer = tokens_layer[:, 0, :, :]
@@ -371,15 +461,36 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 if pad_seq:
                     tokens_layer = unpad_tokens_3d(tokens_layer, orig_len)
                 token_maps[idx + 1] = tokens_layer
-
-                patch_tokens = tokens_layer[:, 1:, :]  # drop CLS
-                B, N, C = patch_tokens.shape
-                if N != int(h_out) * int(w_out):
-                    raise RuntimeError(f"Unexpected patch token length: {N} vs {int(h_out) * int(w_out)}")
-                feat_torch = patch_tokens.transpose(1, 2).reshape(B, C, int(h_out), int(w_out))
-                feats[idx + 1] = feat_torch
+                patch_tokens = tokens_layer[:, 1:, :]
+                b_t, n_t, c_t = patch_tokens.shape
+                if n_t != int(h_out) * int(w_out):
+                    raise RuntimeError(f"Unexpected patch token length: {n_t} vs {int(h_out) * int(w_out)}")
+                feats[idx + 1] = patch_tokens.transpose(1, 2).reshape(b_t, c_t, int(h_out), int(w_out))
 
         return ViTBackboneOutputs(features=feats, tokens=token_maps)
+
+    def _forward_tt_encoder(self, pixel_values: torch.Tensor, return_tt: bool = False) -> ViTBackboneOutputs:
+        """General TT encoder path using TTTransformerBlock stack for small and large configs."""
+        import ttnn  # type: ignore
+
+        if self.tt_device is None or self.tt_patch is None or not self.tt_blocks:
+            # Fallback to CPU backbone if TT is unavailable or misconfigured.
+            return self._forward_cpu_backbone(pixel_values, return_tt=return_tt)
+
+        # Pixel input: torch [B, C, H, W] -> TT tensor.
+        tt_in = ttnn.from_torch(
+            pixel_values,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.tt_device,
+        )
+        return self._forward_tt_encoder_from_tt_input(tt_in, return_tt=return_tt)
+
+    def forward_tt_input(self, tt_pixel_values, return_tt: bool = False) -> ViTBackboneOutputs:
+        """Forward assuming inputs are already a device-side TT tensor."""
+        if not self._use_tt_encoder():
+            raise RuntimeError("TT device is not available but forward_tt_input was requested")
+        return self._forward_tt_encoder_from_tt_input(tt_pixel_values, return_tt=return_tt)
 
     def forward(self, pixel_values: torch.Tensor, return_tt: bool = False) -> ViTBackboneOutputs:
         """Unified backbone forward that can use either HF CPU encoder or a TT encoder."""

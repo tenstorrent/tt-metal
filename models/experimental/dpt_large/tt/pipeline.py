@@ -18,6 +18,7 @@ from .fusion_head import DPTFusionHead
 from .reassembly import DPTReassembly
 from .vit_backbone import DPTViTBackboneTTNN
 from .tt_configs import describe_configs
+from .perf_counters import PERF_COUNTERS
 
 try:
     import ttnn
@@ -89,6 +90,10 @@ class DPTTTPipeline:
         # Last per-call perf breakdown (filled in forward).
         self.last_perf: Optional[dict] = None
         self._fusion_head_tracer = None
+        self._full_trace_id = None
+        self._full_trace_input = None
+        self._full_trace_output = None
+        self._trace_op_event = None
 
     # ------------------------------------------------------------------ plumbing
     def to(self, device: str):
@@ -105,6 +110,17 @@ class DPTTTPipeline:
         return self
 
     def close(self):
+        if self._full_trace_id is not None:
+            try:
+                import ttnn  # type: ignore
+
+                ttnn.release_trace(self.backbone.tt_device, self._full_trace_id)
+            except Exception:
+                pass
+            self._full_trace_id = None
+            self._full_trace_input = None
+            self._full_trace_output = None
+            self._trace_op_event = None
         if self._fusion_head_tracer is not None:
             try:
                 self._fusion_head_tracer.release()
@@ -142,6 +158,127 @@ class DPTTTPipeline:
                 tracer_blocking_execution=True,
             )
 
+    def _tt_forward_core(self, tt_pixel_values):
+        # In perf-neck mode, request TT token maps/features so the neck can stay on device.
+        return_tt_backbone = bool(getattr(self.config, "tt_perf_neck", False))
+        feats = self.backbone.forward_tt_input(tt_pixel_values, return_tt=return_tt_backbone)
+        pyramid = self.reassembly(feats)
+        depth = self.fusion_head(pyramid)
+        return depth
+
+    def _ensure_full_trace(self, tt_pixel_values_host, execution_mode: str):
+        """
+        Capture a single full-model trace for the backbone+neck+head hot path.
+
+        The trace uses cq=0 for execution. For `trace_2cq`, the input copy is
+        scheduled on cq=1 and synchronized via events (similar to other performant
+        runners in the repo).
+        """
+        import ttnn  # type: ignore
+
+        if self._full_trace_id is not None:
+            return
+
+        if self.backbone.tt_device is None:
+            raise RuntimeError("TT device is not available for tracing")
+
+        # Create a persistent device input buffer with a stable address.
+        tt_in_dev = tt_pixel_values_host.to(self.backbone.tt_device)
+        self._full_trace_input = tt_in_dev
+
+        # compile
+        _ = self._tt_forward_core(tt_in_dev)
+
+        # capture trace
+        trace_id = ttnn.begin_trace_capture(self.backbone.tt_device, cq_id=0)
+        try:
+            try:
+                out = self._tt_forward_core(tt_in_dev)
+            finally:
+                ttnn.end_trace_capture(self.backbone.tt_device, trace_id, cq_id=0)
+        except Exception:
+            try:
+                ttnn.release_trace(self.backbone.tt_device, trace_id)
+            except Exception:
+                pass
+            raise
+
+        self._full_trace_id = trace_id
+        self._full_trace_output = out
+
+        # Initialize CQ sync primitive for trace_2cq.
+        if execution_mode == "trace_2cq":
+            self._trace_op_event = ttnn.record_event(self.backbone.tt_device, 0)
+
+    def forward_tt_host_tensor(self, tt_pixel_values_host, normalize: bool = True):
+        """
+        Forward using a TT host tensor input.
+
+        This is intended for traced execution modes. The caller should pass a
+        `ttnn.Tensor` created with `ttnn.from_torch(..., layout=TILE_LAYOUT)` and
+        no device, so input copies can be scheduled efficiently.
+        """
+        try:
+            import ttnn  # type: ignore
+        except Exception:
+            raise RuntimeError("ttnn is required for forward_tt_host_tensor")
+
+        requested_exec_mode = str(getattr(self.config, "tt_execution_mode", "eager")).lower()
+        if requested_exec_mode not in {"trace", "trace_2cq"}:
+            raise ValueError(f"forward_tt_host_tensor requires trace/trace_2cq, got {requested_exec_mode!r}")
+
+        if self.backbone.tt_device is None:
+            raise RuntimeError("TT device is not available for traced execution")
+
+        self._ensure_full_trace(tt_pixel_values_host, execution_mode=requested_exec_mode)
+
+        t0 = time.perf_counter()
+        if requested_exec_mode == "trace_2cq":
+            # 2-CQ wiring: host->device copy on cq=1, trace execute on cq=0.
+            if self._trace_op_event is None:
+                self._trace_op_event = ttnn.record_event(self.backbone.tt_device, 0)
+            ttnn.wait_for_event(1, self._trace_op_event)
+            ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 1)
+            write_event = ttnn.record_event(self.backbone.tt_device, 1)
+            ttnn.wait_for_event(0, write_event)
+            self._trace_op_event = ttnn.record_event(self.backbone.tt_device, 0)
+            ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=False)
+        else:
+            ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 0)
+            ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=True)
+
+        depth = self._full_trace_output
+        # Normalize/return path mirrors the eager TT path.
+        try:
+            if isinstance(depth, ttnn.Tensor):
+                depth = depth.cpu().to_torch()
+        except Exception:
+            pass
+        depth_t = torch.as_tensor(depth)
+        if depth_t.dim() == 3:
+            depth_t = depth_t.unsqueeze(1)
+        if normalize:
+            depth_t = self.fallback._normalize_depth(depth_t.float())
+        else:
+            depth_t = depth_t.float()
+
+        total_ms = (time.perf_counter() - t0) * 1000.0
+        self.last_perf = {
+            "mode": "tt",
+            "execution_mode": requested_exec_mode,
+            "requested_execution_mode": requested_exec_mode,
+            "num_images": 1,
+            "preprocess_ms": 0.0,
+            "backbone_ms": None,
+            "reassembly_ms": None,
+            "fusion_head_ms": None,
+            "normalize_ms": None,
+            "total_ms": total_ms,
+            "fallback_counts": PERF_COUNTERS.snapshot(),
+        }
+
+        return depth_t.cpu().numpy()
+
     def __enter__(self):
         return self
 
@@ -150,37 +287,8 @@ class DPTTTPipeline:
         return False
 
     # ------------------------------------------------------------------ forward
-    def forward(self, image_path: str | list[str], normalize: bool = True) -> np.ndarray | list[np.ndarray]:
-        # Support single path or list for simple pipelining/batching.
-        paths = image_path if isinstance(image_path, list) else [image_path]
-        outputs = []
-        # Reset per-call perf breakdown.
-        self.last_perf = None
-        # If no TT device available, either fall back to HF path (when allowed)
-        # or raise in order to surface configuration issues in tests.
-        if getattr(self.backbone, "tt_device", None) is None:
-            if not self.config.allow_cpu_fallback:
-                raise RuntimeError(
-                    "TT device is not available but `allow_cpu_fallback=False`. "
-                    "This configuration is intended to exercise the TT path."
-                )
-            t_start = time.perf_counter()
-            for p in paths:
-                outputs.append(self.fallback.run_depth_cpu(p, normalize=normalize))
-            total_ms = (time.perf_counter() - t_start) * 1000.0
-            self.last_perf = {
-                "mode": "cpu_fallback",
-                "execution_mode": "cpu_fallback",
-                "total_ms": total_ms,
-                "num_images": len(paths),
-            }
-            return outputs if len(outputs) > 1 else outputs[0]
-
-        # Lightweight host preprocessing pipeline
-        t_pre = time.perf_counter()
-        preprocessed = [self.fallback._prepare(p) for p in paths]
-        preprocess_ms = (time.perf_counter() - t_pre) * 1000.0
-
+    def _forward_preprocessed(self, preprocessed: list[torch.Tensor], normalize: bool, preprocess_ms: float):
+        outputs: list[np.ndarray] = []
         backbone_ms = 0.0
         reassembly_ms = 0.0
         fusion_head_ms = 0.0
@@ -243,16 +351,77 @@ class DPTTTPipeline:
             "mode": "tt",
             "execution_mode": effective_exec_mode,
             "requested_execution_mode": requested_exec_mode,
-            "num_images": len(paths),
+            "num_images": len(preprocessed),
             "preprocess_ms": preprocess_ms,
             "backbone_ms": backbone_ms,
             "reassembly_ms": reassembly_ms,
             "fusion_head_ms": fusion_head_ms,
             "normalize_ms": normalize_ms,
             "total_ms": total_ms,
+            "fallback_counts": PERF_COUNTERS.snapshot(),
         }
 
-        return outputs if len(outputs) > 1 else outputs[0]
+        return outputs
+
+    def forward_pixel_values(
+        self, pixel_values: torch.Tensor | list[torch.Tensor], normalize: bool = True
+    ) -> np.ndarray | list[np.ndarray]:
+        """
+        Forward using already-preprocessed tensors (avoids disk I/O in perf runs).
+        """
+        values = pixel_values if isinstance(pixel_values, list) else [pixel_values]
+        # Reset per-call perf breakdown.
+        self.last_perf = None
+        # If no TT device available, either fall back to HF path (when allowed)
+        # or raise in order to surface configuration issues in tests.
+        if getattr(self.backbone, "tt_device", None) is None:
+            if not self.config.allow_cpu_fallback:
+                raise RuntimeError(
+                    "TT device is not available but `allow_cpu_fallback=False`. "
+                    "This configuration is intended to exercise the TT path."
+                )
+            t_start = time.perf_counter()
+            outs = []
+            for pv in values:
+                # Mirror the CPU fallback behavior: pv is already prepared.
+                depth = self.fallback._forward(pv)
+                depth_t = torch.as_tensor(depth)
+                if depth_t.dim() == 3:
+                    depth_t = depth_t.unsqueeze(1)
+                if normalize:
+                    depth_t = self.fallback._normalize_depth(depth_t.float())
+                else:
+                    depth_t = depth_t.float()
+                outs.append(depth_t.cpu().numpy())
+            total_ms = (time.perf_counter() - t_start) * 1000.0
+            self.last_perf = {
+                "mode": "cpu_fallback",
+                "execution_mode": "cpu_fallback",
+                "total_ms": total_ms,
+                "num_images": len(values),
+                "fallback_counts": PERF_COUNTERS.snapshot(),
+            }
+            return outs if len(outs) > 1 else outs[0]
+
+        outs = self._forward_preprocessed(values, normalize=normalize, preprocess_ms=0.0)
+        return outs if len(outs) > 1 else outs[0]
+
+    def forward(self, image_path: str | list[str], normalize: bool = True) -> np.ndarray | list[np.ndarray]:
+        # Support single path or list for simple pipelining/batching.
+        paths = image_path if isinstance(image_path, list) else [image_path]
+        # Reset per-call perf breakdown.
+        self.last_perf = None
+        # If no TT device available, either fall back to HF path (when allowed)
+        # or raise in order to surface configuration issues in tests.
+        if getattr(self.backbone, "tt_device", None) is None:
+            return self.forward_pixel_values([self.fallback._prepare(p) for p in paths], normalize=normalize)
+
+        # Lightweight host preprocessing pipeline
+        t_pre = time.perf_counter()
+        preprocessed = [self.fallback._prepare(p) for p in paths]
+        preprocess_ms = (time.perf_counter() - t_pre) * 1000.0
+        outs = self._forward_preprocessed(preprocessed, normalize=normalize, preprocess_ms=preprocess_ms)
+        return outs if len(outs) > 1 else outs[0]
 
 
 def run_depth(

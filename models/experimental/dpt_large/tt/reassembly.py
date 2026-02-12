@@ -16,6 +16,7 @@ from .tt_cnn_ops import (
     TTConvTranspose2dCached,
     ensure_tt_device_tensor,
 )
+from .perf_counters import inc_reassembly_readout_fallback
 
 
 def _ensure_tt_device_tensor(x, tt_device, ttnn):
@@ -423,6 +424,9 @@ class DPTReassembly(nn.Module):
                         ttnn=ttnn,
                     )
                 except Exception:
+                    inc_reassembly_readout_fallback()
+                    if not bool(getattr(self.config, "allow_cpu_fallback", True)):
+                        raise
                     hidden_state = None
             else:
                 hidden_state = None
