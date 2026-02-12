@@ -519,7 +519,11 @@ void generate_math_fidelity_descriptor(JitBuildOptions& options) {
     ofstream file_stream;
 
     file_stream.open(tmp.path());
-    file_stream << "constexpr std::int32_t MATH_FIDELITY = " << (int)desc.get_hlk_math_fidelity() << ";" << endl;
+
+    MathFidelity fidelity = desc.get_hlk_math_fidelity();
+
+    file_stream << "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>("
+                << static_cast<std::uint32_t>(fidelity) << ");" << endl;
     file_stream.close();
 }
 
