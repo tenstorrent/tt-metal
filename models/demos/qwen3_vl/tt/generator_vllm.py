@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import Mapping, Optional
 
 import torch
-import vllm.envs as envs
 from loguru import logger
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
     Qwen3VLForConditionalGeneration as Ref_Qwen3VLForConditionalGeneration,
@@ -191,84 +190,42 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # reconstruct the inputs that Qwen3VL expects
         inputs = CustomNamespace()
-        if envs.VLLM_USE_V1:
-            inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype, like V0 does (see below)?
-            # Construct inputs.attention_mask with shape [batch_size, padded_seq_len] like tokens,
-            # where each row has ones in the first prompt_lens[i] positions and zeros elsewhere
-            inputs.attention_mask = torch.zeros(
-                (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
+
+        inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype, like V0 does (see below)?
+        # Construct inputs.attention_mask with shape [batch_size, padded_seq_len] like tokens,
+        # where each row has ones in the first prompt_lens[i] positions and zeros elsewhere
+        inputs.attention_mask = torch.zeros(
+            (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
+        )
+        for i, plen in enumerate(prompt_lens):
+            inputs.attention_mask[i, :plen] = 1
+
+        if (
+            "pixel_values" in kwargs
+            and len(kwargs["pixel_values"]) > 0
+            and kwargs["pixel_values"][0] is not None
+            # kwargs["pixel_values"] is a list,
+            # each element is a list of images for one user
+            # We only check if the first user's pixel_values is not None
+            # as we currently do not support mixed inputs of text-only
+            # users and text-image users
+        ):
+            inputs.pixel_values = torch.concat(
+                [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
             )
-            for i, plen in enumerate(prompt_lens):
-                inputs.attention_mask[i, :plen] = 1
-
-            if (
-                "pixel_values" in kwargs
-                and len(kwargs["pixel_values"]) > 0
-                and kwargs["pixel_values"][0] is not None
-                # kwargs["pixel_values"] is a list,
-                # each element is a list of images for one user
-                # We only check if the first user's pixel_values is not None
-                # as we currently do not support mixed inputs of text-only
-                # users and text-image users
-            ):
-                inputs.pixel_values = torch.concat(
-                    [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
-                )
-                inputs.image_grid_thw = torch.concat(
-                    [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw], dim=0
-                )
-                # Vision prefill
-                image_embeds, deepstack_visual_embeds = self.visual_model(
-                    inputs.pixel_values, grid_thw=inputs.image_grid_thw
-                )
-            else:
-                # text-only users
-                image_embeds, deepstack_visual_embeds = (
-                    torch.tensor([], dtype=torch.bfloat16, device=tokens.device),
-                    None,
-                )
-        else:  # V0
-            if (
-                "images" in kwargs
-                and isinstance(kwargs["images"], list)
-                and len(kwargs["images"]) > 0
-                and kwargs["images"][0] is not None
-                and "attention_mask" in kwargs["images"][0]
-            ):
-                inputs.input_ids = tokens.to(kwargs["images"][0].attention_mask.dtype)
-            else:
-                inputs.input_ids = tokens
-
-            inputs.attention_mask = torch.concat(
-                [
-                    torch.nn.functional.pad(
-                        im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0
-                    )
-                    if im is not None
-                    else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
-                    for i, im in enumerate(kwargs["images"])
-                ],
-                dim=0,
+            inputs.image_grid_thw = torch.concat(
+                [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw], dim=0
             )
-            if (
-                "images" in kwargs
-                and len(kwargs["images"]) > 0
-                and kwargs["images"][0] is not None
-                and "pixel_values" in kwargs["images"][0]
-            ):
-                # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
-                inputs.pixel_values = torch.concat([im.pixel_values for im in kwargs["images"]], dim=0)
-                inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in kwargs["images"]], dim=0)
-
-                image_embeds, deepstack_visual_embeds = self.visual_model(
-                    inputs.pixel_values, grid_thw=inputs.image_grid_thw
-                )
-            else:
-                # text-only users
-                image_embeds, deepstack_visual_embeds = (
-                    torch.tensor([], dtype=torch.bfloat16, device=tokens.device),
-                    None,
-                )
+            # Vision prefill
+            image_embeds, deepstack_visual_embeds = self.visual_model(
+                inputs.pixel_values, grid_thw=inputs.image_grid_thw
+            )
+        else:
+            # text-only users
+            image_embeds, deepstack_visual_embeds = (
+                torch.tensor([], dtype=torch.bfloat16, device=tokens.device),
+                None,
+            )
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
