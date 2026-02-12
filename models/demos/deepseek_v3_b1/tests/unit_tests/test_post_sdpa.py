@@ -40,10 +40,11 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
+@pytest.mark.parametrize("num_devices", [1, 2], ids=["single_device", "multi_device"])
 @pytest.mark.parametrize(
-    "num_devices, M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype",
+    "M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype",
     [
-        (2, 1, 512, 8192, 8192, 7168, ttnn.bfloat16, ttnn.bfloat8_b),
+        (1, 512, 8192, 8192, 7168, ttnn.bfloat16, ttnn.bfloat8_b),
     ],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
@@ -79,6 +80,10 @@ def test_post_sdpa(
     # Validate mesh size
     if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
+
+    # CCL requires multiple devices
+    if num_devices == 1 and ccl_enabled:
+        pytest.skip("CCL requires multiple devices")
 
     # Residual add is part of CCL reduction; skip when CCL is disabled
     if not ccl_enabled and fuse_residual_add:
