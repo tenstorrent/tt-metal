@@ -97,7 +97,7 @@ scaleout:
 
 models:
   e2e:
-    wh_llmbox: 83
+    wh_llmbox: 100
   unit:
     wh_llmbox: 332
   integration:
