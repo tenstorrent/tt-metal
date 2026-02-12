@@ -16,6 +16,7 @@
 #include "noc_parameters.h"
 #include "stream_io_map.h"
 #include "tensix.h"
+#include "tensix_neo_reg.h"
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
@@ -113,20 +114,18 @@ inline __attribute__((always_inline)) uint32_t reg_read(uintptr_t addr) {
 #endif
 
 inline void assert_trisc_reset() {
-    uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
-    uint32_t trisc_reset_mask = RISCV_SOFT_RESET_0_TRISCS;
-    WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset_0 | trisc_reset_mask);
+    uint32_t soft_reset_0 = READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
+    uint32_t trisc_reset_mask = T6_DEBUG_REGS_SOFT_RESET_0_RISC_CONTROL_SOFT_RESET_MASK;
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 | trisc_reset_mask);
 }
 
 inline void deassert_trisc_reset() {
-    uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
-    uint32_t trisc_reset_mask = RISCV_SOFT_RESET_0_TRISCS;
-    WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset_0 & ~trisc_reset_mask);
+    uint32_t soft_reset_0 = READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
+    uint32_t trisc_reset_mask = T6_DEBUG_REGS_SOFT_RESET_0_RISC_CONTROL_SOFT_RESET_MASK;
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 & ~trisc_reset_mask);
+    // soft_reset_0 = READ_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
+    // WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 & ~trisc_reset_mask);
 }
-
-inline void deassert_all_reset() { WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_NONE); }
-
-inline void assert_just_ncrisc_reset() { WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_NCRISC); }
 
 inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
     if (special_b == TILE_WORD_8_BIT) {
@@ -205,8 +204,10 @@ inline void risc_init() {
 #include "internal/ethernet/erisc.h"
 #endif
 inline void riscv_wait(uint32_t cycles) {
-    volatile uint tt_reg_ptr* clock_lo = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    volatile uint tt_reg_ptr* clock_hi = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    volatile uint tt_reg_ptr* clock_lo =
+        reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);
+    volatile uint tt_reg_ptr* clock_hi =
+        reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_REG_ADDR);
     uint64_t wall_clock_timestamp = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
     uint64_t wall_clock = 0;
     do {
@@ -242,14 +243,16 @@ void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
 // Get the wall clock timestamp. Reading RISCV_DEBUG_REG_WALL_CLOCK_L samples/freezes (for readback)
 // upper 32 bits of the 64-bit timestamp. Upper 32 bits are read from RISCV_DEBUG_REG_WALL_CLOCK_H.
 inline uint64_t get_timestamp() {
-    volatile uint timestamp_low = *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    volatile uint timestamp_high = *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    volatile uint timestamp_low =
+        *reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);
+    volatile uint timestamp_high =
+        *reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_REG_ADDR);
     return (((uint64_t)timestamp_high) << 32) | timestamp_low;
 }
 
 // Get only the lower 32 bits of the wall clock timestamp
 inline uint32_t get_timestamp_32b() {
-    return *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    return *reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);
 }
 
 #endif

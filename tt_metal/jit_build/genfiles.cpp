@@ -522,6 +522,9 @@ void generate_math_fidelity_descriptor(JitBuildOptions& options) {
 
     MathFidelity fidelity = desc.get_hlk_math_fidelity();
 
+    // Add the necessary include
+    file_stream << "#include \"llk_defs.h\"\n\n";
+
     file_stream << "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>("
                 << static_cast<std::uint32_t>(fidelity) << ");" << endl;
     file_stream.close();

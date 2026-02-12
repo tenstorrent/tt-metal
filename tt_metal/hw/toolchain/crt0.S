@@ -21,7 +21,11 @@ _start:
 	addi	tp,tp,%lo(__local_base)
 	lui	sp,%hi(__local_stride)
 	addi	sp,sp,%lo(__local_stride)
+#ifdef COMPILE_FOR_TRISC
+	csrr	s2, 0xBC2
+#else
 	csrr	s2,mhartid
+#endif
 	mul	s2,sp,s2
 	add	tp,tp,s2
 	add	sp,tp,sp

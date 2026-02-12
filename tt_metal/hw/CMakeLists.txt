@@ -457,6 +457,9 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                 -mcpu=${CPU}
                 ${GPP_FLAGS_common}
             )
+            if(CPU STREQUAL "tt-qsr32")
+                list(APPEND GPP_FLAGS -DCOMPILE_FOR_TRISC)
+            endif()
             add_custom_command(
                 OUTPUT
                     ${HW_OBJ_DIR}/${HW_OBJ_FILE}
