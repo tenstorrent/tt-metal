@@ -32,7 +32,8 @@ constexpr uint32_t block_size = get_compile_time_arg_val(2);
 constexpr uint32_t Wt = get_compile_time_arg_val(3);
 constexpr uint32_t hidden_Wt = get_compile_time_arg_val(4);
 
-const uint32_t hidden_Wt_rounded_up = ((hidden_Wt + block_size - 1) / block_size) * block_size;
+constexpr uint32_t hidden_Wt_rounded_up = ((hidden_Wt + block_size - 1) / block_size) * block_size;
+constexpr uint32_t tiles_per_batch = block_size * block_size;
 
 // CBs with input data
 constexpr auto cb_input_idx = tt::CBIndex::c_0;
@@ -61,7 +62,6 @@ inline void mul_XW_accumulate_l1(
     tile_regs_acquire();
 
     // Wait for W tiles (batched: block_size rows × block_size tiles)
-    constexpr uint32_t tiles_per_batch = block_size * block_size;
     cb_wait_front(cb_w_idx, tiles_per_batch);
 
     mm_block_init_short(
@@ -229,11 +229,10 @@ inline void compute_M_for_r() {
 // matmul_block(rt_dim=1, ct_dim=block_size) processes all output columns at once.
 // ============================================================================
 inline void mul_MW2_accumulate_Y_l1(
-    const uint32_t k_block_start, const uint32_t k_block_size, const uint32_t c_block_size, const bool first_k_block) {
+    const uint32_t k_block_start, const uint32_t k_block_size, const bool first_k_block) {
     tile_regs_acquire();
 
     // Wait for W2 batch (row-major: block_size rows × block_size cols)
-    constexpr uint32_t tiles_per_batch = block_size * block_size;
     cb_wait_front(cb_w2_idx, tiles_per_batch);
 
     // Use matmul_block: rt_dim=1 (single row M), ct_dim=block_size (all c output cols)
@@ -294,12 +293,9 @@ void kernel_main() {
 
         // ---- Phase C: Compute Y[r,:] = M @ W2 with L1 acc ----
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
-            const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
-
             if (is_padding_row) {
                 // Consume W2 to stay in sync
                 for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
-                    constexpr uint32_t tiles_per_batch = block_size * block_size;
                     cb_wait_front(cb_w2_idx, tiles_per_batch);
                     cb_pop_front(cb_w2_idx, tiles_per_batch);
                 }
@@ -312,7 +308,7 @@ void kernel_main() {
                         (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
                     const bool first_k_block = (k_block_start == 0);
 
-                    mul_MW2_accumulate_Y_l1(k_block_start, k_block_size, c_block_size, first_k_block);
+                    mul_MW2_accumulate_Y_l1(k_block_start, k_block_size, first_k_block);
                 }
 
                 // All k_blocks done for this c_block, push Y

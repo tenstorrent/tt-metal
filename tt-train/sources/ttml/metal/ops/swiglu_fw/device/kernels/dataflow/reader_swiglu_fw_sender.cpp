@@ -70,12 +70,13 @@ void kernel_main() {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
+                const uint32_t weight_tile_start = p_block_start * hidden_Wt + k_block_start;
+
                 // Batched mcast W1 with LOOPBACK
-                const uint32_t w1_first_row_tile_start = p_block_start * hidden_Wt + k_block_start;
                 mcast_sender_read_batched_rows_and_send_loopback(
                     cb_w1_idx,
                     w1_address_generator,
-                    w1_first_row_tile_start,
+                    weight_tile_start,
                     block_size,
                     block_size,
                     k_block_size,
@@ -92,11 +93,10 @@ void kernel_main() {
                     num_receivers_excluding_self);
 
                 // Batched mcast W3 with LOOPBACK
-                const uint32_t w3_first_row_tile_start = p_block_start * hidden_Wt + k_block_start;
                 mcast_sender_read_batched_rows_and_send_loopback(
                     cb_w3_idx,
                     w3_address_generator,
-                    w3_first_row_tile_start,
+                    weight_tile_start,
                     block_size,
                     block_size,
                     k_block_size,
