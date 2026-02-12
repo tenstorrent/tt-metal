@@ -9,7 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Resolve TT_METAL_HOME: prefer env var, else infer from script location (parent of vit_n300 = repo root)
-TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 
 if [[ ! -d "${TT_METAL_HOME}" ]]; then
     echo "ERROR: TT_METAL_HOME directory not found: ${TT_METAL_HOME}" 1>&2

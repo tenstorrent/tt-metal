@@ -1,76 +1,102 @@
-# ViT N300 Local Demo Test
+# ViT N300 — ND Failure Investigation & Stress Tests
 
-This folder provides scripts to run the **VIT single-card demo test** locally on N300 hardware. It reproduces the `vit-N300-func` test from the single-card-demo-tests CI pipeline (see `.github/workflows/single-card-demo-tests-impl.yaml`).
+This folder contains scripts, tests, and documentation for investigating the **non-deterministic (ND) device hang** in the `vit-N300-func` CI test. The hang manifests as a fetch-queue timeout, caused by a Tensix matmul deadlock in `bmm_large_block_zm_fused_bias_activation`.
 
-## Prerequisites
+## Folder Structure
 
-- **Hardware**: Single N300 card (Tenstorrent Wormhole architecture)
-- **tt-metal repo**: Cloned and built (`./build_metal.sh` or equivalent)
-- **Hugging Face**: Log in with `huggingface-cli login` or `export HF_TOKEN=<token>` (for `google/vit-base-patch16-224` model download)
-- **Python env**: TT-Metal/TT-NN Python environment activated with required dependencies
+```
+vit_n300/
+├── README.md                    # This file
+├── ND_failure.log               # CI failure log with triage data
+├── scripts/                     # Shell scripts
+│   ├── run_vit_n300.sh          # Run the original ViT N300 test
+│   ├── stress_test_vit_n300.sh  # Stress test: repeat original test
+│   ├── stress_test_copy_stress.sh  # Stress test: copy/stall amplification
+│   └── stress_test_matmul.sh    # Stress test: matmul deadlock (RECOMMENDED)
+├── tests/                       # Python test files
+│   ├── test_matmul_deadlock_stress.py  # Matmul deadlock reproducer (RECOMMENDED)
+│   └── test_vit_2cq_copy_stress.py    # Copy-path stall amplifier
+├── explanations/                # Analysis documentation
+│   ├── 01_layer1_vit_n300_test_overview.md
+│   ├── 02_layer2_host_to_device_copy_prefetcher_dispatch.md
+│   ├── 03_layer3_semaphore_protocol_and_dispatch_hang.md
+│   └── STRESS_STRATEGY.md
+└── logs/                        # Stress test output logs (gitignored)
+```
 
-## How to Run
+## Quick Start — Reproduce the ND Failure
 
-From the tt-metal repo root:
+The **matmul deadlock stress test** targets the actual root cause. Start here:
 
 ```bash
-./vit_n300/run_vit_n300.sh
+# Run the 2CQ variant (closest to CI failure scenario)
+./vit_n300/scripts/stress_test_matmul.sh --2cq-only
+
+# Run all variants (traced, direct, 2CQ)
+./vit_n300/scripts/stress_test_matmul.sh
+
+# Run just the traced variant (fastest per iteration)
+./vit_n300/scripts/stress_test_matmul.sh --traced-only
 ```
 
-Or from within the `vit_n300` folder:
+Monitor output in real time:
 
 ```bash
-cd vit_n300
-./run_vit_n300.sh
+tail -f vit_n300/logs/stress_matmul_*.log
 ```
 
-Or from anywhere (with `TT_METAL_HOME` set):
+### What the matmul stress test does
+
+It spams the **exact block-sharded matmul configs** from the ViT model that deadlocked in CI:
+
+| Matmul       | Grid | M×K×N          | Notes                    |
+|-------------|------|----------------|--------------------------|
+| QKV         | 8×8  | 1792×768×2304  | QKV projection           |
+| self_output | 8×8  | 1792×768×768   | Attention output proj    |
+| FF1         | 8×8  | 1792×768×3072  | Feedforward + GELU       |
+| FF2         | 8×8  | 1792×3072×768  | Feedforward output       |
+
+Each run: 5000 iterations × 4 matmuls = **20,000 block-sharded matmul ops**.
+
+Three variants:
+- **traced** — trace replay on CQ0 (fast, tests trace-related timing)
+- **direct** — no trace, different memory allocation patterns
+- **2cq** — trace on CQ0 + concurrent CQ1 copies (matches CI failure scenario exactly)
+
+## Other Stress Tests
+
+### Original ViT test stress loop
 
 ```bash
-TT_METAL_HOME=/path/to/tt-metal ./vit_n300/run_vit_n300.sh
+./vit_n300/scripts/stress_test_vit_n300.sh
 ```
 
-## What the Test Does
+Repeats the full ViT inference test for 30 minutes. Low reproduction rate (~0% in 20 runs).
 
-The script runs:
-
-```
-pytest models/demos/vision/classification/vit/wormhole/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
-```
-
-This executes the ViT Base patch16-224 inference performance test with:
-
-- Batch size: 8
-- 2 command queues (2CQ) trace execution
-- Warmup: 100 iterations
-- Measurement: 1000 iterations
-- Expected N300 throughput: ~1323 samples/sec (within 4% margin)
-
-## Stress Test (Reproduce ND Failure)
-
-To stress test for the non-deterministic fetch-queue timeout:
+### Copy/stall amplification
 
 ```bash
-./vit_n300/stress_test_vit_n300.sh
+./vit_n300/scripts/stress_test_copy_stress.sh
 ```
 
-Output is saved to `vit_n300/logs/stress_YYYYMMDD_HHMMSS.log` and also printed to the terminal. Monitor in another window with:
+Amplifies the CQ1 copy stall path (10 copies/iteration × 2000 iterations). See `explanations/STRESS_STRATEGY.md`.
 
-```bash
-tail -f vit_n300/logs/stress_*.log
-```
+## Root Cause Analysis
 
-Runs the same test repeatedly for ~30 minutes, stopping on first failure.
+From CI triage (`ND_failure.log`):
 
-### Copy-stress variant (amplify ND failure)
+1. **Primary**: Tensix cores deadlock in `bmm_large_block_zm_fused_bias_activation`
+   - `reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded` → `noc_semaphore_wait`
+   - `reader_bmm_tile_layout_in1_receiver_writer_padding` → `noc_semaphore_wait`
+   - `bmm_large_block_zm_fused_bias_activation` (trisc0) → `cb_wait_front`
+   - `bmm_large_block_zm_fused_bias_activation` (trisc1) → `matmul_block` (running)
+   - `bmm_large_block_zm_fused_bias_activation` (trisc2) → `pack_main`
 
-To stress the copy/stall path with ~20× more stall points:
+2. **Secondary**: CQ0 dispatch stuck in `process_go_signal_mcast_cmd` (waiting for deadlocked workers)
 
-```bash
-./vit_n300/stress_test_copy_stress.sh
-```
+3. **Symptom**: CQ1 prefetcher stuck in `process_stall` → host times out on fetch queue
 
-Uses `vit_n300/test_vit_2cq_copy_stress.py`: 10 copies per iteration × 2000 iterations ≈ 21,000 stall points per run (vs ~1,100 in original). See `vit_n300/STRESS_STRATEGY.md` for more strategies.
+See `explanations/` for layered analysis.
 
 ## Environment Variables
 
@@ -79,10 +105,3 @@ Uses `vit_n300/test_vit_2cq_copy_stress.py`: 10 copies per iteration × 2000 ite
 | `TT_METAL_HOME`| Auto-detected| Path to tt-metal repo root                     |
 | `ARCH_NAME`    | `wormhole_b0`| Target architecture (N300 uses Wormhole)       |
 | `LOGURU_LEVEL` | `INFO`       | Logging verbosity                              |
-
-## Troubleshooting
-
-- **Device not found**: Ensure exactly one N300 PCIe device is visible (`tt-smi` or equivalent).
-- **Hugging Face errors**: Run `huggingface-cli login` or set `HF_TOKEN`.
-- **Build errors**: Ensure `build/lib` exists and contains TT-Metal shared libraries.
-- **Import errors**: Activate the correct Python environment; `PYTHONPATH` is set by the script.

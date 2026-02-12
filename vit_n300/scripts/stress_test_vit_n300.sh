@@ -17,7 +17,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 
 if [[ ! -d "${TT_METAL_HOME}" ]]; then
     echo "ERROR: TT_METAL_HOME directory not found: ${TT_METAL_HOME}" 1>&2
@@ -25,7 +25,7 @@ if [[ ! -d "${TT_METAL_HOME}" ]]; then
 fi
 
 # Log directory and file (one per stress-test session)
-LOG_DIR="${SCRIPT_DIR}/logs"
+LOG_DIR="${SCRIPT_DIR}/../logs"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/stress_$(date +%Y%m%d_%H%M%S).log"
 

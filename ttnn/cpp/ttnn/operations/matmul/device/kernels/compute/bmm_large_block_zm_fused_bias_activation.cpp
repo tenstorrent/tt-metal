@@ -15,6 +15,7 @@
 #endif
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/debug/dprint.h"
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
@@ -251,6 +252,11 @@ void kernel_main() {
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                     }
 
+                    // CB monitor: log fill levels before waiting on inputs
+                    DPRINT_UNPACK(static uint32_t _dbg_cnt_u = 0; if (++_dbg_cnt_u % 100 == 1) {
+                        DPRINT << "U:wait in0=" << in0_cb_id << " in1=" << in1_cb_id << " blk=" << block << "/"
+                               << num_blocks_inner_dim << " bh=" << bh << " bw=" << bw << ENDL();
+                    });
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
@@ -309,6 +315,11 @@ void kernel_main() {
 #endif
                                 tile_regs_commit();
                                 // Pack out to output buffer
+                                // CB monitor: log before reserving output space
+                                DPRINT_PACK(static uint32_t _dbg_cnt_p = 0; if (++_dbg_cnt_p % 100 == 1) {
+                                    DPRINT << "P:rsrv out=" << mm_out_cb_id << " tiles=" << out_subblock_num_tiles
+                                           << " blk=" << block << ENDL();
+                                });
                                 cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                                 tile_regs_wait();
 
@@ -339,6 +350,11 @@ void kernel_main() {
                                 // Wait for tiles in output buffer to be written out since interm and output share
                                 // memory
                                 if (block == 0) {
+                                    // CB monitor: reserving output buffer for first block
+                                    DPRINT_PACK(static uint32_t _dbg_cnt_p2 = 0; if (++_dbg_cnt_p2 % 100 == 1) {
+                                        DPRINT << "P:rsrv out_cb=" << out_cb_id << " wait=" << out_num_tiles_to_wait
+                                               << ENDL();
+                                    });
                                     cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
                                     out_num_tiles_to_wait += out_subblock_num_tiles;
                                 }
@@ -415,6 +431,10 @@ void kernel_main() {
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
                 add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
                 // reconfigure unpacker df for src B
+                // CB monitor: entering bias+activation section
+                DPRINT_UNPACK(static uint32_t _dbg_cnt_bias = 0; if (++_dbg_cnt_bias % 50 == 1) {
+                    DPRINT << "U:BIAS wait bias_cb=" << bias_cb_id << " bh=" << bh << " bw=" << bw << ENDL();
+                });
                 cb_wait_front(bias_cb_id, in1_block_w);
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
@@ -445,6 +465,11 @@ void kernel_main() {
 #endif
 
                         // Pack out to output buffer
+                        // CB monitor: reserve output in bias path (Failure 2 deadlock point)
+                        DPRINT_PACK(static uint32_t _dbg_cnt_bp = 0; if (++_dbg_cnt_bp % 50 == 1) {
+                            DPRINT << "P:BIAS rsrv out=" << untilize_mode_out_cb_id
+                                   << " tiles=" << out_subblock_num_tiles << ENDL();
+                        });
                         cb_reserve_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {

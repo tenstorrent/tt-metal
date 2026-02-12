@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
@@ -109,6 +110,14 @@ void kernel_main() {
             uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                    // CB monitor (brisc): log before reserving in1 space
+                    {
+                        static uint32_t _dbg_cnt_br = 0;
+                        if (++_dbg_cnt_br % 100 == 1) {
+                            DPRINT << "BR:rsrv in1=" << cb_id_in1 << " tiles=" << in1_block_num_tiles
+                                   << " blk=" << block << " bh=" << bh << " bw=" << bw << ENDL();
+                        }
+                    }
                     // Operand 1
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
@@ -118,6 +127,14 @@ void kernel_main() {
                     // Atomic increment source core counter
                     noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
 
+                    // CB monitor (brisc): log before waiting on in1 semaphore
+                    {
+                        static uint32_t _dbg_cnt_br2 = 0;
+                        if (++_dbg_cnt_br2 % 100 == 1) {
+                            DPRINT << "BR:RECV in1 sem_wait blk=" << block
+                                   << " sem=" << *in1_mcast_receiver_semaphore_addr_ptr << ENDL();
+                        }
+                    }
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
 
@@ -172,6 +189,15 @@ void kernel_main() {
                             subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                         }
 
+                        // CB monitor (brisc): waiting for output from compute pipeline
+                        // This is the Failure 2 deadlock point (cb_wait_front on output CB)
+                        {
+                            static uint32_t _dbg_cnt_br3 = 0;
+                            if (++_dbg_cnt_br3 % 100 == 1) {
+                                DPRINT << "BR:wait out=" << cb_id_out0 << " need=" << out_subblock_tile_count
+                                       << " bh=" << bh << " bw=" << bw << " sbh=" << sbh << " sbw=" << sbw << ENDL();
+                            }
+                        }
                         cb_wait_front(cb_id_out0, out_subblock_tile_count);
                         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
