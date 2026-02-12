@@ -455,6 +455,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
     uint32_t TILE_WIDTH = 32;
 
+    // FIXME: Assert if either of these are 0.
+    // TODO: Add asserts in other program factories.
     uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
     uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
 
