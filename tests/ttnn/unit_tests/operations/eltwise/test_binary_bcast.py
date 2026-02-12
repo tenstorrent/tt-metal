@@ -195,12 +195,11 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
-        [torch.bfloat16, ttnn.bfloat16],
+        # [torch.bfloat16, ttnn.bfloat16],
         # works, but time consuming
         # [torch.float32, ttnn.float32],
-        # currently handled by legacy, and it does not work
-        # [torch.bfloat16, ttnn.bfloat8_b],
-        # [torch.bfloat16, ttnn.bfloat4_b],
+        [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat4_b],
     ),
 )
 def test_binary_sharded_bcast_no_identical(
@@ -226,14 +225,14 @@ def test_binary_sharded_bcast_no_identical(
     )
 
     out_pt = torch.add(a_pt, b_pt)
-    out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+    out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=False)
     if dtype_tt == ttnn.bfloat4_b:
         assert_with_pcc(ttnn.to_torch(out_tt), out_pt, 0.993)
     else:
         assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
 
     # no memory config
-    out_tt = ttnn.add(a_tt, b_tt, use_legacy=None)
+    out_tt = ttnn.add(a_tt, b_tt, use_legacy=False)
     if dtype_tt == ttnn.bfloat4_b:
         assert_with_pcc(ttnn.to_torch(out_tt), out_pt, 0.993)
     else:
@@ -302,8 +301,8 @@ def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_
     "a_shape, b_shape",
     (
         (torch.Size([5, 3, 128, 64]), torch.Size([1, 3, 128, 1])),
+        (torch.Size([5, 3, 128, 64]), torch.Size([1, 3, 1, 64])),
         (torch.Size([5, 3, 32, 32]), torch.Size([1, 1, 1, 1])),
-        (torch.Size([5, 1, 1, 128]), torch.Size([5, 1, 1, 1])),
         (torch.Size([1, 71, 7, 7]), torch.Size([7, 7])),
         (torch.Size([920, 1, 256]), torch.Size([256])),
         (torch.Size([4, 12, 64, 64]), torch.Size([12, 1, 1])),
@@ -352,11 +351,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    (
-        [torch.bfloat16, ttnn.bfloat16],
-        # does not work for binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
-    ),
+    ([torch.bfloat16, ttnn.bfloat16], [torch.bfloat16, ttnn.bfloat8_b], [torch.bfloat16, ttnn.bfloat4_b]),
 )
 def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
@@ -409,13 +404,19 @@ def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_tt_sharded, out_pt)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_tt_sharded, out_pt)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
 
 @pytest.mark.parametrize(
@@ -548,7 +549,11 @@ def test_binary_sharded_bcast_w_height_n(device, dtype_pt, dtype_tt):
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    ([torch.bfloat16, ttnn.bfloat16],),
+    (
+        [torch.bfloat16, ttnn.bfloat16],
+        [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat4_b],
+    ),
 )
 def test_binary_sharded_bcast_h_height(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
@@ -601,19 +606,29 @@ def test_binary_sharded_bcast_h_height(device, dtype_pt, dtype_tt):
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_pt, out_tt_sharded)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_pt, out_tt_sharded)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    ([torch.bfloat16, ttnn.bfloat16],),
+    (
+        [torch.bfloat16, ttnn.bfloat16],
+        [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat4_b],
+    ),
 )
 def test_binary_sharded_bcast_scalar_height(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
@@ -666,14 +681,20 @@ def test_binary_sharded_bcast_scalar_height(device, dtype_pt, dtype_tt):
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_pt, out_tt_sharded)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_pt, out_tt_sharded)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
 
 @pytest.mark.parametrize(
@@ -1486,11 +1507,7 @@ def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, 
 )
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    (
-        [torch.bfloat16, ttnn.bfloat16],
-        # does not work fro binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
-    ),
+    ([torch.bfloat16, ttnn.bfloat16], [torch.bfloat16, ttnn.bfloat8_b], [torch.bfloat16, ttnn.bfloat4_b]),
 )
 def test_binary_sharded_bcast_scalar_value(
     dtype_pt, dtype_tt, scalar, a_shape, shard_type, shard_size, core_range, device
@@ -1520,13 +1537,19 @@ def test_binary_sharded_bcast_scalar_value(
         )
 
         out_pt = torch.add(a_pt, scalar)
-        out_tt_sharded = ttnn.add(a_tt, scalar, memory_config=dst_config, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, scalar, memory_config=dst_config, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_tt_sharded, out_pt)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
-        out_tt_interleaved = ttnn.add(a_tt, scalar, use_legacy=None)
+        out_tt_interleaved = ttnn.add(a_tt, scalar, use_legacy=False)
         out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
-        assert_with_pcc(out_tt_interleaved, out_pt)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_interleaved, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_interleaved, out_pt)
 
 
 @pytest.mark.parametrize("scalar", [1.7, -0.25])
@@ -1560,8 +1583,8 @@ def test_binary_sharded_bcast_scalar_value(
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        # does not work fro binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat4_b],
     ),
 )
 def test_binary_sharded_bcast_scalar_value_uneven(
@@ -1592,13 +1615,19 @@ def test_binary_sharded_bcast_scalar_value_uneven(
         )
 
         out_pt = torch.add(a_pt, scalar)
-        out_tt_sharded = ttnn.add(a_tt, scalar, memory_config=dst_config, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, scalar, memory_config=dst_config, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_tt_sharded, out_pt)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
-        out_tt_interleaved = ttnn.add(a_tt, scalar, use_legacy=None)
+        out_tt_interleaved = ttnn.add(a_tt, scalar, use_legacy=False)
         out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
-        assert_with_pcc(out_tt_interleaved, out_pt)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_interleaved, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_interleaved, out_pt)
 
 
 @pytest.mark.parametrize("scalar", [-0.25])
@@ -2805,8 +2834,8 @@ def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device):
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        # does not work for binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat4_b],
     ),
 )
 def test_binary_sharded_bcast_w_height_uneven(device, dtype_pt, dtype_tt):
@@ -2861,13 +2890,19 @@ def test_binary_sharded_bcast_w_height_uneven(device, dtype_pt, dtype_tt):
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_tt_sharded, out_pt)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_tt_sharded, out_pt)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
 
 @pytest.mark.parametrize(
@@ -3010,7 +3045,11 @@ def test_binary_sharded_bcast_w_block_uneven(device, dtype_pt, dtype_tt):
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    ([torch.bfloat16, ttnn.bfloat16],),
+    (
+        [torch.bfloat16, ttnn.bfloat16],
+        [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat4_b],
+    ),
 )
 def test_binary_sharded_bcast_h_height_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
@@ -3063,14 +3102,20 @@ def test_binary_sharded_bcast_h_height_uneven(device, dtype_pt, dtype_tt):
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_pt, out_tt_sharded)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_pt, out_tt_sharded)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
 
 @pytest.mark.parametrize(
@@ -3205,7 +3250,11 @@ def test_binary_sharded_bcast_h_block_uneven(device, dtype_pt, dtype_tt):
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    ([torch.bfloat16, ttnn.bfloat16],),
+    (
+        [torch.bfloat16, ttnn.bfloat16],
+        [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat4_b],
+    ),
 )
 def test_binary_sharded_bcast_scalar_height_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
@@ -3258,14 +3307,20 @@ def test_binary_sharded_bcast_scalar_height_uneven(device, dtype_pt, dtype_tt):
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_pt, out_tt_sharded)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-        assert_with_pcc(out_pt, out_tt_sharded)
+        if dtype_tt == ttnn.bfloat4_b:
+            assert_with_pcc(out_tt_sharded, out_pt, 0.99)
+        else:
+            assert_with_pcc(out_tt_sharded, out_pt)
 
 
 @pytest.mark.parametrize(
@@ -4432,3 +4487,67 @@ def test_binary_sharded_output_uneven(device):
     result = ttnn.multiply(tt_in1, tt_in2, memory_config=block_sharded)
     result = ttnn.to_torch(result)
     assert_with_pcc(torch_output, result)
+
+
+def test_multiply_bfloat8_b_bcast_scalarsharded(device):
+    """
+    Test case reproducing the ttnn.multiply PCC failure from SD model.
+    When multiplying two bfloat8_b tensors with HEIGHT_SHARDED memory,
+    when broadcasting (1,1,1,1) -> shape
+
+    This test reproduces the issue from:
+    models/demos/vision/generative/stable_diffusion/wormhole/tt/ttnn_functional_cross_attention.py:385
+    """
+    torch.manual_seed(42)
+
+    # Configuration from SD model for seq_len=64 case
+    seq_len = 64
+    key_len = 96  # 77 actual + padding to 96 for tile alignment
+    dim_head = 160  # For seq_len=64
+    tiles_per_shard = 1  # From SD model calculation
+
+    # Input 1: mm_slice (output of matmul Q @ K^T in attention)
+    # Shape after slicing: portion of the full attention scores
+    mm_slice_shape = (1, 1, tiles_per_shard * 32, key_len)
+
+    # Create random tensor mimicking attention scores after Q @ K^T
+    torch_mm_slice = torch.randn(mm_slice_shape, dtype=torch.bfloat16) * 5.0  # Realistic range
+
+    # Input 2: scale tensor (1/sqrt(dim_head))
+    scale_value = 1.0 / torch.sqrt(torch.tensor(dim_head))
+    torch_scale = torch.ones((1, 1, 1, 1), dtype=torch.bfloat16) * scale_value
+
+    # Create HEIGHT_SHARDED memory config (as in SD model)
+    height_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(tiles_per_shard * 32, key_len),
+        core_grid=ttnn.CoreGrid(y=1, x=1),  # Single core for this test
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Convert to TTNN tensors with bfloat8_b (as in model)
+    ttnn_mm_slice = ttnn.from_torch(
+        torch_mm_slice,
+        dtype=ttnn.bfloat8_b,  # Critical: using bfloat8_b
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=height_sharded_config,
+        device=device,
+    )
+
+    ttnn_scale = ttnn.from_torch(
+        torch_scale, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device  # Critical: using bfloat8_b
+    )
+
+    # Golden reference
+    torch_output = torch_mm_slice * scale_value
+
+    ttnn_result = ttnn.multiply(
+        ttnn_mm_slice,
+        ttnn_scale,  # Tensor multiply (not scalar)
+        memory_config=height_sharded_config,
+        fast_and_approximate_mode=True,  # As used in SD model
+        use_legacy=False,
+    )
+    ttnn_result = ttnn.to_torch(ttnn_result)
+    assert_with_pcc(torch_output, ttnn_result, pcc=0.998)

@@ -62,7 +62,9 @@ inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, [[m
     return detail::needs_typecast_to_bfloat16(op, input);
 }
 
-inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, const Tensor& other) {
+inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, [[maybe_unused]] const Tensor& other) {
+    // TODO: soon remove this function, as it will always return false
+    //  confirm after all CI passes
     if (not detail::is_block_format(input.dtype())) {
         return false;
     }
@@ -70,13 +72,14 @@ inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, con
     using enum BinaryOpType;
 
     if (op != ADD and op != SUB and op != MUL) {
-        return true;
+        // return true;
+        return false;
     }
 
-    const auto& input_shape = input.logical_shape();
-    const auto& other_shape = other.logical_shape();
-
-    return (input_shape[-2] == 1 and other_shape[-2] > 1) or (input_shape[-1] == 1 and other_shape[-1] > 1);
+    // For ADD/SUB/MUL with block-float formats (BFLOAT8_B and BFLOAT4_B), binary_ng can
+    // handle subtile broadcast (scalar, row, or column) natively using format-aware fill
+    // functions -- no typecast needed.
+    return false;
 }
 
 inline bool needs_typecast_to_bfloat16(
@@ -270,7 +273,11 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
             // return true;
         }
     }
-    return false;
+
+    // return false;
+    // TODO: soon remove this, as it will always return true
+    //  confirm after all CI passes
+    return true;
 }
 
 }  // namespace detail

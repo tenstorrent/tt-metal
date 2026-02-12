@@ -523,6 +523,16 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
+    } else if (dtype == DataType::BFLOAT8_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfp8";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    } else if (dtype == DataType::BFLOAT4_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfp4";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
@@ -545,6 +555,16 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
+    } else if (b_dtype == DataType::BFLOAT8_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp8";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
+    } else if (b_dtype == DataType::BFLOAT4_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp4";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
