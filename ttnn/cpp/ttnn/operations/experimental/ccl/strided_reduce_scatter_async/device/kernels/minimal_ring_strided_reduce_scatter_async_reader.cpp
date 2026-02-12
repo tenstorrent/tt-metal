@@ -153,12 +153,6 @@ void kernel_main() {
 
     uint32_t sem_target = 0;
 
-#ifdef FUSE_MM_OP_SIGNALER
-    // Wait for matmul to finish writing all output before starting reduce-scatter
-    DPRINT << "Waiting for matmul to finish writing all output before starting reduce-scatter" << ENDL();
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 1);
-#endif
-
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
         DPRINT << "================================================" << ENDL();
@@ -170,6 +164,11 @@ void kernel_main() {
 
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
+#ifdef FUSE_MM_OP_SIGNALER
+                // Wait for matmul to finish writing the next chunk_width_in_mm_blocks output blocks
+                mm_sem_target += chunk_width_in_mm_blocks;
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
+#endif
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                 for (uint32_t i = 0; i < ring_size; i++) {
@@ -296,11 +295,15 @@ void kernel_main() {
             }
             DPRINT << "m_block_iter: " << m_block_iter << " done" << ENDL();
         }
-        // Reset the semaphore before the next batch
+        // Reset the semaphores before the next batch
         DPRINT << "Resetting the semaphore before the next batch" << ENDL();
         DPRINT << "sem_target: " << sem_target << ENDL();
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         sem_target = 0;
+#ifdef FUSE_MM_OP_SIGNALER
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 0);
+        mm_sem_target = 0;
+#endif
         DPRINT << "batch: " << b << " done" << ENDL();
     }
 }
