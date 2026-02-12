@@ -66,7 +66,7 @@ target_include_directories(
         "${CMAKE_SOURCE_DIR}/ttnn"
         "${CMAKE_SOURCE_DIR}/ttnn/cpp"
         "${CMAKE_SOURCE_DIR}/tt_metal"
-        "${CMAKE_SOURCE_DIR}/tt_metal/include"
+        "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc"
         "${CMAKE_SOURCE_DIR}/tt_metal/hostdevcommon/api"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/debug"

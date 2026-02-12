@@ -164,7 +164,6 @@ public:
     void init_command_queue_device() override;
     bool compile_fabric() override;
     void configure_fabric() override;
-    void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;

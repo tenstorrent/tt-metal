@@ -2,19 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/reg_api.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/bcast.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/mask.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/reg_api.h"
+#include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
-
-namespace NAMESPACE {
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -468,7 +466,7 @@ inline void compute_dbeta_components(
     copy_tile(cb_dL_out_idx, dy_tile_idx, dbeta_register);
 }
 
-inline void MAIN {
+void kernel_main() {
     if constexpr (do_mask_w) {
         cb_wait_front(cb_mask_w_idx, onetile);
     }
@@ -617,5 +615,3 @@ inline void MAIN {
         cb_pop_front(cb_mask_w_idx, onetile);
     }
 }
-
-}  // namespace NAMESPACE

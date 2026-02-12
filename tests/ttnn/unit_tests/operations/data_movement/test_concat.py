@@ -367,3 +367,47 @@ def test_concat_1d(device, layout, dim, input_shapes):
     output = ttnn.to_torch(output)
 
     assert_equal(torch_output_tensor, output)
+
+
+@pytest.mark.parametrize(
+    "input_shapes,dim",
+    [
+        (((1, 1, 32, 1024), (1, 1, 32, 1024)), 3),
+        (((1, 1, 32, 64), (1, 1, 32, 96)), 3),
+        (((1, 1, 64, 32), (1, 1, 64, 64)), 3),
+        (((1, 1, 128, 128), (1, 1, 128, 256)), 3),
+        (((1, 1, 256, 512), (1, 1, 256, 256)), 3),
+        (((1, 1, 32, 1024), (1, 1, 32, 1024)), 0),
+        (((1, 1, 32, 64), (1, 1, 32, 64)), 0),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    [
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7))}),
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    ],
+)
+def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids, memory_config):
+    shape_a, shape_b = input_shapes
+    a = torch.randn(shape_a, dtype=torch.bfloat16)
+    b = torch.randn(shape_b, dtype=torch.bfloat16)
+    torch_output_tensor = torch.concat([a, b], dim=dim)
+
+    # Create input tensors with interleaved memory config
+    in1 = ttnn.from_torch(a, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=memory_config)
+    in2 = ttnn.from_torch(b, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=memory_config)
+
+    # Run concat with sub_core_grids
+    output = ttnn.concat([in1, in2], dim=dim, memory_config=memory_config, sub_core_grids=sub_core_grids)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.99)

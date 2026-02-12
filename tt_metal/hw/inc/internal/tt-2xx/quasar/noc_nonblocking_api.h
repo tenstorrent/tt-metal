@@ -193,7 +193,7 @@ struct NocCmdBufState {
     uint32_t at_len_be;
     uint32_t targ_addr_coord;
     uint32_t targ_addr_mid;
-    uint32_t packet_tag;
+    uint32_t packet_tag;  // Not used on Quasar
     uint32_t at_data;
     uint32_t ret_addr_mid;
 };
@@ -211,15 +211,13 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
     state->at_len_be = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN);
     state->targ_addr_coord = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE);
     state->targ_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID);
-    state->packet_tag = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_PACKET_TAG);
+    state->packet_tag = 0;
     state->at_data = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_DATA);
     state->ret_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID);
 }
 
-// Clears NOC_PACKET_TAG register for the specified cmd_buf.
-inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t noc, uint32_t cmd_buf) {
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, 0);
-}
+// Dummy function, does nothing on Quasar. There is no NOC_PACKET_TAG register on Quasar.
+inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t /* noc */, uint32_t /* cmd_buf */) {}
 
 // Restores cmd_buf from state; waits for cmd_buf ready before writing.
 inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
@@ -232,7 +230,6 @@ inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, state->at_len_be);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, state->targ_addr_coord);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, state->targ_addr_mid);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, state->packet_tag);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, state->at_data);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, state->ret_addr_mid);
 }
@@ -1006,6 +1003,56 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (!posted) {
             noc_nonposted_atomics_acked[noc] += 1;
+        }
+    }
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC>
+inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint64_t addr,
+    uint32_t vc,
+    uint32_t incr,
+    uint32_t wrap,
+    bool linked,
+    uint32_t num_dests,
+    bool multicast_path_reserve,
+    bool posted = false) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if (!posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc, num_dests);
+        }
+    }
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+        uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+        uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, 0);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        cmd_buf,
+        NOC_CTRL_LO,
+        NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
+            (multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET |
+            (posted ? 0 : NOC_CMD_RESP_MARKED) | NOC_CMD_AT | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC));
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        cmd_buf,
+        NOC_AT_LEN,
+        NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, incr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if (!posted) {
+            noc_nonposted_atomics_acked[noc] += num_dests;
         }
     }
 }

@@ -89,7 +89,9 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(a, b, c.memory_config())) {
+    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
+    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
+    if (!is_native_L1_sharding(a, b, c.memory_config()) || is_uneven(c)) {
         // treat as interleaved
         return std::nullopt;
     }
@@ -764,8 +766,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     if (op_type == BinaryOpType::WHERE_TTS || op_type == BinaryOpType::WHERE_TST) {
         // Add common fill defines
         compute_kernel_defines["FILL_LLK"] = "fill_tile";
-        if (b_dtype == DataType::INT32 || b_dtype == DataType::UINT32) {
-            compute_kernel_defines["FILL_LLK"] = "fill_tile_int";
+        if (b_dtype == DataType::INT32) {
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
+            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+        } else if (b_dtype == DataType::UINT32) {
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";

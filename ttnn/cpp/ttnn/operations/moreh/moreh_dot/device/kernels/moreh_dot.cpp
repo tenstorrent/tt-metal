@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tile_move_copy.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
