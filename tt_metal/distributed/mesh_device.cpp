@@ -1231,7 +1231,12 @@ constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev_state, uint32_t num_samples) {
     auto& cluster = MetalContext::instance().get_cluster();
     int64_t host_start_time = TracyGetCpuTime();
-    std::vector<std::pair<uint64_t, uint32_t>> samples;  // (device_time, host_time)
+
+    struct SyncSample {
+        int64_t host_time;     // Full 64-bit host TSC ticks relative to host_start_time
+        uint64_t device_time;  // Device wall clock cycles
+    };
+    std::vector<SyncSample> samples;
 
     // Enter sync mode - write sync_request = 1
     std::vector<uint32_t> sync_req_data = {1};
@@ -1246,11 +1251,12 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
     for (uint32_t i = 0; i < num_samples + 1; i++) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-        // Capture host time relative to start
-        uint32_t host_time = static_cast<uint32_t>(TracyGetCpuTime() - host_start_time);
+        // Capture host time with full 64-bit precision
+        int64_t host_time = TracyGetCpuTime() - host_start_time;
 
-        // Write host timestamp to device
-        std::vector<uint32_t> host_time_data = {host_time};
+        // Send truncated 32-bit value as echo identifier for pairing
+        uint32_t host_time_id = static_cast<uint32_t>(host_time);
+        std::vector<uint32_t> host_time_data = {host_time_id};
         tt::tt_metal::detail::WriteToDeviceL1(
             dev_state.device,
             dev_state.realtime_profiler_core,
@@ -1270,13 +1276,14 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
         dev_state.socket->pop_pages(1);
         dev_state.socket->notify_sender();
 
-        // Discard first sample - can be very off
+        // Discard first sample - can be very off due to cold PCIe path
         if (i == 0) {
             continue;
         }
 
-        if (marker == REALTIME_PROFILER_SYNC_MARKER_ID) {
-            samples.push_back({device_time, echoed_host_time});
+        // Verify echo matches and marker is valid; use full 64-bit host_time
+        if (marker == REALTIME_PROFILER_SYNC_MARKER_ID && echoed_host_time == host_time_id) {
+            samples.push_back({host_time, device_time});
         }
     }
 
@@ -1289,35 +1296,55 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
         sync_req_data,
         CoreType::WORKER);
 
-    // Compute sync parameters using linear regression
+    // Compute sync parameters using numerically stable centered linear regression.
+    //
+    // Model: device_time = slope * host_time + intercept
+    //   where slope = frequency * tracy_ratio  (device_cycles per TSC_tick)
+    //
+    // The standard normal equations suffer from catastrophic cancellation when
+    // computing (n*Σxy - Σx*Σy) with large absolute values (~10^25) to get a
+    // result of ~10^19, losing ~6 digits of precision with double's 15.9 digits.
+    //
+    // Centering: slope = Σ((x - x̄)(y - ȳ)) / Σ((x - x̄)²)
+    // reduces operand magnitudes from ~10^12 to ~10^9 (deviations from mean),
+    // keeping all intermediate products well within double precision.
     if (samples.size() >= 2) {
-        double host_sum = 0, device_sum = 0;
-        double host_sq_sum = 0, host_device_sum = 0;
+        const double n = static_cast<double>(samples.size());
+        const double tracy_ratio = TracyGetTimerMul();
 
-        for (const auto& [device_time, host_time] : samples) {
-            host_sum += host_time;
-            device_sum += device_time;
-            host_sq_sum += static_cast<double>(host_time) * host_time;
-            host_device_sum += static_cast<double>(host_time) * device_time;
+        // Pass 1: compute means for centering
+        double host_mean = 0.0, device_mean = 0.0;
+        for (const auto& s : samples) {
+            host_mean += static_cast<double>(s.host_time);
+            device_mean += static_cast<double>(s.device_time);
+        }
+        host_mean /= n;
+        device_mean /= n;
+
+        // Pass 2: centered regression — numerically stable
+        double num = 0.0, den = 0.0;
+        for (const auto& s : samples) {
+            double dx = static_cast<double>(s.host_time) - host_mean;
+            double dy = static_cast<double>(s.device_time) - device_mean;
+            num += dx * dy;
+            den += dx * dx;
         }
 
-        double n = static_cast<double>(samples.size());
-        double tracy_ratio = TracyGetTimerMul();
-
-        // frequency = device_cycles per ns (GHz)
-        double denominator = (host_sq_sum * n - host_sum * host_sum) * tracy_ratio;
-        if (std::abs(denominator) > 1e-10) {
-            dev_state.sync_frequency = (host_device_sum * n - host_sum * device_sum) / denominator;
+        if (std::abs(den) > 1e-10) {
+            // slope = device_cycles per host_TSC_tick
+            // frequency = slope / tracy_ratio = device_cycles per nanosecond (GHz)
+            double slope = num / den;
+            dev_state.sync_frequency = slope / tracy_ratio;
         } else {
             // Fallback to device AICLK
             dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
         }
 
-        // delay = device time (in cycles) at host_start_time (our smallest_host_time)
-        // From linear regression: device_time = delay + (host_time - smallest_host_time) * freq * tracy_ratio
-        // At host_start_time (smallest), device_time = delay
-        double delay = (device_sum - dev_state.sync_frequency * host_sum * tracy_ratio) / n;
-        dev_state.first_timestamp = static_cast<uint64_t>(delay);
+        // Intercept via means: intercept = ȳ - slope * x̄
+        // This is the device cycle count at host_time = 0 (i.e. at host_start_time)
+        double slope = dev_state.sync_frequency * tracy_ratio;
+        double intercept = device_mean - slope * host_mean;
+        dev_state.first_timestamp = static_cast<uint64_t>(intercept);
         dev_state.sync_host_start = host_start_time;
 
         log_info(
