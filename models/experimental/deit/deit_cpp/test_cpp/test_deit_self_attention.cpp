@@ -89,10 +89,8 @@ void test_deit_self_attention_inference(const std::string& model_path) {
         auto model_to_use = model.attr("model").toModule();
         auto encoder = model_to_use.attr("encoder").toModule();
 
-        // 从输出可以看到layer不是列表，而是直接的模块结构
-        // 尝试直接访问 encoder.layer.0
         auto layer = encoder.attr("layer").toModule();
-        auto layer_0 = layer.attr("0").toModule();  // 访问第0层
+        auto layer_0 = layer.attr("0").toModule();
         auto attention = layer_0.attr("attention").toModule();
         self_attention_module = attention.attr("attention").toModule();
     } catch (const std::exception& e) {
