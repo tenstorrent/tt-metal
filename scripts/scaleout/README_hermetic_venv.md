@@ -81,6 +81,48 @@ Why `--bundle-python` is required here:
 ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests
 ```
 
+## Environment Propagation in `tt-run`
+
+`tt-run` (implemented in `ttnn/ttnn/distributed/ttrun.py`) forwards environment variables to MPI ranks using a combination of automatic pass-through, explicit core variables, and override rules.
+
+### `ENV_PASSTHROUGH_PREFIXES`
+
+Environment variables in the launch shell are automatically forwarded when their names start with one of:
+
+- `TT_`
+- `ARCH_`
+- `WH_`
+- `TTNN_`
+- `DEEPSEEK_`
+- `MESH_`
+
+This is why variables such as `ARCH_NAME`, `TTNN_CONFIG_OVERRIDES`, `DEEPSEEK_V3_HF_MODEL`, and `MESH_DEVICE` are available on remote ranks without manual `-x` wiring.
+
+### `ENV_BLOCKLIST`
+
+Some variables are intentionally blocked from automatic pass-through even if they match the prefixes above, because they are managed by `tt-run` or must be rank-specific:
+
+- `TT_MESH_ID`
+- `TT_MESH_HOST_RANK`
+- `TT_MESH_GRAPH_DESC_PATH`
+- `TT_RUN_ORIGINAL_CWD`
+- `TT_METAL_MOCK_CLUSTER_DESC_PATH`
+- `TT_VISIBLE_DEVICES`
+
+### What `tt-run` always sets/passes for hermetic venv workflows
+
+- `PATH` and `VIRTUAL_ENV` are passed from the caller shell (critical for venv-aware execution on remote hosts).
+- `HOME` and `USER` are passed for OpenMPI/runtime behavior.
+- Core variables like `PYTHONPATH`, `LD_LIBRARY_PATH`, `TT_METAL_HOME`, and `TT_METAL_RUNTIME_ROOT` are set with defaults/fallbacks when needed.
+
+### Precedence model
+
+At rank environment construction time, effective precedence is:
+1. Auto pass-through via `ENV_PASSTHROUGH_PREFIXES` (minus `ENV_BLOCKLIST`)
+2. `tt-run` managed defaults/derived values
+3. Config `global_env`
+4. Rank binding `env_overrides` (highest precedence)
+
 ## CI and Workflow Behavior
 
 ### Multi-host physical workflow
