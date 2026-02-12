@@ -231,6 +231,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
     llama_config llama_configuration;
     std::vector<CoreRange> q_cores_vector;
+    q_cores_vector.reserve(llama_configuration.concat_num_cores);
     uint32_t range_count = 0;
     for (auto cr : ring_core_ranges) {
         q_cores_vector.push_back(cr);
@@ -241,6 +242,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     }
     const auto& q_cores_updated = CoreRangeSet(q_cores_vector);
     std::vector<CoreRange> sem_cores_vector;
+    sem_cores_vector.reserve(llama_configuration.concat_num_cores + 1);
     sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
     range_count = 0;
     for (auto cr : ring_core_ranges) {

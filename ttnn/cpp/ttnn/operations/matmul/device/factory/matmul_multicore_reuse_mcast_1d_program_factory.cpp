@@ -1837,6 +1837,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
+    non_idle_cores_vec.reserve(subdevice_cores.ranges().size());
     for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
         if (!intersection.empty()) {
@@ -1846,6 +1847,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     all_cores = CoreRangeSet(non_idle_cores_vec);
     std::vector<CoreRange> ring_list = all_worker_cores.ranges();
     std::vector<CoreRange> hop_list = hop_cores.ranges();
+    ring_list.reserve(ring_list.size() + hop_list.size());
     ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
 
     CoreRangeSet ring_cores = CoreRangeSet(ring_list);
