@@ -135,10 +135,11 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
-    runs-on:
-      - in-service
-      - arch-blackhole
-      - ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        (inputs.runner-label == 'BH-LoudBox-viommu') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
+        || fromJSON(format('["in-service", "arch-blackhole", "{0}"]', inputs.runner-label))
+      }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
       env:
