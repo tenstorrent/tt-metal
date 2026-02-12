@@ -334,7 +334,7 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     uint32_t num_channels_processed_in_current_batch = 0;
     uint32_t chunk_count = 0;
-    {
+
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             chunk_count = 0;
             while (tiles_read < tiles_to_read) {
@@ -380,15 +380,7 @@ void kernel_main() {
                     }
                 }
 
-                // Backward worker: write second half of tiles in the packet
-                uint32_t start_tile = 0;
-                uint32_t end_tile = tiles_to_put_in_current_packet;
-                if (ring_size % 2 == 0 && ring_size > 2 &&
-                    tiles_to_put_in_current_packet > 1) {  // if ring size is even, we need to write the second half of
-                                                           // the tiles, otherwise we write the entire packet
-                    start_tile = tiles_to_put_in_current_packet / 2;
-                }
-                for (uint32_t i = start_tile; i < end_tile; i++) {
+                for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
                     noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
                 }
                 noc_async_write_barrier();
@@ -410,18 +402,6 @@ void kernel_main() {
                             l1_read_addr,
                             NocUnicastCommandHeader{noc_addrs[0]});
                     }
-                }
-                // Forward worker: write first half of tiles in the packet
-                if (ring_size % 2 == 0 && ring_size > 2 &&
-                    tiles_to_put_in_current_packet > 1) {  // if ring size is even, we need to write the first half of
-                                                           // the tiles, otherwise we write the entire packet
-                    uint32_t start_tile = 0;
-                    uint32_t end_tile = tiles_to_put_in_current_packet / 2;
-
-                    for (uint32_t i = start_tile; i < end_tile; i++) {
-                        noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
-                    }
-                    noc_async_write_barrier();
                 }
             }
             tiles_read += tiles_to_put_in_current_packet;
@@ -469,7 +449,6 @@ void kernel_main() {
             pages_read_in_row = start_pages_read_in_row;
             row_offset = start_row_offset;
         }
-    }
 
     // increment locally
     if constexpr (fuse_op) {
