@@ -1,0 +1,5 @@
+soundfile
+librosa>=0.10.1,<0.11.0
+praat-parselmouth>=0.4.3,<0.5.0
+torchcrepe>=0.0.22,<0.1.0
+av==16.0.0

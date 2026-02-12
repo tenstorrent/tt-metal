@@ -5,7 +5,7 @@ import sys
 
 import soundfile as sf
 
-from rvc.vc.pipeline import Pipeline
+from models.demos.rvc.reference.vc.pipeline import Pipeline
 
 
 def parse_args() -> argparse.Namespace:
