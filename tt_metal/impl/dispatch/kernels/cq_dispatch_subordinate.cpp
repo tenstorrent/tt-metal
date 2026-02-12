@@ -141,20 +141,12 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
     WAYPOINT("NWID");
 }
 
-// Record end timestamp, signal real-time profiler core, and switch local state.
-// Call this at the end of each iteration to complete the real-time profiler cycle.
+// Signal the real-time profiler core and switch the ping-pong buffer state.
+// Wraps the state-switching logic from realtime_profiler.hpp with dispatch_s-specific NOC signaling.
 FORCE_INLINE
-void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
+void signal_realtime_profiler_core_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
     DeviceZoneScopedN("signal_realtime_profiler_and_switch");
-    // Determine which buffer we just wrote to
-    RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(mailbox->realtime_profiler_state);
-    bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
-
-    // New state: push the buffer we just wrote to
-    RealtimeProfilerState new_state = used_buffer_a ? REALTIME_PROFILER_STATE_PUSH_A : REALTIME_PROFILER_STATE_PUSH_B;
-
-    // Update local mailbox state (so next iteration writes to other buffer)
-    mailbox->realtime_profiler_state = new_state;
+    RealtimeProfilerState new_state = signal_realtime_profiler_and_switch(mailbox);
 
     // Signal real-time profiler core if configured
     if (mailbox->realtime_profiler_core_noc_xy != 0) {
@@ -427,7 +419,7 @@ void kernel_main() {
         }
         total_pages_acquired++;
 
-        signal_realtime_profiler_and_switch(realtime_profiler_mailbox);
+        signal_realtime_profiler_core_and_switch(realtime_profiler_mailbox);
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);

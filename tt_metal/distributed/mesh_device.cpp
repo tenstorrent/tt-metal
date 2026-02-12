@@ -1345,6 +1345,17 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         return;
     }
 
+    // Real-time profiler is only supported on Blackhole chips due to HW constraints
+    // (requires D2H socket support which is not available on Wormhole)
+    if (this->arch() != tt::ARCH::BLACKHOLE) {
+        log_warning(
+            tt::LogMetal,
+            "Real-time profiler is not functional on {} due to HW constraints. "
+            "Real-time profiler is only supported on Blackhole. Skipping initialization.",
+            this->arch());
+        return;
+    }
+
     // Configuration for real-time profiler socket
     // Using 64 bytes as minimum PCIe-aligned page size on Blackhole
     constexpr uint32_t kRealtimeProfilerFifoSize = 4096;  // 4KB FIFO for real-time profiler data

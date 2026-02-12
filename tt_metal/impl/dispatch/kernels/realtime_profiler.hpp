@@ -79,6 +79,25 @@ void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* mailb
     ts->time_hi = time_hi;
 }
 
+// Switch the real-time profiler ping-pong buffer state.
+// Determines which buffer was just written to and toggles the state so that the next iteration
+// writes to the other buffer. Returns the new state so the caller can signal the real-time
+// profiler core if needed (signaling requires dispatch-specific NOC write functions).
+FORCE_INLINE
+RealtimeProfilerState signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
+    // Determine which buffer we just wrote to
+    RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(mailbox->realtime_profiler_state);
+    bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
+
+    // New state: push the buffer we just wrote to
+    RealtimeProfilerState new_state = used_buffer_a ? REALTIME_PROFILER_STATE_PUSH_A : REALTIME_PROFILER_STATE_PUSH_B;
+
+    // Update local mailbox state (so next iteration writes to other buffer)
+    mailbox->realtime_profiler_state = new_state;
+
+    return new_state;
+}
+
 // Set the program ID in both start and end timestamps of the appropriate ping-pong buffer.
 // Pops the program ID from the FIFO and sets it in the appropriate buffer.
 // If the FIFO is empty, sets the ID to zero.
