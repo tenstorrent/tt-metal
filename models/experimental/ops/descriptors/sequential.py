@@ -522,15 +522,18 @@ def _extract_global_var_names(pre_main: str) -> List[str]:
     return names
 
 
-def _prefix_globals_in_source(source: str, phase_idx: int, global_names: List[str]) -> str:
-    """Prefix global variable names with phase prefix in source code.
+def _prefix_phase_names_in_source(source: str, phase_idx: int, names: List[str]) -> str:
+    """Prefix phase-specific names (functions + globals) in source code.
 
-    Applied to both pre-main declarations and phase body to ensure
-    consistent renaming of global/static variables per phase.
+    Applied to each phase's kernel body to ensure references to
+    phase-specific functions and variables use the prefixed names
+    that match the prefixed declarations in the merged pre-main.
+
+    Every phase (including phase 0) gets prefixed.
     """
-    if phase_idx == 0 or not global_names:
+    if not names:
         return source
-    for name in global_names:
+    for name in names:
         source = re.sub(rf"\b{re.escape(name)}\b", f"phase{phase_idx}_{name}", source)
     return source
 
@@ -648,37 +651,75 @@ def _is_global_var_block(block: str) -> bool:
     return bool(_GLOBAL_VAR_RE.match(stripped))
 
 
-def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> str:
-    """Merge pre-main code from all phases, deduplicating top-level declarations.
+def _is_phase_specific_function(block: str) -> bool:
+    """Check if a top-level block is a free function definition.
+
+    Returns True for file-scope function definitions (ALWI, FORCE_INLINE,
+    static, constexpr, inline, or plain return-type functions).
+    Returns False for namespace blocks, struct/class/enum definitions,
+    single-line declarations, and anything without braces.
+    """
+    stripped = block.strip()
+    # Must have braces (function body)
+    if "{" not in stripped or "}" not in stripped:
+        return False
+    first_line = stripped.split("\n")[0].strip()
+    # Exclude namespace, struct, class, enum blocks
+    for kw in ("namespace ", "struct ", "class ", "enum ", "typedef "):
+        if first_line.startswith(kw):
+            return False
+    # Look for function pattern: something followed by (
+    sig = _extract_block_signature(block)
+    return bool(re.search(r"\w+\s*\(", sig))
+
+
+def _extract_function_name_from_block(block: str) -> Optional[str]:
+    """Extract the function name from a function definition block.
+
+    Finds the identifier immediately before the opening parenthesis in the
+    block's signature.  Returns None if no function name can be identified.
+    """
+    sig = _extract_block_signature(block)
+    m = re.search(r"(\w+)\s*\(", sig)
+    return m.group(1) if m else None
+
+
+def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> Tuple[str, Dict[int, List[str]]]:
+    """Merge pre-main code from all phases with per-phase name isolation.
 
     Extracts pre-main from each phase, splits into top-level C++ blocks
-    (brace-balanced), and merges using a two-tier dedup strategy:
+    (brace-balanced), and classifies each block as *shared* or
+    *phase-specific*:
 
-    1. **Braced blocks** (functions, namespaces, structs): dedup by
-       *signature* — the declaration part before ``{``.  First occurrence
-       wins.  This correctly handles the case where the same template
-       function appears in multiple phases with slightly different bodies
-       due to ``#ifdef`` resolution (e.g., LN vs RMS variants of the
-       same utility header).
+    **Shared** (deduped across phases):
+      - Namespace blocks: dedup by signature (first occurrence wins).
+      - Single-line declarations (namespace aliases, ``using``,
+        ``typedef``): dedup by exact normalized content.
 
-    2. **Single-line declarations** (namespace aliases, ``using``,
-       ``typedef``): dedup by exact normalized content.
+    **Phase-specific** (prefixed with ``phaseN_``):
+      - Free function definitions (``ALWI``, ``FORCE_INLINE``, etc.):
+        each phase gets its own copy with the function name prefixed.
+      - Global/static variables: each phase gets its own copy with
+        the variable name prefixed.
 
-    3. **Global variables** from phase N>0: included with a
-       ``phaseN_`` prefix on the variable name to avoid collisions.
-       Phase 0's globals are included as-is.
+    ALL phases (including phase 0) get prefixed.  This eliminates:
+      - Silent first-wins drops when two phases define the same function
+        with different bodies.
+      - Redefinition errors when an included header also defines a
+        function that appears inline in another phase's pre-main.
 
-    This ensures:
-      - Same helper from same base kernel → deduped (first copy kept)
-      - Different helpers from different ops → both included
-      - Global variables → phase-prefixed for N>0
+    Returns:
+        A tuple of (pre_main_code, phase_names) where phase_names is a
+        dict mapping phase_idx → list of original names that were prefixed.
+        Callers must apply the same prefixing to each phase's kernel body.
     """
     if not sources_with_indices:
-        return ""
+        return "", {}
 
     all_blocks: List[str] = []
     seen_signatures: Set[str] = set()
     seen_content: Set[str] = set()
+    phase_names: Dict[int, List[str]] = {}
 
     for phase_idx, source in sources_with_indices:
         pre_main = _collect_pre_main_code(source)
@@ -689,28 +730,46 @@ def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> s
             if not normalized:
                 continue
 
-            # Global variables: phase N>0 gets prefixed
+            # --- Phase-specific: global/static variables ---
             if _is_global_var_block(block):
-                if phase_idx == 0:
-                    if normalized not in seen_content:
-                        seen_content.add(normalized)
-                        all_blocks.append(block)
-                else:
-                    names = _extract_global_var_names(block)
-                    prefixed = block
-                    for name in names:
-                        prefixed = re.sub(
-                            rf"\b{re.escape(name)}\b",
-                            f"phase{phase_idx}_{name}",
-                            prefixed,
-                        )
+                names = _extract_global_var_names(block)
+                prefixed = block
+                for name in names:
+                    prefixed = re.sub(
+                        rf"\b{re.escape(name)}\b",
+                        f"phase{phase_idx}_{name}",
+                        prefixed,
+                    )
+                    phase_names.setdefault(phase_idx, []).append(name)
+                prefixed_norm = _normalize_block(prefixed)
+                if prefixed_norm not in seen_content:
+                    seen_content.add(prefixed_norm)
+                    all_blocks.append(prefixed)
+                continue
+
+            # --- Phase-specific: free function definitions ---
+            if _is_phase_specific_function(block):
+                func_name = _extract_function_name_from_block(block)
+                if func_name:
+                    prefixed = re.sub(
+                        rf"\b{re.escape(func_name)}\b",
+                        f"phase{phase_idx}_{func_name}",
+                        block,
+                    )
+                    phase_names.setdefault(phase_idx, []).append(func_name)
                     prefixed_norm = _normalize_block(prefixed)
                     if prefixed_norm not in seen_content:
                         seen_content.add(prefixed_norm)
                         all_blocks.append(prefixed)
+                else:
+                    # Fallback: can't extract name, dedup by signature
+                    sig = _extract_block_signature(block)
+                    if sig not in seen_signatures:
+                        seen_signatures.add(sig)
+                        all_blocks.append(block)
                 continue
 
-            # Braced blocks: dedup by signature (first wins)
+            # --- Shared: namespace blocks ---
             has_braces = "{" in normalized and "}" in normalized
             if has_braces:
                 sig = _extract_block_signature(block)
@@ -718,12 +777,12 @@ def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> s
                     seen_signatures.add(sig)
                     all_blocks.append(block)
             else:
-                # Single-line declarations: dedup by content
+                # --- Shared: single-line declarations ---
                 if normalized not in seen_content:
                     seen_content.add(normalized)
                     all_blocks.append(block)
 
-    return "\n\n".join(all_blocks)
+    return "\n\n".join(all_blocks), phase_names
 
 
 # =============================================================================
@@ -816,14 +875,21 @@ def _transform_phase_source(
     source: str,
     phase_idx: int,
     ct_arg_offset: int = 0,
-    global_names: Optional[List[str]] = None,
+    phase_names: Optional[List[str]] = None,
 ) -> str:
-    """Apply all transformations for a phase's kernel body."""
+    """Apply all transformations for a phase's kernel body.
+
+    Args:
+        source: Kernel body source code.
+        phase_idx: Phase index.
+        ct_arg_offset: Compile-time arg offset for this phase.
+        phase_names: Names (functions + globals) that were prefixed in
+            pre-main and must also be prefixed in the kernel body.
+    """
     source = _prefix_named_args_in_source(source, phase_idx)
     source = _offset_compile_time_args_in_source(source, phase_idx, ct_arg_offset)
     source = _offset_runtime_args_in_source(source, phase_idx)
-    if global_names:
-        source = _prefix_globals_in_source(source, phase_idx, global_names)
+    source = _prefix_phase_names_in_source(source, phase_idx, phase_names or [])
     return source
 
 
@@ -1055,17 +1121,8 @@ def _generate_fused_riscv0_source(
     all_sources = [s for _, s in reader_sources]
     includes = _collect_includes(all_sources)
     defines = _collect_defines(all_sources)
-    # Merge pre-main code from all phases (namespace aliases, helpers, globals).
-    # Block comments are stripped by _collect_pre_main_code so line-level dedup is safe.
-    pre_main = _collect_all_pre_main_code(reader_sources)
-
-    # Extract per-phase global variable names for body prefixing
-    phase_globals: Dict[int, List[str]] = {}
-    for phase_idx, source in reader_sources:
-        pm = _collect_pre_main_code(source)
-        names = _extract_global_var_names(pm)
-        if names:
-            phase_globals[phase_idx] = names
+    # Merge pre-main code from all phases with per-phase name isolation.
+    pre_main, phase_names = _collect_all_pre_main_code(reader_sources)
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1163,8 +1220,8 @@ def _generate_fused_riscv0_source(
     for phase_idx, resolved_source in reader_sources:
         body = _extract_kernel_body_for_fusion(resolved_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
-        gnames = phase_globals.get(phase_idx, [])
-        transformed = _transform_phase_source(body, phase_idx, offset, global_names=gnames)
+        pnames = phase_names.get(phase_idx, [])
+        transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
 
         lines.append(f"// Phase {phase_idx} reader")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_reader() {{")
@@ -1276,15 +1333,7 @@ def _generate_fused_riscv1_source(
     all_sources = [s for _, s in writer_sources]
     includes = _collect_includes(all_sources)
     defines = _collect_defines(all_sources)
-    pre_main = _collect_all_pre_main_code(writer_sources)
-
-    # Extract per-phase global variable names for body prefixing
-    phase_globals: Dict[int, List[str]] = {}
-    for phase_idx, source in writer_sources:
-        pm = _collect_pre_main_code(source)
-        names = _extract_global_var_names(pm)
-        if names:
-            phase_globals[phase_idx] = names
+    pre_main, phase_names = _collect_all_pre_main_code(writer_sources)
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1326,8 +1375,8 @@ def _generate_fused_riscv1_source(
     for phase_idx, resolved_source in writer_sources:
         body = _extract_kernel_body_for_fusion(resolved_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
-        gnames = phase_globals.get(phase_idx, [])
-        transformed = _transform_phase_source(body, phase_idx, offset, global_names=gnames)
+        pnames = phase_names.get(phase_idx, [])
+        transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
 
         lines.append(f"// Phase {phase_idx} writer")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_writer() {{")
@@ -1427,15 +1476,7 @@ def _generate_fused_compute_source(
     all_sources = [s for _, s in compute_sources]
     includes = _collect_includes(all_sources)
     defines = _collect_defines(all_sources)
-    pre_main = _collect_all_pre_main_code(compute_sources)
-
-    # Extract per-phase global variable names for body prefixing
-    phase_globals: Dict[int, List[str]] = {}
-    for phase_idx, source in compute_sources:
-        pm = _collect_pre_main_code(source)
-        names = _extract_global_var_names(pm)
-        if names:
-            phase_globals[phase_idx] = names
+    pre_main, phase_names = _collect_all_pre_main_code(compute_sources)
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1500,8 +1541,8 @@ def _generate_fused_compute_source(
     for phase_idx, resolved_source in compute_sources:
         body = _extract_kernel_body_for_fusion(resolved_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
-        gnames = phase_globals.get(phase_idx, [])
-        transformed = _transform_phase_source(body, phase_idx, offset, global_names=gnames)
+        pnames = phase_names.get(phase_idx, [])
+        transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
 
         lines.append(f"// Phase {phase_idx} compute")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_compute() {{")
