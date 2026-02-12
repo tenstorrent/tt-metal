@@ -40,7 +40,7 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-@pytest.mark.parametrize("num_devices", [1, 2], ids=["single_device", "multi_device"])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(1, 1), (4, 2)], ids=["single_device", "multi_device"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -57,12 +57,13 @@ def create_fabric_router_config(max_payload_size):
         (1, 512, 8192, 8192, 7168, ttnn.bfloat16, ttnn.bfloat8_b),
     ],
 )
-@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("fuse_residual_add", [False, True])
 @pytest.mark.parametrize("ccl_enabled", [True, False], ids=["ccl_on", "ccl_off"])
 def test_post_sdpa(
     bh_2d_mesh_device,
-    num_devices,
+    mesh_rows,
+    mesh_cols,
     M,
     K1,
     intermediate,
@@ -75,6 +76,8 @@ def test_post_sdpa(
     ccl_enabled,
 ):
     """Test post_sdpa fused operation with optional CCL all-reduce"""
+
+    num_devices = mesh_rows * mesh_cols
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -89,7 +92,7 @@ def test_post_sdpa(
         pytest.skip("Residual add requires CCL to be enabled")
 
     # Create submesh - fabric requires opening full system mesh first
-    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
@@ -183,14 +186,23 @@ def test_post_sdpa(
     # Compute golden reference
     # ========================================================================
     if ccl_enabled:
-        # Full CCL all-reduce: sum across devices + optional residual
-        torch_expected = PostSDPA.golden(
-            [inp.float() for inp in device_inputs],
-            torch_weights1.float(),
-            torch_weights2.float(),
-            torch_residual.float() if torch_residual is not None else None,
-        ).bfloat16()
-        logger.info(f"Golden output shape (all-reduced): {torch_expected.shape}")
+        # Per-pair CCL all-reduce: each row of devices forms an independent pair
+        num_pairs = mesh_rows
+        devices_per_pair = mesh_cols
+        torch_expected_per_pair = []
+        for pair_idx in range(num_pairs):
+            pair_inputs = []
+            for col in range(devices_per_pair):
+                device_idx = pair_idx * devices_per_pair + col
+                pair_inputs.append(device_inputs[device_idx].float())
+            golden = PostSDPA.golden(
+                pair_inputs,
+                torch_weights1.float(),
+                torch_weights2.float(),
+                torch_residual.float() if torch_residual is not None else None,
+            ).bfloat16()
+            torch_expected_per_pair.append(golden)
+        logger.info(f"Golden output shape (per-pair all-reduced): {torch_expected_per_pair[0].shape}")
     else:
         # Per-device matmul only: input @ W1 @ W2
         torch_expected_per_device = []
@@ -200,9 +212,9 @@ def test_post_sdpa(
         logger.info(f"Golden output shape (per-device): {torch_expected_per_device[0].shape}")
 
     # ========================================================================
-    # Create mesh mapper
+    # Create mesh mapper - shard along dim 0 across all devices in the mesh
     # ========================================================================
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
+    mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
 
     # ========================================================================
     # Create input tensor (height-sharded across matmul1 cores)
@@ -225,7 +237,7 @@ def test_post_sdpa(
         layout=ttnn.TILE_LAYOUT,
         memory_config=input_mem_config,
         tile=a_tile,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        mesh_mapper=mesh_mapper,
     )
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
@@ -326,7 +338,7 @@ def test_post_sdpa(
         tile=a_tile,
         dtype=ttnn.bfloat16,
         memory_config=gather2_output_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        mesh_mapper=mesh_mapper,
     )
     logger.info(f"Created gather2 output tensor: {gather2_output_shard_shape} on gather core per device")
 
@@ -361,7 +373,7 @@ def test_post_sdpa(
             tile=a_tile,  # 1x32 tiles to match gather2 output
             dtype=ttnn.bfloat16,
             memory_config=ccl_intermediate_mem_config,
-            mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+            mesh_mapper=mesh_mapper,
         )
         logger.info(f"Created CCL intermediate tensor: {ccl_intermediate_shape} on gather core per device")
 
@@ -385,7 +397,7 @@ def test_post_sdpa(
             tile=a_tile,
             dtype=ttnn.bfloat16,
             memory_config=output_mem_config,
-            mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+            mesh_mapper=mesh_mapper,
         )
         logger.info(f"Created output tensor: {output_shard_shape} on gather core per device")
 
@@ -399,7 +411,7 @@ def test_post_sdpa(
                 tile=a_tile,
                 dtype=ttnn.bfloat16,
                 memory_config=output_mem_config,
-                mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+                mesh_mapper=mesh_mapper,
             )
             logger.info(f"Created residual tensor: {output_shard_shape} on gather core per device")
 
@@ -451,8 +463,9 @@ def test_post_sdpa(
         assert received.shape == expected_shape, f"Expected shape {expected_shape}, got {received.shape}"
 
         if ccl_enabled:
-            # All devices should have the same all-reduced result
-            golden = torch_expected
+            # Both devices in a pair should have the same all-reduced result
+            pair_idx = device_idx // mesh_cols
+            golden = torch_expected_per_pair[pair_idx]
         else:
             # Each device has its own independent result
             golden = torch_expected_per_device[device_idx]
