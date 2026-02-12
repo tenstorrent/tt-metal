@@ -36,6 +36,10 @@ public:
     constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t tensor_id{INVALID_TENSOR_ID};
 
+    // Shared pointer to all attributes associated with this tensor
+    // Can be safely passed between threads when the tensor is copied
+    std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
+
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
@@ -259,10 +263,6 @@ private:
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
 
     void deallocate_impl(bool force);
-
-    // Shared pointer to all attributes associated with this tensor
-    // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 };
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
