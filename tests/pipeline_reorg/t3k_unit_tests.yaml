@@ -3,189 +3,214 @@
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The command to run the test.
-#   sku: Machine type to target (e.g. wh_llmbox).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   timeout: The maximum allowed runtime for this job in minutes.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: t3k_ttmetal_tests
   cmd: run_t3000_ttmetal_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 40
   owner_id: ULMEPM2MA # Sean Nijjar
   team: fabric
-  timeout: 40
 
 - name: t3k_ttnn_tests
   cmd: run_t3000_ttnn_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 25
   owner_id: UBHPP2NDP # Joseph Chu
   team: ttnn
-  timeout: 25
 
 - name: t3k_tt_metal_multiprocess_tests
   cmd: run_t3000_tt_metal_multiprocess_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 15
   owner_id: U03NG0A5ND7 # Aditya Saigal
   team: scaleout
-  timeout: 15
 
 - name: t3k_ttnn_udm_tests
   cmd: run_t3000_ttnn_udm_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 5
   owner_id: U06MJ6CVCGZ # Yu Gao
   team: ttnn
-  timeout: 5
 
 - name: t3k_falcon7b_tests
   cmd: run_t3000_falcon7b_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 10
   owner_id: UBHPP2NDP # Joseph Chu
   team: models
-  timeout: 10
   model-name: falcon7b
 
 - name: t3k_falcon40b_tests
-  cmd: ls -lart /mnt/MLPerf/tt_dnn-models/tt/Falcon/tiiuae/falcon-40b-instruct/ && mkdir -p generated/test_reports && run_t3000_falcon40b_tests
-  sku: wh_llmbox
+  cmd: |
+    ls -lart /mnt/MLPerf/tt_dnn-models/tt/Falcon/tiiuae/falcon-40b-instruct/
+    mkdir -p generated/test_reports
+    run_t3000_falcon40b_tests
+  skus:
+    wh_llmbox:
+      timeout: 10
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
-  timeout: 10
   model-name: falcon40b
 
 - name: t3k_llama3-small_tests
   cmd: run_t3000_llama3-small_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 30
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
-  timeout: 30
   model-name: llama3-small
 
 - name: t3k_llama3.2-11b_tests
   cmd: run_t3000_llama3.2-11b_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 15
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
-  timeout: 15
   model-name: llama3.2-11b
 
 - name: t3k_llama3.2-11b-vision_tests
   cmd: run_t3000_llama3.2-11b-vision_unit_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 10
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
-  timeout: 10
   model-name: llama3.2-11b-vision
 
 - name: t3k_n300_mesh_llama3.2-11b-vision_tests
   cmd: run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 10
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
-  timeout: 10
   model-name: n300 mesh llama3.2-11b-vision
 
 - name: t3k_llama3.2-90b-vision_tests
   cmd: run_t3000_llama3.2-90b-vision_unit_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 10
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-  timeout: 10
   model-name: llama3.2-90b-vision
 
 - name: t3k_llama3.2-90b_tests
   cmd: run_t3000_llama3.2-90b_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 20
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-  timeout: 20
   model-name: llama3.2-90b
 
 - name: t3k_mixtral_tests
   cmd: run_t3000_mixtral_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 15
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
-  timeout: 15
   model-name: mixtral
 
 - name: t3k_grok_tests
   cmd: run_t3000_grok_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 10
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
-  timeout: 10
   model-name: grok
 
 - name: t3k_unet_shallow_tests
   cmd: run_t3000_unet_shallow_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 10
   owner_id: U06ECNVR0EN # Evan Smal
   team: models
-  timeout: 10
   model-name: unet shallow
 
 - name: t3k_mistral_tests
   cmd: run_t3000_mistral_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 15
   owner_id: U0896VBAKFC # Pratikkumar Prajapati
   team: models
-  timeout: 15
   model-name: mistral
 
 - name: t3k_qwen25_vl_tests
   cmd: run_t3000_qwen25_vl_unit_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 20
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-  timeout: 20
   model-name: qwen25_vl
 
 - name: t3k_qwen3_vl_tests
   cmd: run_t3000_qwen3_vl_unit_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 10
   owner_id: U08H31YMN4Q # Sanjay Sanjay
   team: models
-  timeout: 10
   model-name: qwen3_vl
 
 - name: t3k_gemma3-small_tests
   cmd: run_t3000_gemma3-small_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 25
   owner_id: U08E1JCDVNX # Pavle Petrovic
   team: models
-  timeout: 25
   model-name: gemma3-small
 
 - name: t3k_dits_tests
   cmd: run_t3000_tt_dit_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 15
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
-  timeout: 15
   model-name: dits
 
 - name: t3k_gpt-oss_unit_tests
   cmd: run_t3000_gpt_oss_unit_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 30
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
-  timeout: 30
   model-name: gpt-oss
 
 - name: t3k_deepseek_tests
   cmd: run_t3000_deepseek_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 10
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
-  timeout: 10
   model-name: deepseek
 
 - name: t3k_tttv2_fast_unit_tests
   cmd: run_t3000_tttv2_fast_unit_tests
-  sku: wh_llmbox
+  skus:
+    wh_llmbox:
+      timeout: 18
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-  timeout: 18
-  model-name: tttv2 modules
+  model-name: tttv2-modules
