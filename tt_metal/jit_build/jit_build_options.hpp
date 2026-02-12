@@ -39,8 +39,6 @@ public:
 
     bool dst_full_sync_en{};
 
-    bool en_implied_math_format{};
-
     JitBuildOptions(const JitBuildEnv& env);
     void set_name(const std::string& name);
 

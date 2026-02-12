@@ -352,7 +352,6 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
-    this->supports_en_implied_math_format_ = true;
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,

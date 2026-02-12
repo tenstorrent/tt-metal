@@ -80,7 +80,6 @@ struct ComputeConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
-    bool en_implied_math_format = false;
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation

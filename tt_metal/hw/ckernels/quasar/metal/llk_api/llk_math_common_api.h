@@ -59,20 +59,23 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST_FORMAT
     if (EN_32BIT_DEST_FORMAT && is_src_fmt_fp32_dest_compatible(srca_format) &&
         is_src_fmt_fp32_dest_compatible(srcb_format)) {
+        // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
-            EN_IMPLIED_MATH_FORMAT,
+            false /*EN_IMPLIED_MATH_FORMAT*/,
             true /*EN_FP32_DEST_FORMAT*/,
             false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     } else if (
         EN_32BIT_DEST_FORMAT && is_src_fmt_int32_dest_compatible(srca_format) &&
         is_src_fmt_int32_dest_compatible(srcb_format)) {
+        // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
-            EN_IMPLIED_MATH_FORMAT,
+            false /*EN_IMPLIED_MATH_FORMAT*/,
             false /*EN_FP32_DEST_FORMAT*/,
             true /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     } else {
+        // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
-            EN_IMPLIED_MATH_FORMAT,
+            false /*EN_IMPLIED_MATH_FORMAT*/,
             false /*EN_FP32_DEST_FORMAT*/,
             false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     }

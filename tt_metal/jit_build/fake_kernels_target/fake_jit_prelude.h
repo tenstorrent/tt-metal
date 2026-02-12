@@ -26,9 +26,6 @@ constexpr bool APPROX = true;
 // chlkc_math_fidelity.h
 constexpr std::int32_t MATH_FIDELITY = 255;
 
-// chlkc_implied_math_format.h
-constexpr bool EN_IMPLIED_MATH_FORMAT = false;
-
 // chlkc_pack_data_format.h
 constexpr unsigned char pack_src_format[32] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,

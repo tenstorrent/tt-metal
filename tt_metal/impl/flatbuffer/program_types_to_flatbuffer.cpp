@@ -123,7 +123,6 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
         unpack_modes_offset,
         config.bfp8_pack_precise,
         config.math_approx_mode,
-        config.en_implied_math_format,
         compile_args_offset,
         defines_offset);
 

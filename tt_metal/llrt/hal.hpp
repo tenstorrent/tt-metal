@@ -330,7 +330,6 @@ private:
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
-    bool supports_en_implied_math_format_ = false;
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -549,7 +548,6 @@ public:
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
     bool get_supports_64_bit_pcie_addressing() const { return supports_64_bit_pcie_addressing_; }
-    bool get_supports_en_implied_math_format() const { return supports_en_implied_math_format_; }
 
     // Verify that the eth version is compatible with the HAL capabilities. Throws an exception if version is
     // not compatible.
