@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import subprocess
 import sys
 import time
 import torch
@@ -31,8 +32,38 @@ from models.experimental.tt_symbiote.core.run_config import DispatchManager
 
 try:
     from gr00t.model.gr00t_n1d6.gr00t_n1d6 import Gr00tN1d6
-except (ValueError, ImportError):
-    Gr00tN1d6 = sys.modules["gr00t.model.gr00t_n1d6.gr00t_n1d6"].Gr00tN1d6
+except Exception:
+    _groot_dir = PROJECT_ROOT / "groot"
+    if not _groot_dir.exists():
+        print("groot not found. Cloning https://github.com/pandeashwary/Gr00t.git into tt_symbiote/groot ...")
+        _r = subprocess.run(
+            ["git", "clone", "https://github.com/pandeashwary/Gr00t.git", str(_groot_dir)],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        if _r.returncode != 0:
+            print(f"Clone failed: {_r.stderr or _r.stdout}")
+            exit(1)
+        sys.path.insert(0, str(_groot_dir))
+        try:
+            from gr00t.model.gr00t_n1d6.gr00t_n1d6 import Gr00tN1d6
+        except Exception as _e:
+            print(f"groot import failed after clone: {_e}")
+            exit(1)
+    else:
+        _groot_str = str(_groot_dir)
+        if _groot_str not in sys.path:
+            sys.path.insert(0, _groot_str)
+        try:
+            from gr00t.model.gr00t_n1d6.gr00t_n1d6 import Gr00tN1d6
+        except Exception as _e:
+            print(
+                "groot import failed. Make sure you have https://github.com/pandeashwary/Gr00t.git "
+                "in models/experimental/tt_symbiote/groot (or set PYTHONPATH)."
+            )
+            print(f"Error: {_e}")
+            exit(1)
 
 
 def _patched_beta_sample(self, sample_shape=torch.Size()):
