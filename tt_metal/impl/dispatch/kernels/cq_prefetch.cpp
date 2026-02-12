@@ -1548,7 +1548,8 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
             current_addr += amt_to_read_sub_cmd;
             current_length -= amt_to_read_sub_cmd;
 
-            // If we've consumed the current sub-command, move to the next one
+            // If we've consumed the current sub-command, move to the next one. This will read off the end of the
+            // commands, but that's ok as we don't use that data and the next address is valid.
             if (current_length == 0) {
                 sub_cmd++;
                 current_addr = sub_cmd->addr;
