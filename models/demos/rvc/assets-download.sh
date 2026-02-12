@@ -10,7 +10,12 @@ function download() {
 
 set -e
 
-REPO_FOLDER="rvc-nano"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_FOLDER="${SCRIPT_DIR}/rvc-nano"
+DATA_DIR="${SCRIPT_DIR}/data"
+TARGET_ASSETS_DIR="${DATA_DIR}/assets"
+TARGET_CONFIGS_DIR="${DATA_DIR}/configs"
+TARGET_SAMPLE_FILE="${DATA_DIR}/sample-speech.wav"
 
 export GIT_CLONE_PROTECTION_ACTIVE=false
 export GIT_LFS_SKIP_SMUDGE=1
@@ -40,16 +45,17 @@ unset GIT_CLONE_PROTECTION_ACTIVE
 
 download "assets"
 download "configs"
+download "sample-speech.wav"
 
 rm -rf .git
 
 popd
 
-mkdir -p "assets"
-mkdir -p "configs"
-
-mv "${REPO_FOLDER}/assets" "./"
-mv "${REPO_FOLDER}/configs" "./" 
+mkdir -p "${DATA_DIR}"
+rm -rf "${TARGET_ASSETS_DIR}" "${TARGET_CONFIGS_DIR}"
+mv "${REPO_FOLDER}/assets" "${TARGET_ASSETS_DIR}"
+mv "${REPO_FOLDER}/configs" "${TARGET_CONFIGS_DIR}"
+mv "${REPO_FOLDER}/sample-speech.wav" "${TARGET_SAMPLE_FILE}"
 
 
 rm -rf "${REPO_FOLDER}"

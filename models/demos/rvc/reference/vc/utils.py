@@ -3,11 +3,7 @@ import os
 
 from safetensors.torch import load_file
 
-from .hubert import (
-    HubertModel,
-    HubertPretrainingConfig,
-    HubertPretrainingTask,
-)
+from models.demos.rvc.reference.vc.hubert import HubertModel, HubertPretrainingConfig, HubertPretrainingTask
 
 
 def get_maybe_sharded_checkpoint_filename(filename: str, suffix: str) -> str:
