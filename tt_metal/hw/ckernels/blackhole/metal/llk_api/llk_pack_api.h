@@ -25,7 +25,7 @@
 
 // TODO NC: Remove as the part of tt-metal#34499
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
-inline void llk_pack_mop_config(const uint32_t output) {
+inline void llk_pack_mop_config(const uint32_t output, std::uint32_t num_tiles = 1) {
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -34,7 +34,7 @@ inline void llk_pack_mop_config(const uint32_t output) {
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     _llk_pack_mop_config_<untilize, zero_output, tilize>(
-        pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
+        pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -101,7 +101,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
 }
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
-inline void llk_pack_init(const std::uint32_t pack_output = 16) {
+inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -111,7 +111,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     _llk_pack_init_<untilize, zero_output, tilize>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
+        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
 template <bool out_of_order_output, bool untilize>
