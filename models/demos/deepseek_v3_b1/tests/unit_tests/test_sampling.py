@@ -119,3 +119,157 @@ def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
     Covers multiple random seeds and different final-core placements.
     """
     _run_sampling_argmax_single_device_101_cores(device, seed=seed, final_core_idx=final_core_idx)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize(
+    "seed, final_core_idx",
+    [
+        (2005, 100),
+    ],
+)
+def test_sampling_argmax_mesh_2x2_axis_x(mesh_device, seed, final_core_idx):
+    """
+    Mesh extension test:
+    - per-device local 101-core argmax reduction,
+    - stage-1 axis-x reduction across row pairs,
+    - stage-2 reduction to final mesh coord (1,1).
+    """
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    all_device_cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
+    if len(all_device_cores) < 101:
+        pytest.skip(f"Need at least 101 cores, found {len(all_device_cores)}")
+
+    active_cores = all_device_cores[:101]
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in active_cores})
+    assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
+    final_core = active_cores[final_core_idx]
+    final_mesh_coord = (1, 1)
+
+    num_devices = 4
+    num_cores = len(active_cores)
+    scores_shape_per_device = (1, 160 * num_cores)
+    input_shard_shape = (1, 160)
+    output_shape_per_device = (1, 1)
+    scratch_shape_per_device = (1, 16)  # 4 slots x 16B / 4B(uint32) = 16 uint32 entries
+    tile_1x32 = ttnn.Tile([1, 32])
+
+    logger.info(
+        f"Testing sampling argmax mesh(2x2): seed={seed}, final_core_idx={final_core_idx}, final_mesh_coord={final_mesh_coord}"
+    )
+
+    # Build per-device inputs, then shard device dimension with mesh mapper.
+    torch_scores_per_device = []
+    torch_indices_per_device = []
+    for dev_idx in range(num_devices):
+        torch.manual_seed(seed + dev_idx)
+        scores_dev = torch.randn(scores_shape_per_device, dtype=torch.bfloat16)
+        # Make global index space unique across devices for deterministic tie-break checks.
+        idx_base = dev_idx * scores_shape_per_device[1]
+        indices_dev = (torch.arange(scores_shape_per_device[1], dtype=torch.int32) + idx_base).reshape(
+            scores_shape_per_device
+        )
+        torch_scores_per_device.append(scores_dev)
+        torch_indices_per_device.append(indices_dev)
+
+    torch_scores_all = torch.stack(torch_scores_per_device, dim=0)
+    torch_indices_all = torch.stack(torch_indices_per_device, dim=0)
+    torch_expected_idx = SamplingOp.golden(
+        torch_scores_all.reshape(1, -1), torch_indices_all.reshape(1, -1), k=1, p=1.0
+    )
+
+    input_shard_spec = ttnn.ShardSpec(
+        core_grid,
+        input_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    final_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(final_core, final_core)})
+    output_shard_spec = ttnn.ShardSpec(
+        final_core_grid,
+        output_shape_per_device,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        output_shard_spec,
+    )
+    scratch_shard_spec = ttnn.ShardSpec(
+        final_core_grid,
+        scratch_shape_per_device,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    scratch_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        scratch_shard_spec,
+    )
+
+    mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    ttnn_scores = ttnn.from_torch(
+        torch_scores_all,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=input_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_indices = ttnn.from_torch(
+        torch_indices_all,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=input_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_output_index = ttnn.from_torch(
+        torch.zeros((num_devices, *output_shape_per_device), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=output_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_fabric_scratch = ttnn.from_torch(
+        torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=scratch_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    global_semaphore = ttnn.create_global_semaphore(mesh_device, final_core_grid, 0)
+    global_stage2_semaphore = ttnn.create_global_semaphore(mesh_device, final_core_grid, 0)
+    ttnn.synchronize_device(mesh_device)
+
+    ttnn_result = SamplingOp.op(
+        scores_tensor=ttnn_scores,
+        indices_tensor=ttnn_indices,
+        output_index_tensor=ttnn_output_index,
+        k=1,
+        p=1.0,
+        final_core_coord=final_core,
+        final_mesh_coord=final_mesh_coord,
+        global_semaphore=global_semaphore,
+        global_stage2_semaphore=global_stage2_semaphore,
+        fabric_scratch_tensor=ttnn_fabric_scratch,
+        mesh_axis="x",
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    output_shards = ttnn.get_device_tensors(ttnn_result)
+    final_device_idx = final_mesh_coord[0] * 2 + final_mesh_coord[1]
+    final_output_torch = ttnn.to_torch(output_shards[final_device_idx])
+    final_output_index = final_output_torch.to(torch.uint32).reshape(1, 1)
+
+    assert torch.equal(
+        final_output_index, torch_expected_idx
+    ), f"Mesh argmax index mismatch. expected={torch_expected_idx.item()}, got={int(final_output_index.item())}"
