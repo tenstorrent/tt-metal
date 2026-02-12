@@ -228,4 +228,4 @@ A rare wrong timing can leave the prefetcher waiting forever on a semaphore that
 
 ## Next Step: Layer 3
 
-Layer 3 will focus on the **`process_stall` semaphore protocol**: who writes the semaphore, when, and how the prefetcher and dispatch coordinate. That is the sub-component most likely to explain the hang.
+Layer 3 details the **`process_stall` semaphore protocol** and a **dual-path failure analysis** (prefetcher spin vs dispatch stuck before signaling). See `03_layer3_semaphore_protocol_and_dispatch_hang.md`.
