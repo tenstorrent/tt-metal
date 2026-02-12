@@ -56,13 +56,13 @@ public:
 #endif
 
         local_dfb_interface.wr_ptr[counter_idx_] += (num_entries * local_dfb_interface.stride_size);
-        // DPRINT << "push_back: updated wr_ptr: " << local_dfb_interface.wr_ptr[counter_idx_] << ENDL();
+        DPRINT << "push_back: updated wr_ptr: " << local_dfb_interface.wr_ptr[counter_idx_] << ENDL();
         if (local_dfb_interface.wr_ptr[counter_idx_] == local_dfb_interface.limit[counter_idx_]) {
             local_dfb_interface.wr_ptr[counter_idx_] = local_dfb_interface.base_addr[counter_idx_];
         }
 
         counter_idx_ = (counter_idx_ + 1) % local_dfb_interface.num_tcs_to_rr;
-        // DPRINT << "push_back: updated counter_idx: " << (uint32_t)counter_idx_ << ENDL();
+        DPRINT << "push_back: updated counter_idx: " << (uint32_t)counter_idx_ << ENDL();
     }
 
     void wait_front(uint16_t num_entries) {
@@ -73,9 +73,10 @@ public:
 #error "Not implemented"
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
-        // DPRINT << "wait_front: tensix_id: " << static_cast<uint32_t>(tensix_id) << " tc_id: " <<
-        // static_cast<uint32_t>(tc_id)
-        //        << " occupancy: " << static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)) << ENDL();
+        DPRINT << "wait_front: tensix_id: " << static_cast<uint32_t>(tensix_id)
+               << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
+               << " tc_id: " << static_cast<uint32_t>(tc_id)
+               << " occupancy: " << static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)) << ENDL();
         while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
     }
@@ -93,12 +94,12 @@ public:
 #endif
 
         local_dfb_interface.rd_ptr[counter_idx_] += (num_entries * local_dfb_interface.stride_size);
-        // DPRINT << "pop_front: updated rd_ptr: " << local_dfb_interface.rd_ptr[counter_idx_] << ENDL();
+        DPRINT << "pop_front: updated rd_ptr: " << local_dfb_interface.rd_ptr[counter_idx_] << ENDL();
         if (local_dfb_interface.rd_ptr[counter_idx_] == local_dfb_interface.limit[counter_idx_]) {
             local_dfb_interface.rd_ptr[counter_idx_] = local_dfb_interface.base_addr[counter_idx_];
         }
         counter_idx_ = (counter_idx_ + 1) % local_dfb_interface.num_tcs_to_rr;
-        // DPRINT << "pop_front: updated counter_idx: " << (uint32_t)counter_idx_ << ENDL();
+        DPRINT << "pop_front: updated counter_idx: " << (uint32_t)counter_idx_ << ENDL();
     }
     // Explicit sync APIs end
 

@@ -34,12 +34,16 @@ void kernel_main() {
         dfb.wait_front(1);
         // in blocked case maybe each consumer can modify the data so host knows that each have consumed it
         // DPRINT << "wfd" << ENDL();
-        // DPRINT << "consumer tile id " << tile_id << " page id " << ((tile_id * num_consumers) + consumer_idx) <<
-        // ENDL();
-        noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = tile_id * num_consumers + consumer_idx});
-        // DPRINT << "pfw" << ENDL();
+        uint32_t page_id = /*is blocked?*/ tile_id; /*: tile_id * num_consumers + consumer_idx*/
+        ;
+        DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
+        // for blocked consumer each consumer reads each tile .. user kernel shouldn't have to think about this (tensor
+        // accessor will abstract) noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id}); DPRINT
+        // << "pfw" << ENDL();
         dfb.pop_front(1);
         // DPRINT << "pfd" << ENDL();
     }
-    noc.async_write_barrier();
+    DPRINT << "CBW" << ENDL();
+    // noc.async_write_barrier();
+    DPRINT << "CBWD" << ENDL();
 }
