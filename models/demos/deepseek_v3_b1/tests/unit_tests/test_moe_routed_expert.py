@@ -19,13 +19,11 @@ Tests the fused operation:
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
-from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def create_expert_matmul_tensors(
@@ -1153,85 +1151,6 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
 
     logger.info("Running moe routed expert operation...")
 
-    profiler = BenchmarkProfiler()
-
-    # Compile Run
-    logger.info("Compiling model")
-    ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeRoutedExpert.op(
-        ttnn_input,
-        ttnn_mcast_output,
-        ttnn_gate_mm_weights,
-        ttnn_gate_mm_output,
-        ttnn_gate_input,
-        ttnn_gate_bias,
-        ttnn_gate_indices,
-        gate_output_scores_tensor,
-        gate_output_indices_tensor,
-        expert_index_tensor,
-        expert_scale_tensor,
-        gate_proj_weights,
-        gate_proj_output,
-        up_proj_weights,
-        up_proj_mm_out_tensor,
-        fused_output_tensor,
-        down_proj_gather_output_tensor,
-        down_proj_mcast_output_tensor,
-        down_proj_weights,
-        down_proj_output,
-        fused_add_tensor,
-        final_output_tensor,
-        # ReduceToOne parameters
-        reduce_intermediate_tensors=intermediate_tensors,
-        reduce_output_tensor=reduce_output_tensor,
-        reduce_semaphores=reduce_semaphores,
-        reduce_root_coord=ttnn.MeshCoordinate(root_coord),
-        use_hardcoded_expert_index=use_hardcoded_expert_index,
-    )
-
-    ttnn.synchronize_device(submesh)
-
-    # Capture warmup trace
-    logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for i in range(15):
-        ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeRoutedExpert.op(
-            ttnn_input,
-            ttnn_mcast_output,
-            ttnn_gate_mm_weights,
-            ttnn_gate_mm_output,
-            ttnn_gate_input,
-            ttnn_gate_bias,
-            ttnn_gate_indices,
-            gate_output_scores_tensor,
-            gate_output_indices_tensor,
-            expert_index_tensor,
-            expert_scale_tensor,
-            gate_proj_weights,
-            gate_proj_output,
-            up_proj_weights,
-            up_proj_mm_out_tensor,
-            fused_output_tensor,
-            down_proj_gather_output_tensor,
-            down_proj_mcast_output_tensor,
-            down_proj_weights,
-            down_proj_output,
-            fused_add_tensor,
-            final_output_tensor,
-            # ReduceToOne parameters
-            reduce_intermediate_tensors=intermediate_tensors,
-            reduce_output_tensor=reduce_output_tensor,
-            reduce_semaphores=reduce_semaphores,
-            reduce_root_coord=ttnn.MeshCoordinate(root_coord),
-            use_hardcoded_expert_index=use_hardcoded_expert_index,
-        )
-
-    num_iterations = 20
-    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(submesh)
-
-    # Capture main trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
     for iteration in range(num_iterations):
         ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeRoutedExpert.op(
             ttnn_input,
@@ -1263,28 +1182,7 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
             reduce_root_coord=ttnn.MeshCoordinate(root_coord),
             use_hardcoded_expert_index=use_hardcoded_expert_index,
         )
-    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
-
-    # Execute warmup trace
-    logger.info("Executing warmup trace...")
-    profiler.start("deepseek-moe-routed-expert-warmup")
-    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
-    ttnn.release_trace(submesh, trace_id_warmup)
-    ttnn.synchronize_device(submesh)
-    profiler.end("deepseek-moe-routed-expert-warmup")
-
-    # Execute main trace with signposts for profiling
-    logger.info("Starting Trace perf test...")
-    signpost("start")
-    profiler.start("deepseek-moe-routed-expert-trace")
-
-    ttnn.execute_trace(submesh, trace_id, blocking=False)
-    ttnn.release_trace(submesh, trace_id)
-    ttnn.synchronize_device(submesh)
-
-    profiler.end("deepseek-moe-routed-expert-trace")
-    signpost("stop")
 
     # ========== Verify Results ==========
     # Get actual gate output indices and scores from device

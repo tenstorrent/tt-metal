@@ -199,6 +199,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_sender_remote_receiver_noc_y"),
         get_named_compile_time_arg_val("ccl_sender_dst_num_hops"),
         get_named_compile_time_arg_val("ccl_sender_num_connections")>;
+#endif
 // ============================================================================
 // TRISC (Compute)
 // - Matmul1 compute (8x8 grid)

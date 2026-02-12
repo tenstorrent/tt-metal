@@ -41,12 +41,11 @@ def create_fabric_router_config(max_payload_size):
 
 
 @pytest.mark.parametrize(
-    "num_devices, mesh_device, device_params",
+    "num_devices, device_params",
     [
-        (1, (1, 1), {}),
+        (1, {}),
         (
             2,
-            (2, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(15232),
@@ -54,7 +53,7 @@ def create_fabric_router_config(max_payload_size):
         ),
     ],
     ids=["single_device", "multi_device"],
-    indirect=["mesh_device", "device_params"],
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize(
     "M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype",
