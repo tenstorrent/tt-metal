@@ -128,17 +128,20 @@ def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
     indirect=["device_params"],
 )
 @pytest.mark.parametrize(
-    "seed, final_core_idx",
+    "final_mesh_coord,seed,final_core_idx",
     [
-        (2005, 100),
+        ((0, 0), 2005, 100),
+        ((0, 1), 520, 0),
+        ((1, 0), 1337, 50),
+        ((1, 1), 4242, 73),
     ],
 )
-def test_sampling_argmax_mesh_2x2_axis_x(mesh_device, seed, final_core_idx):
+def test_sampling_argmax_mesh_2x2_axis_x(mesh_device, final_mesh_coord, seed, final_core_idx):
     """
     Mesh extension test:
     - per-device local 101-core argmax reduction,
     - stage-1 axis-x reduction across row pairs,
-    - stage-2 reduction to final mesh coord (1,1).
+    - stage-2 reduction to parameterized final mesh coord.
     """
     grid_size = mesh_device.compute_with_storage_grid_size()
     all_device_cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
@@ -149,7 +152,6 @@ def test_sampling_argmax_mesh_2x2_axis_x(mesh_device, seed, final_core_idx):
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in active_cores})
     assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
     final_core = active_cores[final_core_idx]
-    final_mesh_coord = (1, 1)
 
     num_devices = 4
     num_cores = len(active_cores)
@@ -160,7 +162,8 @@ def test_sampling_argmax_mesh_2x2_axis_x(mesh_device, seed, final_core_idx):
     tile_1x32 = ttnn.Tile([1, 32])
 
     logger.info(
-        f"Testing sampling argmax mesh(2x2): seed={seed}, final_core_idx={final_core_idx}, final_mesh_coord={final_mesh_coord}"
+        "Testing sampling argmax mesh(2x2): "
+        f"seed={seed}, final_core_idx={final_core_idx}, final_mesh_coord={final_mesh_coord}"
     )
     torch.manual_seed(seed)
 
