@@ -5,7 +5,8 @@
 """
 Post SDPA fused operation with CCL All-Reduce.
 
-This implements Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce as a fused execution:
+This implements ScatterHeads + Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce as a fused execution:
+- ScatterHeads: Scatter [8, 512] from 8 input cores to [1, 512] on 64 output cores (8x8 grid)
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (8x8 grid)
 - Gather1: Collect results from all 64 cores to [1, 8192] on gather core (12, 9)
 - Mcast: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular for efficient mcast)
@@ -21,7 +22,7 @@ CCL All-Reduce uses:
 - CCL Sender core = Adjacent core (11, 9) - reads from gather core, sends via fabric
 
 CB Layout:
-- CB 0: matmul1_in0 (8x8 grid)
+- CB 0: scatter_dst = matmul1_in0 (8x8 grid)
 - CB 1: matmul1_in1 (8x8 grid)
 - CB 2: matmul1_out (8x8 grid)
 - CB 3: gather1_dst = mcast_src (gather core)
@@ -41,6 +42,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
@@ -89,12 +91,14 @@ class PostSDPA:
         input_tensor_mesh,
         weights1_tensor,
         weights2_tensor,
+        scatter_output_tensor_mesh,
         gather1_output_tensor,
         gather2_output_tensor,
         intermediate_tensor,
         output_tensor,
         semaphores,
         cluster_axis=0,
+        core_mapping=None,
         residual_tensor_mesh=None,
         fp32_dest_acc_en=False,
     ):
@@ -102,15 +106,19 @@ class PostSDPA:
         Execute post_sdpa fused operation with CCL all-reduce using generic_op.
 
         Args:
-            input_tensor_mesh: Input tensor mesh [1, 512] (height-sharded across 8x8 matmul1 cores)
+            input_tensor_mesh: Scatter input tensor mesh [8, 512] (height-sharded across 8 input cores)
             weights1_tensor: First weights tensor [512, 8192] (width-sharded across 8x8)
             weights2_tensor: Second weights tensor [8192, 7168] (width-sharded across 112 cores)
+            scatter_output_tensor_mesh: Pre-allocated tensor mesh [1, 512] (height-sharded across 8x8 matmul1 cores, scatter output = matmul1 input)
             gather1_output_tensor: Intermediate tensor [1, 8192] for gather1/mcast (on gather core)
             gather2_output_tensor: Intermediate tensor mesh [1, 7168] for gather2/CCL (on gather core per device)
             intermediate_tensor: CCL intermediate tensor mesh for receiving remote data (32x32 tiles)
             output_tensor: Final output tensor mesh [1, 7168]
             semaphores: List of two global semaphores for CCL synchronization
             cluster_axis: Axis for all-reduce (default 0)
+            core_mapping: Optional list of (output_core, input_core, row_offset) tuples for scatter.
+                         If None, uses default mapping where output core i reads from
+                         input core (i // rows_per_input_core), row (i % rows_per_input_core).
             residual_tensor_mesh: Optional tensor mesh for residuals [1, 7168]
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
 
@@ -124,6 +132,7 @@ class PostSDPA:
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
+        scatter_output_tensors_per_device = ttnn.get_device_tensors(scatter_output_tensor_mesh)
         gather2_output_tensors_per_device = ttnn.get_device_tensors(gather2_output_tensor)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
@@ -138,7 +147,8 @@ class PostSDPA:
 
         # Get tensor properties from first device
         input_tensor_sample = input_tensors_per_device[0]
-        data_format = input_tensor_sample.dtype
+        scatter_output_tensor_sample = scatter_output_tensors_per_device[0]
+        data_format = scatter_output_tensor_sample.dtype
         element_size = 2  # bfloat16
 
         # Tile definitions
@@ -166,7 +176,35 @@ class PostSDPA:
             ttnn.CoreCoord(MATMUL1_GRID_END_X, MATMUL1_GRID_END_Y),
         )
         matmul1_core_grid = ttnn.CoreRangeSet([matmul1_grid])
-        num_matmul1_cores = matmul1_grid.grid_size().x * matmul1_grid.grid_size().y  # 64
+
+        # Scatter input cores: extracted from input_tensor_mesh shard spec
+        scatter_input_memory_config = input_tensor_sample.memory_config()
+        scatter_input_core_range_set = scatter_input_memory_config.shard_spec.grid
+        scatter_input_core_list = ttnn.corerange_to_cores(scatter_input_core_range_set, row_wise=True)
+        num_scatter_input_cores = len(scatter_input_core_list)  # Expected: 8
+
+        # Scatter shard shape
+        scatter_input_shard_shape = scatter_input_memory_config.shard_spec.shape
+        scatter_input_rows_per_core = scatter_input_shard_shape[0]  # Expected: 8
+        scatter_input_width = scatter_input_shard_shape[1]  # Expected: 512
+
+        # Scatter output cores = Matmul1 input cores: 8x8 = 64 cores
+        # These cores receive scattered data and perform matmul1
+        scatter_output_memory_config = scatter_output_tensor_sample.memory_config()
+        scatter_output_core_range_set = scatter_output_memory_config.shard_spec.grid
+        scatter_output_core_list = ttnn.corerange_to_cores(scatter_output_core_range_set, row_wise=True)
+        num_scatter_output_cores = len(scatter_output_core_list)  # 64
+
+        # Validate scatter configuration
+        assert (
+            num_scatter_output_cores == num_scatter_input_cores * scatter_input_rows_per_core
+        ), f"Scatter config mismatch: {num_scatter_output_cores} output cores != {num_scatter_input_cores} * {scatter_input_rows_per_core}"
+
+        # Validate that scatter output grid == matmul1 input grid (they must match)
+        # This ensures the scatter output tensor can be used directly as matmul1 input
+        assert scatter_output_core_range_set == matmul1_core_grid, "Scatter output grid must match Matmul1 input grid"
+
+        num_matmul1_cores = num_scatter_output_cores  # 64
 
         # Gather/CCL receiver core: (12, 9)
         gather_core = ttnn.CoreCoord(12, 9)
@@ -214,6 +252,12 @@ class PostSDPA:
         # ========================================================================
         matmul1_k_num_tiles = 16  # 512 / 32 = 16 tiles
         matmul1_out_w_per_core = 4  # 128 / 32 = 4 tiles per core
+
+        # ========================================================================
+        # ScatterHeads parameters: [8, 512] from 8 cores to [1, 512] on 64 cores
+        # ========================================================================
+        scatter_data_size_bytes = scatter_input_width * element_size  # 512 * 2 = 1024 bytes (one row)
+        scatter_dst_num_pages = matmul1_k_num_tiles  # 16 pages (same as matmul1 input)
 
         # ========================================================================
         # Matmul2 parameters: [1, 8192] x [8192, 64] -> [1, 64]
@@ -304,13 +348,17 @@ class PostSDPA:
                 ring_index = row if cluster_axis == 0 else col
                 is_first_chip = ring_index == 0
 
-                # Get the device's tensors
+                # Get tensor properties from first device
                 input_tensor_device = input_tensors_per_device[device_idx]
+                scatter_output_tensor_device = scatter_output_tensors_per_device[device_idx]
                 gather2_output_tensor_device = gather2_output_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
 
                 device = input_tensor_device.device()
+
+                # Get scatter input buffer address for this device
+                scatter_src_addr = input_tensor_device.buffer_address()
 
                 # Get NOC coordinates for this device
                 gather_dest_noc_core = device.worker_core_from_logical_core(gather_core)
@@ -344,6 +392,11 @@ class PostSDPA:
                 # NCRISC compile-time args
                 # ========================================================================
                 ncrisc_named_compile_time_args = [
+                    # ScatterHeads (per-core args added later)
+                    ("scatter_src_addr", scatter_src_addr),
+                    ("scatter_data_size_bytes", scatter_data_size_bytes),
+                    ("scatter_dst_cb", matmul1_in0_cb),
+                    ("scatter_dst_num_pages", scatter_dst_num_pages),
                     # Matmul1
                     ("matmul1_in0", matmul1_in0_cb),
                     ("matmul1_in1", matmul1_in1_cb),
@@ -490,8 +543,10 @@ class PostSDPA:
                 # ========================================================================
                 # Circular buffer descriptors
                 # ========================================================================
-                # CB 0: Matmul1 input (from sharded tensor, 8x8 grid)
-                matmul1_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul1_in0_cb, input_tensor_device)
+                # CB 0: Matmul1 input = scatter output (from sharded tensor, 8x8 grid)
+                matmul1_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    matmul1_in0_cb, scatter_output_tensor_device
+                )
 
                 # CB 1: Matmul1 weights (from sharded tensor, 8x8 grid)
                 matmul1_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul1_in1_cb, weights1_tensor)
@@ -690,6 +745,12 @@ class PostSDPA:
                     ),
                     unified_compile_time_core_descriptors=[
                         UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_scatter_output_core",
+                            core_range=matmul1_core_grid,
+                            value=1,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_matmul1_core",
                             core_range=matmul1_core_grid,
                             value=1,
@@ -730,6 +791,60 @@ class PostSDPA:
 
                 # Get kernel descriptors
                 kernel_result = unified_kernel.get_kernel_descriptors()
+
+                # ========================================================================
+                # Per-core compile-time args for scatter
+                # ========================================================================
+                # Build scatter per-core args: each output core needs src_noc_x, src_noc_y, src_row_offset
+                scatter_output_group = kernel_result.get_group_by_arg("is_scatter_output_core", 1)
+
+                src_noc_x_per_core = []
+                src_noc_y_per_core = []
+                src_row_offset_per_core = []
+
+                if core_mapping is not None:
+                    # Use user-provided mapping
+                    assert (
+                        len(core_mapping) == num_scatter_output_cores
+                    ), f"core_mapping must have {num_scatter_output_cores} entries, got {len(core_mapping)}"
+                    for output_core, input_core, row_offset in core_mapping:
+                        noc_core = device.worker_core_from_logical_core(input_core)
+                        src_noc_x_per_core.append((output_core, noc_core.x))
+                        src_noc_y_per_core.append((output_core, noc_core.y))
+                        src_row_offset_per_core.append((output_core, row_offset))
+                else:
+                    # Use default mapping: output core i reads from input core (i // rows_per_input_core), row (i % rows_per_input_core)
+                    for i, output_core in enumerate(scatter_output_core_list):
+                        input_core_idx = i // scatter_input_rows_per_core
+                        row_offset = i % scatter_input_rows_per_core
+
+                        input_core = scatter_input_core_list[input_core_idx]
+                        noc_core = device.worker_core_from_logical_core(input_core)
+
+                        src_noc_x_per_core.append((output_core, noc_core.x))
+                        src_noc_y_per_core.append((output_core, noc_core.y))
+                        src_row_offset_per_core.append((output_core, row_offset))
+
+                # Add per-core compile-time args for scatter
+                per_core_ct_args_scatter = [
+                    PerCoreCompileTimeDescriptor(
+                        name="scatter_src_noc_x",
+                        values=src_noc_x_per_core,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        name="scatter_src_noc_y",
+                        values=src_noc_y_per_core,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        name="scatter_src_row_offset",
+                        values=src_row_offset_per_core,
+                    ),
+                ]
+
+                # Add per-core args to scatter output cores (NCRISC only for scatter)
+                kernel_result.kernels[scatter_output_group.ncrisc_kernel_index].per_core_compile_time_args.extend(
+                    per_core_ct_args_scatter
+                )
 
                 # Get kernel indices for runtime args
                 ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
@@ -838,6 +953,7 @@ class PostSDPA:
         # Execute generic_op
         io_tensors = [
             input_tensor_mesh,
+            scatter_output_tensor_mesh,
             weights1_tensor,
             weights2_tensor,
             gather1_output_tensor,

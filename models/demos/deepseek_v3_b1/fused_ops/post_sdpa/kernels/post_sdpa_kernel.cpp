@@ -5,7 +5,8 @@
 // Single kernel file, compiles correctly for all RISC cores
 // Each RISC has its own CTArgs struct with different compile-time arg layout
 //
-// Implements: Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce
+// Implements: ScatterHeads + Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce
+// - ScatterHeads: Scatter [8, 512] from 8 input cores to [1, 512] on 64 output cores (8x8)
 // - Matmul1: [1, 512] x [512, 128] -> [1, 128] on 64 cores (8x8)
 // - Gather1: Collect [1, 128] from 64 cores to [1, 8192] on gather core
 // - Mcast: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular)
@@ -22,6 +23,7 @@
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
+#include "../../../unified_kernels/scatter_heads.hpp"
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/gather.hpp"
 #include "../../../unified_kernels/mcast.hpp"
@@ -30,7 +32,9 @@
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
-    // First matmul on 8x8 grid
+    // Scatter output cores (8x8 grid = 64 cores) - receive scattered data
+    static constexpr bool is_scatter_output_core = get_named_compile_time_arg_val("is_scatter_output_core") == 1;
+    // First matmul on 8x8 grid (same as scatter output cores)
     static constexpr bool is_matmul1_core = get_named_compile_time_arg_val("is_matmul1_core") == 1;
     // Gather core (12, 9) - receives gather1, sends mcast, receives gather2, CCL receiver
     static constexpr bool is_gather_receiver_core = get_named_compile_time_arg_val("is_gather_receiver_core") == 1;
@@ -47,6 +51,7 @@ struct Core {
 void kernel_main() {
 // ============================================================================
 // NCRISC (Reader)
+// - ScatterHeads reader (8x8 output cores): read scattered data from input cores
 // - Matmul1 reader (8x8 grid): setup sharded buffers
 // - Gather1 sender (8x8 grid): send matmul1 output to gather core
 // - Mcast receiver (13x10 grid = 130 cores): receive mcast data
@@ -56,6 +61,18 @@ void kernel_main() {
 // - CCL receiver (12, 9): wait for remote data, push to compute
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
+    // ScatterHeads CTArgs
+    using ScatterHeadsCTArgs = deepseek_b1_ops::ScatterHeads::ReaderCTArgs;
+    deepseek_b1_ops::ScatterHeads::ReaderArgs scatter_args{
+        get_named_compile_time_arg_val("scatter_src_noc_x"),
+        get_named_compile_time_arg_val("scatter_src_noc_y"),
+        get_named_compile_time_arg_val("scatter_src_addr"),
+        get_named_compile_time_arg_val("scatter_src_row_offset"),
+        get_named_compile_time_arg_val("scatter_data_size_bytes"),
+        get_named_compile_time_arg_val("scatter_dst_cb"),
+        get_named_compile_time_arg_val("scatter_dst_num_pages"),
+    };
+
     // Matmul1 CTArgs
     using Matmul1CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul1_args{};
@@ -133,6 +150,10 @@ void kernel_main() {
 // - CCL sender (11, 9): send gather2 output via fabric
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
+    // ScatterHeads CTArgs (BRISC is no-op for scatter)
+    using ScatterHeadsCTArgs = deepseek_b1_ops::ScatterHeads::WriterCTArgs;
+    deepseek_b1_ops::ScatterHeads::WriterArgs scatter_args{};
+
     // Matmul1/2 CTArgs (BRISC is no-op for matmul)
     using Matmul1CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     using Matmul2CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
@@ -203,6 +224,10 @@ void kernel_main() {
 // - CCL receiver compute (gather core): reduction (local + remote + residual)
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
+    // ScatterHeads CTArgs (TRISC is no-op for scatter)
+    using ScatterHeadsCTArgs = deepseek_b1_ops::ScatterHeads::ComputeCTArgs;
+    deepseek_b1_ops::ScatterHeads::ComputeArgs scatter_args{};
+
     // Matmul1 CTArgs
     using Matmul1CTArgs =
         deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul1_out_w_per_core")>;
@@ -267,6 +292,16 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(matmul2_in1, matmul2_k_num_tiles * matmul2_out_w_per_core);
     }
 #endif
+
+    // ========================================================================
+    // ScatterHeads: Scatter [8, 512] from 8 input cores to [1, 512] per core (8x8 grid = 64 output cores)
+    // Each output core reads 1 row from its assigned input core
+    // ========================================================================
+    {
+        DeviceZoneScopedN("SCATTER_HEADS");
+        deepseek_b1_ops::ScatterHeads::Op<Core::is_scatter_output_core> scatter;
+        scatter(scatter_args);
+    }
 
     // ========================================================================
     // Matmul1: [1, 512] x [512, 128] -> [1, 128] per core (8x8 grid)

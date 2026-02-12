@@ -6,6 +6,7 @@
 TTNN Post SDPA Fused Op Test with CCL All-Reduce
 
 Tests the full post_sdpa fused operation with CCL all-reduce which implements:
+- ScatterHeads: Scatter [8, 512] from 8 input cores to [1, 512] on 64 cores (8x8)
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
 - Gather1: Collect to [1, 8192] on gather core (12, 9)
 - Mcast: Broadcast [1, 8192] to 130 cores (13x10 rectangular grid)
@@ -100,7 +101,14 @@ def test_post_sdpa(
     # ========================================================================
     # Grid configuration
     # ========================================================================
-    # Matmul1 grid: 8x8 = 64 cores
+    # Scatter input grid: 8 cores (could be any layout, e.g., 2x4, 8x1, etc.)
+    # For this test, use 8x1 (8 cores in a row)
+    SCATTER_INPUT_GRID_X = 8
+    SCATTER_INPUT_GRID_Y = 1
+    num_scatter_input_cores = SCATTER_INPUT_GRID_X * SCATTER_INPUT_GRID_Y  # 8
+    scatter_rows_per_core = 8  # Each input core has 8 rows
+
+    # Matmul1 / Scatter output grid: 8x8 = 64 cores
     MATMUL1_GRID_X = 8
     MATMUL1_GRID_Y = 8
     num_matmul1_cores = MATMUL1_GRID_X * MATMUL1_GRID_Y  # 64
@@ -119,6 +127,9 @@ def test_post_sdpa(
     n2_per_core = output_size // num_matmul2_cores  # 7168 / 112 = 64
 
     logger.info(f"Testing full post_sdpa fused op with CCL all-reduce:")
+    logger.info(
+        f"  ScatterHeads: [{scatter_rows_per_core}, {K1}] on {num_scatter_input_cores} cores -> [{M}, {K1}] on {num_matmul1_cores} cores"
+    )
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
     logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (13x10 grid)")
     logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
@@ -126,6 +137,9 @@ def test_post_sdpa(
     logger.info(f"  Output: [{M}, {output_size}] (fuse_residual_add={fuse_residual_add})")
 
     # Create core grids
+    scatter_input_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(SCATTER_INPUT_GRID_X - 1, SCATTER_INPUT_GRID_Y - 1))]
+    )
     matmul1_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MATMUL1_GRID_X - 1, MATMUL1_GRID_Y - 1))]
     )
@@ -153,15 +167,16 @@ def test_post_sdpa(
     # Weights2: [8192, 7168]
     torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
 
-    # Input per device: [1, 512]
+    # Input per device: [64, 512] total (for scatter to distribute)
+    # This will be sharded across 8 input cores, each with [8, 512]
     device_inputs = []
-    device_input_replicated = []  # For sharding
+    device_input_for_scatter = []  # For scatter input sharding
     for device_idx in range(num_devices):
         torch_input_single = torch.randn((M, K1), dtype=torch.bfloat16)
         device_inputs.append(torch_input_single)
-        # Replicate for matmul1 cores
-        torch_input = torch_input_single.repeat(num_matmul1_cores, 1)  # [64, 512]
-        device_input_replicated.append(torch_input)
+        # Replicate for scatter input cores: [8, 512] per core × 8 cores = [64, 512] total
+        torch_input_scatter = torch_input_single.repeat(num_matmul1_cores, 1)  # [64, 512]
+        device_input_for_scatter.append(torch_input_scatter)
 
     # Residual tensor (optional, shared across devices)
     if fuse_residual_add:
@@ -186,29 +201,62 @@ def test_post_sdpa(
     mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
 
     # ========================================================================
-    # Create input tensor (height-sharded across matmul1 cores)
-    # Each core gets [1, 512]
+    # Create scatter input tensor (height-sharded across 8 input cores)
+    # Each input core gets [8, 512] (8 rows to be scattered to 8 different output cores)
     # ========================================================================
-    input_shard_shape = (M, K1)  # [1, 512] per core
-    input_shard_spec = ttnn.ShardSpec(
-        matmul1_grid,
-        input_shard_shape,
+    scatter_input_shard_shape = (scatter_rows_per_core, K1)  # [8, 512] per core
+    scatter_input_shard_spec = ttnn.ShardSpec(
+        scatter_input_grid,
+        scatter_input_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    scatter_input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, scatter_input_shard_spec
+    )
 
     # Concatenate per-device inputs for mesh tensor
-    mesh_input_torch = torch.cat(device_input_replicated, dim=0)  # [num_devices * 64, 512]
+    mesh_input_torch = torch.cat(device_input_for_scatter, dim=0)  # [num_devices * 64, 512]
     ttnn_input = ttnn.from_torch(
         mesh_input_torch,
         device=submesh,
         dtype=in0_dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=input_mem_config,
+        memory_config=scatter_input_mem_config,
         tile=a_tile,
         mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
     )
-    logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
+    logger.info(
+        f"Created scatter input tensor: shard {scatter_input_shard_shape} on {num_scatter_input_cores} cores per device"
+    )
+
+    # ========================================================================
+    # Create matmul1 input tensor = scatter output (height-sharded across 64 matmul1 cores)
+    # Each core gets [1, 512]
+    # ========================================================================
+    scatter_output_shard_shape = (M, K1)  # [1, 512] per core
+    scatter_output_shard_spec = ttnn.ShardSpec(
+        matmul1_grid,
+        scatter_output_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    scatter_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, scatter_output_shard_spec
+    )
+
+    torch_scatter_output_zeros = torch.zeros((num_matmul1_cores, K1), dtype=torch.bfloat16)
+    mesh_scatter_output_torch = torch.cat([torch_scatter_output_zeros] * num_devices, dim=0)
+    ttnn_scatter_output = ttnn.from_torch(
+        mesh_scatter_output_torch,
+        device=submesh,
+        dtype=in0_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=scatter_output_mem_config,
+        tile=a_tile,
+        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+    )
+    logger.info(
+        f"Created scatter output tensor (matmul1 input): shard {scatter_output_shard_shape} on {num_matmul1_cores} cores per device"
+    )
 
     # ========================================================================
     # Create weights1 tensor (width-sharded across matmul1 cores, replicated)
@@ -399,12 +447,14 @@ def test_post_sdpa(
         ttnn_input,
         ttnn_weights1,
         ttnn_weights2,
+        ttnn_scatter_output,
         ttnn_gather1_output,
         ttnn_gather2_output,
         ttnn_ccl_intermediate,
         ttnn_output,
         semaphores,
         cluster_axis=cluster_axis,
+        core_mapping=None,  # Use default mapping
         residual_tensor_mesh=ttnn_residual,
         fp32_dest_acc_en=False,
     )
