@@ -134,7 +134,7 @@ void kernel_main() {
                                         global_element_start_column_input;
 
             bool block_is_in_output_tensor = true;
-            for (size_t i = tensor_rank - 1; i >= 0; --i) {
+            for (int i = tensor_rank - 1; i >= 0; --i) {
                 uint32_t curr_dim = element_id_input % input_tensor_shape[i];
                 global_coord[i] = curr_dim;
                 if (curr_dim >= output_tensor_shape[i]) {
@@ -151,7 +151,7 @@ void kernel_main() {
 
             uint32_t element_id_output = 0;
             uint32_t stride = 1;
-            for (size_t i = tensor_rank - 1; i >= 0; --i) {
+            for (int i = tensor_rank - 1; i >= 0; --i) {
                 element_id_output += global_coord[i] * stride;
                 stride *= output_tensor_shape[i];
             }
