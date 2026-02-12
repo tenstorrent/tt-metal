@@ -262,13 +262,13 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
     gate_up_program_config = _make_sparse_matmul_program_config(
         device=device,
         out_features=int(hparams.moe_intermediate_size),
-        in0_block_w=1,
+        in0_block_w=8,
         per_core_M=per_core_M,
     )
     down_program_config = _make_sparse_matmul_program_config(
         device=device,
         out_features=int(hparams.hidden_size),
-        in0_block_w=1,
+        in0_block_w=8,
         per_core_M=per_core_M,
     )
 
@@ -281,7 +281,7 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
         gate_up_fused_program_config = _make_sparse_matmul_program_config(
             device=device,
             out_features=int(hparams.moe_intermediate_size) * 2,
-            in0_block_w=1,
+            in0_block_w=8,
             per_core_M=per_core_M,
         )
 
@@ -568,9 +568,13 @@ def moe_dense_experts_forward_decode_tt(
             expert_outputs.append(out)
 
         # `concat` may return a view-like tensor; materialize before freeing sources.
-        expert_output_view = ttnn.concat(expert_outputs, dim=0, memory_config=memory_config)  # [E_local,1,1,H]
-        expert_output = ttnn.clone(expert_output_view, memory_config=memory_config)
-        ttnn.deallocate(expert_output_view, force=False)
+        _skip_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
+        if _skip_clones:
+            expert_output = ttnn.concat(expert_outputs, dim=0, memory_config=memory_config)  # [E_local,1,1,H]
+        else:
+            expert_output_view = ttnn.concat(expert_outputs, dim=0, memory_config=memory_config)  # [E_local,1,1,H]
+            expert_output = ttnn.clone(expert_output_view, memory_config=memory_config)
+            ttnn.deallocate(expert_output_view, force=False)
         for t in expert_outputs:
             ttnn.deallocate(t, force=False)
 
@@ -691,6 +695,7 @@ def moe_sparse_experts_forward_tt(
     - The older all-to-all dispatch/combine path remains available behind
       `GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL=a2a` for future DP-sharded inputs.
     """
+    skip_defensive_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
     packer_l1_acc = _env_bool("GLM4_MOE_LITE_PACKER_L1_ACC", default=False)
     # Default to BF16-speed settings for sparse MoE. Users can opt back into
     # higher-precision accumulation via env overrides if needed for debugging.
@@ -741,20 +746,25 @@ def moe_sparse_experts_forward_tt(
         if pad_tokens:
             # IMPORTANT: `ttnn.pad` can return a view that aliases the input buffer.
             # Materialize with `ttnn.clone` before deallocating the original tensor.
-            hs_padded_view = ttnn.pad(hidden_states, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-            hs_padded = ttnn.clone(hs_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(hidden_states, force=False)
-            hidden_states = hs_padded
+            if skip_defensive_clones:
+                hidden_states = ttnn.pad(hidden_states, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+                topk_expert_indices = ttnn.pad(topk_expert_indices, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0)
+                topk_expert_weights = ttnn.pad(topk_expert_weights, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+            else:
+                hs_padded_view = ttnn.pad(hidden_states, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+                hs_padded = ttnn.clone(hs_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(hidden_states, force=False)
+                hidden_states = hs_padded
 
-            idx_padded_view = ttnn.pad(topk_expert_indices, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0)
-            idx_padded = ttnn.clone(idx_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(topk_expert_indices, force=False)
-            topk_expert_indices = idx_padded
+                idx_padded_view = ttnn.pad(topk_expert_indices, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0)
+                idx_padded = ttnn.clone(idx_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(topk_expert_indices, force=False)
+                topk_expert_indices = idx_padded
 
-            w_padded_view = ttnn.pad(topk_expert_weights, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-            w_padded = ttnn.clone(w_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(topk_expert_weights, force=False)
-            topk_expert_weights = w_padded
+                w_padded_view = ttnn.pad(topk_expert_weights, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+                w_padded = ttnn.clone(w_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(topk_expert_weights, force=False)
+                topk_expert_weights = w_padded
 
             total_tokens += pad_tokens
             tokens_per_device += pad_tokens
@@ -992,17 +1002,28 @@ def moe_sparse_experts_forward_tt(
         end_up = [int(w1w3_out.shape[i]) for i in range(ndim)]
 
         # `slice` may return views that alias the fused buffer; clone before freeing.
-        gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
-        up_view = ttnn.slice(w1w3_out, begin_up, end_up)
-        w1_out = ttnn.clone(gate_view, memory_config=sparse_mc)
-        w3_out = ttnn.clone(up_view, memory_config=sparse_mc)
-        ttnn.deallocate(w1w3_out, force=False)
+        if skip_defensive_clones:
+            w1_out = ttnn.slice(w1w3_out, begin_gate, end_gate)
+            w3_out = ttnn.slice(w1w3_out, begin_up, end_up)
+            # w1w3_out stays alive — deallocated after silu/mul consume the slices
+        else:
+            gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
+            up_view = ttnn.slice(w1w3_out, begin_up, end_up)
+            w1_out = ttnn.clone(gate_view, memory_config=sparse_mc)
+            w3_out = ttnn.clone(up_view, memory_config=sparse_mc)
+            ttnn.deallocate(w1w3_out, force=False)
 
         gate = ttnn.silu(w1_out)
         ttnn.deallocate(w1_out, force=False)
         x_ff = ttnn.mul(gate, w3_out, memory_config=sparse_mc)
         ttnn.deallocate(gate, force=False)
         ttnn.deallocate(w3_out, force=False)
+        # Deferred w1w3_out deallocation: silu/mul consumed the slice views.
+        if skip_defensive_clones:
+            try:
+                ttnn.deallocate(w1w3_out, force=False)
+            except Exception:
+                pass
     else:
         # Separate gate (w1) and up (w3) projections.
         w1_out = ttnn.sparse_matmul(
@@ -1062,10 +1083,14 @@ def moe_sparse_experts_forward_tt(
 
     # `permute` can behave like a view (no refcounting). Materialize before freeing
     # the source to avoid intermittent use-after-free corruption during decode.
-    expert_output_view = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))  # [E, num_blocks, block, H]
-    expert_output = ttnn.clone(expert_output_view, memory_config=memory_config)
-    ttnn.deallocate(expert_output_view, force=False)
-    ttnn.deallocate(expert_output_sparse, force=False)
+    if skip_defensive_clones:
+        expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))  # [E, num_blocks, block, H]
+        # expert_output_sparse stays alive — consumed by reshape/mul downstream
+    else:
+        expert_output_view = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))  # [E, num_blocks, block, H]
+        expert_output = ttnn.clone(expert_output_view, memory_config=memory_config)
+        ttnn.deallocate(expert_output_view, force=False)
+        ttnn.deallocate(expert_output_sparse, force=False)
     expert_output = ttnn.reshape(
         expert_output,
         shape=(int(rt.num_experts_per_device), 1, total_tokens, hidden_size),
@@ -1089,6 +1114,11 @@ def moe_sparse_experts_forward_tt(
             output_shard_dim=rt.output_shard_dim,
         )
         ttnn.deallocate(expert_output, force=False)
+        if skip_defensive_clones:
+            try:
+                ttnn.deallocate(expert_output_sparse, force=False)
+            except Exception:
+                pass
         ttnn.deallocate(dispatch_metadata, force=False)
 
         # STEP 7: Apply routing weights and reduce across K.
@@ -1136,6 +1166,11 @@ def moe_sparse_experts_forward_tt(
 
     weighted = ttnn.mul(expert_output, local_weights_tiled, memory_config=memory_config)
     ttnn.deallocate(expert_output, force=False)
+    if skip_defensive_clones:
+        try:
+            ttnn.deallocate(expert_output_sparse, force=False)
+        except Exception:
+            pass
     ttnn.deallocate(local_weights_tiled, force=False)
     output = ttnn.sum(weighted, dim=0, keepdim=True)
     ttnn.deallocate(weighted, force=False)
@@ -1155,10 +1190,13 @@ def moe_sparse_experts_forward_tt(
     if unpadded_total_tokens != total_tokens:
         # `slice` may return a view that aliases `output` (no refcounting).
         # Materialize before freeing the padded tensor to avoid corruption on decode.
-        output_view = ttnn.slice(output, [0, 0, 0, 0], [1, 1, int(unpadded_total_tokens), hidden_size])
-        output_sliced = ttnn.clone(output_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(output, force=False)
-        output = output_sliced
+        if skip_defensive_clones:
+            output = ttnn.slice(output, [0, 0, 0, 0], [1, 1, int(unpadded_total_tokens), hidden_size])
+        else:
+            output_view = ttnn.slice(output, [0, 0, 0, 0], [1, 1, int(unpadded_total_tokens), hidden_size])
+            output_sliced = ttnn.clone(output_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(output, force=False)
+            output = output_sliced
 
     return output
 

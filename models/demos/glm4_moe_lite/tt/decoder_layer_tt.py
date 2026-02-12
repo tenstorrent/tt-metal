@@ -222,6 +222,7 @@ def _shard_kvpe_update_tensor(
     kvpe_new: ttnn.Tensor,
     batch: int,
     kvpe_dim: int,
+    skip_defensive_clones: bool = False,
 ) -> ttnn.Tensor:
     """Transform KVPE update tensor into the sharded layout required by paged_update_cache."""
     # `paged_update_cache` expects the update tensor to be sharded.
@@ -229,13 +230,19 @@ def _shard_kvpe_update_tensor(
     # Correctness: `ttnn.pad` and some view-like ops can alias the input buffer without
     # increasing refcounts. Make the padded/permuted update tensor own its buffer to
     # avoid intermittent use-after-free corruption in decode.
-    kvpe_padded_view = ttnn.pad(kvpe_new, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # [1,32,B,kvpe_dim]
-    kvpe_padded = ttnn.clone(kvpe_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # NOTE: kvpe_padded_view may alias kvpe_new; do not deallocate it separately.
-    kvpe_perm_view = ttnn.permute(kvpe_padded, (0, 2, 1, 3))  # [1,B,32,kvpe_dim]
-    kvpe_perm = ttnn.clone(kvpe_perm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # NOTE: kvpe_perm_view may alias kvpe_padded; do not deallocate it separately.
-    ttnn.deallocate(kvpe_padded, force=False)
+    if skip_defensive_clones:
+        # Skip clones: views flow directly through pad -> permute -> shard.
+        # kvpe_new must stay alive until paged_update_cache consumes the sharded result.
+        kvpe_padded = ttnn.pad(kvpe_new, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # [1,32,B,kvpe_dim]
+        kvpe_perm = ttnn.permute(kvpe_padded, (0, 2, 1, 3))  # [1,B,32,kvpe_dim]
+    else:
+        kvpe_padded_view = ttnn.pad(kvpe_new, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # [1,32,B,kvpe_dim]
+        kvpe_padded = ttnn.clone(kvpe_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # NOTE: kvpe_padded_view may alias kvpe_new; do not deallocate it separately.
+        kvpe_perm_view = ttnn.permute(kvpe_padded, (0, 2, 1, 3))  # [1,B,32,kvpe_dim]
+        kvpe_perm = ttnn.clone(kvpe_perm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # NOTE: kvpe_perm_view may alias kvpe_padded; do not deallocate it separately.
+        ttnn.deallocate(kvpe_padded, force=False)
 
     # Shard across the (B*32) height dimension so each user gets one 32xkvpe_dim shard.
     grid_size = device.compute_with_storage_grid_size()
@@ -247,10 +254,13 @@ def _shard_kvpe_update_tensor(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    kvpe_sharded_view = ttnn.to_memory_config(kvpe_perm, kvpe_sharded_cfg)
-    kvpe_sharded = ttnn.clone(kvpe_sharded_view, memory_config=kvpe_sharded_cfg)
-    # NOTE: kvpe_sharded_view may alias kvpe_perm; do not deallocate it separately.
-    ttnn.deallocate(kvpe_perm, force=False)
+    if skip_defensive_clones:
+        kvpe_sharded = ttnn.to_memory_config(kvpe_perm, kvpe_sharded_cfg)
+    else:
+        kvpe_sharded_view = ttnn.to_memory_config(kvpe_perm, kvpe_sharded_cfg)
+        kvpe_sharded = ttnn.clone(kvpe_sharded_view, memory_config=kvpe_sharded_cfg)
+        # NOTE: kvpe_sharded_view may alias kvpe_perm; do not deallocate it separately.
+        ttnn.deallocate(kvpe_perm, force=False)
     return kvpe_sharded
 
 
@@ -397,6 +407,52 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # Use L1 for decode intermediate activations when enabled (reduces DRAM round-trips).
     decode_act_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("GLM4_MOE_LITE_DECODE_L1_ACT", "").strip() == "1" else None
 
+    # ---- Explicit 1D matmul program config (zero-overhead decode optimization) ----
+    # When enabled, passes MatmulMultiCoreReuseMultiCast1DProgramConfig to ttnn.linear
+    # calls with M <= 1 tile (decode path). This tells the hardware to distribute the
+    # output N dimension across more cores without requiring any weight resharding.
+    explicit_prog_cfg = _env_bool("GLM4_MOE_LITE_EXPLICIT_PROG_CFG")
+    skip_defensive_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
+
+    def _compute_1d_prog_cfg(b_weight: ttnn.Tensor, m_total: int) -> Any:
+        """Compute 1D multicast program config for decode matmuls."""
+        K = int(b_weight.shape[-2])
+        N = int(b_weight.shape[-1])
+        m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+        k_tiles = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        n_tiles = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        grid = device.compute_with_storage_grid_size()
+        grid_x, grid_y = int(grid.x), int(grid.y)
+        num_cores = grid_x * grid_y
+
+        if n_tiles < num_cores:
+            # Reduce grid to avoid idle cores (following reference pattern).
+            grid_y = max(1, n_tiles // grid_x)
+            num_cores = grid_x * grid_y
+
+        per_core_N = max(1, math.ceil(n_tiles / num_cores))
+
+        # in0_block_w must divide k_tiles exactly.  Find the largest valid
+        # divisor of k_tiles up to 4 (e.g. kv_lora_rank=576 → k_tiles=18,
+        # 18%4≠0 so we fall back to 2 since 18%2==0).
+        in0_bw = 1
+        for candidate in (4, 3, 2):
+            if k_tiles % candidate == 0:
+                in0_bw = candidate
+                break
+
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=in0_bw,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=m_tiles,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
     def _mlp_linear(a: ttnn.Tensor, b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None) -> ttnn.Tensor:
         kwargs: dict[str, object] = {}
         mc = memory_config if memory_config is not None else decode_act_mc
@@ -404,6 +460,18 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             kwargs["memory_config"] = mc
         if mlp_compute_kernel_config is not None:
             kwargs["compute_kernel_config"] = mlp_compute_kernel_config
+        if explicit_prog_cfg:
+            # Only apply 1D prog cfg when M fits in a single tile (decode case)
+            # AND weight tensor has batch==1.  Skip for 4D matmuls (e.g. kv_b1/kv_b2
+            # with [1,H,B,K] inputs and per-head weights with H>1 batch dim).
+            m_total = 1
+            for i in range(len(a.shape) - 1):
+                m_total *= int(a.shape[i])
+            b_batch = 1
+            for i in range(len(b.shape) - 2):
+                b_batch *= int(b.shape[i])
+            if m_total <= ttnn.TILE_SIZE and b_batch == 1:
+                kwargs["program_config"] = _compute_1d_prog_cfg(b, m_total)
         return ttnn.linear(a, b, **kwargs)
 
     tp_axis = _tp_cluster_axis(device)
@@ -436,9 +504,14 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # DRAM banks), and matmuls use a DRAM-sharded program config that reads weights with
     # full DRAM bandwidth. This is the key optimization from DeepSeek V3 for M=1 decode.
     dram_sharded_enabled = _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS")
-    dram_sharded_mlp = dram_sharded_enabled and _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_MLP")
+    dram_sharded_attn = dram_sharded_enabled and _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_ATTN")
+    # MLP DRAM sharding is ON by default when main flag is set; opt out with MLP=0.
+    dram_sharded_mlp = dram_sharded_enabled and os.environ.get("GLM4_MOE_LITE_DRAM_SHARDED_MLP", "1").strip() != "0"
+    # Standalone sharded MLP flag (no dependency on DRAM_SHARDED_WEIGHTS master switch).
+    sharded_mlp = _env_bool("GLM4_MOE_LITE_SHARDED_MLP")
+    dram_sharded_mlp = dram_sharded_mlp or sharded_mlp
 
-    if dram_sharded_enabled:
+    if dram_sharded_enabled or sharded_mlp:
         from models.demos.deepseek_v3.utils.config_helpers import (
             get_activation_sharding_core_counts_for_dram_matmul,
             get_dram_sharded_matmul_config,
@@ -570,7 +643,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
 
     def _attn_linear(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
         """Attention projection linear (2D weights only). Uses DRAM-sharded when enabled."""
-        if dram_sharded_enabled:
+        if dram_sharded_attn:
             if tp_enabled:
                 a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
                 out = _dram_sharded_linear(a_tp, b)
@@ -597,6 +670,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # ---- KVPE for new token -> update cache at cur_pos ----
     skip_kv_update = os.environ.get("GLM4_MOE_LITE_SKIP_KV_UPDATE", "").strip() == "1"
     q_a = None
+    qkv = None
     if not skip_kv_update:
         t0 = time.perf_counter() if profile is not None else 0.0
         kv = None
@@ -605,30 +679,45 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         if w_q_kv_a is not None:
             qkv = _attn_linear(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
 
-            # `slice` may return a view that aliases the `qkv` buffer (no refcounting).
-            # Materialize slices before freeing `qkv` to avoid intermittent corruption.
-            q_a_view = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
-            kv_view = ttnn.slice(
-                qkv,
-                [0, 0, 0, int(hparams.q_lora_rank)],
-                [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
-            )
-            q_a = ttnn.clone(q_a_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            kv = ttnn.clone(kv_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # NOTE: `q_a_view`/`kv_view` may alias `qkv`; do not deallocate them separately.
-            ttnn.deallocate(qkv, force=False)
-            qkv = None
+            if skip_defensive_clones:
+                # Skip clone: use slice results directly; keep qkv alive until q_a and kv are consumed.
+                q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
+                kv = ttnn.slice(
+                    qkv,
+                    [0, 0, 0, int(hparams.q_lora_rank)],
+                    [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
+                )
+                # qkv stays alive — deallocated later after q_a and kv are consumed
+            else:
+                # `slice` may return a view that aliases the `qkv` buffer (no refcounting).
+                # Materialize slices before freeing `qkv` to avoid intermittent corruption.
+                q_a_view = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
+                kv_view = ttnn.slice(
+                    qkv,
+                    [0, 0, 0, int(hparams.q_lora_rank)],
+                    [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
+                )
+                q_a = ttnn.clone(q_a_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                kv = ttnn.clone(kv_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # NOTE: `q_a_view`/`kv_view` may alias `qkv`; do not deallocate them separately.
+                ttnn.deallocate(qkv, force=False)
+                qkv = None
         else:
             kv = _attn_linear(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
 
         # `slice` may alias `kv`. Clone slices before freeing `kv`.
-        kv_nope_view = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
-        kv_rope_view = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
-        kv_nope = ttnn.clone(kv_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kv_rope = ttnn.clone(kv_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # NOTE: `kv_nope_view`/`kv_rope_view` may alias `kv`; do not deallocate them separately.
-        ttnn.deallocate(kv, force=False)
-        kv = None
+        if skip_defensive_clones:
+            kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
+            kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
+            # kv stays alive — deallocated after kv_nope and kv_rope are consumed by layernorm/RoPE/concat
+        else:
+            kv_nope_view = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
+            kv_rope_view = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
+            kv_nope = ttnn.clone(kv_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            kv_rope = ttnn.clone(kv_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # NOTE: `kv_nope_view`/`kv_rope_view` may alias `kv`; do not deallocate them separately.
+            ttnn.deallocate(kv, force=False)
+            kv = None
 
         kv_nope = w.kv_a_layernorm(kv_nope, mode="decode")
 
@@ -646,13 +735,19 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 is_decode_mode=False,
             )  # [1,1,B,rope_dim]
 
+        # Deferred kv deallocation: when skip_defensive_clones is True, kv_nope/kv_rope
+        # were views of kv. Now that layernorm and RoPE have consumed them, kv can be freed.
+        if kv is not None:
+            ttnn.deallocate(kv, force=False)
+            kv = None
+
         kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [1,1,B,kvpe_dim]
         ttnn.deallocate(kv_nope, force=False)
         ttnn.deallocate(kv_rope, force=False)
 
         # Important: paged_update_cache requires the update tensor to be BF16/FP32,
         # even if the cache itself is BF8.
-        kvpe_new_sharded = _shard_kvpe_update_tensor(device=device, kvpe_new=kvpe_new, batch=batch, kvpe_dim=kvpe_dim)
+        kvpe_new_sharded = _shard_kvpe_update_tensor(device=device, kvpe_new=kvpe_new, batch=batch, kvpe_dim=kvpe_dim, skip_defensive_clones=skip_defensive_clones)
 
         # Multi-device correctness: when operating on a MeshDevice, ensure the
         # update is applied on all mesh coordinates that hold a replica of the
@@ -698,6 +793,11 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     if q_a is None:
         q_a = _attn_linear(x, w.w_q_a)  # [1,1,B,q_lora_rank]
     q_a = w.q_a_layernorm(q_a, mode="decode")
+    # Deferred qkv deallocation: when skip_defensive_clones is True, q_a was a
+    # view of qkv. Now that q_a_layernorm has consumed it, qkv can be freed.
+    if qkv is not None:
+        ttnn.deallocate(qkv, force=False)
+        qkv = None
     q = _attn_linear(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
     ttnn.deallocate(q_a, force=False)
 
@@ -705,17 +805,26 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     q = ttnn.permute(q, (0, 2, 1, 3))  # [1,H,B,qk_head_dim]
 
     # `slice` may alias `q` (no refcounting). Clone slices before freeing `q`.
-    q_nope_view = ttnn.slice(q, [0, 0, 0, 0], [1, int(hparams.num_attention_heads), batch, int(hparams.qk_nope_head_dim)])
-    q_rope_view = ttnn.slice(
-        q,
-        [0, 0, 0, int(hparams.qk_nope_head_dim)],
-        [1, int(hparams.num_attention_heads), batch, int(hparams.qk_head_dim)],
-    )
-    q_nope = ttnn.clone(q_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    q_rope = ttnn.clone(q_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # NOTE: `q_nope_view`/`q_rope_view` may alias `q`; do not deallocate them separately.
-    ttnn.deallocate(q, force=False)
-    q = None
+    if skip_defensive_clones:
+        q_nope = ttnn.slice(q, [0, 0, 0, 0], [1, int(hparams.num_attention_heads), batch, int(hparams.qk_nope_head_dim)])
+        q_rope = ttnn.slice(
+            q,
+            [0, 0, 0, int(hparams.qk_nope_head_dim)],
+            [1, int(hparams.num_attention_heads), batch, int(hparams.qk_head_dim)],
+        )
+        # q stays alive — deallocated after q_nope and q_rope are consumed by kv_b1 matmul/RoPE
+    else:
+        q_nope_view = ttnn.slice(q, [0, 0, 0, 0], [1, int(hparams.num_attention_heads), batch, int(hparams.qk_nope_head_dim)])
+        q_rope_view = ttnn.slice(
+            q,
+            [0, 0, 0, int(hparams.qk_nope_head_dim)],
+            [1, int(hparams.num_attention_heads), batch, int(hparams.qk_head_dim)],
+        )
+        q_nope = ttnn.clone(q_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q_rope = ttnn.clone(q_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # NOTE: `q_nope_view`/`q_rope_view` may alias `q`; do not deallocate them separately.
+        ttnn.deallocate(q, force=False)
+        q = None
 
     use_tp_kv_b1 = tp_enabled
     if use_tp_kv_b1:
@@ -748,6 +857,12 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             ttnn.deallocate(sin_decode, force=False)
             ttnn.deallocate(trans_decode, force=False)
 
+    # Deferred q deallocation: when skip_defensive_clones is True, q_nope/q_rope
+    # were views of q. Now that kv_b1 matmul and RoPE have consumed them, q can be freed.
+    if q is not None:
+        ttnn.deallocate(q, force=False)
+        q = None
+
     q_kvpe = ttnn.concat([q_nope, q_rope], dim=-1)  # [1,H,B,kvpe_dim]
     ttnn.deallocate(q_nope, force=False)
     ttnn.deallocate(q_rope, force=False)
@@ -758,11 +873,15 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # ---- FlashMLA decode ----
     # `permute` may return a view that aliases `q_kvpe` (no refcounting). Clone the
     # permuted tensor before freeing `q_kvpe` to avoid use-after-free in attention.
-    q_for_decode_view = ttnn.permute(q_kvpe, (0, 2, 1, 3))  # [1,B,H,kvpe_dim]
-    q_for_decode = ttnn.clone(q_for_decode_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # NOTE: `q_for_decode_view` may alias `q_kvpe`; do not deallocate it separately.
-    ttnn.deallocate(q_kvpe, force=False)
-    q_kvpe = None
+    if skip_defensive_clones:
+        q_for_decode = ttnn.permute(q_kvpe, (0, 2, 1, 3))  # [1,B,H,kvpe_dim]
+        # q_kvpe may be aliased; deallocate after FlashMLA consumes q_for_decode
+    else:
+        q_for_decode_view = ttnn.permute(q_kvpe, (0, 2, 1, 3))  # [1,B,H,kvpe_dim]
+        q_for_decode = ttnn.clone(q_for_decode_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # NOTE: `q_for_decode_view` may alias `q_kvpe`; do not deallocate it separately.
+        ttnn.deallocate(q_kvpe, force=False)
+        q_kvpe = None
     _profile_add(profile, "q_path_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # MLA attention scores are computed from dot(q_kvpe, kvpe) where the dot-product
@@ -853,10 +972,13 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             use_height_and_width_as_shard_shape=True,
         )
 
-        q_for_decode_view = ttnn.to_memory_config(q_for_decode, q_mem_config)
-        q_for_decode_sharded = ttnn.clone(q_for_decode_view, memory_config=q_mem_config)
-        ttnn.deallocate(q_for_decode, force=False)
-        q_for_decode = q_for_decode_sharded
+        if skip_defensive_clones:
+            q_for_decode = ttnn.to_memory_config(q_for_decode, q_mem_config)
+        else:
+            q_for_decode_view = ttnn.to_memory_config(q_for_decode, q_mem_config)
+            q_for_decode_sharded = ttnn.clone(q_for_decode_view, memory_config=q_mem_config)
+            ttnn.deallocate(q_for_decode, force=False)
+            q_for_decode = q_for_decode_sharded
         flash_mla_memcfg = flash_mla_out_memcfg
     if os.environ.get("GLM4_MOE_LITE_DISABLE_FLASH_MLA_DECODE", "").strip() == "1":
         # Debug-only: bypass the FlashMLA decode kernel to isolate nondeterminism.
@@ -906,16 +1028,24 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             memory_config=flash_mla_memcfg,
         )  # [1,B,H_padded,kv_lora_rank]
     ttnn.deallocate(q_for_decode, force=False)
+    # Deferred q_kvpe deallocation: when skip_defensive_clones is True, q_for_decode
+    # was a permute view of q_kvpe. Now that FlashMLA has consumed it, q_kvpe can be freed.
+    if q_kvpe is not None:
+        ttnn.deallocate(q_kvpe, force=False)
+        q_kvpe = None
     _profile_add(profile, "flash_mla_decode_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     if shard_q and os.environ.get("GLM4_MOE_LITE_DISABLE_FLASH_MLA_DECODE", "").strip() != "1":
         # Bring-up convenience: reshard FlashMLA output back to DRAM interleaved
         # before slicing/permuting. This is not the fastest path, but it keeps
         # the downstream code unchanged while we validate correctness.
-        attn_latent_view = ttnn.to_memory_config(attn_latent, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_latent_dram = ttnn.clone(attn_latent_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(attn_latent, force=False)
-        attn_latent = attn_latent_dram
+        if skip_defensive_clones:
+            attn_latent = ttnn.to_memory_config(attn_latent, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            attn_latent_view = ttnn.to_memory_config(attn_latent, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_latent_dram = ttnn.clone(attn_latent_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(attn_latent, force=False)
+            attn_latent = attn_latent_dram
 
     # Slice padded heads back to num_heads.
     #
@@ -925,14 +1055,22 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # slice aliases the source buffer. Materialize the slice before freeing the
     # padded output.
     attn_latent_padded = attn_latent
-    attn_latent_view = ttnn.slice(
-        attn_latent_padded,
-        [0, 0, 0, 0],
-        [1, batch, int(hparams.num_attention_heads), int(hparams.kv_lora_rank)],
-    )
-    attn_latent = ttnn.clone(attn_latent_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # NOTE: attn_latent_view may alias attn_latent_padded; do not deallocate it separately.
-    ttnn.deallocate(attn_latent_padded, force=False)
+    if skip_defensive_clones:
+        attn_latent = ttnn.slice(
+            attn_latent_padded,
+            [0, 0, 0, 0],
+            [1, batch, int(hparams.num_attention_heads), int(hparams.kv_lora_rank)],
+        )
+        # attn_latent_padded stays alive — permute and kv_b2 matmul consume the slice view
+    else:
+        attn_latent_view = ttnn.slice(
+            attn_latent_padded,
+            [0, 0, 0, 0],
+            [1, batch, int(hparams.num_attention_heads), int(hparams.kv_lora_rank)],
+        )
+        attn_latent = ttnn.clone(attn_latent_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # NOTE: attn_latent_view may alias attn_latent_padded; do not deallocate it separately.
+        ttnn.deallocate(attn_latent_padded, force=False)
     attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
 
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -941,6 +1079,13 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     else:
         v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
     ttnn.deallocate(attn_latent, force=False)
+    # Deferred attn_latent_padded deallocation: when skip_defensive_clones is True,
+    # attn_latent was a chain of views from attn_latent_padded. Now consumed by kv_b2 matmul.
+    if skip_defensive_clones:
+        try:
+            ttnn.deallocate(attn_latent_padded, force=False)
+        except Exception:
+            pass
 
     v = ttnn.permute(v, (0, 2, 1, 3))  # [1,B,H,v_head_dim]
     v = ttnn.reshape(v, (1, batch, 1, int(hparams.num_attention_heads * hparams.v_head_dim)))
@@ -1024,11 +1169,14 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             # IMPORTANT: `ttnn.pad` can return a *view* that aliases the input buffer
             # (no refcounting). Materialize with `ttnn.clone` before deallocating the
             # original tensor, otherwise we get use-after-free in decode.
-            x_padded_view = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-            x_padded = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # NOTE: x_padded_view may alias `x`; do not deallocate it separately.
-            ttnn.deallocate(x, force=False)
-            x = x_padded
+            if skip_defensive_clones:
+                x = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+            else:
+                x_padded_view = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+                x_padded = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # NOTE: x_padded_view may alias `x`; do not deallocate it separately.
+                ttnn.deallocate(x, force=False)
+                x = x_padded
 
     # Shared expert (dense MLP).
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -1103,10 +1251,13 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     if pad_tokens:
         # `slice` may return a view that aliases `mlp_out` (no refcounting).
         # Materialize before freeing the padded tensor to avoid decode corruption.
-        mlp_out_view = ttnn.slice(mlp_out, [0, 0, 0, 0], [1, 1, tokens, int(hparams.hidden_size)])
-        mlp_out_sliced = ttnn.clone(mlp_out_view, memory_config=moe_decode_mc)
-        ttnn.deallocate(mlp_out, force=False)
-        mlp_out = mlp_out_sliced
+        if skip_defensive_clones:
+            mlp_out = ttnn.slice(mlp_out, [0, 0, 0, 0], [1, 1, tokens, int(hparams.hidden_size)])
+        else:
+            mlp_out_view = ttnn.slice(mlp_out, [0, 0, 0, 0], [1, 1, tokens, int(hparams.hidden_size)])
+            mlp_out_sliced = ttnn.clone(mlp_out_view, memory_config=moe_decode_mc)
+            ttnn.deallocate(mlp_out, force=False)
+            mlp_out = mlp_out_sliced
 
     x_mlp_out = residual + mlp_out
     ttnn.deallocate(mlp_out, force=False)
