@@ -8,7 +8,7 @@ from torch.nn import Conv1d
 from torch.nn import functional as F
 from torch.nn.utils.parametrizations import weight_norm
 
-from models.demos.rvc.reference.synthesizer.commons import fused_add_tanh_sigmoid_multiply, get_padding
+from models.demos.rvc.torch_impl.synthesizer.commons import fused_add_tanh_sigmoid_multiply, get_padding
 
 LRELU_SLOPE = 0.1
 

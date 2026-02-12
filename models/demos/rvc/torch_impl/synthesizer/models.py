@@ -10,8 +10,8 @@ from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn import functional as F
 from torch.nn.utils.parametrizations import weight_norm
 
-from models.demos.rvc.reference.synthesizer import attentions, modules
-from models.demos.rvc.reference.synthesizer.commons import sequence_mask
+from models.demos.rvc.torch_impl.synthesizer import attentions, modules
+from models.demos.rvc.torch_impl.synthesizer.commons import sequence_mask
 
 
 class TextEncoder(nn.Module):
