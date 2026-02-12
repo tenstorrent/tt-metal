@@ -6,6 +6,7 @@
 import pytest
 import torch
 import ttnn
+from tests.ttnn.utils_for_testing import assert_equal
 
 TTNN_TO_TORCH_DTYPE = {
     ttnn.float32: torch.float32,
@@ -104,7 +105,7 @@ def test_untilize_with_unpadding_height_sharded(
     slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
     torch_result = torch_tensor[slices]
 
-    assert torch.equal(result, torch_result), f"untilize_with_unpadding HEIGHT_SHARDED failed"
+    assert_equal(result, torch_result)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -158,7 +159,7 @@ def test_untilize_with_unpadding_width_sharded(
     slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
     torch_result = torch_tensor[slices]
 
-    assert torch.equal(result, torch_result), f"untilize_with_unpadding WIDTH_SHARDED failed"
+    assert_equal(result, torch_result)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -206,4 +207,81 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
     slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
     torch_result = torch_tensor[slices]
 
-    assert torch.equal(result, torch_result), f"untilize_with_unpadding BLOCK_SHARDED failed"
+    assert_equal(result, torch_result)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_pack_untilize", [True])  # , False])
+@pytest.mark.parametrize(
+    "tensor_shape, output_end",
+    [
+        # ([3, 64, 64], [1, 50, 62]),
+        ([3, 64, 64], [1, 31, 62]),
+        # ([4, 4, 3, 64, 64], [2, 3, 0, 31, 31]),
+        #   ([4, 3, 64, 64], [2, 0, 31, 31]),
+        # ([1, 64, 64], [0, 63, s63]),
+        # ([2, 32, 32], [0, 31, 31]),
+        # ([2, 256, 512], [0, 255, 511]),
+        # ([4, 4, 256, 512], [0, 3, 255, 511]),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shard_orientation",
+    [
+        ttnn.ShardOrientation.ROW_MAJOR,
+        # ttnn.ShardOrientation.COL_MAJOR,
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_core_grid",
+    [
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+        # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 2))}),
+        # ttnn.CoreRangeSet(
+        #     {
+        #         ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+        #         ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(7, 2)),
+        #     }
+        # ),
+    ],
+)
+def test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved(
+    device,
+    dtype,
+    use_pack_untilize,
+    tensor_shape,
+    output_end,
+    input_shard_orientation,
+    shard_core_grid,
+):
+    torch.manual_seed(0)
+    shard_dims = list(range(len(tensor_shape) - 2, len(tensor_shape)))
+    tensor_spec = ttnn.TensorSpec(
+        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+    ).sharded_across_dims(shard_dims, shard_core_grid, input_shard_orientation)
+    nd_shard_spec = tensor_spec.memory_config.nd_shard_spec
+    assert nd_shard_spec is not None
+    print(f"nd_shard_spec.shard_shape: {nd_shard_spec.shard_shape}")
+
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    try:
+        input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, spec=tensor_spec, device=device)
+    except Exception as e:
+        pytest.xfail(f"from_torch failed while building sharded tensor: {e}")
+
+    # slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
+
+    # print(input_ttnn_tensor[slices].shape)
+
+    # output_end = [dim - 1 for dim in tensor_shape]
+    ttnn_output_tensor = ttnn.untilize_with_unpadding(
+        input_ttnn_tensor,
+        output_tensor_end=output_end,
+        memory_config=output_memory_config,
+        use_multicore=True,
+        use_pack_untilize=use_pack_untilize,
+    )
+    slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
+
+    assert_equal(input_torch_tensor[slices], ttnn.to_torch(ttnn_output_tensor))

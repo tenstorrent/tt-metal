@@ -21,7 +21,10 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded untilize does not support sub core grid specification");
-        return UntilizeWithUnpaddingMultiCoreShardedProgramFactory{};
+        if (input.shard_spec().has_value()) {
+            return UntilizeWithUnpaddingMultiCoreShardedProgramFactory{};
+        }
+        return UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory{};
     }
     if (!operation_attributes.use_multicore) {
         return UntilizeWithUnpaddingSingleCoreProgramFactory{};
@@ -79,72 +82,76 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
         tt::constants::TILE_HW);
 
     if (input_tensor_a.memory_config().is_sharded()) {
-        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            TT_FATAL(
-                input_tensor_a.shard_spec().value().grid.ranges().size() == 1,
-                "Expected single grid range and got {}",
-                input_tensor_a.shard_spec().value().grid.ranges().size());
-            TT_FATAL(
-                operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-                "Output memory config layout must be INTERLEAVED for block sharded input but got {}",
-                operation_attributes.output_mem_config.memory_layout());
-            TT_FATAL(
-                input_tensor_a.physical_volume() /
-                        (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
-                    1,
-                "Can only write unbatched output interleaved");
-        } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            if (operation_attributes.output_mem_config.is_sharded()) {
+        if (input_tensor_a.shard_spec().has_value()) {
+            if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
                 TT_FATAL(
-                    operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-                    "Output memory config layout must be HEIGHT_SHARDED when output is sharded but got {}",
-                    operation_attributes.output_mem_config.memory_layout());
-            }
-            // What else?
-        } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            auto output_shape = compute_output_specs(operation_attributes, input).padded_shape();
-            for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
-                TT_FATAL(
-                    input_tensor_a.padded_shape()[i] == output_shape[i],
-                    "Input tensor padded shape[{}] ({}) must equal output shape[{}] ({})",
-                    i,
-                    input_tensor_a.padded_shape()[i],
-                    i,
-                    output_shape[i]);
-            }
-            if (operation_attributes.output_mem_config.is_sharded()) {
-                TT_FATAL(
-                    operation_attributes.output_mem_config.memory_layout() ==
-                        input_tensor_a.memory_config().memory_layout(),
-                    "Output memory config layout ({}) must match input tensor memory layout ({})",
-                    operation_attributes.output_mem_config.memory_layout(),
-                    input_tensor_a.memory_config().memory_layout());
-                TT_FATAL(
-                    input_tensor_a.padded_shape()[-1] == output_shape[-1] ||
-                        (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
-                         input_tensor_a.shard_spec().value().grid.num_cores()),
-                    "Input tensor width ({}) must equal output width ({}) or output width / shard width must equal num "
-                    "cores",
-                    input_tensor_a.padded_shape()[-1],
-                    output_shape[-1]);
-            } else {
+                    input_tensor_a.shard_spec().value().grid.ranges().size() == 1,
+                    "Expected single grid range and got {}",
+                    input_tensor_a.shard_spec().value().grid.ranges().size());
                 TT_FATAL(
                     operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-                    "Output memory config layout must be INTERLEAVED but got {}",
+                    "Output memory config layout must be INTERLEAVED for block sharded input but got {}",
                     operation_attributes.output_mem_config.memory_layout());
                 TT_FATAL(
                     input_tensor_a.physical_volume() /
                             (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
                         1,
                     "Can only write unbatched output interleaved");
-                TT_FATAL(
-                    input_tensor_a.padded_shape()[-1] - output_shape[-1] < input_tensor_a.shard_spec().value().shape[1],
-                    "Input tensor width difference ({}) must be less than shard width ({})",
-                    input_tensor_a.padded_shape()[-1] - output_shape[-1],
-                    input_tensor_a.shard_spec().value().shape[1]);
+            } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+                if (operation_attributes.output_mem_config.is_sharded()) {
+                    TT_FATAL(
+                        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                        "Output memory config layout must be HEIGHT_SHARDED when output is sharded but got {}",
+                        operation_attributes.output_mem_config.memory_layout());
+                }
+                // What else?
+            } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+                auto output_shape = compute_output_specs(operation_attributes, input).padded_shape();
+                for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
+                    TT_FATAL(
+                        input_tensor_a.padded_shape()[i] == output_shape[i],
+                        "Input tensor padded shape[{}] ({}) must equal output shape[{}] ({})",
+                        i,
+                        input_tensor_a.padded_shape()[i],
+                        i,
+                        output_shape[i]);
+                }
+                if (operation_attributes.output_mem_config.is_sharded()) {
+                    TT_FATAL(
+                        operation_attributes.output_mem_config.memory_layout() ==
+                            input_tensor_a.memory_config().memory_layout(),
+                        "Output memory config layout ({}) must match input tensor memory layout ({})",
+                        operation_attributes.output_mem_config.memory_layout(),
+                        input_tensor_a.memory_config().memory_layout());
+                    TT_FATAL(
+                        input_tensor_a.padded_shape()[-1] == output_shape[-1] ||
+                            (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
+                             input_tensor_a.shard_spec().value().grid.num_cores()),
+                        "Input tensor width ({}) must equal output width ({}) or output width / shard width must equal "
+                        "num "
+                        "cores",
+                        input_tensor_a.padded_shape()[-1],
+                        output_shape[-1]);
+                } else {
+                    TT_FATAL(
+                        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                        "Output memory config layout must be INTERLEAVED but got {}",
+                        operation_attributes.output_mem_config.memory_layout());
+                    TT_FATAL(
+                        input_tensor_a.physical_volume() /
+                                (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                            1,
+                        "Can only write unbatched output interleaved");
+                    TT_FATAL(
+                        input_tensor_a.padded_shape()[-1] - output_shape[-1] <
+                            input_tensor_a.shard_spec().value().shape[1],
+                        "Input tensor width difference ({}) must be less than shard width ({})",
+                        input_tensor_a.padded_shape()[-1] - output_shape[-1],
+                        input_tensor_a.shard_spec().value().shape[1]);
+                }
+            } else {
+                TT_THROW("Unsupported sharding scheme");
             }
-        } else {
-            TT_THROW("Unsupported sharding scheme");
         }
     } else {
         TT_FATAL(
