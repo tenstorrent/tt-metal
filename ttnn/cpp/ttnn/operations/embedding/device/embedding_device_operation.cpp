@@ -115,13 +115,10 @@ TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
 
     auto num_embedding_dims = weight_tensor.logical_shape()[-1];
 
-    std::cout << "[EmbeddingsDeviceOperation] input_tensor.logical_shape(): " << input_tensor.logical_shape()
-              << std::endl;
     ttsl::SmallVector<uint32_t> output_shape_vec = {
         input_tensor.logical_shape().begin(), input_tensor.logical_shape().end()};
     output_shape_vec.push_back(num_embedding_dims);
     ttnn::Shape output_shape(output_shape_vec);
-    std::cout << "[EmbeddingsDeviceOperation] output_shape: " << output_shape << std::endl;
 
     auto output_layout =
         (operation_attributes.tilized && input_tensor.layout() != Layout::TILE) ? Layout::TILE : Layout::ROW_MAJOR;
@@ -164,7 +161,6 @@ Tensor embedding(
         .optional_output_tensor = optional_output_tensor,
     };
 
-    std::cout << "[embedding] launch: " << std::endl;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

@@ -18,14 +18,11 @@ void kernel_main() {
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
 
-    // TensorAccessor page size must be aligned to tensor buffer alignment
-    // and must be modulo div by input_buf_alignment
+    // TensorAccessor page size is alignment-rounded (see embeddings_nd_sharded_program_factory)
+    // so small shard shapes work: matches buffer stride and ensures aligned NoC reads.
     const auto input = TensorAccessor(input_args, args.input_buffer_src_addr, c_args.input_page_size);
     const auto weights = TensorAccessor(weights_args, args.weight_buffer_src_addr, c_args.weight_stick_size);
     const auto output = TensorAccessor(output_args, args.output_buffer_src_addr, c_args.weight_stick_size);
-
-    // No element_size() function
-    // constexpr uint32_t input_block_size_bytes = input.dspec().shard_shape()[-1] * input.dspec().element_size();
 
     DPRINT << "start_shard_id: " << args.start_shard_id << ENDL();
     DPRINT << "num_shards: " << args.num_shards << ENDL();
@@ -53,9 +50,7 @@ void kernel_main() {
         for (auto input_page_iter = input_shard_pages.begin(); input_page_iter != input_shard_pages.end();
              ++input_page_iter) {
             DPRINT << "input_page_iter page_id: " << input_page_iter->page_id() << ENDL();
-            DPRINT << "input_page_iter noc_addr: " << input_page_iter->noc_addr() << ENDL();
 
-            // NoC address must be aligned to tensor buffer alignment, input_page_size
             noc_async_read(input_page_iter->noc_addr(), index_cb_addr, c_args.input_page_size);
             noc_async_read_barrier();
 
@@ -75,28 +70,3 @@ void kernel_main() {
 
     DPRINT << "ndsharding embedding DONE: " << ENDL();
 }
-
-//    uint32_t index_shard_size_bytes = input.dspec().shard_volume() * input_page_size;
-//     for (uint32_t shard_id = start_shard_id, shard_idx = 0; shard_idx < num_shards;
-//         ++shard_idx, shard_id += next_shard_offset) {
-//        DPRINT << "shard_id: " << shard_id << ENDL();
-//        //
-//        uint64_t input_noc_addr = input.get_shard_noc_addr(shard_id);
-//        uint64_t output_noc_addr = output.get_shard_noc_addr(shard_id);
-
-//        for (auto in_ofs = 0u; in_ofs < index_shard_size_bytes; in_ofs += input_page_size) {
-//            DPRINT << "in_ofs: " << in_ofs << ENDL();
-
-//            noc_async_read(input_noc_addr + in_ofs, index_cb_addr, input_page_size);  // no update to index_cb_ptr
-//            noc_async_read_barrier();
-
-//            for (uint32_t index = 0; index < elems_per_page; ++index, output_noc_addr += weight_stick_size) {
-//                DPRINT << "index: " << index << ENDL();
-//                input_token_t token = index_cb_ptr[index];
-//                DPRINT << "token: " << token << ENDL();
-//                uint64_t weight_noc_addr = get_token_noc_addr(token, weights);
-//                noc_async_read<weight_stick_size>(weight_noc_addr, output_noc_addr, weight_stick_size);
-//                noc_async_read_barrier();
-//            }
-//        }
-//    }

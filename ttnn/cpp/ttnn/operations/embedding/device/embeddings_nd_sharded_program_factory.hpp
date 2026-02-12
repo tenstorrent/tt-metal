@@ -12,10 +12,8 @@ namespace ttnn::prim {
 struct EmbeddingsNDShardedProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
-        tt::tt_metal::KernelHandle writer_kernel_id{};
         std::vector<tt::tt_metal::CoreCoord> cores;
         tt::tt_metal::CBHandle cb_out{};
-        bool output_sharded = false;
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
