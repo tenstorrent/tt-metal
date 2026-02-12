@@ -1,99 +1,126 @@
 # Hermetic Virtual Environment for Multi-Host
 
-This document describes the hermetic Python virtual environment design used for NFS, OpenMPI, and shared workspace scenarios in TT-Metal/TTNN multi-host clustering.
+This document describes how TT-Metal multi-host jobs use a relocatable and portable Python virtual environment across Docker, CI, and shared filesystem deployments.
 
-## Overview
+It is intended for:
+- developers running multi-host tests locally or on physical runners,
+- CI maintainers wiring workflows,
+- users consuming release images that need portable Python environments.
 
-The hermetic venv design enables:
+## Why This Exists
 
-- **Relocatable venvs** that work when copied from `/opt/venv` (Docker) to `./python_env` (shared NFS)
-- **POSIX sh compatibility** for `activate` (Docker/CI often use `/bin/sh`)
-- **Multi-host consistency** when multiple nodes access the same workspace via NFS
+Multi-host runs often execute from a shared workspace where:
+- the venv is copied from `/opt/venv` into a workspace path such as `./python_env`,
+- shells differ (`bash` vs POSIX `sh`),
+- Python interpreter symlink targets may not be valid on every host.
 
-## Architecture
+The hermetic venv flow addresses these issues by combining:
+- relocatable uv environments,
+- optional POSIX-compatible activation patching,
+- optional interpreter bundling for maximum portability,
+- lock-safe setup in shared multi-host environments.
 
-```mermaid
-flowchart TB
-    subgraph Build [Build Phase]
-        create_venv[create_venv.sh]
-        docker_build[Dockerfile]
-        uv_venv[uv venv --link-mode copy]
-        bundle[bundle_python_into_venv.sh]
-        patch[patch_activate_posix.sh]
-    end
-    subgraph Runtime [Runtime - Multi-Host]
-        setup[setup_shared_venv.sh]
-        copy[Copy /opt/venv to python_env]
-        bundle_runtime[Bundle if needed]
-        patch_runtime[Re-patch activate]
-        tt_run[tt-run]
-        mpi[mpirun -x PATH -x VIRTUAL_ENV]
-    end
-    create_venv --> uv_venv
-    uv_venv --> patch
-    docker_build --> uv_venv
-    setup --> copy --> bundle_runtime --> patch_runtime
-    tt_run --> mpi
-```
+## Architecture Overview
 
-## When to Use `--bundle-python` vs `--link-mode copy`
+1. Build or image stage creates `/opt/venv` with uv (`--relocatable`, `--link-mode copy`).
+2. `scripts/patch_activate_posix.sh` (optional) patches `bin/activate` for POSIX `sh` fallback behavior.
+3. Runtime multi-host setup copies `/opt/venv` to `./python_env` using `tests/scripts/multihost/setup_shared_venv.sh`.
+4. Setup script optionally bundles Python into the copied venv when needed.
+5. Caller activates via `eval "$(setup_shared_venv.sh --activate)"`.
+6. `tt-run` inherits the active `VIRTUAL_ENV`, `PATH`, and other environment variables needed for remote dispatch.
 
-| Scenario | Recommendation |
-|----------|----------------|
-| **CI/Docker** | `--link-mode copy` in Docker build. `setup_shared_venv.sh` invokes `bundle_python_into_venv.sh`, which skips if Python is already a real binary (not a symlink). |
-| **Release models, NFS-only** | Use `--bundle-python` when creating the venv if the venv will be copied to NFS and hosts do not share the same Python installation path. |
-| **SLURM multi-host** | Typically `--link-mode copy` is sufficient when `UV_PYTHON_INSTALL_DIR` points to a shared path (e.g., `/usr/local/share/uv`) accessible from all nodes. |
+## Key Scripts and Responsibilities
 
-## Venv Activation for Multi-Host
+| Path | Role |
+|---|---|
+| `create_venv.sh` | Creates a uv-managed venv with relocatable/copy options; can bundle Python with `--bundle-python` |
+| `scripts/patch_activate_posix.sh` | Optional compatibility patch for POSIX `sh`; generally unnecessary when activation happens from Bash |
+| `scripts/bundle_python_into_venv.sh` | Bundles Python binaries/libs into the venv for Linux portability when symlink targets are unsafe |
+| `tests/scripts/multihost/setup_shared_venv.sh` | Race-safe copy/setup of shared venv and optional activation command output |
 
-### The `eval` Pattern
 
-To activate the shared venv in the caller's shell:
+## Local and Multi-Host Usage
+
+Use one of these two workflows depending on where your source venv comes from.
+
+### Workflow A: copy from Docker `/opt/venv` into workspace (`./python_env`)
+
+This is the CI-style flow. `tests/scripts/multihost/setup_shared_venv.sh` copies from a source venv (default `/opt/venv`) into a workspace-local target (default `./python_env`), then emits activation commands.
 
 ```bash
 eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
 ```
 
-**Why `eval`?** Environment changes made in a subshell (e.g., `source activate`) do not propagate to the parent. The `--activate` flag outputs shell commands that, when evaluated in the current shell, set `VIRTUAL_ENV` and `PATH` correctly.
+`--activate` emits shell commands to stdout; `eval` applies them in the caller's shell so `PATH` and `VIRTUAL_ENV` are set for subsequent commands.
 
-### Correct Usage
+You can also pass explicit source and target paths:
 
 ```bash
-eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-# Now PATH and VIRTUAL_ENV are set in this shell
-tt-run ... pytest ...
+eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate /opt/venv ./python_env)"
 ```
 
-When `--activate` is used, diagnostics go to stderr so stdout remains clean for `eval`.
+### Workflow B: developer-created distributed hermetic venv (local)
 
-## CI Bundling Note
+If you are setting up multi-host development locally (outside the Docker `/opt/venv` flow), create the environment with `--bundle-python` so it is self-contained across hosts:
 
-CI uses `--link-mode copy` in Docker and does not run `--bundle-python`. The behavior depends on uv's implementation: with `--link-mode copy`, uv may create real copies of the Python interpreter. `setup_shared_venv.sh` invokes `bundle_python_into_venv.sh`, which skips bundling if Python is already a real binary. For release artifacts or NFS-only setups where hosts lack a shared Python path, use `--bundle-python` when creating the venv.
+```bash
+./create_venv.sh --env-dir ./python_env --python-version 3.10 --bundle-python
+source ./python_env/bin/activate
+```
 
-## UV_PYTHON_INSTALL_DIR
+Why `--bundle-python` is required here:
+- it removes dependency on host-specific uv Python install paths,
+- it makes `./python_env` portable when shared/copied across nodes,
+- it avoids broken interpreter symlinks on remote hosts.
 
-For system installs of uv, set `UV_PYTHON_INSTALL_DIR` to a shared path (e.g., `/usr/local/share/uv`) so Python is accessible when the venv is copied to NFS:
+### Run multi-host tests after activation
+
+```bash
+./tests/scripts/multihost/run_dual_t3k_tests.sh
+./tests/scripts/multihost/run_dual_galaxy_tests.sh
+./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests
+```
+
+## CI and Workflow Behavior
+
+### Multi-host physical workflow
+
+`.github/workflows/multi-host-physical.yaml` uses:
+- `eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"`
+- then the corresponding multi-host test script.
+
+This ensures each job both sets up and activates the shared venv before invoking `tt-run` and `pytest`.
+
+### Docker build workflow
+
+`dockerfile/Dockerfile` stages used by `.github/workflows/build-docker-artifact.yaml`:
+- set `UV_PYTHON_INSTALL_DIR=/usr/local/share/uv`,
+- install Python via uv,
+- create relocatable venvs with copy/managed mode,
+- patch activation script for POSIX compatibility.
+
+## Notes on `patch_activate_posix.sh`
+
+`scripts/patch_activate_posix.sh` is a compatibility helper, not a strict requirement for all users.
+
+- If you activate from **Bash**, patching is typically unnecessary.
+- It is mainly used in **CI/Docker** paths where activation/sourcing can occur in POSIX `sh`.
+- In this repo, CI applies it to keep activation robust across shell differences.
+
+## Notes on `UV_PYTHON_INSTALL_DIR`
+
+For system uv installs (especially in Docker/CI), use a shared stable location:
 
 ```bash
 export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv
 uv python install 3.10
 ```
 
-See `scripts/install-uv.sh` for the post-install message with full details.
+This improves cross-host accessibility when venvs are copied into shared workspaces.
 
-## Components in This Directory
+## Troubleshooting
 
-| Script | Purpose |
-|--------|---------|
-| `setup_shared_venv.sh` | Copies `/opt/venv` to `./python_env`, bundles if needed, re-patches activate |
-| `run_dual_galaxy_tests.sh` | Dual galaxy multi-host tests |
-| `run_quad_galaxy_tests.sh` | Quad galaxy multi-host tests |
-| `run_dual_t3k_tests.sh` | Dual T3K multi-host tests |
-
-## Related Components (repo root)
-
-| Component | Purpose |
-|-----------|---------|
-| `create_venv.sh` | Creates venv with `uv venv --link-mode copy --relocatable`, runs `patch_activate_posix.sh` |
-| `scripts/patch_activate_posix.sh` | Patches `activate` for POSIX sh (adds fallback when `SCRIPT_PATH` is empty) |
-| `scripts/bundle_python_into_venv.sh` | Deep-copies Python interpreter into venv for NFS portability (Linux only) |
+- **Venv not active after setup:** ensure you use `eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"`, not just running the script directly.
+- **POSIX `sh` activation errors:** verify `scripts/patch_activate_posix.sh` has been run for the target venv.
+- **Python symlink/path issues across hosts:** use `--bundle-python` in `create_venv.sh` or allow `setup_shared_venv.sh` to run bundling.
+- **Concurrent setup races in shared workspace:** rely on `setup_shared_venv.sh` locking behavior rather than ad hoc `cp` flows.
