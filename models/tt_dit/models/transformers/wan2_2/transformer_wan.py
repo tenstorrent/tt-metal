@@ -23,7 +23,7 @@ from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor
+from ....utils.tensor import bf16_tensor, from_torch
 from .attention_wan import WanAttention
 
 
@@ -360,7 +360,12 @@ class WanTransformer3DModel(Module):
             mesh_device=mesh_device,
         )
 
-        self.scale_shift_table = Parameter(total_shape=[1, 2, dim], device=mesh_device)
+        self.scale_shift_table = Parameter(
+            total_shape=[1, 2, dim],
+            device=mesh_device,
+            mesh_axes=[None, None, parallel_config.tensor_parallel.mesh_axis],
+            dtype=ttnn.float32,
+        )
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -416,17 +421,18 @@ class WanTransformer3DModel(Module):
 
         trans_mat = get_rot_transformation_mat()
 
-        tt_rope_cos_1HND = bf16_tensor(
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        tt_rope_cos_1HND = from_torch(
             rope_cos_1HND,
             device=self.mesh_device,
-            mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
-            shard_dim=-2,
+            dtype=ttnn.float32,
+            mesh_axes=[..., sp_axis, None],
         )
-        tt_rope_sin_1HND = bf16_tensor(
+        tt_rope_sin_1HND = from_torch(
             rope_sin_1HND,
             device=self.mesh_device,
-            mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
-            shard_dim=-2,
+            dtype=ttnn.float32,
+            mesh_axes=[..., sp_axis, None],
         )
         tt_trans_mat = bf16_tensor(trans_mat, device=self.mesh_device)
 
@@ -448,12 +454,18 @@ class WanTransformer3DModel(Module):
         temb, timestep_proj = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
 
         timestep_proj = timestep_proj.unflatten(1, (6, -1))
-        tt_temb_11BD = bf16_tensor(temb.unsqueeze(0).unsqueeze(0), device=self.mesh_device)
-        tt_timestep_proj_1BTD = bf16_tensor(
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        tt_temb_11BD = from_torch(
+            temb.unsqueeze(0).unsqueeze(0),
+            device=self.mesh_device,
+            mesh_axes=[..., tp_axis],
+            dtype=ttnn.float32,
+        )
+        tt_timestep_proj_1BTD = from_torch(
             timestep_proj.unsqueeze(0),
             device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            shard_dim=-1,
+            mesh_axes=[..., tp_axis],
+            dtype=ttnn.float32,
         )
 
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
@@ -475,12 +487,18 @@ class WanTransformer3DModel(Module):
         logger.info(f"temb shape: {temb.shape}")
         logger.info(f"encoder_hidden_states shape: {encoder_hidden_states.shape}")
 
-        tt_temb_11BD = bf16_tensor(temb.unsqueeze(0).unsqueeze(0), device=self.mesh_device)
-        tt_timestep_proj_1BTD = bf16_tensor(
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        tt_temb_11BD = from_torch(
+            temb.unsqueeze(0).unsqueeze(0),
+            device=self.mesh_device,
+            mesh_axes=[..., tp_axis],
+            dtype=ttnn.float32,
+        )
+        tt_timestep_proj_1BTD = from_torch(
             timestep_proj.unsqueeze(0),
             device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            shard_dim=-1,
+            mesh_axes=[..., tp_axis],
+            dtype=ttnn.float32,
         )
         tt_prompt_1BLP = bf16_tensor(encoder_hidden_states.unsqueeze(0), device=self.mesh_device)
 
@@ -580,7 +598,6 @@ class WanTransformer3DModel(Module):
         N = patch_F * patch_H * patch_W
 
         rope_cos_1HND, rope_sin_1HND, trans_mat = self.prepare_rope_features(spatial)
-
         temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(timestep, prompt)
 
         # Concatenate spatial and y along the channel dimension
@@ -606,16 +623,18 @@ class WanTransformer3DModel(Module):
         scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
         shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
 
-        spatial_norm_1BND = self.norm_out(spatial_1BND)
+        spatial_norm_1BND = self.norm_out(
+            spatial_1BND, dynamic_weight=(1 + scale_11BD), dynamic_bias=shift_11BD, dtype=ttnn.float32
+        )
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_norm_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_norm_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        spatial_norm_1BND = spatial_norm_1BND * (1 + scale_11BD) + shift_11BD
-
-        proj_out_1BNI = self.proj_out(spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config)
+        proj_out_1BNI = self.proj_out(
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
+        )
 
         spatial_out = self.postprocess_spatial_output(proj_out_1BNI, F, H, W, N)
 
@@ -659,16 +678,18 @@ class WanTransformer3DModel(Module):
         scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
         shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
 
-        spatial_norm_1BND = self.norm_out(spatial_1BND)
+        spatial_norm_1BND = self.norm_out(
+            spatial_1BND, dynamic_weight=(1 + scale_11BD), dynamic_bias=shift_11BD, dtype=ttnn.float32
+        )
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_norm_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_norm_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        spatial_norm_1BND = spatial_norm_1BND * (1 + scale_11BD) + shift_11BD
-
-        proj_out_1BNI = self.proj_out(spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config)
+        proj_out_1BNI = self.proj_out(
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
+        )
 
         # Gather spatial output and move to host
         spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(

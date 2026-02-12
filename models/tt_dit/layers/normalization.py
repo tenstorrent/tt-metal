@@ -288,7 +288,7 @@ class DistributedLayerNorm(Module):
             )
 
     def forward(
-        self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None
+        self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None, dtype=None
     ) -> ttnn.Tensor:
         assert (dynamic_weight is None) == (
             dynamic_bias is None
@@ -322,6 +322,7 @@ class DistributedLayerNorm(Module):
             bias=bias,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            dtype=dtype,
         )
         return x
 

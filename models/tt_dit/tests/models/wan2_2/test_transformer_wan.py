@@ -242,6 +242,7 @@ def test_wan_transformer_model(
     topology: ttnn.Topology,
     is_fsdp: bool,
     dit_unit_test: bool,
+    reset_seeds,
 ) -> None:
     torch_dtype = torch.float32
 
