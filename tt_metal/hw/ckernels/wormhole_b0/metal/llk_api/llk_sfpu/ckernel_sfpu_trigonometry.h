@@ -35,7 +35,7 @@ sfpi_inline sfpi::vFloat reduce_pi(sfpi::vFloat v, sfpi::vInt& i) {
     rounding_bias.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
     sfpi::vFloat inv_pi = FRAC_1_PI;
     sfpi::vFloat j;
-    j.get() = __builtin_rvtt_wh_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
+    j.get() = __builtin_rvtt_wh_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // We need the LSB of the integer later, to determine the sign of the result.
     i = sfpi::reinterpret<sfpi::vInt>(j);
