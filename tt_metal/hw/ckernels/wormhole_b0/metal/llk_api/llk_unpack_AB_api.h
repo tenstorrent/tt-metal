@@ -28,23 +28,17 @@ inline void llk_unpack_AB_init(
     const bool narrow_tile =
         get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly(
-        unpack_src_format[operandA_id],
-        unpack_dst_format[operandA_id],
-        unpack_src_format[operandB_id],
-        unpack_dst_format[operandB_id],
-        face_r_dim,
-        face_r_dim,
-        num_faces,
-        num_faces);
-
-    if (!isUnpackerConfiguredCorrectly) {
-        DPRINT_UNPACK(DPRINT << "llk_unpack_AB_init - Need to reconfigure unpacker for AB." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_unpacker_AB_configured_correctly(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[operandB_id],
+            unpack_dst_format[operandB_id],
+            face_r_dim,
+            get_operand_face_r_dim(operandB_id),
+            num_faces,
+            get_operand_num_faces(operandB_id)),
+        "");
 
     _llk_unpack_AB_init_<BType>(face_r_dim, num_faces, narrow_tile, transpose);
 }
@@ -65,26 +59,17 @@ inline void llk_unpack_AB(
     std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
-    const uint32_t num_faces = get_operand_num_faces(operandA_id);
-
-    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly(
-        unpack_src_format[operandA_id],
-        unpack_dst_format[operandA_id],
-        unpack_src_format[operandB_id],
-        unpack_dst_format[operandB_id],
-        face_r_dim,
-        face_r_dim,
-        num_faces,
-        num_faces);
-
-    if (!isUnpackerConfiguredCorrectly) {
-        DPRINT_UNPACK(DPRINT << "llk_unpack_AB - Need to reconfigure unpacker for AB." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_unpacker_AB_configured_correctly(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[operandB_id],
+            unpack_dst_format[operandB_id],
+            get_operand_face_r_dim(operandA_id),
+            get_operand_face_r_dim(operandB_id),
+            get_operand_num_faces(operandA_id),
+            get_operand_num_faces(operandB_id)),
+        "");
 
     // For row broadcast with non-zero row index, adjust address to point to the desired row
     if constexpr (BType == BroadcastType::ROW) {

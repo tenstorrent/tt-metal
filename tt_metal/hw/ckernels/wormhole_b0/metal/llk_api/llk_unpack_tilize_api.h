@@ -90,26 +90,19 @@ inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t operandB_id = get_operand_id(operandB);
-    // const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
-        unpack_src_format[operandA_id],
-        unpack_dst_format[operandA_id],
-        unpack_src_format[operandB_id],
-        unpack_dst_format[operandB_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        num_faces,
-        num_faces);
-
-    if (!isUnpackerConfiguredCorrectly) {
-        DPRINT_UNPACK(DPRINT << "llk_unpack_tilizeA_B_init - Need to reconfigure unpacker for tilizeA_B." << ENDL());
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[get_operand_id(operandB)],
+            unpack_dst_format[get_operand_id(operandB)],
+            unpA_face_r_dim,
+            unpB_face_r_dim,
+            num_faces,
+            get_operand_num_faces(get_operand_id(operandB))),
+        "");
 
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         unpack_src_format[operandA_id],
@@ -144,23 +137,17 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t offset_address_b = tile_index_b * get_local_cb_interface(operandB_id).fifo_page_size;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
-        unpack_src_format[operandA_id],
-        unpack_dst_format[operandA_id],
-        unpack_src_format[operandB_id],
-        unpack_dst_format[operandB_id],
-        face_r_dim,
-        face_r_dim,
-        num_faces,
-        num_faces);
-
-    if (!isUnpackerConfiguredCorrectly) {
-        DPRINT_UNPACK(DPRINT << "llk_unpack_tilizeA_B - Need to reconfigure unpacker for tilizeA_B." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[operandB_id],
+            unpack_dst_format[operandB_id],
+            face_r_dim,
+            get_operand_face_r_dim(operandB_id),
+            num_faces,
+            get_operand_num_faces(operandB_id)),
+        "");
 
     WAYPOINT("UPTW");
     _llk_unpack_tilizeA_B_<zero_srcA>(

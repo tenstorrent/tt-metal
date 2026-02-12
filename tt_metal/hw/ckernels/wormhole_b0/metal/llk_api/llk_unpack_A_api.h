@@ -5,7 +5,6 @@
 #pragma once
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
-#include "api/debug/dprint.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -47,15 +46,10 @@ inline void llk_unpack_A_init(
         llk_unpack_dbg_feature_disable();
     }
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
-        operand_unpack_src_format, operand_unpack_dst_format, face_r_dim, num_faces);
-
-    if (!isUnpackerConfiguredCorrectly) {
-        DPRINT_UNPACK(DPRINT << "llk_unpack_A_init - Unpacker not configured for A. Need to reconfigure." << ENDL());
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
+            operand_unpack_src_format, operand_unpack_dst_format, face_r_dim, num_faces),
+        "");
 
     _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces,
@@ -77,19 +71,13 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
     std::uint32_t address = base_address + offset_address;
 
-#ifdef LIGHTWEIGHT_ASSERT_ENABLED
-    const uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    const uint32_t num_faces = get_operand_num_faces(operand_id);
-
-    const bool isUnpackerConfiguredCorrectly = is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
-        unpack_src_format[operand_id], unpack_dst_format[operand_id], face_r_dim, num_faces);
-
-    if (!isUnpackerConfiguredCorrectly) {
-        DPRINT_UNPACK(DPRINT << "llk_unpack_A - Need to reconfigure unpacker for A." << ENDL());
-        // There is no mechanism to actually use message, no point in passing it to assert.
-        LLK_ASSERT(false, "");
-    }
-#endif
+    LLK_ASSERT(
+        is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
+            unpack_src_format[operand_id],
+            unpack_dst_format[operand_id],
+            get_operand_face_r_dim(operand_id),
+            get_operand_num_faces(operand_id)),
+        "");
 
     WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
