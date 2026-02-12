@@ -151,6 +151,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 stride=self.config.patch_size,
                 padding=0,
                 output_mem=memcfg,
+                allow_cpu_fallback=bool(getattr(self.config, "allow_cpu_fallback", True)),
             )
             self.tt_blocks = [
                 self.TTTransformerBlock(

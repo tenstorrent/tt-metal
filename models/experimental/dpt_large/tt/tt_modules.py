@@ -17,6 +17,8 @@ from typing import Optional
 import math
 import torch
 
+from .tt_cnn_ops import TTConv2dCached
+
 try:
     import ttnn  # type: ignore
 except Exception:  # pragma: no cover
@@ -191,27 +193,44 @@ class TTPatchEmbedding:
         stride: int,
         padding: int,
         output_mem: Optional[ttnn.MemoryConfig] = None,
+        allow_cpu_fallback: bool = True,
     ):
-        # conv_weight: [out_c, in_c, k, k]
-        if fallback_ops is None:
-            raise RuntimeError(
-                "TTPatchEmbedding requires tt_lib.fallback_ops. "
-                "Install TT runtime dependencies or disable TT device execution."
-            )
-        wt = _tt_from_torch_rm(conv_weight, device)
-        bs = _tt_from_torch_rm(conv_bias, device)
-        self.conv = fallback_ops.Conv2d(
-            in_channels=conv_weight.shape[1],
-            out_channels=conv_weight.shape[0],
-            kernel_size=conv_weight.shape[2],
-            weights=wt,
-            biases=bs,
-            stride=stride,
-            padding=padding,
+        self.device = device
+        self.allow_cpu_fallback = bool(allow_cpu_fallback)
+        self.conv = None
+        self.tt_conv = TTConv2dCached.from_tensors(
+            weight_torch=conv_weight,
+            bias_torch=conv_bias,
+            stride=(int(stride), int(stride)),
+            padding=(int(padding), int(padding)),
+            dilation=(1, 1),
+            groups=1,
         )
+        if self.allow_cpu_fallback:
+            if fallback_ops is None:
+                raise RuntimeError(
+                    "TTPatchEmbedding fallback requires tt_lib.fallback_ops. "
+                    "Install TT runtime dependencies or disable CPU fallback."
+                )
+            wt = _tt_from_torch_rm(conv_weight, device)
+            bs = _tt_from_torch_rm(conv_bias, device)
+            self.conv = fallback_ops.Conv2d(
+                in_channels=conv_weight.shape[1],
+                out_channels=conv_weight.shape[0],
+                kernel_size=conv_weight.shape[2],
+                weights=wt,
+                biases=bs,
+                stride=stride,
+                padding=padding,
+            )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return self.conv(x)
+        try:
+            return self.tt_conv(x, device=self.device)
+        except Exception as exc:
+            if not self.allow_cpu_fallback or self.conv is None:
+                raise RuntimeError("TTPatchEmbedding TT conv path failed and CPU fallback is disabled") from exc
+            return self.conv(x)
 
 
 class TTLayerNorm:
