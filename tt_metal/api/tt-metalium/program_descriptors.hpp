@@ -155,6 +155,16 @@ struct ProgramDescriptor {
  */
 ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>& descriptors);
 
+/**
+ * Compute a hash from a ProgramDescriptor's compile-time parts only.
+ *
+ * Hashes kernel paths, core ranges, compile args, defines, CB configs, and semaphores.
+ * Runtime args VALUES are excluded (only their count is hashed for structural matching).
+ *
+ * If desc.custom_program_hash is set, returns that value directly (allows override).
+ */
+ttsl::hash::hash_t compute_program_descriptor_hash(const ProgramDescriptor& descriptor);
+
 }  // namespace tt::tt_metal
 
 // Hash support for TileDescriptor (needed for reflection system)

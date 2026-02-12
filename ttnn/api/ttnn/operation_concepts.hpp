@@ -52,6 +52,17 @@ concept HasCreateAt = requires {
 template <typename T>
 concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWorkload<T> || HasCreateAt<T>);
 
+// A factory that implements ONLY create_descriptor (not create + override_runtime_arguments).
+// The framework builds the Program from the descriptor on cache miss, and updates
+// runtime args from a fresh descriptor on cache hit.
+//
+// Note: some existing factories (e.g. LayerNorm) have create_descriptor alongside the
+// traditional create/override_runtime_arguments.  Those still satisfy ProgramFactoryConcept.
+// ProgramDescriptorFactoryConcept matches only "pure" descriptor factories.
+template <typename T>
+concept ProgramDescriptorFactoryConcept =
+    requires { &T::create_descriptor; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
+
 template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(
     device_operation_t op,
