@@ -29,18 +29,26 @@ void kernel_main() {
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
+    for (uint32_t tensix_id = 0; tensix_id < 4; tensix_id++) {
+        for (uint32_t tc_id = 0; tc_id < 16; tc_id++) {
+            DPRINT << "tensix_id: " << tensix_id << " tc_id: " << tc_id
+                   << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)) << ENDL();
+        }
+    }
+
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         // DPRINT << "rbw" << ENDL();
         dfb.reserve_back(1);
         // DPRINT << "rbd" << ENDL();
         // DPRINT << "rdi" << ENDL();
-        // DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) <<
-        // ENDL();
+        DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) << ENDL();
         noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = tile_id * num_producers + producer_idx}, {});
         noc.async_read_barrier();
         // DPRINT << "rdd" << ENDL();
         dfb.push_back(1);
         // DPRINT << "pbd" << ENDL();
     }
+    DPRINT << "PFW" << ENDL();
     dfb.finish();
+    DPRINT << "PFD" << ENDL();
 }

@@ -74,7 +74,7 @@ struct dfb_initializer_t {  // 24 bytes
     uint8_t txn_ids[NUM_TXN_IDS];
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
-    uint8_t remapper_consumer_mask;  // used to program remapper, for a L:R mapping, indicates which riscs make up R
+    uint8_t remapper_consumer_ids_mask;  // Bitmask of clientTypes (id_R) for BLOCKED consumers
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 44 bytes
@@ -89,7 +89,7 @@ struct dfb_initializer_per_risc_t {  // 44 bytes
     } __attribute__((packed)) flags;
     uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side
                             // (R). TC can be value between 0 and 31 (5 bits, max of 4 TCs)
-    uint8_t padding[2];
+    uint8_t padding[2];     // Reserved for future use
 } __attribute__((packed));
 
 // intra tensix dfb

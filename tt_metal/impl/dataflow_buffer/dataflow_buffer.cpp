@@ -50,6 +50,40 @@ uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
 
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
 
+uint8_t ClientTypeAllocator::allocate_for_consumer(uint8_t producer_tensix_id, uint8_t consumer_risc_id) {
+    uint8_t client_type;
+
+    if (consumer_risc_id >= 8) {
+        // Tensix RISC: risc_id 8-11 -> clientType 4-7 (NEO_0 to NEO_3)
+        // Derive id_R directly from consumer's RISC ID
+        client_type = 4 + (consumer_risc_id - 8);
+
+        // Validate: Tensix consumer's tensix_id must not conflict with producer's tensix_id
+        TT_FATAL(
+            (client_type % 4) != producer_tensix_id,
+            "Tensix consumer risc_id {} (tensix_id={}) conflicts with producer tensix_id {}",
+            consumer_risc_id,
+            client_type % 4,
+            producer_tensix_id);
+    } else {
+        // DM RISC: find first available clientType whose tensix_id != producer_tensix_id
+        client_type = 0xFF;  // Invalid until found
+        for (uint8_t ct = 0; ct < 8; ct++) {
+            if (!(used_mask_ & (1u << ct)) && (ct % 4) != producer_tensix_id) {
+                client_type = ct;
+                break;
+            }
+        }
+        TT_FATAL(client_type != 0xFF, "Out of client types for BLOCKED DM consumer allocation");
+    }
+
+    // Mark this clientType as used
+    TT_FATAL(!(used_mask_ & (1u << client_type)), "ClientType {} already used", client_type);
+    used_mask_ |= (1u << client_type);
+
+    return client_type;
+}
+
 uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_producer) {
     if (config.cap == ::experimental::AccessPattern::BLOCKED) {
         return is_producer ? 1 : config.num_producers;
@@ -131,7 +165,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     }
     init.num_entries_per_txn_id = this->num_entries_per_txn_id;
     init.num_entries_per_txn_id_per_tc = this->num_entries_per_txn_id_per_tc;
-    init.remapper_consumer_mask = this->remapper_consumer_mask;
+    init.remapper_consumer_ids_mask = this->remapper_consumer_ids_mask;
 
     log_info(
         tt::LogMetal,
@@ -151,7 +185,6 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     }
     log_info(tt::LogMetal, "Num entries per txn id: {}", this->num_entries_per_txn_id);
     log_info(tt::LogMetal, "Num entries per txn id per tc: {}", this->num_entries_per_txn_id_per_tc);
-    log_info(tt::LogMetal, "Remapper consumer mask: 0x{:x}", this->remapper_consumer_mask);
 
     const auto* init_bytes = reinterpret_cast<const uint8_t*>(&init);
     data.insert(data.end(), init_bytes, init_bytes + sizeof(init));
@@ -180,6 +213,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
                                                      // remapper
         per_risc.flags.should_init_tc = rc.config.should_init_tc;
         per_risc.consumer_tcs = rc.config.consumer_tcs;
+        // remapper_consumer_ids_mask is now in dfb_initializer_t (shared), not per_risc
         log_info(tt::LogMetal, "Should init tc: {}", rc.config.should_init_tc);
 
         const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
@@ -323,10 +357,6 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     dfb->capacity = capacity;
     log_info(tt::LogMetal, "Capacity: {}", capacity);
 
-    if (config.cap == ::experimental::AccessPattern::BLOCKED) {
-        dfb->remapper_consumer_mask = config.consumer_risc_mask & 0xFF;
-    }
-
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
 
@@ -365,6 +395,38 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     std::vector<std::vector<TileCounterGroup>> tc_groups;  // [producer_idx][tc_slot]
     tc_groups.resize(producer_risc_ids.size());
 
+    // For BLOCKED mode, pre-allocate clientTypes for each consumer
+    // Constraint: producer's tensix_id cannot equal any consumer's tensix_id
+    // Each consumer gets a unique clientType (id_R)
+    // clientTypes map to tensix_id: tensix_id = clientType % 4
+    std::vector<uint8_t> consumer_client_types;
+    uint8_t consumer_ids_mask = 0;  // Bitmask of used clientTypes
+    if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+        ClientTypeAllocator client_type_allocator;
+        // Producer's tensix_id = first producer's risc_id % 4
+        uint8_t producer_tensix_id = producer_risc_ids[0] % 4;
+
+        for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
+            uint8_t consumer_risc_id = consumer_risc_ids[consumer_idx];
+            uint8_t client_type = client_type_allocator.allocate_for_consumer(producer_tensix_id, consumer_risc_id);
+            consumer_client_types.push_back(client_type);
+            // Set bit for this clientType in the mask
+            consumer_ids_mask |= (1u << client_type);
+
+            log_info(
+                tt::LogMetal,
+                "BLOCKED: Consumer[{}] (risc_id={}) assigned clientType={} (id_R={}, tensix_id={})",
+                consumer_idx,
+                consumer_risc_id,
+                client_type,
+                client_type,
+                ClientTypeAllocator::get_tensix_id(client_type));
+        }
+        // Store mask at DFB level (shared across all RISCs)
+        dfb->remapper_consumer_ids_mask = consumer_ids_mask;
+        log_info(tt::LogMetal, "BLOCKED: remapper_consumer_ids_mask=0x{:02x} (bitmask)", consumer_ids_mask);
+    }
+
     // For each producer, allocate TC groups (one per TC slot)
     for (size_t producer_idx = 0; producer_idx < producer_risc_ids.size(); producer_idx++) {
         tc_groups[producer_idx].resize(num_producer_tcs);
@@ -391,14 +453,16 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                     tensix_id,
                     consumer_idx);
             } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
-                // Determine tensix_id for this producer TC slot
-                uint8_t tensix_id = get_tensix_id_for_pair((producer_idx * num_producer_tcs) + tc_slot);
+                // Producer TC: use producer's risc_id % 4 as tensix_id
+                uint8_t producer_tensix_id = producer_risc_ids[producer_idx] % 4;
 
-                group.producer_tc = tile_counter_allocator_.allocate(tensix_id);
+                group.producer_tc = tile_counter_allocator_.allocate(producer_tensix_id);
 
                 // Allocate separate consumer TCs for Remapper 1-to-many mapping
+                // Each consumer's tensix_id is derived from their pre-allocated clientType
                 for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
-                    uint8_t consumer_tensix_id = get_tensix_id_for_pair((producer_idx * num_producer_tcs) + tc_slot);
+                    uint8_t consumer_tensix_id =
+                        ClientTypeAllocator::get_tensix_id(consumer_client_types[consumer_idx]);
                     ::experimental::PackedTileCounter consumer_tc =
                         tile_counter_allocator_.allocate(consumer_tensix_id);
                     group.consumer_tcs.push_back(consumer_tc);
@@ -409,7 +473,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                     "Blocked: Producer[{}] TC[{}] (tensix_id={}) maps to {} consumer TCs via Remapper",
                     producer_idx,
                     tc_slot,
-                    tensix_id,
+                    producer_tensix_id,
                     group.consumer_tcs.size());
             } else {
                 TT_FATAL(false, "Unsupported consumer access pattern");
