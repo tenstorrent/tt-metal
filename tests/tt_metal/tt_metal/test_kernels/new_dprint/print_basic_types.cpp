@@ -31,4 +31,7 @@ void kernel_main() {
     NEW_DPRINT("double: {}", f64);
     bool b = true;
     NEW_DPRINT("bool: {}", b);
+
+    NEW_DPRINT("Reordered args: {} {} {} {}", b, i16, i32, i64);
+    NEW_DPRINT("Reordered args: {0} {1} {2} {3}", b, i16, i32, i64);
 }

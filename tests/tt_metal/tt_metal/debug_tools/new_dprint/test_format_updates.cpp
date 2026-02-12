@@ -92,6 +92,8 @@ TEST_F(NewDPrintFormatUpdatesFixture, PrintBasicTypes) {
         "float: {0,f}"sv,
         "double: {0,d}"sv,
         "bool: {0,?}"sv,
+        "Reordered args: {3,?} {2,h} {1,i} {0,q}"sv,
+        "Reordered args: {3,?} {2,h} {1,i} {0,q}"sv,
     };
 
     TestFormatUpdate(

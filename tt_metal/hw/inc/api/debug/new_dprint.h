@@ -479,11 +479,6 @@ constexpr uint32_t get_max_index(const char (&format)[N]) {
     return max_index;
 }
 
-template <typename T>
-constexpr bool init_to_false() {
-    return false;
-}
-
 // Helper to validate that all arguments are referenced in indexed format
 // Returns true if all argument indices from 0 to arg_count-1 are used at least once
 template <std::size_t N, typename... Args>
@@ -493,7 +488,7 @@ constexpr bool all_arguments_referenced(const char (&format)[N], const Args&... 
     }
 
     // Track which arguments are referenced
-    bool referenced[] = {init_to_false<Args>()...};
+    std::array<bool, sizeof...(Args)> referenced = {};
 
     for (std::size_t i = 0; i < N - 1;) {
         parsing::FormatToken token = parsing::parse_format_token(format, i);
@@ -620,6 +615,34 @@ constexpr dprint_type_info get_type_info() {
     return dprint_type<base_type>::value;
 }
 
+template <typename... Args>
+constexpr std::array<dprint_type_info, sizeof...(Args)> get_types_info() {
+    return {get_type_info<Args>()...};
+}
+
+template <typename... Args>
+constexpr std::array<uint32_t, sizeof...(Args)> get_arg_reorder() {
+    constexpr auto type_infos = get_types_info<Args...>();
+
+    // Initialize to default ordering of arguments (0, 1, 2, ...).
+    std::array<uint32_t, sizeof...(Args)> arg_reorder = {};
+    for (std::size_t i = 0; i < arg_reorder.size(); ++i) {
+        arg_reorder[i] = i;
+    }
+
+    // Sort arguments by size_in_bytes descending to optimize serialization (largest first)
+    for (std::size_t i = 0; i < arg_reorder.size(); ++i) {
+        for (std::size_t j = i + 1; j < arg_reorder.size(); ++j) {
+            if (type_infos[arg_reorder[j]].size_in_bytes > type_infos[arg_reorder[i]].size_in_bytes) {
+                uint32_t temp = arg_reorder[i];
+                arg_reorder[i] = arg_reorder[j];
+                arg_reorder[j] = temp;
+            }
+        }
+    }
+    return arg_reorder;
+}
+
 // Main function to update format string with type information
 // Supports both {} and {N} placeholder styles (fmtlib-compatible)
 template <std::size_t N, typename... Args>
@@ -635,7 +658,9 @@ constexpr auto update_format_string(const char (&format)[N]) {
 
     helpers::static_string<result_len> result;
 
-    constexpr dprint_type_info type_infos[] = {get_type_info<Args>()...};
+    constexpr auto type_infos = get_types_info<Args...>();
+    constexpr auto arg_reorder = get_arg_reorder<Args...>();
+
     std::size_t type_index = 0;
 
     for (std::size_t i = 0; i < format_len;) {
@@ -656,8 +681,8 @@ constexpr auto update_format_string(const char (&format)[N]) {
             // Unified handling for both indexed and non-indexed: output {index,type:format}
             result.push_back('{');
 
-            // Output the index
-            result.push_back_uint32(arg_index);
+            // Output the index (updated with reordered index)
+            result.push_back_uint32(arg_reorder[arg_index]);
 
             // Add comma and type character
             result.push_back(',');
@@ -718,6 +743,109 @@ constexpr auto update_format_string_from_args(const char (&format)[N], const Arg
     (void)((void)args, ...);  // Suppress unused parameter warnings for all args
     return update_format_string<N, Args...>(format);
 }
+
+namespace detail {
+
+// Convenience alias: the argument types as a tuple
+template <typename... Args>
+using arg_tuple = std::tuple<Args...>;
+
+// Get size_in_bytes for argument at index I (0-based) in Args...
+template <std::size_t I, typename... Args>
+constexpr uint32_t size_of_arg() {
+    // Use your existing get_types_info<Args...>()
+    constexpr auto infos = get_types_info<Args...>();
+    return infos[I].size_in_bytes;
+}
+
+// A list of indices as a type
+template <std::size_t... Idxs>
+struct index_list {
+    static constexpr std::size_t size = sizeof...(Idxs);
+};
+
+// Insert an index at the front of an index_list
+template <std::size_t NewHead, typename List>
+struct push_front;
+
+template <std::size_t NewHead, std::size_t... Idxs>
+struct push_front<NewHead, index_list<Idxs...>> {
+    using type = index_list<NewHead, Idxs...>;
+};
+
+// Insert index NewIdx into an already-sorted index_list, descending by size_in_bytes
+template <std::size_t NewIdx, typename List, typename... Args>
+struct insert_sorted;
+
+// Base case: insert into empty list
+template <std::size_t NewIdx, typename... Args>
+struct insert_sorted<NewIdx, index_list<>, Args...> {
+    using type = index_list<NewIdx>;
+};
+
+// Recursive case: compare with Head, then either insert before Head or recurse into Tail
+template <std::size_t NewIdx, std::size_t Head, std::size_t... Tail, typename... Args>
+struct insert_sorted<NewIdx, index_list<Head, Tail...>, Args...> {
+    static constexpr uint32_t size_new = size_of_arg<NewIdx, Args...>();
+    static constexpr uint32_t size_head = size_of_arg<Head, Args...>();
+
+    // We want larger sizes first (descending)
+    static constexpr bool before_head = (size_new > size_head);
+
+    using type = std::conditional_t<
+        before_head,
+        // NewIdx is larger, place it before Head
+        index_list<NewIdx, Head, Tail...>,
+        // Otherwise keep Head, and insert into Tail...
+        typename push_front<Head, typename insert_sorted<NewIdx, index_list<Tail...>, Args...>::type>::type>;
+};
+
+// Build sorted indices 0..N-1 using insertion sort
+template <std::size_t N, std::size_t K, typename List, typename... Args>
+struct build_sorted_indices_impl;
+
+// Recursive step: insert K, then proceed with K+1
+template <std::size_t N, std::size_t K, typename List, typename... Args>
+struct build_sorted_indices_impl {
+    using list_with_k = typename insert_sorted<K, List, Args...>::type;
+    using type = typename build_sorted_indices_impl<N, K + 1, list_with_k, Args...>::type;
+};
+
+// Stop when K == N
+template <std::size_t N, typename List, typename... Args>
+struct build_sorted_indices_impl<N, N, List, Args...> {
+    using type = List;
+};
+
+// Public entry: start with empty list and K = 0
+template <std::size_t N, typename... Args>
+struct build_sorted_indices {
+    using type = typename build_sorted_indices_impl<N, 0, index_list<>, Args...>::type;
+};
+
+// Convert index_list<Idxs...> to std::index_sequence<Idxs...>
+template <typename List>
+struct index_list_to_seq;
+
+template <std::size_t... Idxs>
+struct index_list_to_seq<index_list<Idxs...>> {
+    using type = std::index_sequence<Idxs...>;
+};
+
+}  // namespace detail
+
+template <typename... Args>
+struct arg_reorder_seq {
+private:
+    static constexpr std::size_t N = sizeof...(Args);
+    using sorted_list = typename detail::build_sorted_indices<N, Args...>::type;
+
+public:
+    using type = typename detail::index_list_to_seq<sorted_list>::type;
+};
+
+template <typename... Args>
+using arg_reorder_seq_t = typename arg_reorder_seq<Args...>::type;
 
 }  // namespace formatting
 
@@ -841,10 +969,20 @@ void serialize_argument(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer
     serialize_argument(dprint_buffer, static_cast<uint8_t>(argument ? 1 : 0));
 }
 
+template <typename Tuple, std::size_t... Is>
+inline void serialize_arguments_impl(
+    volatile NewDebugPrintMemLayout* dprint_buffer, Tuple&& tup, std::index_sequence<Is...>) {
+    (serialize_argument(dprint_buffer, std::get<Is>(std::forward<Tuple>(tup))), ...);
+}
+
 // Variadic template to serialize all arguments in order
 template <typename... Args>
 void serialize_arguments(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, Args&&... args) {
-    (serialize_argument(dprint_buffer, std::forward<Args>(args)), ...);
+    auto tup = std::forward_as_tuple(std::forward<Args>(args)...);
+
+    using seq = formatting::arg_reorder_seq_t<Args...>;  // std::index_sequence<perm[0], perm[1], ...>
+
+    serialize_arguments_impl(dprint_buffer, tup, seq{});
 }
 
 }  // namespace serialization
