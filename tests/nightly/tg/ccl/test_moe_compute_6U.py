@@ -4,10 +4,21 @@
 
 from loguru import logger
 import math
+import os
 import pytest
 import random
 import torch
 import ttnn
+
+
+MESH_GRAPH_DESC_1x16 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
+)
+
+
+def is_mesh_graph_descriptor_set(expected_path):
+    """Check if TT_MESH_GRAPH_DESC_PATH is set to the expected path."""
+    return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
 
 
 def validate_per_expert_tokens(
@@ -811,6 +822,11 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
+# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 mesh descriptor before running
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -929,7 +945,7 @@ def test_moe_compute(
     activation_goldens = []
     e_t_goldens = []
 
-    logger.info(f"Creating goldens and input tensors")
+    logger.info(f"Creating tilize goldens and input tensors")
     for layer_id in range(num_layers):
         # Generate test data
         sparse_buffer, expert_indices, expert_scores, original_tokens = gen_sparse_buffer_and_indices(
@@ -1017,9 +1033,7 @@ def test_moe_compute(
     #########################################
     # CREATE MATMUL INPUT TENSORS
     #########################################
-
-    in0_dtype = ttnn.bfloat16
-    w0_dtype = ttnn.bfloat4_b
+    logger.info(f"Creating matmul goldens and input tensors")
 
     # --------------------------------------------------------------------------
     # Shard grid
@@ -1041,11 +1055,6 @@ def test_moe_compute(
     for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
         # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
         ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
-
-    in0_core_range = [ttnn.CoreRange(ring2cores[i][0], ring2cores[i][0]) for i in range(in0_num_cores)]
-    in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
-
-    num_dram_banks = 12
 
     dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
     dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
@@ -1090,7 +1099,7 @@ def test_moe_compute(
     # Create tt_w0_w1 tensor with DRAM sharding
     tt_w0_w1 = ttnn.from_torch(
         torch_w0_w1_reordered,
-        dtype=w0_dtype,
+        dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w0_w1_mem_config,
@@ -1104,7 +1113,7 @@ def test_moe_compute(
     # Create tt_w2 tensor with DRAM sharding
     tt_w2 = ttnn.from_torch(
         torch_w2_reordered,
-        dtype=w0_dtype,
+        dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w2_mem_config,
