@@ -121,7 +121,7 @@ Tensor accumulation_invoke(
         op);
     wip_tensor = common::postprocess_output_tensor(wip_tensor, cum_axis, permutation, input_shape, input_rank);
     if (optional_out.has_value()) {
-        optional_out = wip_tensor;
+        optional_out->tensor_attributes->get_storage() = wip_tensor.tensor_attributes->get_storage();
     }
     return wip_tensor;
 }
