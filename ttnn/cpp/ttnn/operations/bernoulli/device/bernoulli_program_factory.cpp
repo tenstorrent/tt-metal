@@ -91,7 +91,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, writer_defines));
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compile_time.compute_kernel_config);
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         compute_file_path,
@@ -121,7 +121,8 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         // Each core has its own seed to increase the number of generated random numbers
-        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        uint32_t seed =
+            operation_attributes.runtime.seed != 0 ? operation_attributes.runtime.seed + i : get_random_seed();
 
         std::vector<uint32_t> compute_runtime_args = {seed, tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
@@ -161,7 +162,8 @@ void BernoulliDeviceOperation::ProgramFactory::override_runtime_arguments(
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, cores[i]);
-            runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+            runtime_args[0] =
+                operation_attributes.runtime.seed != 0 ? operation_attributes.runtime.seed + i : get_random_seed();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);

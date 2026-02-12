@@ -15,6 +15,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::device_operation {
@@ -43,10 +44,19 @@ struct MeshDeviceOperationAdapter {
     using tensor_return_value_t = typename DeviceOperation::tensor_return_value_t;
     using program_factory_t = typename DeviceOperation::program_factory_t;
 
-    // Delegate to base operation methods
+    // Delegate to base operation methods.
+    // Uses the framework helper: if the operation provides select_program_factory, it is called;
+    // otherwise, for single-variant program_factory_t, returns the sole type automatically.
     static program_factory_t select_program_factory(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        return DeviceOperation::select_program_factory(attrs, tensor_args);
+        if constexpr (HasSelectProgramFactory<DeviceOperation>) {
+            return DeviceOperation::select_program_factory(attrs, tensor_args);
+        } else {
+            static_assert(
+                std::variant_size_v<program_factory_t> == 1,
+                "select_program_factory must be provided when program_factory_t has more than one type");
+            return program_factory_t{std::variant_alternative_t<0, program_factory_t>{}};
+        }
     }
 
     template <typename... Args>
@@ -61,7 +71,11 @@ struct MeshDeviceOperationAdapter {
     }
 
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        DeviceOperation::validate_on_program_cache_hit(attrs, tensor_args);
+        if constexpr (HasValidateOnProgramCacheHit<DeviceOperation>) {
+            DeviceOperation::validate_on_program_cache_hit(attrs, tensor_args);
+        } else {
+            DeviceOperation::validate_on_program_cache_miss(attrs, tensor_args);
+        }
     }
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
@@ -75,14 +89,32 @@ struct MeshDeviceOperationAdapter {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        return DeviceOperation::create_output_tensors(attrs, tensor_args);
+        if constexpr (HasCreateOutputTensors<DeviceOperation>) {
+            return DeviceOperation::create_output_tensors(attrs, tensor_args);
+        } else {
+            static_assert(
+                std::is_same_v<tensor_return_value_t, Tensor>,
+                "create_output_tensors must be defined for operations with non-Tensor return types "
+                "(e.g. std::vector<Tensor>, std::tuple<Tensor, ...>). "
+                "Use default_create_output_tensors<Op> helper for preallocated output patterns. "
+                "See: ttnn/api/ttnn/device_operation.hpp or docs/source/ttnn/ttnn/adding_new_ttnn_operation.rst");
+            auto output_spec = DeviceOperation::compute_output_specs(attrs, tensor_args);
+            auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+            return create_device_tensor(output_spec, first_tensor.value().device());
+        }
     }
 
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+            // Operation provides custom hash function
             return DeviceOperation::compute_program_hash(attrs, tensor_args);
+        } else if constexpr (requires { attrs.compile_time; }) {
+            // Operation uses compile_time/runtime struct pattern - hash only compile_time fields
+            return tt::stl::hash::hash_objects_with_default_seed(
+                tt::stl::hash::type_hash<DeviceOperation>, attrs.compile_time, tensor_args);
         } else {
+            // Fallback: hash everything
             return tt::stl::hash::hash_objects_with_default_seed(
                 tt::stl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
         }

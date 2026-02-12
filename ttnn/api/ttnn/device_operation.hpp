@@ -11,6 +11,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <unordered_map>
 
 #include <tt-metalium/program_cache.hpp>
@@ -55,14 +56,27 @@ template <typename... Ts>
     return table[i];
 }
 
+// Concept to detect if operation_attributes_t has a compile_time member
+template <typename T>
+concept HasCompileTimeStruct = requires(const T& attrs) {
+    { attrs.compile_time };
+};
+
 template <typename device_operation_t>
 auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     if constexpr (DeviceOperationWithCustomProgramCacheConcept<device_operation_t>) {
+        // Operation provides custom hash function
         ZoneScopedN("Compute custom program hash");
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
+    } else if constexpr (HasCompileTimeStruct<typename device_operation_t::operation_attributes_t>) {
+        // Operation uses compile_time/runtime struct pattern - hash only compile_time fields
+        ZoneScopedN("Compute compile_time program hash");
+        return tt::stl::hash::hash_objects_with_default_seed(
+            tt::stl::hash::type_hash<device_operation_t>, operation_attributes.compile_time, tensor_args);
     } else {
+        // Fallback: hash everything
         ZoneScopedN("Compute default program hash");
         return tt::stl::hash::hash_objects_with_default_seed(
             tt::stl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
@@ -224,7 +238,11 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
+        mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    } else {
+        mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    }
 
     auto& cached_program_factory = program_cache.get(program_hash);
     auto program_factory_index = cached_program_factory.program_factory_index;
@@ -526,6 +544,28 @@ ttnn::MeshDevice* get_mesh_device(
     return mesh_device;
 }
 
+// Framework helper: create output tensors.
+// If the operation provides create_output_tensors, use it.
+// Otherwise, auto-generate from compute_output_specs (single-output operations only).
+template <typename device_operation_t>
+typename device_operation_t::tensor_return_value_t create_output_tensors(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    if constexpr (HasCreateOutputTensors<device_operation_t>) {
+        return device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    } else {
+        static_assert(
+            std::is_same_v<typename device_operation_t::tensor_return_value_t, Tensor>,
+            "create_output_tensors must be defined for operations with non-Tensor return types "
+            "(e.g. std::vector<Tensor>, std::tuple<Tensor, ...>). "
+            "Use default_create_output_tensors<Op> helper for preallocated output patterns. "
+            "See: ttnn/api/ttnn/device_operation.hpp or docs/source/ttnn/ttnn/adding_new_ttnn_operation.rst");
+        auto output_spec = device_operation_t::compute_output_specs(operation_attributes, tensor_args);
+        auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+        return create_device_tensor(output_spec, first_tensor.value().device());
+    }
+}
+
 /**
  * Launch an operation on a mesh device.
  *
@@ -552,7 +592,7 @@ typename device_operation_t::tensor_return_value_t launch(
             "Device Operations expect tensor with Device storage in inputs");
     }
 
-    auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    auto tensor_return_value = create_output_tensors<device_operation_t>(operation_attributes, tensor_args);
 
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
@@ -618,5 +658,28 @@ typename device_operation_t::tensor_return_value_t invoke(
 }  // namespace detail
 
 using ttnn::device_operation::detail::launch;
+
+// Helper to create output tensors from compute_output_specs.
+// Works for single-output operations (TensorSpec -> Tensor).
+// Pass an optional preallocated tensor to return it instead of creating a new one.
+//
+// Usage:
+//   // Pattern 1: no preallocated output
+//   return default_create_output_tensors<MyOp>(attrs, tensor_args);
+//
+//   // Pattern 2: with preallocated output
+//   return default_create_output_tensors<MyOp>(attrs, tensor_args, tensor_args.output);
+template <typename device_operation_t>
+typename device_operation_t::tensor_return_value_t default_create_output_tensors(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const std::optional<Tensor>& preallocated = std::nullopt) {
+    if (preallocated.has_value()) {
+        return preallocated.value();
+    }
+    auto output_spec = device_operation_t::compute_output_specs(operation_attributes, tensor_args);
+    auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    return create_device_tensor(output_spec, first_tensor.value().device());
+}
 
 }  // namespace ttnn::device_operation

@@ -11,10 +11,17 @@ namespace ttnn::operations::bernoulli {
 
 struct BernoulliDeviceOperation {
     struct operation_attributes_t {
-        uint32_t seed;
-        const DataType dtype;
-        const MemoryConfig memory_config;
-        const DeviceComputeKernelConfig compute_kernel_config;
+        // Affects program structure - automatically hashed for cache lookup
+        struct compile_time_t {
+            DataType dtype;
+            MemoryConfig memory_config;
+            DeviceComputeKernelConfig compute_kernel_config;
+        } compile_time;
+
+        // Only passed to kernels - NOT hashed, changes don't trigger recompilation
+        struct runtime_t {
+            uint32_t seed;
+        } runtime;
     };
 
     struct tensor_args_t {
@@ -49,14 +56,10 @@ struct BernoulliDeviceOperation {
 
     using program_factory_t = std::variant<ProgramFactory>;
 
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::bernoulli

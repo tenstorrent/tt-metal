@@ -8,6 +8,7 @@
 #include <optional>
 #include <random>
 #include <type_traits>
+#include <variant>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/graph_tracking.hpp>
@@ -60,26 +61,62 @@ concept HasComputeOutputSpecs = requires(
     } -> std::same_as<typename device_operation_t::spec_return_value_t>;
 };
 
+// Detect if operation provides custom cache-hit validation.
+// If not provided, the framework defaults to calling validate_on_program_cache_miss.
+template <typename device_operation_t>
+concept HasValidateOnProgramCacheHit = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    device_operation_t::validate_on_program_cache_hit(attrs, tensor_args);
+};
+
+// Detect if operation provides a custom select_program_factory.
+// If not provided and program_factory_t is a single-type variant, the framework returns it automatically.
+template <typename device_operation_t>
+concept HasSelectProgramFactory = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::select_program_factory(attrs, tensor_args)
+    } -> std::same_as<typename device_operation_t::program_factory_t>;
+};
+
+// Detect if operation provides a custom create_output_tensors.
+// If not provided, the framework auto-generates it from compute_output_specs for single-output operations.
+template <typename device_operation_t>
+concept HasCreateOutputTensors = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::create_output_tensors(attrs, tensor_args)
+    } -> std::same_as<typename device_operation_t::tensor_return_value_t>;
+};
+
+// Validate that all variant alternatives in a program_factory_t satisfy exactly one of
+// ProgramFactoryConcept or MeshWorkloadFactoryConcept.
+namespace detail {
+template <typename Variant, std::size_t... Is>
+consteval bool all_factories_valid(std::index_sequence<Is...>) {
+    return (
+        (ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> !=
+         MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>>) &&
+        ...);
+}
+}  // namespace detail
+
+template <typename Variant>
+concept AllFactoriesValid =
+    detail::all_factories_valid<Variant>(std::make_index_sequence<std::variant_size_v<Variant>>{});
+
 template <typename device_operation_t>
 concept DeviceOperationConcept = requires {
+    typename device_operation_t::program_factory_t;
+
     [](const typename device_operation_t::operation_attributes_t& operation_attributes,
        const typename device_operation_t::tensor_args_t& tensor_args) {
-        device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
-
-        using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
-        static_assert(std::same_as<
-                      decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
-                      tensor_return_value_t>);
-
-        // All program factories returned by `select_program_factory` must implement exactly one of
-        // `ProgramFactoryConcept` or `MeshWorkloadFactoryConcept`.
-        const auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
-        std::visit(
-            []<typename T>(const T&) { static_assert(ProgramFactoryConcept<T> != MeshWorkloadFactoryConcept<T>); },
-            program_factory);
     };
-} && HasComputeOutputSpecs<device_operation_t>;
+} && HasComputeOutputSpecs<device_operation_t> && AllFactoriesValid<typename device_operation_t::program_factory_t>;
 
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =

@@ -107,22 +107,28 @@ struct ExampleDeviceOperation {
 
     using program_factory_t = std::variant<SingleCore, MultiCore>;
 
-    // Mandatory methods
-
-    // Select the program factory based on the operation attributes and tensor args
+    // Required only when program_factory_t has more than one variant.
+    // For single-variant program_factory_t, the framework auto-selects it.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // Validate the operation when it creates a program. Usually will have more checks
+    // Mandatory methods
+
+    // Validate the operation when it creates a program. Also called on cache hit by default.
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    // Validate the operation when it reuses a program. Usually will have less checks
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    // Optional: override to use lighter validation on cache hit.
+    // If not provided, the framework calls validate_on_program_cache_miss.
+    // static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Compute the output specs based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    // Create the output tensors based on the operation attributes and tensor args
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    // Optional: create_output_tensors.
+    // For single-output operations (tensor_return_value_t = Tensor), the framework auto-generates it
+    // from compute_output_specs. Override to handle preallocated outputs or complex cases.
+    // Use default_create_output_tensors<Op> helper for the preallocated output pattern:
+    //   return default_create_output_tensors<MyOp>(attrs, args, args.output);
+    // static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::examples
