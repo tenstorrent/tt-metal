@@ -108,11 +108,6 @@ void py_module_types(nb::module_& mod) {
                     "write_tensor: tensor data size ({}) is not a multiple of page_size ({})",
                     data_span.size(),
                     page_size);
-                TT_FATAL(
-                    data_span.size() % page_size == 0,
-                    "write_tensor: tensor data size ({}) is not a multiple of socket page_size ({})",
-                    data_span.size(),
-                    page_size);
                 uint32_t num_writes = data_span.size() / page_size;
                 for (uint32_t i = 0; i < num_writes; i++) {
                     self.write(data_span.data() + (i * page_size), 1);
