@@ -409,6 +409,8 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     CoreRangeSet mcast_receiver_cores = CoreRangeSet(mcast_receiver_core_ranges);
     // mcast groups
     std::vector<std::vector<CoreCoord>> mcast_groups;
+    auto num_sender_cores = (num_batches / num_batches_per_core) * (num_groups / num_groups_per_core);
+    mcast_groups.reserve(num_sender_cores);
     int group_index = -1;
     if (is_height_sharding) {
         for (uint32_t i = 0; i < num_cores; ++i) {
