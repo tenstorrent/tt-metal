@@ -21,7 +21,7 @@ sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model
 
 
-def run_model_pipeline(device, test_infra, num_measurement_iterations):
+def run_model_pipeline(device, test_infra, num_warmup_iterations, num_measurement_iterations):
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(
         device, mesh_mapper=test_infra.inputs_mesh_mapper, mesh_composer=test_infra.outputs_mesh_composer
     )
@@ -43,16 +43,25 @@ def run_model_pipeline(device, test_infra, num_measurement_iterations):
         l1_input_memory_config=input_mem_config,
     )
 
-    logger.info(f"Running model warmup with input shape {list(tt_inputs_host.shape)}")
+    logger.info(f"Running model compilation and warmup with input shape {list(tt_inputs_host.shape)}")
     profiler.start("compile")
     pipeline.compile(tt_inputs_host)
     profiler.end("compile")
+
+    # Warmup iterations
+    logger.info(f"Running {num_warmup_iterations} warmup iterations")
+    warmup_inputs = [tt_inputs_host] * num_warmup_iterations
+    pipeline.preallocate_output_tensors_on_host(num_warmup_iterations)
+    warmup_outputs = pipeline.enqueue(warmup_inputs).pop_all()
+    # Discard warmup outputs
+    for output in warmup_outputs:
+        del output
 
     host_inputs = [tt_inputs_host] * num_measurement_iterations
     pipeline.preallocate_output_tensors_on_host(num_measurement_iterations)
 
     logger.info(
-        f"Starting performance pipeline for {num_measurement_iterations} iterations with batch_size={test_infra.batch_size} and num_devices={test_infra.num_devices}"
+        f"Starting performance measurement for {num_measurement_iterations} iterations with batch_size={test_infra.batch_size} and num_devices={test_infra.num_devices}"
     )
     profiler.start("run_model_pipeline_2cqs")
     outputs = pipeline.enqueue(host_inputs).pop_all()
@@ -94,8 +103,10 @@ def run_perf_e2e_yolov7(
         outputs_mesh_composer=output_mesh_composer,
     )
 
+    # warmup iterations
+    num_warmup_iterations = 10
     num_measurement_iterations = 32
-    run_model_pipeline(device, test_infra, num_measurement_iterations)
+    run_model_pipeline(device, test_infra, num_warmup_iterations, num_measurement_iterations)
 
     compile_time = profiler.get("compile")
     inference_time_avg = profiler.get(f"run_model_pipeline_2cqs") / num_measurement_iterations

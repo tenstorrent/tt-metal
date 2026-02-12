@@ -14,7 +14,9 @@ from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
 
-def _run_model_pipeline(device, test_infra, num_measurement_iterations, num_command_queues, trace):
+def _run_model_pipeline(
+    device, test_infra, num_warmup_iterations, num_measurement_iterations, num_command_queues, trace
+):
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
 
     def model_wrapper(l1_input_tensor):
@@ -32,10 +34,19 @@ def _run_model_pipeline(device, test_infra, num_measurement_iterations, num_comm
         l1_input_memory_config=input_mem_config,
     )
 
-    logger.info(f"Running model warmup with input shape {list(tt_inputs_host.shape)}")
+    logger.info(f"Running model compilation and warmup with input shape {list(tt_inputs_host.shape)}")
     profiler.start("compile")
     pipeline.compile(tt_inputs_host)
     profiler.end("compile")
+
+    # Warmup iterations
+    logger.info(f"Running {num_warmup_iterations} warmup iterations")
+    warmup_inputs = [tt_inputs_host] * num_warmup_iterations
+    pipeline.preallocate_output_tensors_on_host(num_warmup_iterations)
+    warmup_outputs = pipeline.enqueue(warmup_inputs).pop_all()
+    # Discard warmup outputs
+    for output in warmup_outputs:
+        del output
 
     host_inputs = [tt_inputs_host] * num_measurement_iterations
 
@@ -44,7 +55,7 @@ def _run_model_pipeline(device, test_infra, num_measurement_iterations, num_comm
     )
 
     logger.info(
-        f"Starting performance pipeline for {num_measurement_iterations} iterations with batch_size={test_infra.batch_size} and num_devices={test_infra.num_devices}"
+        f"Starting performance measurement for {num_measurement_iterations} iterations with batch_size={test_infra.batch_size} and num_devices={test_infra.num_devices}"
     )
     profiler.start(f"run_model_pipeline_{num_command_queues}cqs")
     outputs = pipeline.enqueue(host_inputs).pop_all()
@@ -57,10 +68,11 @@ def _run_model_pipeline(device, test_infra, num_measurement_iterations, num_comm
     pipeline.cleanup()
 
 
-def run_trace_2cq_model_pipeline(device, test_infra, num_measurement_iterations):
+def run_trace_2cq_model_pipeline(device, test_infra, num_warmup_iterations, num_measurement_iterations):
     _run_model_pipeline(
         device,
         test_infra,
+        num_warmup_iterations,
         num_measurement_iterations,
         num_command_queues=2,
         trace=True,
@@ -87,8 +99,10 @@ def run_perf_e2e_yolov8x(
         outputs_mesh_composer=output_mesh_composer,
     )
 
+    # Use warmup iterations
+    num_warmup_iterations = 5
     num_measurement_iterations = 15
-    run_trace_2cq_model_pipeline(device, test_infra, num_measurement_iterations)
+    run_trace_2cq_model_pipeline(device, test_infra, num_warmup_iterations, num_measurement_iterations)
 
     first_iter_time = profiler.get("compile")
     inference_time_avg = profiler.get(f"run_model_pipeline_2cqs") / num_measurement_iterations

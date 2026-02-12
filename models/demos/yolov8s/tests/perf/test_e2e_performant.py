@@ -43,15 +43,21 @@ def run_yolov8s(
     input_shape = (batch_size, 3, 640, 640)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
-    # Warmup run to stabilize kernel cache and memory state
-    _ = performant_runner.run(torch_input_tensor)
+    # Warmup iterations
+    num_warmup_iterations = 10
+    logger.info(f"Running {num_warmup_iterations} warmup iterations")
+    for _ in range(num_warmup_iterations):
+        _ = performant_runner.run(torch_input_tensor)
+
     ttnn.synchronize_device(device)
 
     if use_signpost:
         signpost(header="start")
 
+    # Measurement iterations
+    num_measurement_iterations = 100
     t0 = time.time()
-    for _ in range(10):
+    for _ in range(num_measurement_iterations):
         _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
@@ -60,7 +66,7 @@ def run_yolov8s(
         signpost(header="stop")
 
     performant_runner.release()
-    inference_time_avg = round((t1 - t0) / 10, 6)
+    inference_time_avg = round((t1 - t0) / num_measurement_iterations, 6)
     logger.info(
         f"Model: ttnn_yolov8s - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round((batch_size) / inference_time_avg)}"
     )

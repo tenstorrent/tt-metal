@@ -49,18 +49,23 @@ def run_yolov8s_world_inference(
     input_shape = (batch_size, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
-    # Warmup run to stabilize kernel cache and memory state
-    _ = performant_runner.run(torch_input_tensor)
+    # Warmup iterations
+    num_warmup_iterations = 5
+    logger.info(f"Running {num_warmup_iterations} warmup iterations")
+    for _ in range(num_warmup_iterations):
+        _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
 
+    # Measurement iterations
+    num_measurement_iterations = 10
     t0 = time.time()
-    for _ in range(10):
+    for _ in range(num_measurement_iterations):
         _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
 
     performant_runner.release()
-    inference_time = round((t1 - t0) / 10, 6)
+    inference_time = round((t1 - t0) / num_measurement_iterations, 6)
 
     inference_and_compile_time = inference_time
 
