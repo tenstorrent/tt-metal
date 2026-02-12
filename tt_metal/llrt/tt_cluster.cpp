@@ -972,6 +972,7 @@ std::optional<tt::umd::semver_t> Cluster::get_ethernet_firmware_version() const 
 // (default ordering is posted) This barrier is intended to prevent races caused by out of order writes, specifically to
 // ensure metadata and data to compute on are committed before launching kernels
 void Cluster::dram_barrier(ChipId chip_id) const {
+    TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     std::unordered_set<uint32_t> dram_channels;
     for (uint32_t channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
         dram_channels.insert(channel);
@@ -984,6 +985,7 @@ void Cluster::dram_barrier(ChipId chip_id) const {
 // ordering is posted) This barrier is intended to prevent races caused by out of order writes, specifically to ensure
 // binaries, metadata, and data to compute on are committed before launching kernels
 void Cluster::l1_barrier(ChipId chip_id) const {
+    TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     // Sets and resets L1 barrier of all tensix cores and ethernet cores
     this->driver_->l1_membar(chip_id);
 }
