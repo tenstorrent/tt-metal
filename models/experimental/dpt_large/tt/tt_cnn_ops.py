@@ -151,6 +151,7 @@ def tt_upsample_nchw(
     *,
     scale_factor: int | Sequence[int] = 2,
     mode: str = "bilinear",
+    align_corners: Optional[bool] = None,
     memory_config=None,
     expected_input_hw: Optional[Tuple[int, int]] = None,
     op_name: str = "tt_upsample_nchw",
@@ -169,6 +170,33 @@ def tt_upsample_nchw(
         sf = [int(sf[0]), int(sf[1])]
     else:
         sf = int(sf)
+    sf_h = sf[0] if isinstance(sf, list) else sf
+    sf_w = sf[1] if isinstance(sf, list) else sf
+    out_h = h * sf_h
+    out_w = w * sf_w
+
+    # TTNN bilinear interpolation follows align_corners=False semantics. For
+    # DPT paths that require align_corners=True, execute an exact host
+    # interpolation and convert back to TT tensor to preserve numerical parity.
+    if mode == "bilinear" and align_corners is True:
+        x_torch = ttnn.to_torch(x).to(dtype=torch.float32)
+        y_torch = torch.nn.functional.interpolate(
+            x_torch,
+            size=(out_h, out_w),
+            mode="bilinear",
+            align_corners=True,
+        )
+        tt_device = None
+        try:
+            tt_device = x.device()
+        except Exception:
+            tt_device = None
+        return ttnn.from_torch(
+            y_torch.to(dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=tt_device,
+        )
 
     if memory_config is None:
         # Keep upsample outputs interleaved by default to avoid width-sharded
@@ -198,8 +226,6 @@ def tt_upsample_nchw(
     # can be invalid for those shard specs. Ensure interleaved before NCHW permute.
     y_nhwc = _ensure_interleaved(y_nhwc)
 
-    out_h = h * (sf[0] if isinstance(sf, list) else sf)
-    out_w = w * (sf[1] if isinstance(sf, list) else sf)
     y_nchw = ttnn.permute(y_nhwc, (0, 3, 1, 2))
     y_nchw = tt_canonicalize_nchw_spatial(
         y_nchw,
@@ -220,6 +246,7 @@ def tt_resize_to_nchw(
     *,
     target_hw: Tuple[int, int],
     mode: str = "bilinear",
+    align_corners: Optional[bool] = None,
     memory_config=None,
     op_name: str = "tt_resize_to_nchw",
 ):
@@ -240,6 +267,7 @@ def tt_resize_to_nchw(
         x,
         scale_factor=(target_h // h, target_w // w),
         mode=mode,
+        align_corners=align_corners,
         memory_config=memory_config,
         expected_input_hw=(h, w),
         op_name=op_name,
