@@ -179,6 +179,11 @@ def test_pre_sdpa(
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
     torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
+    matmul_h, matmul_w = matmul_weights_shape
+    # Pack [H, W] -> [H/2, 2W] by pairing each row i from K-half0 and K-half1 as [half0_i | half1_i].
+    torch_matmul_weights_packed = (
+        torch_matmul_weights.reshape(2, matmul_h // 2, matmul_w).permute(1, 0, 2).reshape(matmul_h // 2, 2 * matmul_w)
+    )
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
     # Matmul2 weights - create unshuffled first, then shuffle for device
@@ -279,23 +284,34 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # Matmul weights tensor - width sharded on 6x8 grid (48 cores)
-    matmul_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))
-    num_matmul_cores = 6 * 8
-    matmul_shard_shape = (matmul_weights_shape[0], matmul_weights_shape[1] // num_matmul_cores)
-    matmul_shard_spec = ttnn.ShardSpec(
+    # Matmul1 packed weights tensor
+    # Pack [7168, 1536] -> [3584, 3072] by concatenating K-halves across width.
+    # Width-shard over full 96-core grid, giving per-core shard [3584, 32].
+    matmul_grid_x = 12
+    matmul_grid_y = 8
+    matmul_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul_grid_x - 1, matmul_grid_y - 1))
+    num_matmul_cores = matmul_grid_x * matmul_grid_y
+    # WIDTH_SHARDED requires shard height == tensor height.
+    # Packed tensor is [3584, 3072], so per-core shard is [3584, 32].
+    matmul_packed_shard_shape = (
+        matmul_weights_shape[0] // 2,
+        (matmul_weights_shape[1] * 2) // num_matmul_cores,
+    )
+    matmul_packed_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({matmul_grid}),
-        matmul_shard_shape,
+        matmul_packed_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    matmul_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul_shard_spec)
+    matmul_packed_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul_packed_shard_spec
+    )
 
     ttnn_matmul_weights = ttnn.from_torch(
-        torch_matmul_weights,
+        torch_matmul_weights_packed,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=matmul_mem_config,
+        memory_config=matmul_packed_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
