@@ -416,8 +416,11 @@ the following:
 #. The NoC address of the memory in the destination cores.
    To make the process efficient, multicast implicitly assumes that destination memory addresses are
    the same on all destination cores.
-#. The number of byte sof data to be multicast. In our example program, this is the number of bytes in a tile.
+#. The number of bytes of data to be multicast. In our example program, this is the number of bytes in a tile.
 #. The number of destination cores.
+   While this value could technically be decoded from the NoC destination address, it is more efficient to pass it as an argument since this value is known to the code issuing the ``noc_async_write_multicast`` command.
+   it is more efficient to pass it as an argument since this value is known to the code issuing the
+   ``noc_async_write_multicast`` command.
 
 The memory address of source data is simply the CB read pointer obtained by calling ``get_read_ptr``
 after calling ``cb_wait_front``, since the tile has just been pushed into the CB.
@@ -441,7 +444,9 @@ Both types of information are encoded into one 64-bit value by the ``get_noc_mul
        uint32_t dest_mem_addr);
 
 The first four arguments specify the coordinates of the opposite corners of a rectangle of cores, which are
-the destination for the multicast.
+the destination for the multicast. To use ``noc_async_write_multicast`` or ``noc_semaphore_set_multicast``,
+the destination must be a rectangular grid of cores.
+
 The ``dest_mem_addr`` argument is an **on-chip SRAM address in the destination cores** where the data will be written.
 As noted above, it is assumed that all destination cores use the same on-chip SRAM address to receive data.
 This is possible because ``CreateCircularBuffer`` guarantees that the same CB index
@@ -463,19 +468,30 @@ Multicast Operation
 
 Once the sender kernel has obtained encoded destination address via ``get_noc_multicast_addr``,
 it issues ``noc_async_write_multicast`` to send the data to all receivers using the NoC.
-Next, the sender wants to inform receivers that the tile has been sent and is valid.
+``noc_async_write_multicast`` is a **non blocking** operation. It enqueues a multicast transfer on the NoC,
+then returns control to the kernel immediately, while the hardware performs the tile transfer in the background.
+
+After issuing the tile multicast operation, the sender needs to inform receivers that the tile has been sent and is valid.
 To do this, it performs another multicast operation to update the receiver's ``tile_sent`` semaphore to
 ``VALID`` by calling ``noc_semaphore_set_multicast``.
-Between the two multicast operations, the sender calls ``noc_async_writes_flushed()`` to ensure the **tile** multicast
-command has been sent into the NoC before the ``tile_sent`` multicast command.
-While the NoC supports many different modes of operation, the default configuration used in this lab ensures
-the NOC operations issued from one core will be completed in the order they were issued, but ``noc_async_writes_flushed``
-needs to be called between the multicast operations to ensure the commands are issued in the program order.
+On some architectures, NoC operations may be issued to separate command buffer FIFOs and may not be
+issued in the order they are called. To ensure the commands are issued in the program order,
+the sender calls ``noc_async_writes_flushed()`` before calling ``noc_semaphore_set_multicast``
+This ensures that the tile multicast command has been sent into the NoC before the ``noc_semaphore_set_multicast``
+command that sets ``tile_sent``.
+
+While this ensures commands are issued in the program order, for multicast protocol correctness it is also necessary
+that the commands be completed in the order they were issued. The default NoC configuration used in this lab ensures
+the NOC operations issued from one core will be completed in the order they were issued.
 
 Finally, the sender calls ``noc_async_write_barrier()`` to wait until the multicast data transfer completes before reusing the CB slot.
-After this barrier the sender calls ``cb_pop_front`` to free the CB entry for the next tile.. This preserves the usual CB producer-consumer protocol while
-ensuring that multicast traffic has fully drained before any
+After this barrier the sender calls ``cb_pop_front`` to free the CB entry for the next tile..
+This preserves the usual CB producer-consumer protocol by ensuring that multicast data has been sent before any
 tile data is overwritten.
+
+It is worth noting that NoC supports other more complex modes of operation, where the order of completion of commands may not match
+the order of their issuance. In such cases, it may be necessary to add an additional ``noc_async_write_barrier()`` after the tile multicast
+data to ensure that the semaphore set command is issued only after the data transfer completes.
 
 
 Compute and Writer Kernels
@@ -496,10 +512,23 @@ On each receiver, double buffering allows overlapping:
 
 Double buffering still works with multicast, as long as:
 
-* You do not reuse a CB slot until all NoC operations that write to that memory have completed.
+* You do not reuse a CB slot until all NoC operations that read or write the memory occupied by the slot have completed.
 * You maintain a consistent pattern of ``cb_reserve_back``, ``cb_push_back``, ``cb_wait_front``,
-  and ``cb_pop_front`` across sender and receivers, so that everyone agrees which memory addresses
-  are used for which tile at each step.
+  and ``cb_pop_front`` across sender and receivers, so that senders and receivers consistently use
+  the same memory addresses for the same tiles.
+
+
+Multicast Exclusions
+====================
+
+When calling ``noc_async_write_multicast`` or ``noc_semaphore_set_multicast``, the core initiating these operations
+is excluded from the multicast operation by default.
+This means that the number of destination cores and the destination NoC address passed to these function should not
+include the core initiating the operation.
+While we will not require it for this lab, it is worth noting that separate functions do exist that include the core
+initiating the operation in the multicast operation. These functions are ``noc_async_write_multicast_loopback_src`` and
+``noc_semaphore_set_multicast_loopback_src``.
+
 
 
 
@@ -517,111 +546,6 @@ You will change that in Exercise 1.
 
 
 
-
-
-
-``noc_async_write_multicast``
------------------------------
-
-The sender multicasts tiles using:
-
-.. code-block:: cpp
-
-   uint64_t tile_mcast_addr =
-       get_noc_multicast_addr(receiver_start_x, receiver_start_y,
-                              receiver_end_x, receiver_end_y,
-                              on-chip SRAM_read_addr);
-
-   noc_async_write_multicast(on-chip SRAM_read_addr, tile_mcast_addr, tile_size_bytes, num_receivers);
-
-Key points:
-
-* ``noc_async_write_multicast`` is **non blocking**:
-  * It enqueues a multicast transfer on the NoC, then **returns control to the kernel immediately**.
-  * The hardware performs the tile transfer in the background.
-
-
-TODO: Explain Why ``noc_async_write_multicast`` needs ``num_dests`` parameter?
-Why isn't that automatically calculated from ``dst_noc_addr_multicast``, which encodes the range of destinations?
-
-TODO: document limitations of ``noc_async_write_multicast``:
-
-In short:
-
-They **cannot** be an arbitrary set of cores.
-
-For ``noc_async_write_multicast`` the documented and implemented constraints are:
-
-1. **Rectangular grid only (base API)**
-   The targets must be all Tensix worker cores in a **contiguous rectangle** ``[x_start..x_end] x [y_start..y_end]``
-   on the NoC, all at the same memory address.
-   The docs say explicitly:
-
-   - "The destination nodes can only be a set of Tensix cores + a memory address."
-   - "The destination nodes must form a **rectangular grid**."
-
-   So: not "same row" or "same column" only; but **any axis-aligned rectangle** is fine.
-
-2. **L-shaped variant = rectangle minus rectangle**
-   There is a separate API (multicast with exclude region) where you specify a rectangle and then subtract a rectangular
-   "exclusion zone" to get an **L-shaped** pattern, but even that is *"rect grid minus sub-rect grid"*, not an arbitrary subset.
-
-3. **Same memory address on all destinations**
-   All destination cores must use the **same memory address**; the multicast NoC address encodes one local address plus the rectangular coord range, not per-core offsets.
-
-4. **Sender cannot be in the destination set (for this API)**
-   The base ``noc_async_write_multicast`` excludes the sender core; if you want the sender included you must use the ``*_loopback_src`` variant.
-
-5. **Cardinality is otherwise unconstrained**
-   Aside from "non-zero" and "<= number of cores - 1", the number of destinations can be as large as "full chip rectangle."
-
-So if you need to hit an **arbitrary set of scattered cores** (e.g. "this triangle" or a few disjoint islands), you have to implement that as:
-
-- multiple multicast calls to different rectangles / L-shapes, or
-- fall back to multiple unicast writes.
-
-A single ``noc_async_write_multicast`` call always targets a **rectangular (or L-shaped via the exclude API) contiguous region**, not an arbitrary mask of cores.
-
-
-
-Ordering with ``noc_async_writes_flushed``
-------------------------------------------
-
-Because ``noc_async_write_multicast`` is non blocking, you must ensure that:
-
-* The multicast command is actually **sent onto the NoC** before you signal receivers that the tile is ready.
-
-This is handled using:
-
-.. code-block:: cpp
-
-   noc_async_writes_flushed();
-
-   // Signal receivers that tile has been sent by multicasting VALID to receiver semaphore
-   *receiver_sem_ptr = VALID;
-   noc_semaphore_set_multicast(tile_sent_semaphore_addr, receiver_sem_mcast_addr, num_receivers);
-
-``noc_async_writes_flushed()`` does **not** wait for multicast transfers to complete. It only ensures that all outstanding enqueued ``noc_async_write`` calls issued on the current core have **departed** (have been pushed into the NoC) before the function returns.
-
-Why is it safe to send the semaphore update before the transfers complete?
-
-* The sender:
-  * Issues the multicast command.
-  * Calls ``noc_async_writes_flushed()`` to ensure the command has been sent into the NoC.
-  * Then multicasts the "tile_sent" semaphore value.
-* Each receiver:
-  * Waits for the "tile_sent" semaphore to become ``VALID`` before using the tile.
-  * The NoC ensures that the data transfer and the semaphore update are observed in the correct order.
-* Additionally, the sender calls:
-
-  .. code-block:: cpp
-
-     noc_async_write_barrier();
-
-  before popping the CB slot, ensuring that the tile transfer has completed before the sender reuses the CB memory location.
-
-TODO: Explain that this is a simplified view of the reality and that for optimal performance on some architectures we may do things differently.
-Also, NoC is customizable and may behave differently if customizations are made.
 
 
 
