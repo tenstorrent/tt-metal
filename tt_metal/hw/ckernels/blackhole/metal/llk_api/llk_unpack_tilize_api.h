@@ -21,9 +21,9 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
-
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     _llk_unpack_tilize_init_(
-        unpack_src_format[operand_id], unpack_dst_format[operand_id], ct_dim, face_r_dim, narrow_tile);
+        unpack_src_format[operand_id], unpack_dst_format[operand_id], ct_dim, face_r_dim, narrow_tile, num_faces);
 }
 
 inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
