@@ -12,8 +12,13 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 // Forward declaration
+namespace tt::tt_metal {
+class PhysicalSystemDescriptor;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 namespace proto {
@@ -37,9 +42,15 @@ struct GroupingItemInfo {
 
 // Grouping information
 struct GroupingInfo {
-    std::string name;
+    std::string name;  // Unique identifier/name for this specific grouping instance
+    std::string type;  // Type of grouping (e.g., "MESH", "TRAY_1", "meshes", "pods")
     std::vector<GroupingItemInfo> items;
     uint32_t asic_count = 0;  // Total ASICs provided by this grouping, calculated bottom-up during population
+
+    // Adjacency graph representing the topology/connections between instances
+    // Node IDs are instance IDs (uint32_t) from the grouping's instances list
+    // Empty graph if no connection type is specified
+    AdjacencyGraph<uint32_t> adjacency_graph;
 };
 
 // PhysicalGroupingDescriptor - Interpreter class for physical grouping descriptor files
@@ -74,43 +85,19 @@ public:
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor) const;
 
+    // Validate and populate predefined groupings (TRAYS and HOSTS) from PhysicalSystemDescriptor
+    // If groupings already exist, validates they match the physical system
+    // If groupings don't exist, automatically creates TRAY groupings with ASIC locations and HOST groupings with tray
+    // references
+    void validate_and_populate_preformed_groups_from_physical_system(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
+
 private:
     // Matching algorithm helper methods (internal use only)
-    // Find best matching "meshes" grouping for a given chip count requirement
-    GroupingInfo find_best_meshes_grouping(uint32_t required_chips) const;
-
-    // Analyze how many of each lower-level grouping type a grouping contains
-    std::unordered_map<std::string, uint32_t> analyze_grouping_composition(
-        const GroupingInfo& grouping, const std::vector<std::string>& lower_level_names) const;
-
-    // Find matching higher-level groupings based on all lower-level types
-    std::vector<GroupingInfo> find_matching_higher_level_groupings(
-        const std::string& grouping_name,
-        const std::vector<std::string>& lower_level_names,
-        const std::unordered_map<std::string, uint32_t>& required_counts) const;
-
-    // Determine grouping hierarchy levels (which groupings reference which)
-    // Returns a map from grouping name to the set of lower-level grouping names it references
-    std::unordered_map<std::string, std::vector<std::string>> determine_grouping_hierarchy() const;
-
-    // Count required lower-level groupings from MGD graph instances
-    // graph_type: The type of graph instances we're matching (e.g., "POD", "CLUSTER")
-    //             Used to count lower-level instances within those graph instances
-    std::unordered_map<std::string, uint32_t> count_required_lower_level_groupings(
-        const MeshGraphDescriptor& mesh_graph_descriptor,
-        const std::vector<std::string>& lower_level_names,
-        const std::string& graph_type = "") const;
-
-    // Build composition requirements from MGD structure (Phase 2)
-    // Returns: map of composition pattern -> list of graph instance IDs requiring that pattern
-    // Composition pattern is a map: {lower_level_name -> count}
-    std::unordered_map<std::string, std::vector<GlobalNodeId>> build_composition_requirements(
-        const MeshGraphDescriptor& mesh_graph_descriptor) const;
-
-    // Find groupings by composition (Phase 3) - NO name filtering
-    // Returns best matching grouping that satisfies the required composition
-    GroupingInfo find_groupings_by_composition(
-        const std::unordered_map<std::string, uint32_t>& required_composition) const;
+    // Find best matching "meshes" grouping for a given chip count requirement and mesh topology
+    // Uses topology solving to ensure the grouping's adjacency graph can map the mesh's topology
+    GroupingInfo find_best_meshes_grouping(
+        uint32_t required_chips, const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId mesh_instance_id) const;
 
     // Data members
     std::shared_ptr<const proto::PhysicalGroupings> proto_;
@@ -143,10 +130,12 @@ private:
         const std::unordered_map<std::string, std::vector<GroupingInfo>>& groupings_by_name);
 
     // Internal validation helpers (used by static_validate)
+    static void uniquify_duplicate_names(proto::PhysicalGroupings& proto);
     static void validate_required_groupings(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_references(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_counts(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_structure(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
+    static void validate_unique_names(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
 };
 
 }  // namespace tt::tt_fabric
