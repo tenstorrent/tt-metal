@@ -273,6 +273,13 @@ void kernel_main() {
     }
 
     uint32_t slice_writes = 0;
+    bool split_forwarding_enabled = false;
+    if constexpr (topology == Topology::Ring) {
+        if (ring_size % 2 == 0 && ring_size > 2) {  // if ring size is even, we need to write the first half of the
+                                                    // tiles, otherwise we write the entire packet
+            split_forwarding_enabled = true;
+        }
+    }
 
     // Write out the local slice to both DRAM and forward and backward
     uint32_t pages_read_in_row = start_pages_read_in_row;
@@ -476,7 +483,6 @@ void kernel_main() {
     }
 
     uint32_t writes_expected = 0;
-    bool split_forwarding_enabled = false;
     if constexpr (topology == Topology::Linear) {
         if (detail::valid_targets_backward(direction)) {
             writes_expected = num_targets_forward_direction;
@@ -486,16 +492,12 @@ void kernel_main() {
     } else if constexpr (topology == Topology::Ring) {
         if (direction == 1) {
             writes_expected = num_targets_backward_direction - 1;
-            if (ring_size % 2 == 0 && ring_size > 2) {
+            if (split_forwarding_enabled) {
                 writes_expected++;  // Backward worker will also forward 1 slice (but only half of it)
-                split_forwarding_enabled = true;
             }
         } else {
             writes_expected = num_targets_forward_direction - 1;
             // For 4-device ring, forward worker will only send half of last slice
-            if (ring_size % 2 == 0 && ring_size > 2) {
-                split_forwarding_enabled = true;
-            }
         }
     }
 

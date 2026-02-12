@@ -587,7 +587,7 @@ def test_all_gather_async_wan_galaxy_4x32(
         (
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(8704),
+                "fabric_router_config": create_fabric_router_config(8192),
                 "trace_region_size": 1000000,
             },
             ttnn.Topology.Ring,
