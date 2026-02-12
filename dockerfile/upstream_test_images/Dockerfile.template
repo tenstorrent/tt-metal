@@ -10,7 +10,7 @@ LABEL org.opencontainers.image.description="Run upstream smoke tests"
 LABEL org.opencontainers.image.licenses=MIT
 
 ## add user
-RUN adduser --uid 1000 --shell /bin/bash user
+RUN adduser --uid 1001 --shell /bin/bash user
 RUN usermod -aG sudo user
 RUN echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
 USER user
