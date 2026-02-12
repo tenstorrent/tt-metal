@@ -9,14 +9,16 @@
 
     defaults:
       ftype: unicast # This default applies to both patterns above
-      ntype: unicast_write
+      ntype: fused_atomic_inc
       size: 7168
+      num_packets: 1
 
     senders:
       - device: 26
+        noc_id: 0
         patterns:
           # First traffic stream from core [1,1]
-          - ntype: unicast_write
+          - ntype: fused_atomic_inc
             destination:
               device: 9
 
@@ -27,15 +29,17 @@
 
     defaults:
       ftype: unicast # This default applies to both patterns above
-      ntype: unicast_write
+      ntype: fused_atomic_inc
       size: 7168
+      num_packets: 1
 
     latency_test_mode: true
     senders:
       - device: 9
+        noc_id: 0
         patterns:
           # First traffic stream from core [1,1]
-          - ntype: unicast_write
+          - ntype: fused_atomic_inc
             destination:
               device: 30
 
@@ -46,15 +50,17 @@
 
     defaults:
       ftype: unicast # This default applies to both patterns above
-      ntype: unicast_write
+      ntype: fused_atomic_inc
       size: 7168
+      num_packets: 1
 
     latency_test_mode: true
     senders:
       - device: 30
+        noc_id: 0
         patterns:
           # First traffic stream from core [1,1]
-          - ntype: unicast_write
+          - ntype: fused_atomic_inc
             destination:
               device: 23
 
@@ -65,14 +71,16 @@
 
     defaults:
       ftype: unicast # This default applies to both patterns above
-      ntype: unicast_write
+      ntype: fused_atomic_inc
       size: 7168
+      num_packets: 1
 
     latency_test_mode: true
     senders:
       - device: 23
+        noc_id: 0
         patterns:
           # First traffic stream from core [1,1]
-          - ntype: unicast_write
+          - ntype: fused_atomic_inc
             destination:
               device: 26

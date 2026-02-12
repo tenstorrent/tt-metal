@@ -126,26 +126,31 @@ void kernel_main() {
     // Measure roundtrip latency: Time it takes for the data to be picked up from L1 + pipeline latency
     uint32_t measurement_addr = credit_address;
     auto l1_read_addr = get_read_ptr(data_cb_id);
+
+    // Configure packet header once before loop (optimization to avoid reconfiguring on every packet)
+    uint64_t initial_dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
+    data_packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
+        NocUnicastAtomicIncFusedCommandHeader{initial_dst_addr, downstream_bytes_sent_noc_addr, whole_packet_size},
+        whole_packet_size);
+
     for (uint32_t i = 0; i < 100; ++i) {
-        uint64_t start_timestamp = get_timestamp();
+        uint64_t start_timestamp = 0;
         uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
 
         // interleave acks
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
             // Socket send on a single link the entire packet size
-            {
-                DeviceZoneScopedN("sender per iter write link 0");
-                write_data_to_remote_core_with_ack(
-                    fabric_connection,
-                    data_packet_header_addr,
-                    l1_read_addr,
-                    dst_addr,
-                    downstream_bytes_sent_noc_addr,
-                    whole_packet_size);
-                DPRINT << "Initially Sent " << whole_packet_size << " BYTES" << ENDL();
-                dst_addr += whole_packet_size;
-                l1_read_addr += whole_packet_size;
-            }
+            // Update destination address in pre-configured header
+            data_packet_header_addr->command_fields.unicast_seminc_fused.noc_address = dst_addr;
+
+            fabric_connection.wait_for_empty_write_slot();
+            fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, whole_packet_size);
+            fabric_connection.send_payload_flush_non_blocking_from_address(
+                (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+            DPRINT << "Initially Sent " << whole_packet_size << " BYTES" << ENDL();
+            dst_addr += whole_packet_size;
+            l1_read_addr += whole_packet_size;
 
             // {
             //     DeviceZoneScopedN("sender per iter write link 1");
@@ -159,31 +164,27 @@ void kernel_main() {
             //     dst_addr += whole_packet_size;
             //     l1_read_addr += whole_packet_size;
             // }
-            {
-                DeviceZoneScopedN("sender l1 flush");
-                noc_async_writes_flushed();
-            }
+            start_timestamp = get_timestamp();
+            noc_async_writes_flushed();
         }
 
         if constexpr (aligned_partial_packet_size) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection,
-                data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
+            // Update header for partial packet size
+            data_packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
+                NocUnicastAtomicIncFusedCommandHeader{
+                    dst_addr, downstream_bytes_sent_noc_addr, aligned_partial_packet_size},
                 aligned_partial_packet_size);
+
+            fabric_connection.wait_for_empty_write_slot();
+            fabric_connection.send_payload_without_header_non_blocking_from_address(
+                l1_read_addr, aligned_partial_packet_size);
+            fabric_connection.send_payload_flush_non_blocking_from_address(
+                (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
         }
 
-        {
-            DeviceZoneScopedN("sender push pages");
-            socket_push_pages(sender_socket, 1);
-        }
+        socket_push_pages(sender_socket, 1);
 
-        {
-            DeviceZoneScopedN("Wait for pages");
-            socket_wait_for_pages(receiver_socket, 1);
-        }
+        socket_wait_for_pages(receiver_socket, 1);
         // uint32_t socket_read_addr = receiver_socket.read_ptr;
         // uint32_t val = 0;
         // for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
@@ -192,6 +193,10 @@ void kernel_main() {
         //     }
         //     val++;
         // }
+        uint64_t end_timestamp = get_timestamp();
+        uint64_t latency = end_timestamp - start_timestamp;
+        *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(measurement_addr) = latency;
+        measurement_addr += sizeof(uint64_t);
         {
             DeviceZoneScopedN("pop pages");
             socket_pop_pages(receiver_socket, 1);
@@ -204,10 +209,6 @@ void kernel_main() {
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
         }
-        uint64_t end_timestamp = get_timestamp();
-        uint64_t latency = end_timestamp - start_timestamp;
-        *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(measurement_addr) = latency;
-        measurement_addr += sizeof(uint64_t);
     }
 
     update_socket_config(sender_socket);

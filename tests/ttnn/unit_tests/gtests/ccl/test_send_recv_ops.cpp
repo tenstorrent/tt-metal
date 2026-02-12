@@ -272,11 +272,16 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest4) {
         latencies.data(), sizeof(uint64_t) * 100, tt_cxy_pair(start_device_id, start_core_coord), base_addr);
 
     int freq_mhz = cluster.get_device_aiclk(start_device_id);
+    std::cout << "freq: " << freq_mhz << std::endl;
+    double total_latency{};
     for (uint32_t i = 0; i < 100; i++) {
         double latency_ns = 1000 * ((float)latencies[i] / freq_mhz);
         std::cout << "Iteration " << i << " RTT latency (ns): " << latency_ns
                   << " Per hop latency (ns): " << latency_ns / 4.0f << std::endl;
+        total_latency += latency_ns;
     }
+    std::cout << "Avg RTT (ns): " << total_latency / 100 << std::endl;
+    std::cout << "Avg Per hop (ns): " << total_latency / 400 << std::endl;
 }
 
 TEST_F(FabricSendRecv2x4Fixture, SRTest2) {
@@ -387,7 +392,7 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest2) {
     cluster.read_core(
         latencies.data(), sizeof(uint64_t) * 100, tt_cxy_pair(start_device_id, start_core_coord), base_addr);
 
-    int freq_mhz = cluster.get_device_aiclk(start_device_id);
+    float freq_mhz = cluster.get_device_aiclk(start_device_id);
     for (uint32_t i = 0; i < 100; i++) {
         double latency_ns = 1000 * ((float)latencies[i] / freq_mhz);
         std::cout << "Iteration " << i << " RTT latency (ns): " << latency_ns

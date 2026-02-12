@@ -102,6 +102,12 @@ void kernel_main() {
         (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     // Done handshake
 
+    // Configure packet header once before loop (optimization to avoid reconfiguring on every packet)
+    uint64_t initial_dst_addr = receiver_noc_coord_addr + send_socket.write_ptr;
+    downstream_data_packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
+        NocUnicastAtomicIncFusedCommandHeader{initial_dst_addr, downstream_bytes_sent_noc_addr, whole_packet_size},
+        whole_packet_size);
+
     for (uint32_t i = 0; i < 100; ++i) {
         {
             DeviceZoneScopedN("Socket reserve pages");
@@ -117,19 +123,21 @@ void kernel_main() {
         // Forward data to downstream
         // interleave acks
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
+            // Update destination address in pre-configured header
+            downstream_data_packet_header_addr->command_fields.unicast_seminc_fused.noc_address = dst_addr;
+
             {
-                DeviceZoneScopedN("fwd per iter write link 0");
-                write_data_to_remote_core_with_ack(
-                    downstream_fabric_connection,
-                    downstream_data_packet_header_addr,
-                    l1_read_addr,
-                    dst_addr,
-                    downstream_bytes_sent_noc_addr,
-                    whole_packet_size);
-                dst_addr += whole_packet_size;
-                DPRINT << "Socket sent " << whole_packet_size << " bytes" << ENDL();
-                l1_read_addr += whole_packet_size;
+                DeviceZoneScopedN("intermed cost");
+                downstream_fabric_connection.wait_for_empty_write_slot();
+                downstream_fabric_connection.send_payload_without_header_non_blocking_from_address(
+                    l1_read_addr, whole_packet_size);
+                downstream_fabric_connection.send_payload_flush_non_blocking_from_address(
+                    (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
             }
+
+            dst_addr += whole_packet_size;
+            DPRINT << "Socket sent " << whole_packet_size << " bytes" << ENDL();
+            l1_read_addr += whole_packet_size;
 
             // {
             //     DeviceZoneScopedN("fwd per iter write link 1");
@@ -143,32 +151,26 @@ void kernel_main() {
             //     dst_addr += whole_packet_size;
             //     l1_read_addr += whole_packet_size;
             // }
-            {
-                DeviceZoneScopedN("fwd l1 flush");
-                noc_async_writes_flushed();
-            }
+            noc_async_writes_flushed();
         }
 
         if constexpr (aligned_partial_packet_size) {
-            DeviceZoneScopedN("fwd aligned write");
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection,
-                downstream_data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
+            // Update header for partial packet size
+            downstream_data_packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
+                NocUnicastAtomicIncFusedCommandHeader{
+                    dst_addr, downstream_bytes_sent_noc_addr, aligned_partial_packet_size},
                 aligned_partial_packet_size);
+
+            downstream_fabric_connection.wait_for_empty_write_slot();
+            downstream_fabric_connection.send_payload_without_header_non_blocking_from_address(
+                l1_read_addr, aligned_partial_packet_size);
+            downstream_fabric_connection.send_payload_flush_non_blocking_from_address(
+                (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
         }
 
         // Notify Upstream and Downstream that data has been consumed or produced
-        {
-            DeviceZoneScopedN("socket push pages");
-            socket_push_pages(send_socket, 1);
-        }
-        {
-            DeviceZoneScopedN("socket pop pages");
-            socket_pop_pages(recv_socket, 1);
-        }
+        socket_push_pages(send_socket, 1);
+        socket_pop_pages(recv_socket, 1);
         if ((i & 7) == 0) {
             {
                 DeviceZoneScopedN("socket notify stateful");

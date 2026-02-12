@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cstddef>
 
+#include "api/debug/dprint.h"
+
 // Latency test sender kernel - measures round-trip latency by recording timestamps
 // around packet send and ack receipt
 
