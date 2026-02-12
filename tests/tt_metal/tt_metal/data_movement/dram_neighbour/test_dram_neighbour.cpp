@@ -67,7 +67,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     std::vector<CoreCoord> dram_cores;
     for(const auto& [key, value] : core_dram_map) {
         dram_cores.push_back(CoreCoord{static_cast<uint16_t>(value), 0});
-        log_info(tt::LogTest, "line 67: dram_cores vector - DRAM bank {}", value);
+        // log_info(tt::LogTest, "line 67: dram_cores vector - DRAM bank {}", value);
     }
 
     // Buffer sharding: each bank's data to corresponding core
@@ -114,7 +114,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     for(const auto [key, value] : core_dram_map) {
         CoreCoord core{static_cast<uint16_t>(key >> 16), static_cast<uint16_t>(key & 0xFFFF)};
         worker_cores.push_back(core);
-        log_info(tt::LogTest, "line 114: worker_cores vector - Core ({}, {})", core.x, core.y);
+        // log_info(tt::LogTest, "line 114: worker_cores vector - Core ({}, {})", core.x, core.y);
     }
 
     CoreRangeSet core_range_set(worker_cores);
@@ -137,14 +137,13 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     // Set runtime args: each core reads its adjacent bank
     for(uint32_t i = 0; i < worker_cores.size(); i++) {
         uint32_t dram_bank_id = core_dram_map.at((static_cast<uint32_t>(worker_cores[i].x) << 16) | static_cast<uint32_t>(worker_cores[i].y));
-        log_info(tt::LogTest, "line 130: Core ({}, {}), dram_bank_id {}",
-                 worker_cores[i].x, worker_cores[i].y, dram_bank_id);
+        // log_info(tt::LogTest, "line 130: Core ({}, {}), dram_bank_id {}",
+        //  worker_cores[i].x, worker_cores[i].y, dram_bank_id);
         std::vector<uint32_t> core_runtime_args = {input_buffer_address, l1_addr[i], dram_bank_id};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel, worker_cores[i], core_runtime_args);
     }
 
-
-    log_info(tt::LogTest, "Running Neighbour Read Test ID: {}, Run ID: {}", test_config.test_id, runtime_host_id);
+    // log_info(tt::LogTest, "Running Neighbour Read Test ID: {}, Run ID: {}", test_config.test_id, runtime_host_id);
     program.set_runtime_id(runtime_host_id++);
 
 
@@ -167,7 +166,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     for (uint32_t i = 0; i < worker_cores.size(); i++) {
         detail::ReadFromDeviceL1(device, worker_cores[i], l1_addr[i], total_size_bytes/test_config.num_banks, cur_output);
-        log_info(tt::LogTest, "line 170: Read from L1 of Core ({}, {})", worker_cores[i].x, worker_cores[i].y);
+        // log_info(tt::LogTest, "line 170: Read from L1 of Core ({}, {})", worker_cores[i].x, worker_cores[i].y);
         packed_output.insert(packed_output.end(), cur_output.begin(), cur_output.end());
         cur_output.clear();
     }
@@ -260,7 +259,7 @@ TEST_F(GenericMeshDeviceFixture, idealClosestNeighbourTest) {
 
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
 
-    uint32_t test_id = 110;
+    uint32_t test_id = 501;
     uint32_t num_of_transactions = 1;
     uint32_t num_banks = mesh_device->num_dram_channels();
     uint32_t pages_per_bank = 1;
@@ -271,7 +270,7 @@ TEST_F(GenericMeshDeviceFixture, idealClosestNeighbourTest) {
 
     for(const auto& [key, value] : core_dram_map) {
         CoreCoord core{static_cast<uint16_t>(key >> 16), static_cast<uint16_t>(key & 0xFFFF)};
-        log_info(tt::LogTest, "line 268: Core ({}, {}) assigned to DRAM bank {}", core.x, core.y, value);
+        // log_info(tt::LogTest, "line 268: Core ({}, {}) assigned to DRAM bank {}", core.x, core.y, value);
     }
 
 
@@ -292,7 +291,7 @@ TEST_F(GenericMeshDeviceFixture, numPagesSweepClosestNeighbourTest) {
 
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
 
-    uint32_t test_id = 111;
+    uint32_t test_id = 502;
     uint32_t num_banks = mesh_device->num_dram_channels();
     uint32_t max_num_pages = 32;
     uint32_t max_transactions = 256;
@@ -322,7 +321,7 @@ TEST_F(GenericMeshDeviceFixture, numBankSweepClosestNeighbourTest) {
 
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
 
-    uint32_t test_id = 111;
+    uint32_t test_id = 503;
     uint32_t max_num_banks = mesh_device->num_dram_channels();
     uint32_t num_pages = 32;
     uint32_t max_transactions = 256;
@@ -355,7 +354,7 @@ TEST_F(GenericMeshDeviceFixture, randomCoreToDramAssignmentTest) {
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
 
     // Test parameters
-    uint32_t test_id = 200;
+    uint32_t test_id = 504;
     uint32_t num_of_transactions = 1;
     uint32_t pages_per_bank = 1;
     DataFormat l1_data_format = DataFormat::Float16_b;
@@ -410,7 +409,7 @@ TEST_F(GenericMeshDeviceFixture, randomCoreToDramAssignmentSweepTest) {
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
 
     // Test parameters
-    uint32_t test_id = 200;
+    uint32_t test_id = 505;
     uint32_t max_transactions = 256;
     uint32_t max_num_pages = 32;
     DataFormat l1_data_format = DataFormat::Float16_b;
