@@ -623,7 +623,6 @@ class PreSDPA:
         # Split K=7168 into 2 halves: each half has 112 tiles
         matmul_k_per_core = matmul_act_total_tiles // 2
         matmul_k_offset_half1 = matmul_k_per_core
-        matmul_cols_per_half = matmul_half0_bbox.grid_size().x
         # matmul_half_boundary_col is a logical-x threshold used directly in kernel
         matmul_half_boundary_col = matmul_half1_bbox.start.x
 
@@ -862,7 +861,14 @@ class PreSDPA:
             ("gather_reduce_src_cb", matmul_output_cb),
             ("gather_reduce_src_num_pages", gather_reduce_src_num_pages),
             ("matmul_half_boundary_col", matmul_half_boundary_col),
-            ("matmul_cols_per_half", matmul_cols_per_half),
+            ("gather_reduce_half0_grid_start_x", matmul_half0_bbox.start.x),
+            ("gather_reduce_half0_grid_start_y", matmul_half0_bbox.start.y),
+            ("gather_reduce_half0_grid_end_x", matmul_half0_bbox.end.x),
+            ("gather_reduce_half0_grid_end_y", matmul_half0_bbox.end.y),
+            ("gather_reduce_half1_grid_start_x", matmul_half1_bbox.start.x),
+            ("gather_reduce_half1_grid_start_y", matmul_half1_bbox.start.y),
+            ("gather_reduce_half1_grid_end_x", matmul_half1_bbox.end.x),
+            ("gather_reduce_half1_grid_end_y", matmul_half1_bbox.end.y),
             ("gather_reduce_half0_cb_id", rmsnorm2_input_cb),
             ("gather_reduce_half1_cb_id", gather_reduce_half1_scratch_cb),
         ]
