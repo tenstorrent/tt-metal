@@ -244,6 +244,18 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     ):
         pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37645")
 
+    if (
+        is_blackhole()
+        and is_watcher_enabled()
+        and N == 1
+        and C == 512
+        and H == 512
+        and W == 512
+        and num_groups == 32
+        and num_splits == 16
+    ):
+        pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37645")
+
     grid_size = ttnn.CoreGrid(y=8, x=8)
 
     # Generate torch tensor
