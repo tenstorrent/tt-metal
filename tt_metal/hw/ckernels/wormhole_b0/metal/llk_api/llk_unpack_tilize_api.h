@@ -127,7 +127,8 @@ inline void llk_unpack_tilizeA_B(
 
     WAYPOINT("UPTW");
 
-    _llk_unpack_tilizeA_B_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+    // Wormhole LLK only has zero_srcA template param; neginf_srcA, reload_srcB, zero_srcA_reduce kept for API compat
+    _llk_unpack_tilizeA_B_<zero_srcA>(
         unpack_src_format[operandA_id],
         face_r_dim,
         narrow_tile,
