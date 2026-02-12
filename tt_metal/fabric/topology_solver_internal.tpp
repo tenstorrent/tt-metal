@@ -24,6 +24,9 @@ namespace tt::tt_fabric::detail {
 // Using bit mask (2^18 - 1) to efficiently check if dfs_calls is divisible by 2^18
 constexpr uint32_t PROGRESS_LOG_INTERVAL_MASK = (1u << 18) - 1;
 
+// DFS call limit to prevent excessive search for complex topologies
+constexpr size_t DFS_CALL_LIMIT = 1000000;  // 1 million calls
+
 template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
     const AdjacencyGraph<TargetNode>& target_graph, const AdjacencyGraph<GlobalNode>& global_graph)
@@ -887,6 +890,19 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     // Periodic progress logging (similar to topology_mapper_utils.cpp)
     state_.dfs_calls++;
+
+    // Check DFS call limit to prevent excessive search for complex topologies
+    if (state_.dfs_calls >= DFS_CALL_LIMIT) {
+        std::string error_msg = fmt::format(
+            "DFS search exceeded call limit of {} calls. Topology may be too complex to solve.",
+            DFS_CALL_LIMIT);
+        log_warning(tt::LogFabric, "{}", error_msg);
+        if (state_.error_message.empty()) {
+            state_.error_message = error_msg;
+        }
+        return false;
+    }
+
     if ((state_.dfs_calls & PROGRESS_LOG_INTERVAL_MASK) == 0) {
         size_t assigned = 0;
         for (auto v : state_.mapping) {
@@ -904,6 +920,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
     // Check memoization cache
     uint64_t state_hash = hash_state(state_.mapping);
     if (state_.failed_states.find(state_hash) != state_.failed_states.end()) {
+        state_.memoization_hits++;
         return false;
     }
 
@@ -1637,6 +1654,7 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
 
         result.stats.dfs_calls = state.dfs_calls;
         result.stats.backtrack_count = state.backtrack_count;
+        result.stats.memoization_hits = state.memoization_hits;
         result.warnings = std::move(validation_warnings);
 
         return result;
@@ -1656,16 +1674,18 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     // Copy statistics
     result.stats.dfs_calls = state.dfs_calls;
     result.stats.backtrack_count = state.backtrack_count;
+    result.stats.memoization_hits = state.memoization_hits;
 
     // Log success with statistics
     log_info(
         tt::LogFabric,
         "Mapping validation succeeded: {} target nodes mapped to {} global nodes. "
-        "DFS calls: {}, backtracks: {}. Required constraints satisfied: {}, preferred constraints satisfied: {}/{}",
+        "DFS calls: {}, backtracks: {}, memoization hits: {}. Required constraints satisfied: {}, preferred constraints satisfied: {}/{}",
         graph_data.n_target,
         graph_data.n_global,
         state.dfs_calls,
         state.backtrack_count,
+        state.memoization_hits,
         result.constraint_stats.required_satisfied,
         result.constraint_stats.preferred_satisfied,
         result.constraint_stats.preferred_total);

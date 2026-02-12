@@ -746,6 +746,7 @@ void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result) {
     ss << "\nStatistics:" << std::endl;
     ss << "  DFS calls: " << result.stats.dfs_calls << std::endl;
     ss << "  Backtracks: " << result.stats.backtrack_count << std::endl;
+    ss << "  Memoization hits: " << result.stats.memoization_hits << std::endl;
     ss << "  Elapsed time: " << result.stats.elapsed_time.count() << " ms" << std::endl;
     ss << "  Required constraints satisfied: " << result.constraint_stats.required_satisfied << std::endl;
     ss << "  Preferred constraints satisfied: " << result.constraint_stats.preferred_satisfied << "/"

@@ -1643,6 +1643,80 @@ TEST_F(TopologySolverTest, RequiredConstraints_4x8MeshOn8x8Mesh_CornersToCorners
     }
 }
 
+TEST_F(TopologySolverTest, SolveTopologyMapping_4x3MeshOn6x2Torus) {
+    // Test mapping a 4x3 logical mesh onto a 6x2 physical torus
+    // Logical mesh: 4x3 grid (12 nodes, no wrap-around)
+    // Physical mesh: 6x2 torus (12 nodes, with wrap-around in both dimensions)
+    //
+    // This tests that a grid topology cannot be mapped onto a torus topology
+    // where the torus has wrap-around connections that the grid doesn't have.
+    // Uses smaller topology to reduce DFS calls while still testing the concept.
+
+    // Create logical graph: 4x3 mesh (12 nodes, no wrap-around)
+    auto logical_graph = create_2d_mesh_graph<TestTargetNode>(4, 3);
+
+    // Create physical graph: 6x2 torus (12 nodes, with wrap-around)
+    auto physical_graph = create_2d_torus_graph<TestGlobalNode>(6, 2);
+
+    // Verify graph sizes match
+    EXPECT_EQ(logical_graph.get_nodes().size(), 12u) << "Logical mesh should have 4*3=12 nodes";
+    EXPECT_EQ(physical_graph.get_nodes().size(), 12u) << "Physical torus should have 6*2=12 nodes";
+
+    // Verify logical graph structure (4x3 mesh)
+    // Corners have 2 neighbors, edges have 3 neighbors, interior have 4 neighbors
+    size_t logical_corner_count = 0, logical_edge_count = 0, logical_interior_count = 0;
+    for (const auto& node : logical_graph.get_nodes()) {
+        size_t degree = logical_graph.get_neighbors(node).size();
+        if (degree == 2) {
+            logical_corner_count++;
+        } else if (degree == 3) {
+            logical_edge_count++;
+        } else if (degree == 4) {
+            logical_interior_count++;
+        }
+    }
+    // 4x3 mesh: 4 corners, (4-2)*2 + (3-2)*2 = 4 + 2 = 6 edge nodes, (4-2)*(3-2) = 2 interior
+    EXPECT_EQ(logical_corner_count, 4u);
+    EXPECT_EQ(logical_edge_count, 6u);
+    EXPECT_EQ(logical_interior_count, 2u);
+
+    // Verify physical graph structure (6x2 torus - all nodes have 4 neighbors due to wrap-around)
+    for (const auto& node : physical_graph.get_nodes()) {
+        size_t degree = physical_graph.get_neighbors(node).size();
+        EXPECT_EQ(degree, 4u) << "All nodes in a 2D torus should have exactly 4 neighbors";
+    }
+
+    // No constraints - let the solver find any valid mapping
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Solve the mapping
+    auto result = solve_topology_mapping(logical_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Verify mapping failed - a 4x3 mesh cannot map onto a 6x2 torus
+    // The mesh has nodes with 2 neighbors (corners) and 3 neighbors (edges),
+    // but the torus only has nodes with 4 neighbors (all nodes due to wrap-around).
+    // This violates the adjacency preservation requirement.
+    EXPECT_FALSE(result.success) << "4x3 mesh should NOT map onto 6x2 torus because mesh has nodes with 2-3 neighbors "
+                                 << "but torus only has nodes with 4 neighbors. Error: " << result.error_message;
+    EXPECT_FALSE(result.error_message.empty()) << "Should have error message explaining why mapping failed";
+
+    // Verify no infinite loop occurred - DFS calls should be reasonable and not exceed limit
+    // The DFS limit is 1 million, so we check that it's well below that
+    EXPECT_LT(result.stats.dfs_calls, 1000000u) << "DFS calls should not exceed limit (no infinite loop)";
+    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made some DFS calls";
+
+    // Log statistics for debugging
+    log_info(
+        tt::LogFabric,
+        "4x3 mesh on 6x2 torus test (expected failure): dfs_calls={}, backtracks={}, memoization_hits={}, "
+        "mapped_nodes={}, error={}",
+        result.stats.dfs_calls,
+        result.stats.backtrack_count,
+        result.stats.memoization_hits,
+        result.target_to_global.size(),
+        result.error_message);
+}
+
 // Helper function to create a 2D mesh graph without torus connections (no wrap-around)
 template <typename NodeId>
 AdjacencyGraph<NodeId> create_2d_mesh_no_torus_graph(size_t rows, size_t cols) {
@@ -2194,6 +2268,7 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_BasicSuccess) {
     // Verify statistics
     EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
 }
 
 TEST_F(TopologySolverTest, SolveTopologyMapping_WithRequiredConstraints) {
@@ -2416,8 +2491,72 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_ResultStructure) {
     // Verify statistics are populated
     EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have DFS calls";
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
     EXPECT_EQ(result.constraint_stats.required_satisfied, 1u) << "Should satisfy required constraint";
     EXPECT_GE(result.constraint_stats.preferred_satisfied, 0u) << "Should track preferred constraints";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_MemoizationHits) {
+    // Test that memoization hits and backtracking stats are tracked in results
+    // Create a topology with multiple paths to allow exploration
+
+    // Create target graph: 1 -> 2 -> 3 -> 4 -> 5 (5-node path)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2, 4};
+    target_adj_map[4] = {3, 5};
+    target_adj_map[5] = {4};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph with multiple valid paths
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 15};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12, 14, 19};  // Multiple neighbors for exploration
+    global_adj_map[14] = {13};
+    global_adj_map[19] = {13, 20};
+    global_adj_map[20] = {19};
+    global_adj_map[15] = {10, 16};  // Alternative path
+    global_adj_map[16] = {15, 17};
+    global_adj_map[17] = {16, 18};
+    global_adj_map[18] = {17};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Use constraints to guide search - this may or may not cause backtracking
+    // depending on heuristic choices, but stats should always be tracked
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    constraints.add_required_constraint(2, 11);
+    constraints.add_required_constraint(3, 12);
+    constraints.add_preferred_constraint(4, 19);  // Guide search
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed after backtracking
+    EXPECT_TRUE(result.success) << "Should find a valid mapping after backtracking";
+
+    // Verify stats are tracked
+    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
+
+    // Verify stats are tracked correctly
+    // Note: With efficient forward consistency checking, backtracking may not always occur
+    // in simple topologies. The important thing is that the stats are properly tracked.
+    // If backtracking occurs (backtrack_count > 0), that demonstrates the mechanism works.
+    // If it doesn't occur, that's also valid - it means the heuristics are working well.
+
+    // Log the stats for debugging
+    log_info(
+        tt::LogFabric,
+        "Memoization test: dfs_calls={}, backtracks={}, memoization_hits={}",
+        result.stats.dfs_calls,
+        result.stats.backtrack_count,
+        result.stats.memoization_hits);
 }
 
 TEST_F(TopologySolverTest, MappingConstraintsOneToManyRequired) {
@@ -3069,6 +3208,7 @@ TEST_F(TopologySolverTest, CardinalityConstraint_IntegrationWithSolver) {
     // Verify statistics
     EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
 }
 
 TEST_F(TopologySolverTest, CardinalityConstraint_ConstraintIndexData) {

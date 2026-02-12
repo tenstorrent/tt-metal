@@ -426,6 +426,7 @@ struct MappingResult {
     struct Stats {
         size_t dfs_calls = 0;                      ///< Number of DFS calls made
         size_t backtrack_count = 0;                ///< Number of backtracks performed
+        size_t memoization_hits = 0;               ///< Number of times memoization cache was hit
         std::chrono::microseconds elapsed_time{};  ///< Time taken to solve (microsecond resolution)
     } stats;
 };
@@ -614,6 +615,7 @@ public:
         std::unordered_set<uint64_t> failed_states;  // Memoization cache of failed states
         size_t dfs_calls = 0;                        // Number of DFS calls made
         size_t backtrack_count = 0;                  // Number of backtracks performed
+        size_t memoization_hits = 0;                 // Number of times memoization cache was hit
         std::string error_message;                   // Error message if search fails
     };
 
