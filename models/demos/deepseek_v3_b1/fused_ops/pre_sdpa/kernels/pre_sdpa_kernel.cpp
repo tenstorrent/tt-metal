@@ -31,6 +31,8 @@
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/gather.hpp"
+#include "../../../unified_kernels/gather_reduce.hpp"
+#include "../../../unified_kernels/kn_sliced_matmul.hpp"
 #include "../../../unified_kernels/gather_heads.hpp"
 #include "../../../unified_kernels/rope.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
@@ -73,8 +75,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_is_sender"),
         get_named_compile_time_arg_val("bcast_core_noc_x"),
         get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
-        get_named_compile_time_arg_val("bcast_is_active_broadcaster")>;
+        get_named_compile_time_arg_val("bcast_is_secondary_sender")>;
 
     // CCL Broadcast reader runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
@@ -101,28 +102,28 @@ void kernel_main() {
     };
 
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
-    using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    using MatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::ReaderCTArgs;
     using Matmul2CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     using Matmul3CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
 
     // Matmul reader args (NCRISC is no-op)
-    deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
+    deepseek_b1_ops::KNSlicedMatmul::ReaderArgs matmul_args{};
 
     // Gather sender args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Gather::SenderArgs gather_args{
-        get_named_compile_time_arg_val("gather_dest_noc_x"),
-        get_named_compile_time_arg_val("gather_dest_noc_y"),
-        get_named_compile_time_arg_val("gather_data_size_bytes"),
-        get_named_compile_time_arg_val("gather_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("gather_src_cb"),
-        get_named_compile_time_arg_val("gather_src_num_pages"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather_row_major"),
-        get_write_ptr(get_named_compile_time_arg_val(
-            "rmsnorm2_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+    deepseek_b1_ops::GatherReduce::SenderArgs gather_reduce_args{
+        get_named_compile_time_arg_val("gather_reduce_dest_noc_x"),
+        get_named_compile_time_arg_val("gather_reduce_dest_noc_y"),
+        get_named_compile_time_arg_val("gather_reduce_data_size_bytes"),
+        get_named_compile_time_arg_val("gather_reduce_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("gather_reduce_src_cb"),
+        get_named_compile_time_arg_val("gather_reduce_src_num_pages"),
+        get_named_compile_time_arg_val("gather_reduce_grid_start_x"),
+        get_named_compile_time_arg_val("gather_reduce_grid_start_y"),
+        get_named_compile_time_arg_val("gather_reduce_grid_end_x"),
+        get_named_compile_time_arg_val("gather_reduce_grid_end_y"),
+        get_named_compile_time_arg_val("gather_reduce_half_num_cores"),
+        get_named_compile_time_arg_val("gather_reduce_half0_cb_id"),
+        get_named_compile_time_arg_val("gather_reduce_half1_cb_id"),
     };
 
     // RMSNorm2 reader args
@@ -209,12 +210,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_core_noc_y"),
         get_named_compile_time_arg_val("bcast_is_secondary_sender"),
         get_named_compile_time_arg_val("bcast_has_secondary_target"),
-        get_named_compile_time_arg_val("bcast_has_reverse_secondary_connection"),
         get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
         get_named_compile_time_arg_val("bcast_range_hops_forward"),
         get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("bcast_range_hops_backward"),
-        get_named_compile_time_arg_val("bcast_using_persistent_buffers")>;
+        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
 
     // CCL Broadcast writer runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
@@ -271,21 +270,22 @@ void kernel_main() {
     };
 
     // Matmul CTArgs type alias (BRISC uses WriterCTArgs)
-    using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    using MatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::WriterCTArgs;
     using Matmul2CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     using Matmul3CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
 
     // Matmul writer args (BRISC is no-op)
-    deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
+    deepseek_b1_ops::KNSlicedMatmul::WriterArgs matmul_args{};
 
     // Gather receiver args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Gather::ReceiverArgs gather_args{
-        get_named_compile_time_arg_val("gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather_noc1_num_senders"),
-        get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("gather_dst_cb"),
-        get_named_compile_time_arg_val("gather_dst_num_pages"),
+    deepseek_b1_ops::GatherReduce::ReceiverArgs gather_reduce_args{
+        get_named_compile_time_arg_val("gather_reduce_noc0_num_senders"),
+        get_named_compile_time_arg_val("gather_reduce_noc1_num_senders"),
+        get_named_compile_time_arg_val("gather_reduce_noc0_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("gather_reduce_noc1_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
     // Matmul2 writer args (BRISC is no-op)
@@ -404,19 +404,34 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
 
     // Matmul CTArgs type alias (out_w is compile-time for TRISC)
+    const auto matmul_half_info = unified_kernels::get_split_half_core_info<true>(
+        get_named_compile_time_arg_val("matmul_grid_start_x"),
+        get_named_compile_time_arg_val("matmul_grid_start_y"),
+        get_named_compile_time_arg_val("matmul_grid_end_x"),
+        get_named_compile_time_arg_val("matmul_grid_end_y"),
+        get_named_compile_time_arg_val("matmul_half_num_cores"));
+    constexpr uint32_t matmul_k_offset_half1 = get_named_compile_time_arg_val("matmul_k_offset_half1");
+    uint32_t k_offset = matmul_half_info.is_half0 ? 0 : matmul_k_offset_half1;
+
     using MatmulCTArgs =
-        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w_per_core")>;
+        deepseek_b1_ops::KNSlicedMatmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w_per_core")>;
 
     // Matmul compute args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Matmul::ComputeArgs matmul_args{
+    deepseek_b1_ops::KNSlicedMatmul::ComputeArgs matmul_args{
         get_named_compile_time_arg_val("matmul_in0"),
         get_named_compile_time_arg_val("matmul_in1"),
         get_named_compile_time_arg_val("matmul_out"),
-        get_named_compile_time_arg_val("matmul_k_num_tiles"),
+        k_offset,
+        get_named_compile_time_arg_val("matmul_k_per_core"),
+        get_named_compile_time_arg_val("matmul_act_total_tiles"),
     };
 
-    // Gather compute args (no-op for TRISC)
-    deepseek_b1_ops::Gather::ComputeArgs gather_args{};
+    // Gather reduce compute args
+    deepseek_b1_ops::GatherReduce::ComputeArgs gather_reduce_args{
+        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
+    };
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
@@ -547,7 +562,7 @@ void kernel_main() {
     if constexpr (Core::is_matmul_core) {
         // Matmul weights
         constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
-        constexpr uint32_t matmul_k_num_tiles = get_named_compile_time_arg_val("matmul_k_num_tiles");
+        constexpr uint32_t matmul_k_num_tiles = get_named_compile_time_arg_val("matmul_k_per_core");
         constexpr uint32_t matmul_out_w_per_core = get_named_compile_time_arg_val("matmul_out_w_per_core");
         unified_kernels::setup_sharded_buffer(matmul_in1, matmul_k_num_tiles * matmul_out_w_per_core);
     }
@@ -690,20 +705,21 @@ void kernel_main() {
     // ========================================================================
     {
         DeviceZoneScopedN("MATMUL");
-        // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-        deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
+        // pop_act = false (shared activation buffer), pop_weights = false (weights are persistent)
+        deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
         matmul(matmul_args);
     }
 
     // ========================================================================
-    // Gather: matmul cores (senders) -> input core (receiver)
-    // NCRISC sends from matmul cores, BRISC receives on input core, TRISC no-op
+    // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
+    // NCRISC sends from matmul cores, BRISC receives on input core, TRISC reduces CB7 += CB8
     // ========================================================================
     {
         DeviceZoneScopedN("GATHER");
         // pop_src = true (matmul output is consumed after gather)
-        deepseek_b1_ops::Gather::Op<Core::is_matmul_core, Core::is_input_core, true> gather;
-        gather(gather_args);
+        deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
+            gather_reduce;
+        gather_reduce(gather_reduce_args);
     }
 
     // ========================================================================

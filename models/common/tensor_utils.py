@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -14,6 +14,33 @@ import ttnn
 
 # Standard tile size - hardware constant
 TILE_SIZE = ttnn.TILE_SIZE  # 32
+
+
+def get_rot_transformation_mat() -> torch.Tensor:
+    """
+    Create rotation transformation matrix for RoPE.
+
+    Returns a [1, 1, 32, 32] tensor with the pattern:
+    - rot_emb_matrix[i, i+1] = 1 for even i
+    - rot_emb_matrix[i+1, i] = -1 for even i
+
+    This is used by ttnn.experimental.rotary_embedding_llama.
+    """
+    dhead = TILE_SIZE  # Always 32 for RoPE op
+    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+    return rot_emb_matrix
+
+
+def zeros_like_kv_cache(batch_size: int, n_kv_heads: int, max_seq_len: int, head_dim: int) -> torch.Tensor:
+    """Create zeros tensor for standard KV cache."""
+    return torch.zeros((batch_size, n_kv_heads, max_seq_len, head_dim))
+
+
+def zeros_like_paged_cache(paged_config, n_kv_heads: int, head_dim: int) -> torch.Tensor:
+    """Create zeros tensor for paged KV cache."""
+    return torch.zeros((paged_config.max_num_blocks, n_kv_heads, paged_config.block_size, head_dim))
 
 
 # todo)) add a on-device pad_dim_to_size function?

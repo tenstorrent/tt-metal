@@ -359,6 +359,15 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::allocated_addresses(
     return allocated_addresses;
 }
 
+std::optional<DeviceAddr> FreeListOpt::get_allocation_size(DeviceAddr absolute_address) const {
+    DeviceAddr addr = absolute_address - offset_bytes_;
+    auto block_index_opt = get_block_index_from_alloc_table(addr);
+    if (!block_index_opt.has_value()) {
+        return std::nullopt;
+    }
+    return block_size_[*block_index_opt];
+}
+
 size_t FreeListOpt::alloc_meta_block(
     DeviceAddr address, DeviceAddr size, ssize_t prev_block, ssize_t next_block, bool is_allocated) {
     size_t idx;
@@ -646,6 +655,15 @@ bool FreeListOpt::is_address_in_alloc_table(DeviceAddr address) const {
         }
     }
     return false;
+}
+std::optional<size_t> FreeListOpt::get_block_index_from_alloc_table(DeviceAddr address) const {
+    size_t bucket = hash_device_address(address);
+    for (const auto& [addr, block_index] : allocated_block_table_[bucket]) {
+        if (addr == address) {
+            return block_index;
+        }
+    }
+    return std::nullopt;
 }
 std::optional<size_t> FreeListOpt::get_and_remove_from_alloc_table(DeviceAddr address) {
     size_t bucket = hash_device_address(address);
