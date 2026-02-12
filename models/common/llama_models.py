@@ -5,7 +5,6 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
-from logging import getLogger
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import torch
@@ -166,11 +165,6 @@ class GeneratorText:
         return self.processor.decode(tokens, skip_special_tokens=True)
 
 
-IMAGE_RES = 224
-
-logger = getLogger()
-
-
 class VariableSizeImageTransform(object):
     """
     This class accepts images of any size and dynamically resize, pads and chunks it
@@ -206,9 +200,8 @@ class VariableSizeImageTransform(object):
     patches are coming from the resizing and chunking.
     """
 
-    def __init__(self, size: int = IMAGE_RES) -> None:
-        self.size = size
-        logger.info(f"VariableSizeImageTransform size: {self.size}")
+    def __init__(self, size: int = 224) -> None:
+        self.size = size  # image resolution is the size of the patch that the image will be split into defaulted to 224 for LLaMA-3
         self.to_tensor = tv.ToTensor()
         self._mean = (0.48145466, 0.4578275, 0.40821073)
         self._std = (0.26862954, 0.26130258, 0.27577711)
