@@ -237,8 +237,10 @@ class RotarySetup1D(LightweightModule):
         """
         if mode == "decode":
             return self.decode_forward(**kwargs)
-        else:
+        elif mode == "prefill":
             return self.prefill_forward(**kwargs)
+        else:
+            raise ValueError(f"Unknown mode: {mode!r}. Expected 'decode' or 'prefill'.")
 
     def get_both_trans_mats(self) -> Dict[str, ttnn.Tensor]:
         """Return both decode and prefill transformation matrices."""
