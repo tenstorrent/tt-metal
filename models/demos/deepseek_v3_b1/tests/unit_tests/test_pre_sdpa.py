@@ -179,9 +179,11 @@ def test_pre_sdpa(
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
     torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
-    torch_matmul_weights_half0 = torch_matmul_weights[: matmul_weights_shape[0] // 2, :]
-    torch_matmul_weights_half1 = torch_matmul_weights[matmul_weights_shape[0] // 2 :, :]
-    torch_matmul_weights_packed = torch.cat([torch_matmul_weights_half0, torch_matmul_weights_half1], dim=1)
+    matmul_h, matmul_w = matmul_weights_shape
+    # Pack [H, W] -> [H/2, 2W] by pairing each row i from K-half0 and K-half1 as [half0_i | half1_i].
+    torch_matmul_weights_packed = (
+        torch_matmul_weights.reshape(2, matmul_h // 2, matmul_w).permute(1, 0, 2).reshape(matmul_h // 2, 2 * matmul_w)
+    )
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
     # Matmul2 weights - create unshuffled first, then shuffle for device
