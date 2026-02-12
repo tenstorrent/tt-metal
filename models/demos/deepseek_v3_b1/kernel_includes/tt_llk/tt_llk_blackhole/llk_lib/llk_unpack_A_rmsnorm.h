@@ -18,7 +18,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 template <
-    uint32_t num_tiles,
+    std::uint32_t num_tiles,
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
@@ -39,7 +39,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         "Not supported configuration when unpacking to dest!");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    static constexpr uint unpack_srca = TT_OP_UNPACR(
+    static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(
         SrcA,
         0b1 /*Z inc*/,
         0,
@@ -53,7 +53,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         0,
         0,
         1);
-    static constexpr uint unpack_srca_to_dest = TT_OP_UNPACR(
+    static constexpr std::uint32_t unpack_srca_to_dest = TT_OP_UNPACR(
         SrcA,
         0b00010001 /*Z inc*/,
         0,
@@ -67,11 +67,11 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         0,
         0,
         1);  // ch0/ch1 z_inc
-    static constexpr uint unpack_srca_to_dest_transpose_of_faces = TT_OP_UNPACR(
+    static constexpr std::uint32_t unpack_srca_to_dest_transpose_of_faces = TT_OP_UNPACR(
         SrcA, 0b00010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // inc srcA ch1_z+=1, ch0_z+=2
-    static constexpr uint unpack_srca_set_dvalid =
+    static constexpr std::uint32_t unpack_srca_set_dvalid =
         TT_OP_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    static constexpr uint unpack_srcb = TT_OP_UNPACR(
+    static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(
         SrcB,
         0b1 /*Z inc*/,
         0,
@@ -85,7 +85,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         0,
         0,
         1);
-    static constexpr uint unpack_srcb_inc_z_0 = TT_OP_UNPACR(
+    static constexpr std::uint32_t unpack_srcb_inc_z_0 = TT_OP_UNPACR(
         SrcB,
         0b0 /*Z inc*/,
         0,
@@ -99,20 +99,23 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         0,
         0,
         1);
-    static constexpr uint unpack_srcb_set_dvalid =
+    static constexpr std::uint32_t unpack_srcb_set_dvalid =
         TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    static constexpr uint srca_set_z_1 = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);  // set srcA ch0_z = 1
-    static constexpr uint srcb_set_z_2 = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001);  // set srcB ch0_z = 2
-    static constexpr uint srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);  // set srcB ch0_z = 0
+    static constexpr std::uint32_t srca_set_z_1 =
+        TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);  // set srcA ch0_z = 1
+    static constexpr std::uint32_t srcb_set_z_2 =
+        TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001);  // set srcB ch0_z = 2
+    static constexpr std::uint32_t srcb_clear_z =
+        TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);  // set srcB ch0_z = 0
     if (num_faces == 1) {
-        constexpr uint32_t outerloop = 1;
-        constexpr uint32_t innerloop = num_tiles;
+        constexpr std::uint32_t outerloop = 1;
+        constexpr std::uint32_t innerloop = num_tiles;
         ckernel_template tmp(outerloop, innerloop, unpack_srca);
         tmp.set_start_op(unpack_srcb_set_dvalid);
         tmp.program();
     } else {
-        constexpr uint32_t outerloop = 1;
-        const uint32_t innerloop = num_tiles * num_faces / 2;
+        constexpr std::uint32_t outerloop = 1;
+        const std::uint32_t innerloop = num_tiles * num_faces / 2;
         ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srca);
         tmp.set_start_op(unpack_srcb_set_dvalid);
         tmp.program();
@@ -120,7 +123,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
 }
 
 template <
-    uint32_t num_tiles,
+    std::uint32_t num_tiles,
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
