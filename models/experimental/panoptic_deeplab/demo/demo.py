@@ -472,6 +472,7 @@ def run_panoptic_deeplab_demo(
     return None
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": PDL_L1_SMALL_SIZE, "trace_region_size": 4000000}],
