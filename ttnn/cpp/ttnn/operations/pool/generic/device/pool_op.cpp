@@ -5,6 +5,7 @@
 #include "pool_op.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
 
 #include <tt-metalium/math.hpp>
 #include <utility>
@@ -42,10 +43,10 @@ void validate_pool2d(
         auto input_h = sliding_window_config.input_hw.first;
         auto input_w = sliding_window_config.input_hw.second;
         TT_FATAL(
-            input_h * input_w <= std::numeric_limits<uint16_t>::max(),
-            "Input HW {} will overflow uint16 indices max {}",
+            input_h * input_w <= std::numeric_limits<uint32_t>::max(),
+            "Input HW {} will overflow uint32 indices max {}",
             input_h * input_w,
-            std::numeric_limits<uint16_t>::max());
+            std::numeric_limits<uint32_t>::max());
 
         TT_FATAL(output_layout == Layout::ROW_MAJOR, "Only ROW_MAJOR supported when return_indices is true");
     }
@@ -137,9 +138,12 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
     auto output_spec_data = compute_output_specs(op_attr, tensor);
     if (op_attr.return_indices_) {
+        DataType index_dtype = get_index_data_type(
+            op_attr.sliding_window_config_.input_hw.first, op_attr.sliding_window_config_.input_hw.second);
+
         // the index output spec is the same as the input spec just with a different data type
         tt::tt_metal::TensorLayout output_layout_ind(
-            DataType::UINT16,
+            index_dtype,
             output_spec_data.page_config(),
             output_spec_data.memory_config(),
             output_spec_data.tensor_layout().get_alignment());
