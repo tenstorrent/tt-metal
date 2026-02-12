@@ -285,7 +285,7 @@ inline void _top8_add_core_offset_to_indices_0_3_(uint32_t core_offset) {
 }
 
 inline void _top8_add_core_offset_to_indices_4_7_(uint32_t core_offset) {
-    // Add the core offset to LREG0 to LREG3, in bits 7-5 from the lower 16 bits
+    // Add the core offset to LREG4 to LREG7, in bits 7-5 from the lower 16 bits
     TT_SFPIADD(core_offset << 5, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TT_SFPIADD(core_offset << 5, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TT_SFPIADD(core_offset << 5, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
