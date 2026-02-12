@@ -105,16 +105,17 @@ tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevi
 tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
     return core::full(shape, 1.F, device, dtype);
 }
-
-template <>
-tt::tt_metal::Tensor from_vector<bfloat16, ttnn::DataType::BFLOAT16>(
-    const std::vector<bfloat16>& buffer,
+template <class VectorType, ttnn::DataType TensorType>
+tt::tt_metal::Tensor from_vector(
+    const std::vector<VectorType>& buffer,
     const ttnn::Shape& shape,
     ttnn::distributed::MeshDevice* device,
     ttnn::Layout layout,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    assert(device != nullptr);
-    const ttnn::DataType data_type = ttnn::DataType::BFLOAT16;
+    if (device == nullptr) {
+        throw std::runtime_error("from_vector: device == nullptr. Device is required");
+    }
+
     ttnn::MemoryConfig output_mem_config{};
     size_t volume = shape.volume();
     if (buffer.size() != volume) {
@@ -123,70 +124,9 @@ tt::tt_metal::Tensor from_vector<bfloat16, ttnn::DataType::BFLOAT16>(
     }
 
     const auto tensor_layout =
-        ttnn::TensorLayout(data_type, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
-    auto output = (mesh_mapper != nullptr) ? ttnn::distributed::create_distributed_tensor(
-                                                 ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper)
-                                           : ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
+        ttnn::TensorLayout(TensorType, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
 
-    if (layout == ttnn::Layout::TILE) {
-        output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
-        output = ttnn::to_device(output, device, output_mem_config);
-    } else {
-        output = ttnn::to_device(output, device, output_mem_config);
-    }
-
-    return output;
-}
-
-template <>
-tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
-    const std::vector<float>& buffer,
-    const ttnn::Shape& shape,
-    ttnn::distributed::MeshDevice* device,
-    ttnn::Layout layout,
-    const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    assert(device != nullptr);
-    const ttnn::DataType data_type = ttnn::DataType::BFLOAT16;
-    ttnn::MemoryConfig output_mem_config{};
-    size_t volume = shape.volume();
-    if (buffer.size() != volume) {
-        throw std::logic_error(
-            fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
-    }
-
-    const auto tensor_layout =
-        ttnn::TensorLayout(data_type, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
-    auto output = (mesh_mapper != nullptr) ? ttnn::distributed::create_distributed_tensor(
-                                                 ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper)
-                                           : ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
-
-    output = ttnn::to_device(output, device, output_mem_config);
-    if (layout == ttnn::Layout::TILE) {
-        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
-    }
-
-    return output;
-}
-
-template <>
-tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
-    const std::vector<float>& buffer,
-    const ttnn::Shape& shape,
-    ttnn::distributed::MeshDevice* device,
-    ttnn::Layout layout,
-    const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    size_t volume = shape.volume();
-    if (buffer.size() != volume) {
-        throw std::logic_error(
-            fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
-    }
-
-    ttnn::MemoryConfig output_mem_config{};
     ttnn::Tensor output;
-
-    const auto tensor_layout = ttnn::TensorLayout(
-        ttnn::DataType::FLOAT32, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
-
     if (mesh_mapper != nullptr) {
         output = ttnn::distributed::create_distributed_tensor(
             ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper);
@@ -194,78 +134,47 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
         output = ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
     }
 
-    if (layout == ttnn::Layout::TILE) {
-        output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
-    }
-    output = ttnn::to_device(output, device, output_mem_config);
-    return output;
-}
-
-/*
-From vector uint32 doesn't support tilize_with_zero_padding on device
-*/
-template <>
-tt::tt_metal::Tensor from_vector<uint32_t, ttnn::DataType::UINT32>(
-    const std::vector<uint32_t>& buffer,
-    const ttnn::Shape& shape,
-    ttnn::distributed::MeshDevice* device,
-    ttnn::Layout layout,
-    const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    ttnn::MemoryConfig output_mem_config{};
-    auto volume = shape.volume();
-    if (buffer.size() != volume) {
-        throw std::logic_error(
-            fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
-    }
-
-    const auto tensor_layout =
-        ttnn::TensorLayout(ttnn::DataType::UINT32, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), output_mem_config);
-    auto output = (mesh_mapper != nullptr) ? ttnn::distributed::create_distributed_tensor(
-                                                 ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper)
-                                           : ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
-
-    if (device != nullptr) {
-        if (layout != ttnn::Layout::ROW_MAJOR) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config);
-        }
+    if constexpr (TensorType == ttnn::DataType::FLOAT32) {
+        output = ttnn::to_layout(output, ttnn::Layout::TILE);
         output = ttnn::to_device(output, device, output_mem_config);
-    }
-
-    return output;
-}
-
-/*
-From vector int32 doesn't support tilize_with_zero_padding on device
-*/
-template <>
-tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
-    const std::vector<int32_t>& buffer,
-    const ttnn::Shape& shape,
-    ttnn::distributed::MeshDevice* device,
-    ttnn::Layout layout,
-    const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    ttnn::MemoryConfig output_mem_config{};
-    auto volume = shape.volume();
-    if (buffer.size() != volume) {
-        throw std::logic_error(
-            fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
-    }
-
-    const auto tensor_layout =
-        ttnn::TensorLayout(ttnn::DataType::INT32, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), output_mem_config);
-    auto output = (mesh_mapper != nullptr) ? ttnn::distributed::create_distributed_tensor(
-                                                 ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper)
-                                           : ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
-
-    if (device != nullptr) {
-        if (layout != ttnn::Layout::ROW_MAJOR) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config);
-        }
+    } else {
         output = ttnn::to_device(output, device, output_mem_config);
+        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
     }
 
     return output;
 }
+
+template tt::tt_metal::Tensor from_vector<bfloat16, ttnn::DataType::BFLOAT16>(
+    const std::vector<bfloat16>&,
+    const ttnn::Shape&,
+    ttnn::distributed::MeshDevice*,
+    ttnn::Layout,
+    const ttnn::distributed::TensorToMesh*);
+template tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
+    const std::vector<float>&,
+    const ttnn::Shape&,
+    ttnn::distributed::MeshDevice*,
+    ttnn::Layout,
+    const ttnn::distributed::TensorToMesh*);
+template tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
+    const std::vector<float>&,
+    const ttnn::Shape&,
+    ttnn::distributed::MeshDevice*,
+    ttnn::Layout,
+    const ttnn::distributed::TensorToMesh*);
+template tt::tt_metal::Tensor from_vector<uint32_t, ttnn::DataType::UINT32>(
+    const std::vector<uint32_t>&,
+    const ttnn::Shape&,
+    ttnn::distributed::MeshDevice*,
+    ttnn::Layout,
+    const ttnn::distributed::TensorToMesh*);
+template tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
+    const std::vector<int32_t>&,
+    const ttnn::Shape&,
+    ttnn::distributed::MeshDevice*,
+    ttnn::Layout,
+    const ttnn::distributed::TensorToMesh*);
 
 bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
     return tensor.tensor_attributes != nullptr;
