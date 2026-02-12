@@ -91,6 +91,9 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         # TTNN defaults to l1_small_size=0 in some runtimes, which can force
         # kernels down slow fallback paths or fail allocation in conv/halo ops.
         self._tt_l1_small_size = 24576
+        self._tt_trace_region_size = 8 * 1024 * 1024
+        req_exec_mode = str(getattr(self.config, "tt_execution_mode", "eager")).lower()
+        self._tt_num_command_queues = 2 if req_exec_mode == "trace_2cq" else 1
         try:
             import ttnn  # noqa: F401
             from .tt_modules import TTTransformerBlock, TTPatchEmbedding
@@ -104,12 +107,22 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                             mesh_shape=ttnn.MeshShape(1, 1),
                             physical_device_ids=[0],
                             l1_small_size=self._tt_l1_small_size,
+                            trace_region_size=self._tt_trace_region_size,
+                            num_command_queues=self._tt_num_command_queues,
                         )
                     except Exception:
-                        self.tt_device = ttnn.open_mesh_device(
-                            mesh_shape=ttnn.MeshShape(1, 1),
-                            l1_small_size=self._tt_l1_small_size,
-                        )
+                        try:
+                            self.tt_device = ttnn.open_mesh_device(
+                                mesh_shape=ttnn.MeshShape(1, 1),
+                                l1_small_size=self._tt_l1_small_size,
+                                trace_region_size=self._tt_trace_region_size,
+                                num_command_queues=self._tt_num_command_queues,
+                            )
+                        except Exception:
+                            self.tt_device = ttnn.open_mesh_device(
+                                mesh_shape=ttnn.MeshShape(1, 1),
+                                l1_small_size=self._tt_l1_small_size,
+                            )
                 else:
                     self.tt_device = ttnn.open_device(device_id=0, l1_small_size=self._tt_l1_small_size)
                 try:

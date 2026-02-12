@@ -94,6 +94,7 @@ class DPTTTPipeline:
         self._full_trace_input = None
         self._full_trace_output = None
         self._trace_op_event = None
+        self._full_trace_unavailable_reason: Optional[str] = None
 
     # ------------------------------------------------------------------ plumbing
     def to(self, device: str):
@@ -230,22 +231,45 @@ class DPTTTPipeline:
         if self.backbone.tt_device is None:
             raise RuntimeError("TT device is not available for traced execution")
 
-        self._ensure_full_trace(tt_pixel_values_host, execution_mode=requested_exec_mode)
+        if self._full_trace_unavailable_reason is None:
+            try:
+                self._ensure_full_trace(tt_pixel_values_host, execution_mode=requested_exec_mode)
+            except Exception as exc:
+                self._full_trace_unavailable_reason = str(exc)
+                LOG.warning(
+                    "Full TT trace capture is unavailable (%s). Falling back to non-full-trace execution.",
+                    self._full_trace_unavailable_reason,
+                )
+
+        if self._full_trace_unavailable_reason is not None or self._full_trace_id is None:
+            # Graceful fallback: convert host TT input back to torch and run the
+            # existing eager/partial-trace path.
+            pv_torch = ttnn.to_torch(tt_pixel_values_host)
+            return self.forward_pixel_values(pv_torch, normalize=normalize)
 
         t0 = time.perf_counter()
-        if requested_exec_mode == "trace_2cq":
-            # 2-CQ wiring: host->device copy on cq=1, trace execute on cq=0.
-            if self._trace_op_event is None:
+        try:
+            if requested_exec_mode == "trace_2cq":
+                # 2-CQ wiring: host->device copy on cq=1, trace execute on cq=0.
+                if self._trace_op_event is None:
+                    self._trace_op_event = ttnn.record_event(self.backbone.tt_device, 0)
+                ttnn.wait_for_event(1, self._trace_op_event)
+                ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 1)
+                write_event = ttnn.record_event(self.backbone.tt_device, 1)
+                ttnn.wait_for_event(0, write_event)
                 self._trace_op_event = ttnn.record_event(self.backbone.tt_device, 0)
-            ttnn.wait_for_event(1, self._trace_op_event)
-            ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 1)
-            write_event = ttnn.record_event(self.backbone.tt_device, 1)
-            ttnn.wait_for_event(0, write_event)
-            self._trace_op_event = ttnn.record_event(self.backbone.tt_device, 0)
-            ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=False)
-        else:
-            ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 0)
-            ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=True)
+                ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=False)
+            else:
+                ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 0)
+                ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=True)
+        except Exception as exc:
+            self._full_trace_unavailable_reason = str(exc)
+            LOG.warning(
+                "Full TT trace execution failed (%s). Falling back to non-full-trace execution.",
+                self._full_trace_unavailable_reason,
+            )
+            pv_torch = ttnn.to_torch(tt_pixel_values_host)
+            return self.forward_pixel_values(pv_torch, normalize=normalize)
 
         depth = self._full_trace_output
         # Normalize/return path mirrors the eager TT path.

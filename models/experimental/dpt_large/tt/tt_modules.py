@@ -193,24 +193,44 @@ class TTPatchEmbedding:
         output_mem: Optional[ttnn.MemoryConfig] = None,
     ):
         # conv_weight: [out_c, in_c, k, k]
-        if fallback_ops is None:
-            raise RuntimeError(
-                "TTPatchEmbedding requires tt_lib.fallback_ops. "
-                "Install TT runtime dependencies or disable TT device execution."
+        self.device = device
+        self._tt_conv = None
+        self.conv = None
+
+        # Prefer native TT conv so tracing does not require host readbacks.
+        try:
+            from .tt_cnn_ops import TTConv2dCached
+
+            self._tt_conv = TTConv2dCached.from_tensors(
+                weight_torch=conv_weight,
+                bias_torch=conv_bias,
+                stride=(int(stride), int(stride)),
+                padding=(int(padding), int(padding)),
             )
-        wt = _tt_from_torch_rm(conv_weight, device)
-        bs = _tt_from_torch_rm(conv_bias, device)
-        self.conv = fallback_ops.Conv2d(
-            in_channels=conv_weight.shape[1],
-            out_channels=conv_weight.shape[0],
-            kernel_size=conv_weight.shape[2],
-            weights=wt,
-            biases=bs,
-            stride=stride,
-            padding=padding,
-        )
+        except Exception:
+            self._tt_conv = None
+
+        if self._tt_conv is None:
+            if fallback_ops is None:
+                raise RuntimeError(
+                    "TTPatchEmbedding requires either TTConv2dCached or tt_lib.fallback_ops. "
+                    "Install TT runtime dependencies or disable TT device execution."
+                )
+            wt = _tt_from_torch_rm(conv_weight, device)
+            bs = _tt_from_torch_rm(conv_bias, device)
+            self.conv = fallback_ops.Conv2d(
+                in_channels=conv_weight.shape[1],
+                out_channels=conv_weight.shape[0],
+                kernel_size=conv_weight.shape[2],
+                weights=wt,
+                biases=bs,
+                stride=stride,
+                padding=padding,
+            )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self._tt_conv is not None:
+            return self._tt_conv(x, device=self.device)
         return self.conv(x)
 
 
