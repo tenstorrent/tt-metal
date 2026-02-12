@@ -71,7 +71,7 @@ def test_matmul_varying_k(device, k_size, dtype, batch_size, math_fi, fp32_acc):
     input_shape_a = (batch_size, m_size, k_size)
     input_shape_b = (batch_size, k_size, n_size)
 
-    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_dtype = torch.float64
     torch_input_tensor_a = torch.randn(input_shape_a, dtype=torch_dtype)
     torch_input_tensor_b = torch.randn(input_shape_b, dtype=torch_dtype)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
@@ -106,7 +106,11 @@ def test_matmul_varying_k(device, k_size, dtype, batch_size, math_fi, fp32_acc):
     # Calculate metrics
     diff = torch.abs(torch_output_tensor - output_tensor)
     rel_diff = diff / (torch.abs(torch_output_tensor) + 1e-8)
-    max_diff = torch.max(diff).item()
+    max_diff = torch.max(diff)
+    max_diff_index = torch.argmax(diff)
+    print(
+        f"Max diff ref = {torch_output_tensor.view(-1)[max_diff_index].item()}, output = {output_tensor.view(-1)[max_diff_index].item()}"
+    )
     max_rel_diff = torch.max(rel_diff).item()
     mean_diff = torch.mean(diff).item()
     mean_rel_diff = torch.mean(rel_diff).item()

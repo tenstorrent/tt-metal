@@ -26,6 +26,11 @@ def _cleanup_device():
         pass
 
 
+def div_up(numerator, denominator):
+    """Integer division with ceiling (round up)"""
+    return (numerator + denominator - 1) // denominator
+
+
 class TenstorrentGemmOp(BasicOp):
     """
     Tenstorrent native GEMM operation using ttnn.matmul.
@@ -175,8 +180,21 @@ class TenstorrentGemmOp(BasicOp):
         a = tensor_mapping["a"]
         b = tensor_mapping["b"]
 
+        core_grid = self.device.compute_with_storage_grid_size()
+        per_core_M = div_up(self.M_padded, core_grid.y)
+        per_core_N = div_up(self.N_padded, core_grid.x)
         # Perform matmul on device
-        c = ttnn.matmul(a, b)
+        matmul_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+            in0_block_w=8,
+            out_subblock_h=2,
+            out_subblock_w=4,
+            per_core_M=128,
+            per_core_N=128,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+        c = ttnn.matmul(a, b, program_config=matmul_config)
         return c
 
     def core_run(self, tensor_mapping):
