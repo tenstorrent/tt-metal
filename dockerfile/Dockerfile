@@ -265,6 +265,14 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
         apt-get clean && rm -rf /var/lib/apt/lists/*; \
     fi
 
+# Configure SSH for MPI multihost jobs readiness
+RUN adduser --uid 1001 --shell /bin/bash user
+RUN usermod -aG sudo user
+RUN echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
+
+RUN mkdir -p /run/sshd
+RUN echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
+
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner

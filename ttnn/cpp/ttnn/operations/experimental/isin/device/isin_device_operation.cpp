@@ -15,11 +15,6 @@ IsInDeviceOperation::program_factory_t IsInDeviceOperation::select_program_facto
     return IsInProgramFactory{};
 }
 
-void IsInDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void IsInDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& elements = tensor_args.elements_tensor;

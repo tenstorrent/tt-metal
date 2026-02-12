@@ -30,11 +30,6 @@ void IntImgDeviceOperation::validate_on_program_cache_miss(
         input_dtype);
 }
 
-void IntImgDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
-}
-
 IntImgDeviceOperation::spec_return_value_t IntImgDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     auto output_layout{Layout::TILE};
