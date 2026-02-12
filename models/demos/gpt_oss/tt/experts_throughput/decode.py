@@ -200,8 +200,8 @@ def decode_forward(
     down_matmul_config = program_config.get_down_config(n=config.hidden_size, m=total_tokens)
 
     # Gate projection (w1)
-    w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config)
-    # w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config, program_config=gate_up_matmul_config)
+    # w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config)
+    w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config, program_config=gate_up_matmul_config)
     # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
     ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
 
@@ -216,8 +216,8 @@ def decode_forward(
     activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
 
     # Down projection (w2): [1, E, total_tokens, I] x [1, E, I, H] -> [1, E, total_tokens, H]
-    expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config)
-    # expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config, program_config=down_matmul_config)
+    # expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config)
+    expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config, program_config=down_matmul_config)
     ttnn.deallocate(activated)
     # Bias: [1, num_experts_per_device, 1, H] broadcasts across total_tokens
     ttnn.add(expert_output, weights.w2_bias, output_tensor=expert_output)

@@ -141,7 +141,7 @@ class ThroughputProgramConfig:
 
     # Matmul parameters
     # in0_block_w: int = 2
-    in0_block_w: int = 10
+    in0_block_w: int = 15
     ## can be estimated by k // 32 (2880 / 32 = 90) therefore factors of 90 (30, 15, 10, 9 etc.)
     out_subblock_h: int = 1
     out_subblock_w: int = 1
@@ -181,7 +181,7 @@ class ThroughputProgramConfig:
             out_subblock_w=self.out_subblock_w,
             per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
-            fuse_batch=False,
+            fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
         )
@@ -208,7 +208,7 @@ class ThroughputProgramConfig:
             out_subblock_w=self.out_subblock_w,
             per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
-            fuse_batch=False,
+            fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
         )
