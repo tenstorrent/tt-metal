@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "hal/generated/dev_msgs.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -471,7 +470,7 @@ private:
     // Cluster depends on RunTimeOptions and Hal to set up, but they're all initialized/accessed by MetalContext, so
     // keep a local reference for init.
     const llrt::RunTimeOptions& rtoptions_;
-    const tt_metal::Hal* hal_;
+    const tt_metal::Hal* hal_ = nullptr;
 };
 
 }  // namespace tt

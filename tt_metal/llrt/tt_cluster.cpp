@@ -225,11 +225,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
 
     this->initialize_device_drivers();
 
-    this->disable_ethernet_cores_with_retrain();
-
     this->initialize_ethernet_cores_router_mode();
-
-    this->initialize_ethernet_sockets();
 
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
@@ -324,8 +320,6 @@ void Cluster::initialize_device_drivers() {
 
     umd::DeviceParams default_params;
     this->start_driver(default_params);
-    this->generate_virtual_to_umd_coord_mapping();
-    this->generate_virtual_to_profiler_flat_id_mapping();
 
     // Cache IOMMU status (expensive to query repeatedly)
     this->iommu_enabled_ = false;
@@ -425,6 +419,9 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 }
 
 void Cluster::set_hal(const tt_metal::Hal* hal) {
+    TT_ASSERT(this->hal_ == nullptr, "Hal is already set");
+    TT_ASSERT(hal != nullptr, "Cannot set a null hal");
+    TT_ASSERT(this->driver_ != nullptr, "Driver has not been created. Need to call open_driver() first.");
     this->hal_ = hal;
     this->routing_info_addr_ = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
@@ -440,6 +437,11 @@ void Cluster::set_hal(const tt_metal::Hal* hal) {
     barrier_params.eth_l1_barrier_base =
         hal->get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
     this->driver_->set_barrier_address_params(barrier_params);
+
+    this->generate_virtual_to_umd_coord_mapping();
+    this->generate_virtual_to_profiler_flat_id_mapping();
+    this->disable_ethernet_cores_with_retrain();
+    this->initialize_ethernet_sockets();
 }
 
 void Cluster::start_driver(umd::DeviceParams& device_params) const {
@@ -541,6 +543,7 @@ const metal_SocDescriptor& Cluster::get_soc_desc(ChipId chip) const {
 }
 
 void Cluster::generate_virtual_to_umd_coord_mapping() {
+    TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     for (auto chip_id : this->driver_->get_target_device_ids()) {
         this->virtual_worker_cores_[chip_id] = {};
         for (const tt::umd::CoreCoord& core :
@@ -578,6 +581,7 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
 
 void Cluster::generate_virtual_to_profiler_flat_id_mapping() {
 #if defined(TRACY_ENABLE)
+    TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     for (auto chip_id : this->driver_->get_target_device_ids()) {
         auto board_type = this->get_board_type(chip_id);
         if (this->virtual_routing_to_profiler_flat_id_.contains(board_type)) {
@@ -1042,6 +1046,7 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_g
 
 // Ethernet cluster api
 void Cluster::initialize_ethernet_sockets() {
+    TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     for (const auto& chip_id : this->driver_->get_target_device_ids()) {
         if (!this->ethernet_sockets_.contains(chip_id)) {
             this->ethernet_sockets_.insert({chip_id, {}});
@@ -1073,6 +1078,7 @@ void Cluster::initialize_ethernet_sockets() {
 }
 
 void Cluster::disable_ethernet_cores_with_retrain() {
+    TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     std::vector<uint32_t> read_vec;
     const auto& chips = this->driver_->get_target_device_ids();
     for (const auto& chip_id : chips) {
