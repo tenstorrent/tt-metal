@@ -537,6 +537,8 @@ Debugging Hangs with Watcher
 Given that multicast is a relatively complex operation, it is possible to introduce bugs that are difficult to debug.
 For example, forgetting to update a semaphore, updating semaphores at wrong points in the code, or passing incorrect
 coordinates to NoC APIs can lead to program hanging indefinitely.
+while such issues can be debugged using debug features introduced in Lab 1, there is another tool that is particularly
+useful for debugging Noc Issues and Hangs.
 
 The **Watcher** tool in TT-Metalium is a debug facility that instruments firmware and kernels and runs a
 host-side monitoring thread to catch common programming errors and hangs.
@@ -549,46 +551,167 @@ Watcher can be enabled by setting an environment variable before running your pr
     export TT_METAL_WATCHER=10
 
 The numeric value is the interval, in seconds, between Watcher status dumps. Small values like 1 give very frequent snapshots and
-are convenient while you are developing or chasing a hang, at the cost of extra performance overhead.
-Larger values like 60 or 120 are less intrusive and are better when you only want a periodic heartbeat.
+are convenient while debugging a hang, but introduce a significant performance overhead.
+Larger values like 10 or 60 are less intrusive and are better starting point when doing initial debugging.
 
 When enabled, Watcher will print messages such as "Watcher checking device 0" to the terminal and write a log file
-(typically in ``generated/watcher/watcher.log``) that summarizes the kernel IDs that were running, as well as the
-last **waypoint** string hit on each RISC-V. Waypoints are short markers you can insert into kernel code to tag key
+to ``generated/watcher/watcher.log``, which summarizes the kernel IDs that were running, as well as the
+last **waypoint** string hit on each RISC-V. Waypoints are short markers (up to 4 characters long) that can be inserted into kernel code to tag key
 positions like "entered main loop" or "finished writing". Various TT-Metalium APIs already encode waypoints into their code.
 For example, if you examine the code for ``noc_semaphore_wait`` in ``tt_metal/hw/inc/api/dataflow/dataflow_api.h``,
 you can observe that it encodes the waypoint "NSW" (for "NoC Semaphore Wait") before waiting on a semaphore and "NSD" (for "NoC Semaphore Done") after.
+You can also add your own waypoints to the code to tag key positions simply by adding the ``#include "api/debug/waypoint.h"``
+nad then using the ``WAYPOINT`` macro at desired points in the code.
 
+.. code-block:: cpp
 
-Exercise 1: Using Watcher to Debug NoC Errors and Hangs
-*******************************************************
+   #include "api/debug/waypoint.h"
 
-To illustrate how Watcher can be used to debug NoC errors and hangs, we will use the ``lab_multicast`` example program.
+   void kernel_main() {
+      WAYPOINT("MYWY");
+   }
 
+Ensure that you use unique waypoint strings for each key position in the code, otherwise the watcher output may be misleading.
 
-
-We will illustrate how watcher can hel
-You can introduce a very simple artificial hang by commenting out the call to ``noc_semaphore_inc`` in ``mcast_receiver.cpp``,
-as if you accidentally forgot it.
-
-
-Add waypoints as shown above and run the example with Watcher enabled:
-
-.. code-block:: bash
-
-   export TT_METAL_WATCHER=5
-   ./build/programming_examples/metal_example_lab_eltwise_binary
-
-When it becomes apparent that the program has been running for a long time without indication of progress, terminate it from the host
-(for example with Ctrl+C) and open `generated/watcher/watcher.log` to see the last waypoint before the hang.
-The waypoint field for the compute RISC-V processor should show something like `LOP2`, indicating that execution reached inside
-the main loop but never got as far as `DONE`.
-That strongly suggests a problem in the loop body, such as a missing `cb_pop_front` that prevents progress.
-
-Watcher adds extra checking and bookkeeping code, so it has a nonzero performance and code-size cost.
+Since Watcher adds extra checking and bookkeeping code, it adds a performance and code-size cost.
 Therefore Watcher should be disabled when doing performance benchmarking or production runs.
+In some cases, Watcher can significantly prolong program execution time, making a valid program run appear to hang.
+Therefore, for the purpose of thiese labs, it is best to disable Watcher by default and only enable it when debugging.
 
-For more information about the Watcher, refer to https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/watcher.html
+For more information about the Watcher, refer to Additional resources section at the end of this lab.
+
+
+Exercise 1: Debugging Multicast Issues Using Watcher
+====================================================
+
+In this exercise, you will intentionally introduce errors into the multicast sender and receiver kernels
+and use the Tenstorrent watcher and DPRINT to help diagnose the problem.
+This is intended to give you hands-on experience with debugging tools for distributed NoC and semaphore issues
+in a controlled environment.
+Perform the following steps:
+
+#. If you haven't already done so, from the root of the ``tt-metal`` repository, run the build script ``./build_metal.sh``.
+
+#. Run the multicast example (``./build/ttnn/examples/example_lab_multicast``) and
+   verify that it completes successfully and prints a "Test Passed" message on the host.
+
+#. Next, introduce an error in the multicast sender kernel by modifying the destination core range.
+   Open ``ttnn/examples/lab_multicast/kernels/dataflow/mcast_sender.cpp`` and find the line where the sender
+   precomputes the multicast address for the ``tile_sent`` semaphore:
+
+   .. code-block:: cpp
+
+      uint64_t tile_sent_mcast_addr = get_noc_multicast_addr(
+          receiver_start_x, receiver_start_y, receiver_end_x, receiver_end_y, tile_sent_semaphore_addr);
+
+   Change ``receiver_start_x`` to a constant that is outside the valid core coordinate range on your device, such as ``100``.
+   This makes the sender attempt to multicast to a non-existent core along the ``x`` dimension.
+   Because this is a change in kernel code only, you do not need to rebuild the program;
+   the updated kernel will be JIT-compiled the next time the program is run.
+
+#. Run the multicast example again:
+   You should see that the program now hangs, running indefinitely without printing a final result or explicit error.
+   This kind of hang is typical for incorrect NoC addressing or synchronization errors.
+
+#. Terminate the program (using ``Ctrl + C``) and execute the ``tt-smi -r`` command to reset the device.
+   It is always a good idea to reset the device after a hang to ensure that the device is in a known good state.
+
+#. Rerun the program with Watcher enabled with a period of 10 seconds:
+
+   .. code-block:: bash
+
+      TT_METAL_WATCHER=10 ./build/ttnn/examples/example_lab_multicast
+
+   Watcher will periodically inspect the device state. After some time it should detect that the program is not
+   making progress and report an error. the error should indicate the logical (e.g. ``core(x= 0,y= 0)``) and
+   device (e.g. ``virtual(x= 1,y= 2)``) coordinates of the core that caused the erroneous NoC operation,
+   along with a message indicating the type of error. Note that the exact error messages may vary depending on the
+   type of error.
+
+#. Revert the sender change by putting ``receiver_start_x`` back into the ``get_noc_multicast_addr`` call
+   in ``mcast_sender.cpp``. Reset the device using ``tt-smi -r``, then rerun the multicast example
+   with Watcher disabled and confirm that it completes successfully without hanging.
+
+#. Next, introduce a synchronization bug in the receiver kernel by removing a key semaphore update.
+   Open ``ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp`` and comment the ``noc_semaphore_inc``
+   line that signals the sender that this receiver is ready for the next tile.
+   Rerun the multicast example once more with Watcher disabled.
+   The sender kernel will hang waiting on ``receivers_ready`` semaphore, because receivers no longer
+   increment that semaphore.
+
+#. Terminate the program, reset the device using ``tt-smi -r``, then rerun the multicast example, this time
+   with Watcher **enabled** with a period of 10 seconds.
+
+   .. code-block:: bash
+
+      TT_METAL_WATCHER=10 ./build/ttnn/examples/example_lab_multicast
+
+   Once program starts, watcher should activate once every 10 seconds and log the state of the device into
+   a log file. After several watcher messages, terminate the program (using ``Ctrl + C``) and inspect
+   the log file in ``generated/watcher/watcher.log``.
+
+   First, review the legend in the log file to understand the meaning of the subsequent lines.
+   Key takeaways:
+
+   * Each Tensix core has 5 RISC-V processors: BRISC, NCRISC, TRISC0, TRISC1, TRISC2, corresponding to
+     RISC-V 0 through RISC-V 4 in Tensix Core figure in Lab 1.
+     BRISC is considered to be the primary processor, and the other RISC-V processors are considered
+     to be subordinate processors.
+   * State of each RISC-V processor is indicated either through a single-character code
+     (e.g., ``W`` = Waiting, ``R`` = Running, ``D`` = Done), or through a multi-character code,
+     (e.g., ``NRW`` = "NOC Read Wait", ``NSW`` = "NOC Semaphore Wait").
+   * ``smsg`` shows if subordinate processors are in Go (G) or Done (D) state.
+   * ``k_ids`` maps to kernel source files listed at the end of each dump section
+
+   Next, examine a single line of the log file to understand how to interpret the information.
+   Consider this example line:
+
+   .. code-block:: text
+
+      Device 0 worker core(x= 1,y= 0) virtual(x= 2,y= 2):  NSW,CWFW,   K,MWDD,   K  rmsg:D0G|BNT h_id:  0 smsg:GGGG k_ids:  5|  6|  7|  7|  7
+
+   Breaking this apart:
+
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | Field                    | Value                   | Meaning                                                  |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `core(x= 1,y= 0)`        | Logical coords          | This is logical core (1,0)                               |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `virtual(x= 2,y= 2)`     | Device/Virtual coords   | Used for NOC addressing                                  |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `NSW`                    | BRISC status            | **N**OC **S**emaphore **W**ait                           |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `CWFW`                   | NCRISC status           | **C**B **W**ait **F**or **W**rite                        |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `K`                      | TRISC0 status           | In **K**ernel                                            |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `MWDD`                   | TRISC1 status           | **M**ath **W**ait **D**ata **D**ependency                |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `K`                      | TRISC2 status           | In **K**ernel                                            |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `rmsg:D0G\|BNT`          | Run message             | Dispatch, NOC 0, Go state; BRISC/NCRISC/TRISC enabled    |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `smsg:GGGG`              | Subordinate message     | NCRISC, TRISC0, TRISC1, TRISC2 in **G**o state (running) |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+   | `k_ids: 5\|6\|7\|7\|7`   | Kernel IDs              | BRISC=5, NCRISC=6, TRISC0/1/2=7                          |
+   +--------------------------+-------------------------+----------------------------------------------------------+
+
+   Kernels are idntified through their IDs, and mapping between kernel IDs and source file names is listed
+   at the end of each dump section.
+   Idle cores where the program hasn't created any kernels can easily be identified by their ``k_ids`` fields all set to 0.
+
+   To help us identify the source of the hang, we observe the **first column of the status** (BRISC status) for the
+   cores running our kernels and observe that they are all stuck at ``NSW`` (**N**OC **S**emaphore **W**ait).
+   Of course, we need to verify that this is actually a hang and not just a slow operation, which we can do by observing
+   that the program state in multiple dumps doesn't change.
+
+   With simple bugs like the one we introduced, this information may be sufficient to diagnose the problem.
+   However, in more complex cases, we may need to add additional instrumentation to the kernels to help us diagnose the problem.
+   This could be either by adding additional waypoints, or by adding DPRINT statements to the code.
+
+In this exercise we have intentionally introduced NoC issues and then used Watcher to analyze the resulting behavior.
+Taken together, Watcher, waypoints, and DPRINTs provide a powerful set of tools for debugging NoC-related bugs
+in TT-Metalium multicast and multi-core programs.
 
 
 
@@ -1340,3 +1463,4 @@ Additional information about Tenstorrent NoC can be found in the following resou
 * NoC (Network on Chip) Readme: https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md
 * Networks and Communication Lesson: https://github.com/tenstorrent/tt-vscode-toolkit/blob/main/content/lessons/cs-fundamentals-04-networks.md
 * Introduction to Data Movement in TT-Metal: https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/general/intro_to_dm.md
+* Watcher Documentation: https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/watcher.html
