@@ -436,6 +436,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # DRAM banks), and matmuls use a DRAM-sharded program config that reads weights with
     # full DRAM bandwidth. This is the key optimization from DeepSeek V3 for M=1 decode.
     dram_sharded_enabled = _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS")
+    dram_sharded_mlp = dram_sharded_enabled and _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_MLP")
 
     if dram_sharded_enabled:
         from models.demos.deepseek_v3.utils.config_helpers import (
@@ -454,17 +455,13 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             packer_l1_acc=True,
         )
 
-        def _dram_sharded_linear(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
-            """DRAM-sharded matmul for decode. Weight b must be in DRAM WIDTH_SHARDED format."""
-            K = int(b.shape[2])
-            N = int(b.shape[3])
-            input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(K, _ds_max_cores))
-            output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(N, _ds_max_cores))
-
-            act_mc = ttnn.create_sharded_memory_config_(
-                shape=(_DS_BATCH, K // input_cores),
+        def _ds_act_mc(width: int) -> ttnn.MemoryConfig:
+            """Create WIDTH_SHARDED L1 activation config for a given width dimension."""
+            cores = max(get_activation_sharding_core_counts_for_dram_matmul(width, _ds_max_cores))
+            return ttnn.create_sharded_memory_config_(
+                shape=(_DS_BATCH, width // cores),
                 core_grid=ttnn.num_cores_to_corerangeset(
-                    input_cores,
+                    cores,
                     ttnn.CoreCoord(_ds_grid.x, _ds_grid.y),
                     row_wise=True,
                 ),
@@ -473,7 +470,15 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 tile_layout=True,
                 use_height_and_width_as_shard_shape=True,
             )
-            a_sharded = ttnn.to_memory_config(a, act_mc)
+
+        def _dram_sharded_linear(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+            """DRAM-sharded matmul for decode. Weight b must be in DRAM WIDTH_SHARDED format."""
+            K = int(b.shape[2])
+            N = int(b.shape[3])
+            input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(K, _ds_max_cores))
+            output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(N, _ds_max_cores))
+
+            a_sharded = ttnn.to_memory_config(a, _ds_act_mc(K))
 
             prog_cfg = get_dram_sharded_matmul_config(
                 m=_DS_BATCH, k=K, n=N,
@@ -488,6 +493,77 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 compute_kernel_config=_ds_ckc,
             )
             ttnn.deallocate(a_sharded, force=False)
+            result_dram = ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(result, force=False)
+            return result_dram
+
+        def _dram_sharded_mlp(
+            x: ttnn.Tensor,
+            w_gate: ttnn.Tensor,
+            w_up: ttnn.Tensor,
+            w_down: ttnn.Tensor,
+        ) -> ttnn.Tensor:
+            """Fused gate→silu→up→mul→down MLP entirely in L1 WIDTH_SHARDED.
+
+            Follows DeepSeek V3 decode MLP pattern: reshard input once, keep all
+            intermediates in L1 WIDTH_SHARDED, only move final output to DRAM.
+            This eliminates 4 DRAM round-trips compared to calling _dram_sharded_linear
+            three times independently.
+            """
+            K_gate = int(w_gate.shape[2])
+            N_gate = int(w_gate.shape[3])
+            K_down = int(w_down.shape[2])
+            N_down = int(w_down.shape[3])
+
+            input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(K_gate, _ds_max_cores))
+            inner_cores = max(get_activation_sharding_core_counts_for_dram_matmul(N_gate, _ds_max_cores))
+            output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(N_down, _ds_max_cores))
+
+            # 1. Reshard input to L1 WIDTH_SHARDED once (shared between gate and up).
+            x_sharded = ttnn.to_memory_config(x, _ds_act_mc(K_gate))
+
+            gate_cfg = get_dram_sharded_matmul_config(
+                m=_DS_BATCH, k=K_gate, n=N_gate,
+                input_num_shards=input_cores, output_num_shards=inner_cores,
+            )
+
+            # 2. Gate projection → stays in L1 WIDTH_SHARDED.
+            gate = ttnn.linear(
+                x_sharded, w_gate,
+                program_config=gate_cfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=_ds_ckc,
+            )
+
+            # 3. Up projection → stays in L1 WIDTH_SHARDED (reuses x_sharded!).
+            up = ttnn.linear(
+                x_sharded, w_up,
+                program_config=gate_cfg,  # same shape as gate
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=_ds_ckc,
+            )
+            ttnn.deallocate(x_sharded, force=False)
+
+            # 4. silu(gate) * up → stays in L1 WIDTH_SHARDED.
+            gate = ttnn.silu(gate)
+            x_ff = ttnn.mul(gate, up, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+            ttnn.deallocate(gate, force=False)
+            ttnn.deallocate(up, force=False)
+
+            # 5. Down projection → L1 WIDTH_SHARDED output.
+            down_cfg = get_dram_sharded_matmul_config(
+                m=_DS_BATCH, k=K_down, n=N_down,
+                input_num_shards=inner_cores, output_num_shards=output_cores,
+            )
+            result = ttnn.linear(
+                x_ff, w_down,
+                program_config=down_cfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=_ds_ckc,
+            )
+            ttnn.deallocate(x_ff, force=False)
+
+            # 6. Move final result to DRAM (needed for all_reduce / residual add).
             result_dram = ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(result, force=False)
             return result_dram
@@ -892,22 +968,19 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     use_moe = moe_runtime is not None and getattr(w, "moe", None) is not None
     if not use_moe:
         t0 = time.perf_counter() if profile is not None else 0.0
-        if dram_sharded_enabled:
-            gate = _dram_sharded_linear(x, w.w_mlp_gate)
-            up = _dram_sharded_linear(x, w.w_mlp_up)
+        if dram_sharded_mlp:
+            mlp_out = _dram_sharded_mlp(x, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down)
+            ttnn.deallocate(x, force=False)
         else:
             gate = _mlp_linear(x, w.w_mlp_gate)
             up = _mlp_linear(x, w.w_mlp_up)
-        ttnn.deallocate(x, force=False)
-        gate = ttnn.silu(gate)
-        x_ff = gate * up
-        ttnn.deallocate(gate, force=False)
-        ttnn.deallocate(up, force=False)
-        if dram_sharded_enabled:
-            mlp_out = _dram_sharded_linear(x_ff, w.w_mlp_down)
-        else:
+            ttnn.deallocate(x, force=False)
+            gate = ttnn.silu(gate)
+            x_ff = gate * up
+            ttnn.deallocate(gate, force=False)
+            ttnn.deallocate(up, force=False)
             mlp_out = _mlp_linear(x_ff, w.w_mlp_down)
-        ttnn.deallocate(x_ff, force=False)
+            ttnn.deallocate(x_ff, force=False)
         if tp_enabled:
             mlp_out_reduced = ttnn.all_reduce(
                 mlp_out,
@@ -959,22 +1032,18 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
 
     # Shared expert (dense MLP).
     t0 = time.perf_counter() if profile is not None else 0.0
-    _use_dram_mlp = dram_sharded_enabled and int(x.shape[2]) == _DS_BATCH
+    _use_dram_mlp = dram_sharded_mlp and int(x.shape[2]) == _DS_BATCH
     if _use_dram_mlp:
-        gate_shared = _dram_sharded_linear(x, w.w_mlp_gate)
-        up_shared = _dram_sharded_linear(x, w.w_mlp_up)
+        shared_out = _dram_sharded_mlp(x, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down)
     else:
         gate_shared = _mlp_linear(x, w.w_mlp_gate)
         up_shared = _mlp_linear(x, w.w_mlp_up)
-    gate_shared = ttnn.silu(gate_shared)
-    x_ff_shared = gate_shared * up_shared
-    ttnn.deallocate(gate_shared, force=False)
-    ttnn.deallocate(up_shared, force=False)
-    if _use_dram_mlp:
-        shared_out = _dram_sharded_linear(x_ff_shared, w.w_mlp_down)
-    else:
+        gate_shared = ttnn.silu(gate_shared)
+        x_ff_shared = gate_shared * up_shared
+        ttnn.deallocate(gate_shared, force=False)
+        ttnn.deallocate(up_shared, force=False)
         shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down, memory_config=moe_decode_mc)
-    ttnn.deallocate(x_ff_shared, force=False)
+        ttnn.deallocate(x_ff_shared, force=False)
     if tp_enabled:
         shared_out_reduced = ttnn.all_reduce(
             shared_out,
