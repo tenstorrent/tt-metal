@@ -299,13 +299,15 @@ void kernel_main() {
     auto pkt_hdr_sem_inc_backward = PacketHeaderPool::allocate_header();
     // only initialize if we're actually going to send something over fabric
     if (detail::valid_targets(1)) {
-        auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
+        uint16_t page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
+        uint64_t dummy_addrs[4] = {0, 0, 0, 0};
+        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr_backward,
             static_cast<uint8_t>(unicast_route_info_backward.distance_in_hops),
-            NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
-            page_size * 2);
+            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
+            page_size * num_tiles_to_write_per_packet);
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr_backward,
@@ -330,13 +332,15 @@ void kernel_main() {
     auto pkt_hdr_sem_inc_forward = PacketHeaderPool::allocate_header();
     // only initialize if we're actually going to send something over fabric
     if (detail::valid_targets(0)) {
-        auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
+        uint16_t page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
+        uint64_t dummy_addrs[4] = {0, 0, 0, 0};
+        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr_forward,
             static_cast<uint8_t>(unicast_route_info_forward.distance_in_hops),
-            NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
-            page_size * 2);
+            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
+            page_size * num_tiles_to_write_per_packet);
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr_forward,

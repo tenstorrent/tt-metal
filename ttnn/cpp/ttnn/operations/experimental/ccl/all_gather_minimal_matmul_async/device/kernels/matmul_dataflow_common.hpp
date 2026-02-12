@@ -127,6 +127,7 @@ void forward_half_block_to_fabric_neighbor(
         uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
         bool reached_half_block_end = false;
 
+        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
         uint64_t noc_addrs[4] = {0, 0, 0, 0};
         for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
             uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -140,11 +141,14 @@ void forward_half_block_to_fabric_neighbor(
             noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
         }
         if (tiles_to_put_in_current_packet > 1) {
-            fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+            fabric_unicast_noc_scatter_write_with_state<
+                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                UnicastScatterWriteUpdateMask::PayloadSize>(
                 mux_connection_handle,
                 pkt_scatter_hdr,
                 l1_read_addr,
-                NocUnicastScatterCommandHeader({noc_addrs[0], noc_addrs[1]}, {0}));
+                NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                page_size * tiles_to_put_in_current_packet);
         } else {
             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                 mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});

@@ -16,6 +16,13 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
     return ccl_semaphore_handles
 
 
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 def assert_quality(torch_output, tt_output):
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / torch_output.std().item()
@@ -320,7 +327,11 @@ def run_test_linear(
         ],
         [
             (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(8192),
+                "trace_region_size": 90112,
+            },
             ttnn.Topology.Ring,
             1,
             8,
@@ -331,7 +342,11 @@ def run_test_linear(
         ],
         [
             (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(8192),
+                "trace_region_size": 90112,
+            },
             ttnn.Topology.Ring,
             2,
             4,
@@ -342,7 +357,11 @@ def run_test_linear(
         ],
         [
             (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(8192),
+                "trace_region_size": 90112,
+            },
             ttnn.Topology.Ring,
             4,
             2,
@@ -353,7 +372,11 @@ def run_test_linear(
         ],
         [
             (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
             ttnn.Topology.Ring,
             2,
             6,
