@@ -109,7 +109,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
         tt::tt_metal::BufferType::L1,
         tt::tt_metal::ShardSpec(shard_cores, {2 * 32, 7168}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
-    auto output_shape = ttnn::Shape({shard_cores.size(), 2, 32, 7168});
+    auto output_shape = ttnn::Shape({shard_cores.num_cores(), 2, 32, 7168});
     auto output_spec = TensorSpec(
         Shape(output_shape),
         tt::tt_metal::TensorLayout(
