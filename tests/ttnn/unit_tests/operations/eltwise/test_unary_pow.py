@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import (
     assert_with_ulp,
+    assert_allclose,
     generate_all_bfloat16_bitpatterns,
     flush_subnormal_values_to_zero,
 )
@@ -25,17 +26,25 @@ def generate_clean_bf16_tensor(dtype=torch.bfloat16):
     return fp32.to(dtype)
 
 
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("exponent", [2.0, -2.0, -3.56, 0.5, -0.5, -0.566, -2])
-def test_pow(exponent, device):
+def test_pow(exponent, device, dtype):
     torch.manual_seed(42)
-    torch_base = torch.rand([4, 4], dtype=torch.bfloat16)
+
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    torch_base = torch.rand([4, 4], dtype=torch_dtype)
     torch_output = torch.pow(torch_base, exponent)
-    ttnn_base = ttnn.from_torch(torch_base, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_base = ttnn.from_torch(torch_base, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     ttnn_output = ttnn.pow(ttnn_base, exponent)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_ulp(torch_output, ttnn_output, 1)
+    if dtype == "float32":
+        assert_allclose(torch_output, ttnn_output, atol=2.5e-4, rtol=5e-7)
+    else:
+        assert_with_ulp(torch_output, ttnn_output, 1)
 
 
 @pytest.mark.parametrize("exponent", [0.0, 1.0, 2.0, 3.0, -1.0])
