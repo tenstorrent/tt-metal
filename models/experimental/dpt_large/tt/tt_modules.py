@@ -12,7 +12,6 @@ in `tt_configs.py`.
 
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 import math
@@ -39,15 +38,6 @@ except Exception:  # pragma: no cover
 
 def _tt_from_torch_rm(t: torch.Tensor, device):
     return torch_to_tt_tensor_rm(t, device, put_on_device=True)
-
-
-def _resolve_matmul_dtype():
-    if ttnn is None:
-        return None
-    mode = str(os.environ.get("DPT_TT_MATMUL_DTYPE", "bfloat16")).strip().lower()
-    if mode in {"bfloat8_b", "bf8", "bfp8"}:
-        return getattr(ttnn, "bfloat8_b", ttnn.bfloat16)
-    return ttnn.bfloat16
 
 
 def pad_tokens_3d(x_3d: torch.Tensor, pad_multiple: int = 32):
@@ -376,7 +366,6 @@ class TTAttention:
         self.output_mem = output_mem
         self.program_config = program_config
         self.allow_cpu_fallback = bool(allow_cpu_fallback)
-        self.matmul_dtype = _resolve_matmul_dtype()
         # Pre-create TTNN projection weights for device-side output matmul
         try:
             # Use transposed weights to avoid transpose_b flag during linear
@@ -438,7 +427,7 @@ class TTAttention:
                 x4,
                 self._wqkv_tt,
                 bias=self._bqkv_tt,
-                dtype=self.matmul_dtype,
+                dtype=ttnn.bfloat16,
                 memory_config=memcfg,
             )
             # [B, 1, N, 3C] -> [B, N, 3C]
@@ -507,7 +496,7 @@ class TTAttention:
                 ctx_tt4,
                 self._proj_w_tt,
                 bias=self._proj_b_tt,
-                dtype=self.matmul_dtype,
+                dtype=ttnn.bfloat16,
                 memory_config=memcfg,
             )
             # Back to [B, N, C]
@@ -547,7 +536,6 @@ class TTMLP:
         self.output_mem = output_mem
         self.program_config = program_config
         self.allow_cpu_fallback = bool(allow_cpu_fallback)
-        self.matmul_dtype = _resolve_matmul_dtype()
         # Host fallback linears kept for safety
         self._fc1_host = TTLinear(
             fc1_w, fc1_b, device, output_mem=output_mem, fast_gelu=True, program_config=program_config
@@ -585,9 +573,9 @@ class TTMLP:
             memcfg = getattr(self, "output_mem", None)
             if memcfg is None:
                 memcfg = ttnn.DRAM_MEMORY_CONFIG
-            y1 = ttnn.linear(x4, self.w1_tt, bias=self.b1_tt, dtype=self.matmul_dtype, memory_config=memcfg)
+            y1 = ttnn.linear(x4, self.w1_tt, bias=self.b1_tt, dtype=ttnn.bfloat16, memory_config=memcfg)
             y1 = ttnn.gelu(y1)
-            y2 = ttnn.linear(y1, self.w2_tt, bias=self.b2_tt, dtype=self.matmul_dtype, memory_config=memcfg)
+            y2 = ttnn.linear(y1, self.w2_tt, bias=self.b2_tt, dtype=ttnn.bfloat16, memory_config=memcfg)
             return y2 if len(shape) == 4 else ttnn.reshape(y2, (B, N, self.w2_tt.shape[-1]))
         except Exception as exc:
             if not self.allow_cpu_fallback:
