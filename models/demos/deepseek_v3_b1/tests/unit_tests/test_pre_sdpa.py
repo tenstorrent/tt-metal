@@ -19,7 +19,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
-from models.demos.deepseek_v3_b1.utils import shuffle_weights_for_interleaved_qnope_qrope
+from models.demos.deepseek_v3_b1.utils import shuffle_weights_for_interleaved_qnope_qrope, stitch_weight_tensors
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -93,7 +93,7 @@ def test_pre_sdpa(
     # ========================================================================
     # Input tensor shapes
     shape = (1, 7168)
-    matmul_weights_shape = (7168, 1536)
+    matmul_weights_shape = (7168, 3072)  # 96 cores * 32 elements per core
 
     # Head configuration
     NUM_QNOPE_HEADS = 64
@@ -122,7 +122,8 @@ def test_pre_sdpa(
 
     # Matmul2 output width (interleaved Qnope/Qrope)
     matmul2_width = NUM_QNOPE_HEADS * QNOPE_HEAD_DIM + NUM_QROPE_HEADS * QROPE_HEAD_DIM  # 8192 + 4096 = 12288
-    matmul2_weights_shape = (1536, matmul2_width)
+    matmul1_output_width = matmul_weights_shape[1]  # 3072 (= 96 cores * 32 per core)
+    matmul2_weights_shape = (matmul1_output_width, matmul2_width)  # (3072, 12288)
     qnope_num_cores = QNOPE_GRID_COLS * matmul2_grid_y  # 64 cores
     qrope_num_cores = QROPE_GRID_COLS * matmul2_grid_y  # 32 cores
 
@@ -166,8 +167,8 @@ def test_pre_sdpa(
 
     tile = ttnn.Tile([1, 32])
 
-    # RMSNorm2 parameters (1536 elements = 3 tiles of 16x32)
-    rmsnorm2_width = 1536
+    # RMSNorm2 parameters (derived from matmul1 output width)
+    rmsnorm2_width = matmul1_output_width  # 3072
 
     logger.info(f"Device grid: {device_grid_size.x}x{device_grid_size.y}")
     logger.info(f"Qnope cores: {qnope_num_cores}, Qrope cores: {qrope_num_cores}")
@@ -279,45 +280,48 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # Matmul weights tensor - width sharded on 6x8 grid (48 cores)
-    matmul_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))
-    num_matmul_cores = 6 * 8
-    matmul_shard_shape = (matmul_weights_shape[0], matmul_weights_shape[1] // num_matmul_cores)
-    matmul_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({matmul_grid}),
-        matmul_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    matmul_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul_shard_spec)
+    # Both matmul1 and matmul2 share the same core grid (12x8 = 96 cores) for stitched weights
+    stitched_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul2_grid_x - 1, matmul2_grid_y - 1))
+    num_stitched_cores = matmul2_grid_x * matmul2_grid_y  # 96 cores
 
-    ttnn_matmul_weights = ttnn.from_torch(
+    # Per-core output widths
+    matmul1_n_per_core = matmul_weights_shape[1] // num_stitched_cores  # 3072 / 96 = 32
+    matmul2_n_per_core = matmul2_weights_shape[1] // num_stitched_cores  # 12288 / 96 = 128
+
+    # Stitch matmul1 and matmul2 weights into a single tile-packed tensor
+    # Each core gets: matmul1 tiles (contiguous) followed by matmul2 tiles (contiguous)
+    torch_stitched_weights = stitch_weight_tensors(
         torch_matmul_weights,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=matmul_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        torch_matmul2_weights_shuffled,
+        n1_per_core=matmul1_n_per_core,
+        n2_per_core=matmul2_n_per_core,
     )
 
-    # Matmul2 weights tensor (shuffled) - width sharded on 8x12 grid
-    matmul2_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul2_grid_x - 1, matmul2_grid_y - 1))
-    matmul2_num_cores = matmul2_grid_x * matmul2_grid_y
-    matmul2_shard_shape = (matmul2_weights_shape[0], matmul2_weights_shape[1] // matmul2_num_cores)
-    matmul2_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({matmul2_grid}),
-        matmul2_shard_shape,
+    # Stitched tensor shard shape: (32, total_tiles_per_core * 32)
+    TILE_SIZE = 32
+    matmul1_k_tiles = matmul_weights_shape[0] // TILE_SIZE  # 7168 / 32 = 224
+    matmul1_n_tiles = matmul1_n_per_core // TILE_SIZE  # 32 / 32 = 1
+    matmul2_k_tiles = matmul2_weights_shape[0] // TILE_SIZE  # 3072 / 32 = 96
+    matmul2_n_tiles = matmul2_n_per_core // TILE_SIZE  # 128 / 32 = 4
+    total_tiles_per_core = matmul1_k_tiles * matmul1_n_tiles + matmul2_k_tiles * matmul2_n_tiles
+    stitched_shard_width = total_tiles_per_core * TILE_SIZE
+
+    stitched_shard_shape = (TILE_SIZE, stitched_shard_width)
+    stitched_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({stitched_grid}),
+        stitched_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    matmul2_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul2_shard_spec
+    stitched_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, stitched_shard_spec
     )
 
-    ttnn_matmul2_weights = ttnn.from_torch(
-        torch_matmul2_weights_shuffled,
+    ttnn_stitched_weights = ttnn.from_torch(
+        torch_stitched_weights,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=matmul2_mem_config,
+        memory_config=stitched_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
@@ -570,9 +574,8 @@ def test_pre_sdpa(
         input_tensor_mesh,
         intermediate_tensor_mesh,
         ttnn_gamma,
-        ttnn_matmul_weights,
+        ttnn_stitched_weights,
         ttnn_rmsnorm2_gamma,
-        ttnn_matmul2_weights,
         ttnn_matmul3_weights,
         ttnn_sin,
         ttnn_cos,
@@ -583,6 +586,8 @@ def test_pre_sdpa(
         ttnn_dkv_rmsnorm_gamma,
         ttnn_sdpa_input_output,
         sender_coord,
+        matmul1_out_w_tiles=matmul1_n_tiles,
+        matmul2_out_w_tiles=matmul2_n_tiles,
         semaphores=semaphores,
         cluster_axis=cluster_axis,
         secondary_cluster_axis=secondary_cluster_axis,
@@ -601,9 +606,8 @@ def test_pre_sdpa(
             input_tensor_mesh,
             intermediate_tensor_mesh,
             ttnn_gamma,
-            ttnn_matmul_weights,
+            ttnn_stitched_weights,
             ttnn_rmsnorm2_gamma,
-            ttnn_matmul2_weights,
             ttnn_matmul3_weights,
             ttnn_sin,
             ttnn_cos,
@@ -614,6 +618,8 @@ def test_pre_sdpa(
             ttnn_dkv_rmsnorm_gamma,
             ttnn_sdpa_input_output,
             sender_coord,
+            matmul1_out_w_tiles=matmul1_n_tiles,
+            matmul2_out_w_tiles=matmul2_n_tiles,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
@@ -633,9 +639,8 @@ def test_pre_sdpa(
             input_tensor_mesh,
             intermediate_tensor_mesh,
             ttnn_gamma,
-            ttnn_matmul_weights,
+            ttnn_stitched_weights,
             ttnn_rmsnorm2_gamma,
-            ttnn_matmul2_weights,
             ttnn_matmul3_weights,
             ttnn_sin,
             ttnn_cos,
@@ -646,6 +651,8 @@ def test_pre_sdpa(
             ttnn_dkv_rmsnorm_gamma,
             ttnn_sdpa_input_output,
             sender_coord,
+            matmul1_out_w_tiles=matmul1_n_tiles,
+            matmul2_out_w_tiles=matmul2_n_tiles,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,

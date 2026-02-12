@@ -432,11 +432,13 @@ void kernel_main() {
         deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul2_out_w_per_core")>;
 
     // Matmul2 compute args (from compile-time args)
+    // start_in1 offsets into the stitched weight CB to skip matmul1's tiles
     deepseek_b1_ops::Matmul::ComputeArgs matmul2_args{
         get_named_compile_time_arg_val("matmul2_in0"),
         get_named_compile_time_arg_val("matmul2_in1"),
         get_named_compile_time_arg_val("matmul2_out"),
         get_named_compile_time_arg_val("matmul2_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul2_start_in1"),
     };
 
     // Mcast2 compute args (no-op for TRISC)
@@ -545,20 +547,11 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
     }
     if constexpr (Core::is_matmul_core) {
-        // Matmul weights
+        // Stitched matmul1+matmul2 weights: single setup_sharded_buffer for the combined CB
+        // matmul1 and matmul2 share the same CB (stitched tensor), same core grid
         constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
-        constexpr uint32_t matmul_k_num_tiles = get_named_compile_time_arg_val("matmul_k_num_tiles");
-        constexpr uint32_t matmul_out_w_per_core = get_named_compile_time_arg_val("matmul_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul_in1, matmul_k_num_tiles * matmul_out_w_per_core);
-    }
-    if constexpr (Core::is_matmul2_core) {
-        // Matmul2 CB indices and parameters from named compile-time args
-        constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
-        constexpr uint32_t matmul2_k_num_tiles = get_named_compile_time_arg_val("matmul2_k_num_tiles");
-        constexpr uint32_t matmul2_out_w_per_core = get_named_compile_time_arg_val("matmul2_out_w_per_core");
-
-        // Matmul2 weights (on all cores in main grid, 4 tiles per core)
-        unified_kernels::setup_sharded_buffer(matmul2_in1, matmul2_k_num_tiles * matmul2_out_w_per_core);
+        constexpr uint32_t stitched_total = get_named_compile_time_arg_val("stitched_weights_total_tiles");
+        unified_kernels::setup_sharded_buffer(matmul_in1, stitched_total);
     }
     if constexpr (Core::is_qnope_core) {
         // Matmul3 CB indices and parameters from named compile-time args

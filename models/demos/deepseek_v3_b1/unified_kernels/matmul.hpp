@@ -60,12 +60,13 @@ struct Matmul {
     // Writer args (BRISC): none (BRISC is no-op)
     struct WriterArgs {};
 
-    // Compute args (TRISC): [in0, in1, out, num_tiles]
+    // Compute args (TRISC): [in0, in1, out, num_tiles, start_in1]
     struct ComputeArgs {
         uint32_t in0;
         uint32_t in1;
         uint32_t out;
         uint32_t k_num_tiles;
+        uint32_t start_in1 = 0;  // Starting tile index in in1 CB (for stitched weight tensors)
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -104,9 +105,13 @@ struct Matmul {
             constexpr bool read_transposed = transpose && true;
 
             // Wait for all input tiles (both from sharded tensors in L1)
-            // in1 has num_tiles * out_w tiles (K tiles for each output column)
+            // in1 needs start_in1 + num_tiles * out_w tiles available
+            // (start_in1 accounts for offset in stitched weight tensors)
             cb_wait_front(args.in0, args.k_num_tiles);
-            cb_wait_front(args.in1, args.k_num_tiles * out_w);
+            UNPACK(({
+                get_local_cb_interface(args.in1).fifo_rd_ptr +=
+                    args.start_in1 * get_local_cb_interface(args.in1).fifo_page_size;
+            }));
 
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
