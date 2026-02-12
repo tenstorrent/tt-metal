@@ -156,16 +156,14 @@ class Flux1Pipeline:
             )
 
             model_name = os.path.basename(checkpoint_name)
-            if not cache.initialize_from_cache(
+            cache.load_model(
                 tt_transformer,
-                torch_transformer.state_dict(),
-                model_name,
-                "transformer",
-                parallel_config,
-                tuple(submesh_device.shape),
-            ):
-                logger.info(f"Loading transformer weights from PyTorch state dict")
-                tt_transformer.load_torch_state_dict(torch_transformer.state_dict())
+                get_torch_state_dict=torch_transformer.state_dict,
+                model_name=model_name,
+                subfolder="transformer",
+                parallel_config=parallel_config,
+                mesh_shape=tuple(submesh_device.shape),
+            )
 
             self.transformers.append(tt_transformer)
             ttnn.synchronize_device(submesh_device)
@@ -237,16 +235,14 @@ class Flux1Pipeline:
                     parallel_config=encoder_parallel_config,
                 )
 
-                if not cache.initialize_from_cache(
+                cache.load_model(
                     self._t5_text_encoder,
-                    torch_t5_text_encoder.state_dict(),
-                    model_name,
-                    "t5_text_encoder",
-                    encoder_parallel_config,
-                    tuple(self.encoder_device.shape),
-                ):
-                    logger.info(f"Loading T5 text encoder weights from PyTorch state dict")
-                    self._t5_text_encoder.load_torch_state_dict(torch_t5_text_encoder.state_dict())
+                    get_torch_state_dict=torch_t5_text_encoder.state_dict,
+                    model_name=model_name,
+                    subfolder="t5_text_encoder",
+                    parallel_config=encoder_parallel_config,
+                    mesh_shape=tuple(self.encoder_device.shape),
+                )
         else:
             self._t5_text_encoder = None
 

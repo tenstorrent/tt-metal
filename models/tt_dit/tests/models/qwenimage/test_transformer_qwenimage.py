@@ -103,16 +103,14 @@ def test_transformer(
         padding_config=padding_config,
     )
 
-    if not cache.initialize_from_cache(
+    cache.load_model(
         tt_model=tt_model,
-        torch_state_dict=torch_model.state_dict(),
+        get_torch_state_dict=torch_model.state_dict,
         model_name="qwen-image",
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
-        dtype="bf16",
-    ):
-        tt_model.load_torch_state_dict(torch_model.state_dict())
+    )
 
     spatial_seq_len = (latents_height // patch_size) * (latents_width // patch_size)
 
