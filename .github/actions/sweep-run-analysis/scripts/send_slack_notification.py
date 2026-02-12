@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import time
-from typing import Optional
 
 import requests
 
@@ -341,7 +340,7 @@ def build_cancelled_block() -> list[dict]:
     ]
 
 
-def build_superset_link_block(run_id: Optional[int]) -> dict:
+def build_superset_link_block() -> dict:
     """Build the Superset dashboard link block.
 
     Uses gh_run_number (GITHUB_RUN_ID) since it's available immediately,
@@ -424,7 +423,7 @@ def build_slack_message(results: dict, conclusion: str) -> dict:
 
     # Superset link
     blocks.append({"type": "divider"})
-    blocks.append(build_superset_link_block(results.get("run_id")))
+    blocks.append(build_superset_link_block())
 
     return {"blocks": blocks}
 
