@@ -202,15 +202,14 @@ FORCE_INLINE
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             constexpr uint8_t CHUNK_ENCODING_MASK = 0b11;  // Gets us the encoding of the first chunk
-            constexpr uint8_t CHUNK_ENCODING_SEMINC_MASK = 0b10;
-            constexpr uint8_t ENCODING_UNICAST_WRITE =
-                static_cast<uint8_t>(tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
-            constexpr uint8_t ENCODING_SEMINC_NO_FLUSH =
-                static_cast<uint8_t>(tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH);
-            constexpr uint8_t ENCODING_SEMINC_FLUSH =
-                static_cast<uint8_t>(tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH);
-            constexpr uint8_t ENCODING_NOP =
-                static_cast<uint8_t>(tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_NOP);
+            constexpr uint8_t CHUNK_ENCODING_SEMINC_MASK = 0b10;  // Checks if the first chunk is a semaphore increment
+
+            using Encoding = tt::tt_fabric::NocScatterWriteChunkEncoding;
+            constexpr uint8_t ENCODING_UNICAST_WRITE = static_cast<uint8_t>(Encoding::CHUNK_ENCODING_UNICAST_WRITE);
+            constexpr uint8_t ENCODING_SEMINC_NO_FLUSH = static_cast<uint8_t>(Encoding::CHUNK_ENCODING_SEMINC_NO_FLUSH);
+            constexpr uint8_t ENCODING_SEMINC_FLUSH = static_cast<uint8_t>(Encoding::CHUNK_ENCODING_SEMINC_FLUSH);
+            constexpr uint8_t ENCODING_NOP = static_cast<uint8_t>(Encoding::CHUNK_ENCODING_NOP);
+
             const auto& scatter = header.command_fields.unicast_scatter_write;
             const uint8_t chunk_count = scatter.chunk_count;
             uint8_t packet_encoding = scatter.chunk_encoding;
