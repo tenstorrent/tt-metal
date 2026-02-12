@@ -42,7 +42,7 @@ fi
 # 2) Replace the single VIRTUAL_ENV=... line with POSIX-compatible logic.
 awk '
 /^deactivate nondestructive$/ {
-    print "[ -n \"\\${VIRTUAL_ENV:-}\" ] && _CALLER_VIRTUAL_ENV=\"\\$VIRTUAL_ENV\""
+    print "[ -n \"\${VIRTUAL_ENV:-}\" ] && _CALLER_VIRTUAL_ENV=\"\$VIRTUAL_ENV\""
     print ""
     print
     next
@@ -50,19 +50,15 @@ awk '
 /realpath -- "\$SCRIPT_PATH"/ {
     print "# POSIX sh compatibility: SCRIPT_PATH is only set in bash/zsh/ksh."
     print "# When sourced under /bin/sh, use: . bin/activate /path/to/venv  or  VIRTUAL_ENV=/path . bin/activate"
-    print "if [ -n \"\\${1:-}\" ] && [ -d \"\$1\" ]; then"
+    print "if [ -n \"\${1:-}\" ] && [ -d \"\$1\" ]; then"
     print "    VIRTUAL_ENV=\"\$1\""
-    print "elif [ -n \"\\${SCRIPT_PATH:-}\" ]; then"
-    print "    _ap=\"\$SCRIPT_PATH\""
-    print "    VIRTUAL_ENV=\"$(dirname -- \"$(dirname -- \"$(realpath -- \"\$_ap\")\")\")\""
-    print "    unset _ap"
-    print "elif [ -n \"\\${_CALLER_VIRTUAL_ENV:-}\" ]; then"
-    print "    VIRTUAL_ENV=\"\\$_CALLER_VIRTUAL_ENV\""
+    print "elif [ -n \"\${SCRIPT_PATH:-}\" ]; then"
+    print "    VIRTUAL_ENV=\"$(dirname -- \"$(dirname -- \"$(realpath -- \"\$SCRIPT_PATH\")\")\")\""
+    print "elif [ -n \"\${_CALLER_VIRTUAL_ENV:-}\" ]; then"
+    print "    VIRTUAL_ENV=\"\$_CALLER_VIRTUAL_ENV\""
     print "    unset _CALLER_VIRTUAL_ENV"
     print "elif [ -n \"\$0\" ] && case \"\$0\" in */*) true ;; *) false ;; esac && [ -f \"\$0\" ]; then"
-    print "    _ap=\"\$0\""
-    print "    VIRTUAL_ENV=\"$(dirname -- \"$(dirname -- \"$(realpath -- \"\$_ap\")\")\")\""
-    print "    unset _ap"
+    print "    VIRTUAL_ENV=\"$(dirname -- \"$(dirname -- \"$(realpath -- \"\$0\")\")\")\""
     print "else"
     print "    echo \"activate (relocatable): Could not determine venv path. Under POSIX sh use: . bin/activate /path/to/venv  or  VIRTUAL_ENV=/path . bin/activate\" >&2"
     print "    exit 1"
