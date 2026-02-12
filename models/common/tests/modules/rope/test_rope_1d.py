@@ -291,7 +291,7 @@ def _list_init_test_cases() -> list[pytest.param]:
     "mesh_shape,batch_size,head_dim,max_seq_len,rope_theta,rope_scaling_str,use_qk_fused",
     _list_init_test_cases(),
 )
-def test_rope_1d_vs_reference(
+def test_rope_1d_decode_forward_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
     mesh_shape,
     batch_size,
@@ -526,34 +526,105 @@ def test_forward_dispatch_prefill(ttnn_mesh_device: ttnn.MeshDevice):
 # ============================================================================
 
 
+def _list_prefill_test_cases() -> list[pytest.param]:
+    # fmt: off
+    return [
+        # === Fast tests (one per model family + edge cases) ===
+        # Llama-3.2-1B: hd64, llama3
+        pytest.param(64, 8192, 500000.0, "llama3", 0, 128, None, id="hd64-llama3-seq8k-start0-S128"),
+        # Llama-3.2-3B / 3.1-8B: hd128, llama3
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 128, None, id="hd128-llama3-seq8k-start0-S128"),
+        # Mistral / Qwen: hd128, no scaling
+        pytest.param(128, 8192, 1000000.0, "none", 0, 128, None, id="hd128-none-seq8k-start0-S128"),
+        # Chunked prefill (llama3): nonzero start_pos
+        pytest.param(128, 32768, 500000.0, "llama3", 4096, 4096, None, id="hd128-llama3-seq32k-start4k-S4k"),
+        # Chunked prefill (none): nonzero start_pos
+        pytest.param(128, 32768, 1000000.0, "none", 4096, 4096, None, id="hd128-none-seq32k-start4k-S4k"),
+        # SDPA padding (not collected — manual edge case)
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 100, 128, id="hd128-llama3-seq8k-start0-S100-pad128"),
+
+        # === Slow tests (remaining from CSV) ===
+
+        # --- hd=64, llama3, theta=500k ---
+        pytest.param(64, 1024, 500000.0, "llama3", 0, 128, None, id="hd64-llama3-seq1k-start0-S128", marks=_slow),
+        pytest.param(64, 1024, 500000.0, "llama3", 0, 1024, None, id="hd64-llama3-seq1k-start0-S1024", marks=_slow),
+        pytest.param(64, 2048, 500000.0, "llama3", 0, 128, None, id="hd64-llama3-seq2k-start0-S128", marks=_slow),
+        pytest.param(64, 2048, 500000.0, "llama3", 0, 1024, None, id="hd64-llama3-seq2k-start0-S1024", marks=_slow),
+        pytest.param(64, 2048, 500000.0, "llama3", 0, 2048, None, id="hd64-llama3-seq2k-start0-S2048", marks=_slow),
+        pytest.param(64, 8192, 500000.0, "llama3", 0, 1024, None, id="hd64-llama3-seq8k-start0-S1024", marks=_slow),
+        pytest.param(64, 8192, 500000.0, "llama3", 0, 2048, None, id="hd64-llama3-seq8k-start0-S2048", marks=_slow),
+        pytest.param(64, 8192, 500000.0, "llama3", 0, 4096, None, id="hd64-llama3-seq8k-start0-S4096", marks=_slow),
+        pytest.param(64, 8192, 500000.0, "llama3", 0, 8192, None, id="hd64-llama3-seq8k-start0-S8192", marks=_slow),
+        pytest.param(64, 32768, 500000.0, "llama3", 0, 128, None, id="hd64-llama3-seq32k-start0-S128", marks=_slow),
+        pytest.param(64, 32768, 500000.0, "llama3", 0, 1024, None, id="hd64-llama3-seq32k-start0-S1024", marks=_slow),
+        pytest.param(64, 32768, 500000.0, "llama3", 0, 2048, None, id="hd64-llama3-seq32k-start0-S2048", marks=_slow),
+        pytest.param(64, 32768, 500000.0, "llama3", 0, 4096, None, id="hd64-llama3-seq32k-start0-S4096", marks=_slow),
+        pytest.param(64, 32768, 500000.0, "llama3", 0, 8192, None, id="hd64-llama3-seq32k-start0-S8192", marks=_slow),
+        pytest.param(64, 32768, 500000.0, "llama3", 0, 16384, None, id="hd64-llama3-seq32k-start0-S16384", marks=_slow),
+        pytest.param(64, 32768, 500000.0, "llama3", 0, 32768, None, id="hd64-llama3-seq32k-start0-S32768", marks=_slow),
+
+        # --- hd=128, llama3, theta=500k ---
+        pytest.param(128, 1024, 500000.0, "llama3", 0, 128, None, id="hd128-llama3-seq1k-start0-S128", marks=_slow),
+        pytest.param(128, 1024, 500000.0, "llama3", 0, 1024, None, id="hd128-llama3-seq1k-start0-S1024", marks=_slow),
+        pytest.param(128, 2048, 500000.0, "llama3", 0, 128, None, id="hd128-llama3-seq2k-start0-S128", marks=_slow),
+        pytest.param(128, 2048, 500000.0, "llama3", 0, 1024, None, id="hd128-llama3-seq2k-start0-S1024", marks=_slow),
+        pytest.param(128, 2048, 500000.0, "llama3", 0, 2048, None, id="hd128-llama3-seq2k-start0-S2048", marks=_slow),
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 1024, None, id="hd128-llama3-seq8k-start0-S1024", marks=_slow),
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 2048, None, id="hd128-llama3-seq8k-start0-S2048", marks=_slow),
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 4096, None, id="hd128-llama3-seq8k-start0-S4096", marks=_slow),
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 8192, None, id="hd128-llama3-seq8k-start0-S8192", marks=_slow),
+        pytest.param(128, 32768, 500000.0, "llama3", 0, 128, None, id="hd128-llama3-seq32k-start0-S128", marks=_slow),
+        pytest.param(128, 32768, 500000.0, "llama3", 0, 1024, None, id="hd128-llama3-seq32k-start0-S1024", marks=_slow),
+        pytest.param(128, 32768, 500000.0, "llama3", 0, 2048, None, id="hd128-llama3-seq32k-start0-S2048", marks=_slow),
+        pytest.param(128, 32768, 500000.0, "llama3", 0, 4096, None, id="hd128-llama3-seq32k-start0-S4096", marks=_slow),
+        pytest.param(128, 32768, 500000.0, "llama3", 0, 8192, None, id="hd128-llama3-seq32k-start0-S8192", marks=_slow),
+        pytest.param(128, 32768, 500000.0, "llama3", 0, 16384, None, id="hd128-llama3-seq32k-start0-S16384", marks=_slow),
+        pytest.param(128, 32768, 500000.0, "llama3", 0, 32768, None, id="hd128-llama3-seq32k-start0-S32768", marks=_slow),
+        # Chunked prefill (Llama-3.1-8B, 3.3-70B)
+        pytest.param(128, 32768, 500000.0, "llama3", 8192, 4096, None, id="hd128-llama3-seq32k-start8k-S4k", marks=_slow),
+        pytest.param(128, 32768, 500000.0, "llama3", 8192, 8192, None, id="hd128-llama3-seq32k-start8k-S8k", marks=_slow),
+        pytest.param(128, 32768, 500000.0, "llama3", 12288, 4096, None, id="hd128-llama3-seq32k-start12k-S4k", marks=_slow),
+
+        # --- hd=128, none, theta=1000k (Mistral / Qwen) ---
+        pytest.param(128, 1024, 1000000.0, "none", 0, 128, None, id="hd128-none-seq1k-start0-S128", marks=_slow),
+        pytest.param(128, 1024, 1000000.0, "none", 0, 1024, None, id="hd128-none-seq1k-start0-S1024", marks=_slow),
+        pytest.param(128, 2048, 1000000.0, "none", 0, 128, None, id="hd128-none-seq2k-start0-S128", marks=_slow),
+        pytest.param(128, 2048, 1000000.0, "none", 0, 1024, None, id="hd128-none-seq2k-start0-S1024", marks=_slow),
+        pytest.param(128, 2048, 1000000.0, "none", 0, 2048, None, id="hd128-none-seq2k-start0-S2048", marks=_slow),
+        pytest.param(128, 8192, 1000000.0, "none", 0, 1024, None, id="hd128-none-seq8k-start0-S1024", marks=_slow),
+        pytest.param(128, 8192, 1000000.0, "none", 0, 2048, None, id="hd128-none-seq8k-start0-S2048", marks=_slow),
+        pytest.param(128, 8192, 1000000.0, "none", 0, 4096, None, id="hd128-none-seq8k-start0-S4096", marks=_slow),
+        pytest.param(128, 8192, 1000000.0, "none", 0, 8192, None, id="hd128-none-seq8k-start0-S8192", marks=_slow),
+        pytest.param(128, 32768, 1000000.0, "none", 0, 128, None, id="hd128-none-seq32k-start0-S128", marks=_slow),
+        pytest.param(128, 32768, 1000000.0, "none", 0, 1024, None, id="hd128-none-seq32k-start0-S1024", marks=_slow),
+        pytest.param(128, 32768, 1000000.0, "none", 0, 2048, None, id="hd128-none-seq32k-start0-S2048", marks=_slow),
+        pytest.param(128, 32768, 1000000.0, "none", 0, 4096, None, id="hd128-none-seq32k-start0-S4096", marks=_slow),
+        pytest.param(128, 32768, 1000000.0, "none", 0, 8192, None, id="hd128-none-seq32k-start0-S8192", marks=_slow),
+        pytest.param(128, 32768, 1000000.0, "none", 0, 16384, None, id="hd128-none-seq32k-start0-S16384", marks=_slow),
+        pytest.param(128, 32768, 1000000.0, "none", 0, 32768, None, id="hd128-none-seq32k-start0-S32768", marks=_slow),
+        # Chunked prefill (Mistral-7B, Qwen2.5-Coder-32B)
+        pytest.param(128, 32768, 1000000.0, "none", 8192, 4096, None, id="hd128-none-seq32k-start8k-S4k", marks=_slow),
+        pytest.param(128, 32768, 1000000.0, "none", 12288, 4096, None, id="hd128-none-seq32k-start12k-S4k", marks=_slow),
+        pytest.param(128, 32768, 1000000.0, "none", 16384, 4096, None, id="hd128-none-seq32k-start16k-S4k", marks=_slow),
+
+        # --- SDPA padding edge cases (manual — not collected, but exercises pad_to path) ---
+        pytest.param(128, 8192, 500000.0, "llama3", 32, 64, 128, id="hd128-llama3-pad-start32-S64-pad128", marks=_slow),
+        pytest.param(128, 8192, 500000.0, "llama3", 0, 128, 128, id="hd128-llama3-pad-noop-S128-pad128", marks=_slow),
+    ]
+    # fmt: on
+
+
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
-    [(1, 1), (1, 2)],
-    ids=["1x1", "1x2"],
+    [(1, 1), (1, 2), (1, 8)],
+    ids=["1x1", "1x2", "1x8"],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "head_dim,max_seq_len,rope_theta,rope_scaling_str,start_pos,prefill_seq_len,pad_to",
-    [
-        # Basic: slice from beginning, no padding
-        pytest.param(128, 8192, 500000.0, "llama3", 0, 128, None, id="hd128-start0-seq128"),
-        # Slice with start_pos offset
-        pytest.param(128, 8192, 500000.0, "llama3", 64, 128, None, id="hd128-start64-seq128"),
-        # Slice with padding (SDPA alignment)
-        pytest.param(128, 8192, 500000.0, "llama3", 0, 100, 128, id="hd128-start0-seq100-pad128"),
-        # head_dim=64
-        pytest.param(64, 8192, 500000.0, "llama3", 0, 64, None, id="hd64-start0-seq64"),
-        # No scaling (Mistral-style)
-        pytest.param(128, 8192, 1000000.0, "none", 0, 256, None, id="hd128-none-start0-seq256"),
-        # Padding where pad_to > seq_len
-        pytest.param(128, 8192, 500000.0, "llama3", 32, 64, 128, id="hd128-start32-seq64-pad128"),
-        # pad_to == seq_len (no-op padding)
-        pytest.param(128, 8192, 500000.0, "llama3", 0, 128, 128, id="hd128-start0-seq128-pad128-noop"),
-        # Large start_pos
-        pytest.param(128, 8192, 500000.0, "llama3", 4000, 128, None, id="hd128-start4000-seq128"),
-    ],
+    _list_prefill_test_cases(),
 )
-def test_prefill_forward(
+def test_rope_1d_prefill_forward_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
     head_dim,
     max_seq_len,
