@@ -16,10 +16,10 @@ import torch.nn.functional as F
 from safetensors.torch import load_file
 from scipy import signal
 
-from models.demos.rvc.reference.audio import load_audio
-from models.demos.rvc.reference.configs.config import Config
-from models.demos.rvc.reference.synthesizer.models import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
-from models.demos.rvc.reference.vc.utils import load_hubert
+from models.demos.rvc.torch_impl.audio import load_audio
+from models.demos.rvc.torch_impl.configs.config import Config
+from models.demos.rvc.torch_impl.synthesizer.models import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
+from models.demos.rvc.torch_impl.vc.utils import load_hubert
 
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)
 

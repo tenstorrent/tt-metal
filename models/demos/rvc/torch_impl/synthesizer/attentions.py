@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from models.demos.rvc.reference.synthesizer.modules import LayerNorm
+from models.demos.rvc.torch_impl.synthesizer.modules import LayerNorm
 
 
 class Encoder(nn.Module):

@@ -47,12 +47,12 @@ uv run models/demos/rvc/scripts/infer.py -i ./models/demos/rvc/data/sample-speec
 Run inference using the Python API:
 
 ```python
-from models.demos.rvc.reference.rvc.vc.pipeline import Pipeline
+from models.demos.rvc.torch_impl.vc.pipeline import Pipeline
 import soundfile as sf
 
 pipe = Pipeline(if_f0=True, version="v1", num="48k")
-audio = pipe.infer("speech-sample-01.wav", speaker_id=0, f0_method="pm")
-sf.write("output.wav", audio, pipe.tgt_sr, subtype="PCM_16")
+audio = pipe.infer("./models/demos/rvc/data/sample-speech.wav", speaker_id=0, f0_method="pm")
+sf.write("./models/demos/rvc/data/output/output.wav", audio, pipe.tgt_sr, subtype="PCM_16")
 ```
 
 Expected layout after download:
