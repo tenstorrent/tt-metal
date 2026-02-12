@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -55,24 +56,12 @@ public:
     ~FileRenamer();
 
     const std::string& path() const { return temp_path_; }
+    static std::string generate_temp_path(const std::filesystem::path& target_path);
 
 private:
     std::string temp_path_;
     std::string target_path_;
     static uint64_t unique_id_;
-};
-
-// An RAII wrapper that keeps track of a group of files that need to be renamed.
-class FileGroupRenamer {
-public:
-    const std::string& add(const std::string& path) { return renamers_.emplace_back(path).path(); }
-    auto paths() const {
-        return renamers_ |
-               std::views::transform([](const FileRenamer& renamer) { return std::string_view{renamer.path()}; });
-    }
-
-private:
-    std::vector<FileRenamer> renamers_;
 };
 
 }  // namespace tt::jit_build::utils
