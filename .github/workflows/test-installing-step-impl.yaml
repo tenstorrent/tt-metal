@@ -70,15 +70,17 @@ jobs:
         run: |
           set -euo pipefail
           LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
-          mkdir -p falcon7b_lfc
-          wget -r -nH -x --cut-dirs=4 -np --progress=dot:giga -R "index.html*" -P falcon7b_lfc "${LFC_BASE}/tiiuae/falcon-7b-instruct/"
+          # Download under tt_dnn-models/Falcon so once workspace is mounted at /mnt/MLPerf,
+          # model_location_generator finds /mnt/MLPerf/tt_dnn-models/Falcon/tiiuae/falcon-7b-instruct
+          mkdir -p tt_dnn-models/Falcon
+          wget -r -nH -x --cut-dirs=4 -np --progress=dot:giga -R "index.html*" -P tt_dnn-models/Falcon "${LFC_BASE}/tiiuae/falcon-7b-instruct/"
       - name: Patch tt-metalium-models to mount workspace volume
         shell: bash
         run: |
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
           SCRIPT=$(which tt-metalium-models)
-          sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):$(pwd) \\' "$SCRIPT"
+          sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
       - name: Run Falcon7b Demo via tt-metalium-models
         shell: bash
         timeout-minutes: 60
@@ -86,7 +88,7 @@ jobs:
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
           tt-metalium-models \
-            -c "export TT_MODEL_CACHE_PATH=\$PWD/falcon7b_lfc && pytest --timeout=1200 --disable-warnings -q -s \
+            -c "pytest --timeout=1200 --disable-warnings -q -s \
               --input-method=json \
               --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"
