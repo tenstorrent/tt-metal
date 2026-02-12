@@ -264,7 +264,7 @@ class VariableSizeImageTransform(object):
 
     def _pad(self, image: PIL_Image.Image, target_size) -> PIL_Image.Image:
         new_width, new_height = target_size
-        new_im = Image.new(mode="RGB", size=(new_width, new_height), color=(0, 0, 0))  # type: ignore
+        new_im = PIL_Image.new(mode="RGB", size=(new_width, new_height), color=(0, 0, 0))  # type: ignore
         new_im.paste(image)
         return new_im
 
