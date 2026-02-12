@@ -652,6 +652,7 @@ def shard_and_save(
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     ttnn.dump_tensor(path, ttnn_tensor)
+    ttnn.deallocate(ttnn_tensor)
 
     # Always convert absolute paths to relative paths for portability
     # This ensures SavedWeight objects always have relative paths

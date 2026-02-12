@@ -16,10 +16,10 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
 WeightConfig = (
-    dict[str, "WeightConfig | SavedWeight | None"]
-    | list["WeightConfig | SavedWeight | None"]
+    dict[str, "WeightConfig | SavedWeight | WeightSpec | None"]
+    | list["WeightConfig | SavedWeight | WeightSpec | None"]
     | tuple[
-        "WeightConfig | SavedWeight | None", ...
+        "WeightConfig | SavedWeight | WeightSpec | None", ...
     ]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
@@ -167,6 +167,9 @@ def _merge_run_config(
                 cached_ttnn_weights[weight_config_item.path] = loaded_weight
 
             return loaded_weight
+        if isinstance(weight_config_item, ttnn.Tensor):
+            # In-memory weight from TensorCache (create_weight_config_from_weight_spec); already on device
+            return weight_config_item
         return None
 
     if weight_config_item is None:

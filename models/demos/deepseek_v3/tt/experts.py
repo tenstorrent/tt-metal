@@ -16,7 +16,6 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     dequantize,
     even_int_div,
-    shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -25,6 +24,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 
 
 class Experts(AbstractModule):
@@ -34,6 +34,54 @@ class Experts(AbstractModule):
     def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
         """Calculate the number of experts per device based on the total number of experts and the device shape."""
         return even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
+
+    @classmethod
+    def convert_expert_weight(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dict: dict[str, torch.Tensor],
+        hf_name: str,
+    ) -> WeightSpec:
+        """Convert an expert weight tensor to WeightSpec.
+
+        Args:
+            hf_config: HuggingFace model configuration
+            state_dict: State dictionary containing expert weights
+            hf_name: HuggingFace weight name (e.g., "gate_proj", "down_proj", "up_proj")
+
+        Returns:
+            WeightSpec describing how to convert the weight
+        """
+        # Stack all expert weights and scales
+        stacked_weights = torch.stack(
+            [state_dict[f"experts.{expert_id}.{hf_name}.weight"] for expert_id in range(hf_config.n_routed_experts)]
+        )
+        stacked_scales = torch.stack(
+            [
+                state_dict[f"experts.{expert_id}.{hf_name}.weight_scale_inv"]
+                for expert_id in range(hf_config.n_routed_experts)
+            ]
+        )
+
+        # Dequantize to get the base tensor
+        dequantized = dequantize(
+            stacked_weights,
+            stacked_scales,
+            (1, *hf_config.quantization_config["weight_block_size"]),
+        )
+
+        def preprocessor(t):
+            # Apply unsqueeze and transpose transformations
+            return t.unsqueeze(0).transpose(-1, -2)
+
+        return WeightSpec(
+            torch_tensor=dequantized,
+            shard_dims=(1, 1),
+            dtype=ttnn.bfloat8_b if hf_name == "up_proj" else ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            preprocessor=preprocessor,
+        )
 
     @classmethod
     def convert_weights(
@@ -51,32 +99,7 @@ class Experts(AbstractModule):
         assert state_dict is not None
 
         return {
-            ttnn_name: {
-                "input_tensor_b": shard_and_save(
-                    output_path / f"{ttnn_name}.input_tensor_b",
-                    dequantize(
-                        torch.stack(
-                            [
-                                state_dict[f"experts.{expert_id}.{hf_name}.weight"]
-                                for expert_id in range(hf_config.n_routed_experts)
-                            ]
-                        ),
-                        torch.stack(
-                            [
-                                state_dict[f"experts.{expert_id}.{hf_name}.weight_scale_inv"]
-                                for expert_id in range(hf_config.n_routed_experts)
-                            ]
-                        ),
-                        (1, *hf_config.quantization_config["weight_block_size"]),
-                    )
-                    .unsqueeze(0)
-                    .transpose(-1, -2),
-                    shard_dims=(1, 1),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat8_b if hf_name == "up_proj" else ttnn.bfloat4_b,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            }
+            ttnn_name: {"input_tensor_b": cls.convert_expert_weight(hf_config, state_dict, hf_name)}
             for hf_name, ttnn_name in [
                 ("gate_proj", "w1_experts"),
                 ("down_proj", "w2_experts"),

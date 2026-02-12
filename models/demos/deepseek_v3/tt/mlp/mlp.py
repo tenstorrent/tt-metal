@@ -19,7 +19,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MulConfig,
     OpConfigBase,
     ReduceScatterAsyncMinimalConfig,
-    SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -31,7 +30,6 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     get_activation_sharding_core_counts_for_dram_matmul,
     get_dram_sharded_matmul_config,
     get_state_dicts,
-    shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
@@ -42,6 +40,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 
 
 class MLP(AbstractModule):
@@ -73,7 +72,6 @@ class MLP(AbstractModule):
         return {
             models_name: {
                 "input_tensor_b": cls.convert_metaweight(
-                    output_path / f"{models_name}.input_tensor_b",
                     get_state_dicts(
                         state_dicts,
                         f"{hf_name}.weight",
@@ -96,51 +94,66 @@ class MLP(AbstractModule):
     @classmethod
     def convert_metaweight(
         cls,
-        path: Path,
         torch_metaweight_tensor: torch.Tensor,
         mesh_device: ttnn.Device,
         is_w2: bool,
-    ) -> SavedWeight:
+    ) -> WeightSpec:
         """
         Convert a normal (non-quantized) weight tensor to a format suitable for TTNN.
 
         Args:
-            metaweight_tensor: The weight tensor.
+            torch_metaweight_tensor: The weight tensor.
             mesh_device: The mesh device to use for the conversion.
+            is_w2: Whether this is the w2 (down_proj) weight, which has different sharding.
 
         Returns:
-            The converted TTNN tensor.
+            WeightSpec describing how to convert the weight.
         """
-        torch_metaweight_tensor = torch_metaweight_tensor.transpose(
-            2, 1
-        )  # In torch the weights are in (out_features, in_features) format
 
-        # Calculate the expected weight dimensions
-        num_shards, per_device_in_features, per_device_out_features = torch_metaweight_tensor.shape
+        # Transpose in preprocessor
+        def preprocessor(t):
+            return t.transpose(2, 1)  # In torch the weights are in (out_features, in_features) format
+
+        # Calculate the expected weight dimensions (before transpose)
+        # Input tensor shape: (num_shards, out_features, in_features)
+        num_shards, per_device_out_features_orig, per_device_in_features_orig = torch_metaweight_tensor.shape
         mp, tp = mesh_device.shape
         assert num_shards == mp, "Number of mesh rows does not match weight shards"
 
+        # After transpose: (num_shards, in_features, out_features)
+        # The memory config needs dimensions after transpose
+        # For memory config: k = input features (after transpose), n = output features (after transpose)
         if is_w2:
-            per_device_in_features = even_int_div(per_device_in_features, tp)
             mesh_sharded_dim = 1
+            # After transpose: dim 1 is in_features (per_device_in_features_orig)
+            # For w2, we shard the input dimension (dim 1 after transpose)
+            # Memory config: k = adjusted input features, n = output features
+            k = even_int_div(per_device_in_features_orig, tp)  # Input features after transpose and adjustment
+            n = per_device_out_features_orig  # Output features after transpose
         else:
-            per_device_out_features = even_int_div(per_device_out_features, tp)
             mesh_sharded_dim = 2
+            # After transpose: dim 2 is out_features (per_device_out_features_orig)
+            # For w1/w3, we shard the output dimension (dim 2 after transpose)
+            # Memory config: k = input features, n = adjusted output features
+            k = per_device_in_features_orig  # Input features after transpose
+            n = even_int_div(per_device_out_features_orig, tp)  # Output features after transpose and adjustment
 
-        # Convert the torch tensor to a TTNN tensor
-        return shard_and_save(
-            path,
-            torch_metaweight_tensor,
+        # Compute memory config directly (we have all the info we need)
+        # Note: dram_sharded_weight_config takes (k, n) where k is input features and n is output features
+        memory_config = dram_sharded_weight_config(
+            k,
+            n,
+            mesh_device.dram_grid_size(),
+        )
+
+        return WeightSpec(
+            torch_tensor=torch_metaweight_tensor,
             shard_dims=(0, mesh_sharded_dim),
-            mesh_device=mesh_device,
             remove_dims=(True, False),
             dtype=cls.WEIGHT_DTYPE,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=dram_sharded_weight_config(
-                per_device_in_features,
-                per_device_out_features,
-                mesh_device.dram_grid_size(),
-            ),
+            memory_config=memory_config,
+            preprocessor=preprocessor,
         )
 
     @final

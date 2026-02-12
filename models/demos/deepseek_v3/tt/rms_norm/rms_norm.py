@@ -10,7 +10,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm_base import RMSNormBase
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, RMSNormConfig
-from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, get_state_dicts, shard_and_save
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, get_state_dicts
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -18,6 +18,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import ModuleWeightSpec, WeightSpec, WeightSpecContext
 
 
 class RMSNorm(RMSNormBase):
@@ -46,6 +47,25 @@ class RMSNorm(RMSNormBase):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+        }
+
+    @classmethod
+    def create_weight_spec(
+        cls, hf_config: PretrainedConfig, mesh_shape: (int, int), context: WeightSpecContext
+    ) -> ModuleWeightSpec:
+        def preprocessor(t: torch.Tensor) -> torch.Tensor:
+            assert len(t.shape) == 1, "Weight expected to be a 1D tensor"
+            return t.reshape((1, 1, -1, ttnn.TILE_SIZE)).repeat(mesh_shape[0], 1, 1, 1)
+
+        return {
+            "weight": WeightSpec(
+                name="weight",
+                shard_dims=(0, None),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                preprocessor=preprocessor,
             ),
         }
 
