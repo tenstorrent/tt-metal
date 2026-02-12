@@ -249,6 +249,7 @@ class WanTransformer3DModel(Module):
         self.is_fsdp = is_fsdp
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
+        self.cached_rope_features = {}
 
         assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
         if model_type == "i2v":
@@ -351,11 +352,18 @@ class WanTransformer3DModel(Module):
         # Torch fallbacks
         self.rope.load_state_dict(pop_substate(state, "rope"))
 
+    def get_rope_features(self, hidden_states):
+        if tuple(hidden_states.shape) not in self.cached_rope_features:
+            rope_features = self.prepare_rope_features(hidden_states)
+            self.cached_rope_features[tuple(hidden_states.shape)] = rope_features
+        return self.cached_rope_features[tuple(hidden_states.shape)]
+
     def prepare_rope_features(self, hidden_states):
         """
         Given video input, compute RoPE features.
         Return tensors on device.
         """
+        logger.info(f"Preparing rope features for shape {hidden_states.shape}")
         rope_cos, rope_sin = self.rope(hidden_states)
 
         # Convert to TT tensors with proper sharding
@@ -414,23 +422,8 @@ class WanTransformer3DModel(Module):
         Return tensors on device.
         """
         assert timestep.ndim == 1, "Wan2.2-T2V requires a 1D timestep tensor"
-        temb, timestep_proj, encoder_hidden_states, encoder_hidden_states_image = self.condition_embedder(
-            timestep, encoder_hidden_states, encoder_hidden_states_image=None, timestep_seq_len=None
-        )
-        assert encoder_hidden_states_image is None, "Wan2.2-T2V does not support image conditioning"
-
-        timestep_proj = timestep_proj.unflatten(1, (6, -1))
-        logger.info(f"temb shape: {temb.shape}")
-        logger.info(f"encoder_hidden_states shape: {encoder_hidden_states.shape}")
-
-        tt_temb_11BD = bf16_tensor(temb.unsqueeze(0).unsqueeze(0), device=self.mesh_device)
-        tt_timestep_proj_1BTD = bf16_tensor(
-            timestep_proj.unsqueeze(0),
-            device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            shard_dim=-1,
-        )
-        tt_prompt_1BLP = bf16_tensor(encoder_hidden_states.unsqueeze(0), device=self.mesh_device)
+        tt_temb_11BD, tt_timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
+        tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states)
 
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
         logger.info(f"TT timestep proj shape: {tt_timestep_proj_1BTD.shape}")
@@ -527,7 +520,7 @@ class WanTransformer3DModel(Module):
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
         N = patch_F * patch_H * patch_W
 
-        rope_cos_1HND, rope_sin_1HND, trans_mat = self.prepare_rope_features(spatial)
+        rope_cos_1HND, rope_sin_1HND, trans_mat = self.get_rope_features(spatial)
 
         temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(timestep, prompt)
 
