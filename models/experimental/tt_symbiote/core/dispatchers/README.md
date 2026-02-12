@@ -54,6 +54,8 @@ Standard TTNN dispatcher with all supported operations. This includes:
 - Comparison operations (ge, gt, eq, lt)
 - And more...
 
+**aten::index.Tensor:** Only the case with a single 1D index tensor as the only element in the index tuple (indexing dim 0) is dispatched. Indexing on other dimensions (e.g. `x[:, idx, :]`) falls back to PyTorch and runs on CPU. See [CUSTOM_README.md](../../CUSTOM_README.md) for the two GR00T vision operations affected and why.
+
 ## Creating a New Dispatcher
 
 There are two ways to create a custom dispatcher:

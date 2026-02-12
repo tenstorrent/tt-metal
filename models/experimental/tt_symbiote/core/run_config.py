@@ -5,7 +5,7 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
 from torch.utils._pytree import tree_flatten, tree_map
@@ -20,10 +20,95 @@ from models.experimental.tt_symbiote.core.utils import (
 
 
 @dataclass
+class CCLManagerConfig:
+    """Configuration for CCLManager."""
+
+    mesh_device: Any
+    num_links: Optional[int] = None
+    topology: Optional[Any] = None
+
+    def __post_init__(self):
+        if self.num_links is None:
+            self.num_links = 1
+        if self.topology is None:
+            try:
+                self.topology = ttnn.Topology.Linear
+            except Exception:
+                self.topology = None
+
+
+@dataclass
 class DistributedTensorConfig:
     """Configuration for distributed tensor operations."""
 
     mesh_mapper: Any
+    mesh_composer: Optional[Any] = None
+    logical_shape_fn: Optional[Any] = None
+
+    def get_logical_shape(self, sharded_shape):
+        if self.logical_shape_fn is not None:
+            return self.logical_shape_fn(sharded_shape)
+        return sharded_shape
+
+
+def logical_shape_for_batch_channel_sharding(mesh_shape):
+    def _logical_shape(shape):
+        shape = list(shape)
+        logical_shape = [shape[0] * mesh_shape[0]] + shape[1:-1] + [shape[-1] * mesh_shape[1]]
+        return tuple(logical_shape)
+
+    return _logical_shape
+
+
+@dataclass
+class DistributedConfig:
+    """Device-level state for multi-device TTNN modules (e.g. set_device_state)."""
+
+    device: Any
+
+
+@dataclass
+class MeshDistributedConfig:
+    """Full distributed config for mesh devices (tensor_config, ccl_manager)."""
+
+    mesh_device: Any
+    tensor_config: Optional[DistributedTensorConfig] = None
+    ccl_manager: Optional[Any] = None
+
+    def __post_init__(self):
+        num_devices = getattr(self.mesh_device, "get_num_devices", lambda: 1)()
+        if num_devices > 1:
+            try:
+                if (
+                    self.tensor_config is None
+                    and hasattr(ttnn, "ShardTensor2dMesh")
+                    and hasattr(ttnn, "ConcatMesh2dToTensor")
+                ):
+                    mesh_shape = getattr(self.mesh_device, "shape", (1, 1))
+                    self.tensor_config = DistributedTensorConfig(
+                        mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape, (0, -1)),
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape, (0, -1)),
+                        logical_shape_fn=logical_shape_for_batch_channel_sharding(mesh_shape),
+                    )
+            except Exception:
+                pass
+            try:
+                if self.ccl_manager is None:
+                    from models.tt_transformers.tt.ccl import TT_CCL
+
+                    self.ccl_manager = TT_CCL(self.mesh_device)
+            except Exception:
+                pass
+
+    def get_tensor_config_for_tensor(self, module_name, tensor):
+        if tensor is not None:
+            shape = getattr(self.mesh_device, "shape", (1, 1))
+            shp = tuple(shape) if shape is not None else (1, 1)
+            if len(tensor.shape) < 2 or (
+                len(shp) >= 2 and (tensor.shape[-1] % shp[-1] != 0 or tensor.shape[0] % shp[0] != 0)
+            ):
+                return None
+        return self.tensor_config
 
 
 @contextlib.contextmanager
@@ -114,30 +199,83 @@ class DispatchManager:
     def dispatch_to_ttnn_wrapper(func, ttnn_args, ttnn_kwargs):
         from models.experimental.tt_symbiote.core.dispatcher import dispatch_to_ttnn
 
-        begin = time.time()
+        _record = os.environ.get("TT_SYMBIOTE_DISPATCH_TIMING", "0") == "1"
+        if _record:
+            begin = time.time()
         res = dispatch_to_ttnn(func.name(), ttnn_args, ttnn_kwargs)
-        end = time.time()
-        DispatchManager.record_timing(
-            "TTNN",
-            (
-                DispatchManager.current_module_name + f".{func.name()}"
-                if DispatchManager.current_module_name
-                else func.name()
-            ),
-            func.name(),
-            {},
-            end - begin,
-        )
+        if _record:
+            end = time.time()
+            DispatchManager.record_timing(
+                "TTNN",
+                (
+                    DispatchManager.current_module_name + f".{func.name()}"
+                    if DispatchManager.current_module_name
+                    else func.name()
+                ),
+                func.name(),
+                {},
+                end - begin,
+            )
         return res
 
     @staticmethod
     def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs):
         from models.experimental.tt_symbiote.core.torch_dispatcher import can_dispatch_to_torch, dispatch_to_torch
 
+        # Capture logical shape for im2col before unwrap (to_torch can make .shape physical/padded).
+        im2col_logical_shape = None
+        if func.name().startswith("aten::im2col") and len(torch_args) >= 5:
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+            if isinstance(torch_args[0], TorchTTNNTensor) and torch_args[0].ttnn_tensor is not None:
+                im2col_logical_shape = tuple(int(i) for i in torch_args[0].ttnn_tensor.shape)
         with no_dispatch():
             func_args, func_kwargs = tree_map(unwrap_to_torch(func), torch_args), tree_map(
                 unwrap_to_torch(func), torch_kwargs
             )
+            # For im2col CPU fallback: input synced from device may have padded storage; copy to logical shape
+            # so downstream view(1, C, 196, 4) is valid. Prefer shape from TTNN tensor (captured above).
+            if func.name().startswith("aten::im2col") and len(torch_args) >= 5:
+                from math import isqrt
+
+                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                if isinstance(torch_args[0], TorchTTNNTensor) and isinstance(func_args[0], torch.Tensor):
+                    t = func_args[0]
+                    shp = (
+                        im2col_logical_shape
+                        if (im2col_logical_shape is not None and len(im2col_logical_shape) == 4)
+                        else torch_args[0].shape
+                    )
+                    if len(shp) == 4:
+                        N, C = int(shp[0]), int(shp[1])
+                        expected_in_numel = N * C * int(shp[2]) * int(shp[3])
+                        func_args = list(func_args)
+                        # Vision fallback: known padded buffer 2965872 with logical (1,1152,28,28)=903168.
+                        if t.numel() == 2965872 and N == 1 and C == 1152:
+                            func_args[0] = t.flatten()[:903168].clone().reshape(1, 1152, 28, 28)
+                        elif t.numel() > expected_in_numel:
+                            # Padded buffer: .shape is logical; copy first expected_in_numel elements.
+                            func_args[0] = (
+                                t.flatten()[:expected_in_numel].clone().reshape(N, C, int(shp[2]), int(shp[3]))
+                            )
+                        elif t.numel() < expected_in_numel:
+                            # Buffer smaller than .shape (e.g. .shape physical): use all elements, infer H*W.
+                            spatial = t.numel() // (N * C)
+                            if spatial > 0:
+                                H = isqrt(spatial)
+                                W = spatial // H
+                                if H * W == spatial and H > 0 and W > 0:
+                                    func_args[0] = t.flatten().clone().reshape(N, C, H, W)
+                                else:
+                                    func_args[0] = t.contiguous().clone()
+                            else:
+                                func_args[0] = t.contiguous().clone()
+                        else:
+                            func_args[0] = (
+                                t[: int(shp[0]), : int(shp[1]), : int(shp[2]), : int(shp[3])].contiguous().clone()
+                            )
+                        func_args = tuple(func_args)
             # Avoid BFloat16 != float errors when one operand is from TTNN (bfloat16) and another is module param (float32)
             target_dtype = _dtype_from_torch_args(func_args, func_kwargs)
             if target_dtype is not None:
@@ -149,24 +287,27 @@ class DispatchManager:
 
                 func_args = tree_map(_cast_to_dtype, func_args)
                 func_kwargs = tree_map(_cast_to_dtype, func_kwargs)
-            begin = time.time()
+            _record = os.environ.get("TT_SYMBIOTE_DISPATCH_TIMING", "0") == "1"
+            if _record:
+                begin = time.time()
             func_res = (
                 dispatch_to_torch(func.name(), func_args, func_kwargs)
                 if can_dispatch_to_torch(func.name(), func_args, func_kwargs)
                 else func(*func_args, **func_kwargs)
             )
-            end = time.time()
-            DispatchManager.record_timing(
-                "Torch",
-                (
-                    DispatchManager.current_module_name + f".{func.name()}"
-                    if DispatchManager.current_module_name
-                    else func.name()
-                ),
-                func.name(),
-                {},
-                end - begin,
-            )
+            if _record:
+                end = time.time()
+                DispatchManager.record_timing(
+                    "Torch",
+                    (
+                        DispatchManager.current_module_name + f".{func.name()}"
+                        if DispatchManager.current_module_name
+                        else func.name()
+                    ),
+                    func.name(),
+                    {},
+                    end - begin,
+                )
             return tree_map(wrap_from_torch, func_res)
 
     @staticmethod
@@ -461,6 +602,243 @@ class CPU(NormalRun):
     pass
 
 
+# --- Trace Infrastructure ---
+
+
+def _compute_tensor_signature(tensor) -> Tuple:
+    """Compute hashable signature from tensor properties."""
+    if isinstance(tensor, ttnn.Tensor):
+        return (tuple(tensor.shape), tensor.dtype, tensor.layout)
+    if hasattr(tensor, "ttnn_tensor") and tensor.ttnn_tensor is not None:
+        t = tensor.ttnn_tensor
+        return (tuple(t.shape), t.dtype, t.layout)
+    if isinstance(tensor, torch.Tensor):
+        return (tuple(tensor.shape), tensor.dtype)
+    return ()
+
+
+def _compute_args_signature(args) -> Tuple:
+    """Compute signature for all tensor args."""
+    sigs = []
+    for arg in args:
+        sig = _compute_tensor_signature(arg)
+        if sig:
+            sigs.append(sig)
+    return tuple(sigs)
+
+
+@dataclass(slots=True)
+class TraceEntry:
+    """Single trace cache entry."""
+
+    trace_id: int
+    trace_inputs: List[Any]
+    trace_output: Any
+    device: Any
+
+
+_TRACE_ENABLED_CLASSES: Set[Type] = set()
+_TRACE_RUNNING = False
+
+
+def trace_enabled(cls: Type) -> Type:
+    """
+    Decorator to mark a TTNNModule subclass as trace-enabled.
+
+    Usage:
+        @trace_enabled
+        class MyModule(TTNNModule):
+            ...
+    """
+    _TRACE_ENABLED_CLASSES.add(cls)
+    return cls
+
+
+def is_trace_enabled(module) -> bool:
+    """Check if module's class is trace-enabled."""
+    return isinstance(module, tuple(_TRACE_ENABLED_CLASSES))
+
+
+class TracedRun(NormalRun):
+    """
+    Traced execution mode with automatic caching.
+    Only traces modules decorated with @trace_enabled.
+    """
+
+    _device: Any = None
+    _cq_id: int = 0
+    _input_memory_config: Any = None
+    _trace_cache: Dict[Tuple, TraceEntry] = {}
+
+    @classmethod
+    def configure(
+        cls,
+        device=None,
+        cq_id: int = 0,
+        input_memory_config=None,
+    ) -> None:
+        """Configure traced run mode."""
+        cls._device = device
+        cls._cq_id = cq_id
+        cls._input_memory_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
+        cls._trace_cache = {}
+
+    @classmethod
+    def cache_size(cls) -> int:
+        return len(cls._trace_cache)
+
+    @classmethod
+    def cached_keys(cls) -> List[Tuple]:
+        return list(cls._trace_cache.keys())
+
+    @classmethod
+    def release_all(cls) -> None:
+        """Release all cached traces."""
+        for entry in cls._trace_cache.values():
+            ttnn.release_trace(entry.device, entry.trace_id)
+        cls._trace_cache.clear()
+
+    @classmethod
+    def release(cls, module_name: str) -> int:
+        """Release all traces for a specific module. Returns count released."""
+        to_remove = [k for k in cls._trace_cache if k[0] == module_name]
+        for key in to_remove:
+            entry = cls._trace_cache.pop(key)
+            ttnn.release_trace(entry.device, entry.trace_id)
+        return len(to_remove)
+
+    @staticmethod
+    def _make_cache_key(module_name: str, args) -> Tuple:
+        """Create cache key from module name and input signatures."""
+        return (module_name, _compute_args_signature(args))
+
+    @staticmethod
+    def _copy_inputs_to_trace_buffer(new_args, trace_inputs) -> None:
+        """Copy new inputs to trace input buffers."""
+        trace_idx = 0
+        for arg in new_args:
+            if trace_idx >= len(trace_inputs):
+                break
+            trace_input = trace_inputs[trace_idx]
+            if trace_input is None:
+                trace_idx += 1
+                continue
+            if isinstance(arg, ttnn.Tensor):
+                ttnn.copy(arg, trace_input)
+                trace_idx += 1
+            elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
+                ttnn.copy(arg.ttnn_tensor, trace_input)
+                trace_idx += 1
+
+    @staticmethod
+    def _capture_trace(module, func_args, func_kwargs, cache_key) -> TraceEntry:
+        """Capture trace for module."""
+        device = module.device
+        cq_id = TracedRun._cq_id
+        mem_config = TracedRun._input_memory_config or ttnn.DRAM_MEMORY_CONFIG
+
+        trace_inputs = []
+        trace_func_args = []
+        for arg in func_args:
+            if isinstance(arg, ttnn.Tensor):
+                host_tensor = arg.cpu() if arg.storage_type() != ttnn.StorageType.HOST else arg
+                trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_inputs.append(trace_input)
+                trace_func_args.append(trace_input)
+            elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
+                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                t = arg.ttnn_tensor
+                host_tensor = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
+                trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_inputs.append(trace_input)
+                trace_func_args.append(TorchTTNNTensor(trace_input))
+            else:
+                trace_inputs.append(None)
+                trace_func_args.append(arg)
+
+        trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
+        trace_output = module.forward(*trace_func_args, **func_kwargs)
+        ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
+
+        entry = TraceEntry(
+            trace_id=trace_id,
+            trace_inputs=trace_inputs,
+            trace_output=trace_output,
+            device=device,
+        )
+        TracedRun._trace_cache[cache_key] = entry
+        return entry
+
+    @staticmethod
+    def module_run(self, *args, **kwds):
+        pass
+
+        assert self.device is not None, "Device must be set for TTNN module execution."
+        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        func_args = tree_map(transform, args)
+        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
+        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
+
+        self.preprocess_weights()
+        self.move_weights_to_device()
+
+        global _TRACE_RUNNING
+        if not is_trace_enabled(self) or _TRACE_RUNNING:
+            result = self.forward(*func_args, **func_kwargs)
+            return tree_map(wrap_to_torch_ttnn_tensor, result)
+
+        cache_key = TracedRun._make_cache_key(self.module_name, func_args)
+        if cache_key in TracedRun._trace_cache:
+            entry = TracedRun._trace_cache[cache_key]
+            TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
+            ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
+            return entry.trace_output
+        _TRACE_RUNNING = True
+        try:
+            entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
+            return entry.trace_output
+        finally:
+            _TRACE_RUNNING = False
+
+
+def disable_trace(fn):
+    """Decorator to disable trace capture during fn execution."""
+
+    def new_fn(*args, **kwargs):
+        global _TRACE_RUNNING
+        was_tracing = _TRACE_RUNNING
+        _TRACE_RUNNING = True
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _TRACE_RUNNING = was_tracing
+
+    return new_fn
+
+
+def get_default_distributed_tensor_config(mesh_device=None, torch_tensor=None, module_name=None):
+    """Get distributed tensor config for the current device state (when using DeviceInit)."""
+    try:
+        from models.experimental.tt_symbiote.utils.device_management import DeviceInit
+
+        state = None
+        if mesh_device is not None:
+            state = DeviceInit.DEVICE_TO_STATE_DICT.get(mesh_device)
+        elif (
+            getattr(DeviceInit, "DEVICE_TO_STATE_DICT", None) is not None and len(DeviceInit.DEVICE_TO_STATE_DICT) == 1
+        ):
+            state = next(iter(DeviceInit.DEVICE_TO_STATE_DICT.values()))
+        if state is None:
+            return None
+        if hasattr(state, "get_tensor_config_for_tensor") and torch_tensor is not None:
+            return state.get_tensor_config_for_tensor(module_name, torch_tensor)
+        return getattr(state, "tensor_config", None)
+    except Exception:
+        return None
+
+
 _RUN_MODE_REGISTRY = {
     "LIGHTWEIGHT": LightweightRun,
     "NORMAL": NormalRun,
@@ -469,6 +847,7 @@ _RUN_MODE_REGISTRY = {
     "DPL": DPLRun,
     "DPL_NO_ERROR_PROP": DPLRunNoErrorProp,
     "CPU": CPU,
+    "TRACED": TracedRun,
 }
 
 _current_run_mode = None

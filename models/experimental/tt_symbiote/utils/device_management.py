@@ -3,14 +3,47 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device management utilities for TTNN modules."""
+from __future__ import annotations
+
 import time
+from typing import TYPE_CHECKING
 
 from torch import nn
 
-from models.experimental.tt_symbiote.core.run_config import DispatchManager
+if TYPE_CHECKING:
+    from models.experimental.tt_symbiote.core.module import TTNNModule
+
+from models.experimental.tt_symbiote.core.run_config import DispatchManager, DistributedConfig
 
 
-def set_device(obj, device, register_forward_hook=True):
+class DeviceInit:
+    DEVICE_TO_STATE_DICT = {}
+
+    @classmethod
+    def init_state(cls, device):
+        """Initialize device state if not already initialized."""
+        if device not in cls.DEVICE_TO_STATE_DICT:
+            res = cls.init_state_impl(device)
+            if res is not None:
+                assert isinstance(res, DistributedConfig), f"Expected DistributedConfig, got {type(res)}"
+            cls.DEVICE_TO_STATE_DICT[device] = res
+        return cls.DEVICE_TO_STATE_DICT[device]
+
+    @classmethod
+    def init_state_impl(cls, device) -> DistributedConfig:
+        """Implementation-specific device state initialization."""
+        # Placeholder for actual device state initialization logic
+        return DistributedConfig(device)
+
+
+def _initialize_module_on_device(module: TTNNModule, device, device_init=DeviceInit):
+    """Initialize a TTNN module on the specified device."""
+    module.to_device(device)
+    if getattr(device, "get_num_devices", lambda: 1)() > 1 and hasattr(module, "set_device_state"):
+        module.set_device_state(device_init.init_state(device))
+
+
+def set_device(obj, device, device_init=DeviceInit, **kwargs):
     """Recursively set device for all TTNN modules in a model."""
     from models.experimental.tt_symbiote.core.module import TTNNModule
 
@@ -25,7 +58,7 @@ def set_device(obj, device, register_forward_hook=True):
             name = module_names.get(current_obj, module_name or "")
 
             # Register forward hook for this module
-            if register_forward_hook:
+            if kwargs.get("register_forward_hook", True):
 
                 def timed_call(original_call, module_name, module_class):
                     def new_call(*args, **kwargs):
@@ -52,7 +85,7 @@ def set_device(obj, device, register_forward_hook=True):
                 if module is None:
                     continue
                 if isinstance(module, TTNNModule):
-                    module.to_device(device)
+                    _initialize_module_on_device(module, device, device_init)
                 _set_device_recursive(module)
 
             for attr_name in dir(current_obj):
@@ -63,20 +96,20 @@ def set_device(obj, device, register_forward_hook=True):
                 except Exception as e:
                     continue
                 if isinstance(value, TTNNModule):
-                    value.to_device(device)
+                    _initialize_module_on_device(value, device, device_init)
                     _set_device_recursive(value)
                 if isinstance(value, dict):
                     for k, v in value.items():
                         if isinstance(v, TTNNModule):
-                            v.to_device(device)
+                            _initialize_module_on_device(v, device, device_init)
                         _set_device_recursive(v)
                 if isinstance(value, (list, tuple)):
                     for v in value:
                         if isinstance(v, TTNNModule):
-                            v.to_device(device)
+                            _initialize_module_on_device(v, device, device_init)
                         _set_device_recursive(v)
         elif isinstance(current_obj, TTNNModule):
-            current_obj.to_device(device)
+            _initialize_module_on_device(current_obj, device, device_init)
             for attr_name in dir(current_obj):
                 if attr_name.startswith("_"):
                     continue
@@ -84,18 +117,19 @@ def set_device(obj, device, register_forward_hook=True):
                     value = getattr(current_obj, attr_name)
                 except Exception as e:
                     continue
-                if isinstance(value, TTNNModule):
-                    value.to_device(device)
+                if isinstance(value, (nn.Module, TTNNModule)):
+                    if isinstance(value, TTNNModule):
+                        _initialize_module_on_device(value, device, device_init)
                     _set_device_recursive(value)
                 if isinstance(value, dict):
                     for k, v in value.items():
                         if isinstance(v, TTNNModule):
-                            v.to_device(device)
+                            _initialize_module_on_device(v, device, device_init)
                         _set_device_recursive(v)
                 if isinstance(value, (list, tuple)):
                     for v in value:
                         if isinstance(v, TTNNModule):
-                            v.to_device(device)
+                            _initialize_module_on_device(v, device, device_init)
                         _set_device_recursive(v)
 
     _set_device_recursive(obj)

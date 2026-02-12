@@ -11,7 +11,7 @@ from transformers import AutoModelForVision2Seq, AutoProcessor
 from tqdm import tqdm
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import TTNNLinearLLama, TTNNLinear
-from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TtRMSNorm
+from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TTNNRMSNorm
 from models.experimental.tt_symbiote.modules.attention import LlamaAttention
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
@@ -29,7 +29,7 @@ def test_openvla(device):
         nn.SiLU: TTNNSilu,
         nn.SiLU: TTNNSilu,
         nn.LayerNorm: TTNNLayerNorm,
-        model.language_model.model.layers[0].input_layernorm.__class__: TtRMSNorm,
+        model.language_model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
         model.language_model.model.layers[0].self_attn.__class__: LlamaAttention,
     }
     nn_to_ttnn_2 = {
