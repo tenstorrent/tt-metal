@@ -22,7 +22,6 @@ template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose = 0) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t operandB_id = get_operand_id(operandB);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face r dim in unpA and unpB are the same
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
     const bool narrow_tile =
@@ -32,12 +31,12 @@ inline void llk_unpack_AB_init(
         are_unpacker_AB_configured_correctly(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
-            unpack_src_format[operandB_id],
-            unpack_dst_format[operandB_id],
+            unpack_src_format[get_operand_id(operandB)],
+            unpack_dst_format[get_operand_id(operandB)],
             face_r_dim,
-            get_operand_face_r_dim(operandB_id),
+            get_operand_face_r_dim(get_operand_id(operandB)),
             num_faces,
-            get_operand_num_faces(operandB_id)),
+            get_operand_num_faces(get_operand_id(operandB))),
         "");
 
     _llk_unpack_AB_init_<BType>(face_r_dim, num_faces, narrow_tile, transpose);

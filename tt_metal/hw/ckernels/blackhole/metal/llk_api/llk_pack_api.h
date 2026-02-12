@@ -258,9 +258,11 @@ inline void llk_pack_rows(
         (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
         "Dst tile exceeds maximum allowed for the given tile shape and accumulation mode.");
 
+    // Pack rows uses pack_reads_per_xy_plane=1 (set in _llk_pack_rows_init_) for row packing,
+    // which differs from standard tile face_r_dim. Use ProgramByTile to skip face_r_dim check.
     LLK_ASSERT(
-        are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output_id)),
+        are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
+            pack_src_format[output_id], pack_dst_format[output_id]),
         "");
 
     _llk_pack_rows_(dst_index, pack_addr);
