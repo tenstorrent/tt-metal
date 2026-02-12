@@ -254,7 +254,7 @@ tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
 }
 
 bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
-    return !tensor.is_valueless();
+    return tensor.tensor_attributes != nullptr;
 }
 
 void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name) {
