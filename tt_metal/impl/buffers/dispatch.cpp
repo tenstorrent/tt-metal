@@ -763,19 +763,20 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             total_relay_length += relay_sub_cmd.length;
         }
 
- //       fmt::println(stderr, "Total relay length: {} write sub cmds: {} relay sub cmds: {} \n", total_relay_length, write_sub_cmds.size(), relay_sub_cmds.size());
+        //       fmt::println(stderr, "Total relay length: {} write sub cmds: {} relay sub cmds: {} \n",
+        //       total_relay_length, write_sub_cmds.size(), relay_sub_cmds.size());
 
         // Use calculator to compute command sequence size
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_packed_large_unicast(write_sub_cmds.size());
-        //calculator.add_prefetch_relay_linear_packed(relay_sub_cmds.size());
+        // calculator.add_prefetch_relay_linear_packed(relay_sub_cmds.size());
         void* cmd_region = sysmem_manager.issue_queue_reserve(calculator.write_offset_bytes(), dispatch_params.cq_id);
         HugepageDeviceCommand command_sequence(cmd_region, calculator.write_offset_bytes());
 
         // Add write packed large unicast command
         command_sequence.add_dispatch_write_packed_large_unicast(
             CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, l1_alignment, write_sub_cmds.size(), write_sub_cmds);
-       // command_sequence.add_prefetch_relay_linear_packed(
+        // command_sequence.add_prefetch_relay_linear_packed(
         //    pinned_src_noc_xy, total_relay_length, relay_sub_cmds, relay_sub_cmds.size(), 0);
 
         TT_ASSERT(
@@ -788,7 +789,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
         sysmem_manager.fetch_queue_write(calculator.write_offset_bytes(), dispatch_params.cq_id);
 
-        #if 1
+#if 1
         calculator.clear();
 
         // Put the CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H into its own fetch queue entry so prefetch_h knows to process
@@ -820,7 +821,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         sysmem_manager.issue_queue_push_back(calculator.write_offset_bytes(), dispatch_params.cq_id);
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
         sysmem_manager.fetch_queue_write(calculator.write_offset_bytes(), dispatch_params.cq_id);
-        #endif
+#endif
 
         // Clear for next batch
         write_sub_cmds.clear();
@@ -930,7 +931,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     emit_command_pair();
     std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> duration = end_time - start_time;
-    //log_info(tt::LogMetal, "Time taken to build command sequence: {} microseconds", duration.count() * 1000000);
+    // log_info(tt::LogMetal, "Time taken to build command sequence: {} microseconds", duration.count() * 1000000);
 }
 
 // Issue dispatch commands for writing buffer data
@@ -1209,7 +1210,8 @@ bool write_to_device_buffer(
         if (has_pinned_inputs && is_unpadded) {
             // Check if average host range size is large enough to benefit from pinned transfer.
             // Each relay-linear-packed batch handles at most CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS
-            // host ranges; skip pinned if total data per batch would be < 512kB, as otherwise we can't pipeline the reads well.
+            // host ranges; skip pinned if total data per batch would be < 512kB, as otherwise we can't pipeline the
+            // reads well.
             auto buffer_page_mapping = buffer.get_buffer_page_mapping();
             uint32_t total_host_range_count = 0;
             for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
@@ -1218,7 +1220,8 @@ bool write_to_device_buffer(
                 }
             }
             constexpr uint64_t pinned_min_batch_size = 512 * 1024;
-            bool batch_large_enough = total_host_range_count == 0 ||
+            bool batch_large_enough =
+                total_host_range_count == 0 ||
                 static_cast<uint64_t>(buffer.size()) * CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS >=
                     pinned_min_batch_size * total_host_range_count;
 
@@ -1308,8 +1311,9 @@ bool write_to_device_buffer(
 
         std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
         std::chrono::duration<double> duration = end_time - start_time;
-        //log_info(tt::LogMetal, "Time taken to start write sharded buffer: {} microseconds", duration.count() * 1000000);
-        // Since we read core by core we are reading the device pages sequentially
+        // log_info(tt::LogMetal, "Time taken to start write sharded buffer: {} microseconds", duration.count() *
+        // 1000000);
+        //  Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
             for (const BufferCorePageMapping& core_page_mapping :
                  dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
