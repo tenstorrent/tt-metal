@@ -192,21 +192,14 @@ class DistributedRMSNorm(Module):
             raise ValueError(msg)
 
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
-            x, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
+            x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
         )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-            stats = ttnn.experimental.all_gather_async(
+            stats = self.ccl_manager.all_gather_persistent_buffer(
                 stats,
                 dim=len(x.shape) - 1,
-                cluster_axis=self.mesh_axis,
-                mesh_device=x.device(),
-                topology=self.ccl_manager.topology,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
-                persistent_output_tensor=self.ccl_manager.get_ag_ping_pong_buffer(
-                    stats.shape, len(stats.shape) - 1, self.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
+                mesh_axis=self.mesh_axis,
             )
 
         x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
