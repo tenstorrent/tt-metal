@@ -285,9 +285,11 @@ inline void llk_pack_rows(
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t pack_addr = get_output_tile_address<true, false>(output_id, output_index);
 
+    // Pack rows uses pack_reads_per_xy_plane=1 (set in _llk_pack_rows_init_) for row packing,
+    // which differs from standard tile face_r_dim. Use ProgramByTile to skip face_r_dim check.
     LLK_ASSERT(
-        are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output_id)),
+        are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
+            pack_src_format[output_id], pack_dst_format[output_id]),
         "");
 
     _llk_pack_rows_(dst_index, pack_addr);

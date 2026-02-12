@@ -90,6 +90,8 @@ inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
+    // Use operandA to get operand_id tile dims must be the same for both operands
+    // const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     LLK_ASSERT(
