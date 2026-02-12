@@ -113,7 +113,7 @@ void kernel_main() {
                     // CB monitor (brisc): log before reserving in1 space
                     {
                         static uint32_t _dbg_cnt_br = 0;
-                        if (++_dbg_cnt_br % 100 == 1) {
+                        if (++_dbg_cnt_br % 100000 == 1) {
                             DPRINT << "BR:rsrv in1=" << cb_id_in1 << " tiles=" << in1_block_num_tiles
                                    << " blk=" << block << " bh=" << bh << " bw=" << bw << ENDL();
                         }
@@ -130,7 +130,7 @@ void kernel_main() {
                     // CB monitor (brisc): log before waiting on in1 semaphore
                     {
                         static uint32_t _dbg_cnt_br2 = 0;
-                        if (++_dbg_cnt_br2 % 100 == 1) {
+                        if (++_dbg_cnt_br2 % 100000 == 1) {
                             DPRINT << "BR:RECV in1 sem_wait blk=" << block
                                    << " sem=" << *in1_mcast_receiver_semaphore_addr_ptr << ENDL();
                         }
@@ -193,7 +193,7 @@ void kernel_main() {
                         // This is the Failure 2 deadlock point (cb_wait_front on output CB)
                         {
                             static uint32_t _dbg_cnt_br3 = 0;
-                            if (++_dbg_cnt_br3 % 100 == 1) {
+                            if (++_dbg_cnt_br3 % 100000 == 1) {
                                 DPRINT << "BR:wait out=" << cb_id_out0 << " need=" << out_subblock_tile_count
                                        << " bh=" << bh << " bw=" << bw << " sbh=" << sbh << " sbw=" << sbw << ENDL();
                             }

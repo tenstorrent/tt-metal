@@ -7,7 +7,8 @@ This folder contains scripts, tests, and documentation for investigating the **n
 ```
 vit_n300/
 ├── README.md                    # This file
-├── ND_failure.log               # CI failure log with triage data
+├── ND_failure.log               # CI failure log #1 (Feb 9) with triage data
+├── ND_failure2.log              # CI failure log #2 (Jan 24) with triage data
 ├── scripts/                     # Shell scripts
 │   ├── run_vit_n300.sh          # Run the original ViT N300 test
 │   ├── stress_test_vit_n300.sh  # Stress test: repeat original test
@@ -32,11 +33,14 @@ The **matmul deadlock stress test** targets the actual root cause. Start here:
 # Run the 2CQ variant (closest to CI failure scenario)
 ./vit_n300/scripts/stress_test_matmul.sh --2cq-only
 
-# Run all variants (traced, direct, 2CQ)
+# Run all variants (traced, direct, 2CQ, wide)
 ./vit_n300/scripts/stress_test_matmul.sh
 
 # Run just the traced variant (fastest per iteration)
 ./vit_n300/scripts/stress_test_matmul.sh --traced-only
+
+# Run wide matmuls (extra back-pressure from larger output tiles)
+./vit_n300/scripts/stress_test_matmul.sh --wide-only
 ```
 
 Monitor output in real time:
@@ -45,23 +49,47 @@ Monitor output in real time:
 tail -f vit_n300/logs/stress_matmul_*.log
 ```
 
+### With DPRINT CB monitoring
+
+Enable device-side circular buffer monitoring to see fill levels on Tensix cores.
+DPRINT output goes to a separate log file in `vit_n300/logs/`.
+
+```bash
+# Enable DPRINT (monitors 4 corner cores, brisc + ncrisc only)
+./vit_n300/scripts/stress_test_matmul.sh --2cq-only --dprint
+
+# Monitor DPRINT output
+tail -f vit_n300/logs/dprint_*.log
+```
+
+Note: DPRINT adds some timing perturbation. Run without `--dprint` first to reproduce the deadlock at full speed, then enable it for diagnostics.
+
 ### What the matmul stress test does
 
 It spams the **exact block-sharded matmul configs** from the ViT model that deadlocked in CI:
 
-| Matmul       | Grid | M×K×N          | Notes                    |
-|-------------|------|----------------|--------------------------|
-| QKV         | 8×8  | 1792×768×2304  | QKV projection           |
-| self_output | 8×8  | 1792×768×768   | Attention output proj    |
-| FF1         | 8×8  | 1792×768×3072  | Feedforward + GELU       |
-| FF2         | 8×8  | 1792×3072×768  | Feedforward output       |
+| Matmul       | Grid | M x K x N       | Notes                    |
+|-------------|------|-----------------|--------------------------|
+| QKV         | 8x8  | 1792 x 768 x 2304  | QKV projection           |
+| self_output | 8x8  | 1792 x 768 x 768   | Attention output proj    |
+| FF1         | 8x8  | 1792 x 768 x 3072  | Feedforward + GELU       |
+| FF2         | 8x8  | 1792 x 3072 x 768  | Feedforward output       |
 
-Each run: 5000 iterations × 4 matmuls = **20,000 block-sharded matmul ops**.
+Each run: 10,000 iterations x 4 matmuls = **40,000 block-sharded matmul ops**.
 
-Three variants:
+Four test variants:
 - **traced** — trace replay on CQ0 (fast, tests trace-related timing)
 - **direct** — no trace, different memory allocation patterns
-- **2cq** — trace on CQ0 + concurrent CQ1 copies (matches CI failure scenario exactly)
+- **2cq** — trace on CQ0 + 5 concurrent CQ1 copies per iter (matches CI failure exactly)
+- **wide** — adds extra-wide matmul configs (6144, 4096 output width) for more back-pressure
+
+### Deadlock amplification
+
+Two changes increase the probability of hitting the deadlock:
+
+1. **Removed double-buffering**: `MCAST_INPUT_BUFFERING_DEPTH` set to 1 in `matmul_utilities.hpp` (was 2). This halves input CB sizes, eliminating slack that prevents back-pressure cycles. Requires rebuild.
+
+2. **DPRINT instrumentation**: All 3 matmul kernels (compute, in0 reader, in1 reader/writer) have DPRINT statements at CB sync points. These compile to nothing unless `TT_METAL_DPRINT_CORES` is set, so there is zero overhead in normal runs.
 
 ## Other Stress Tests
 
@@ -79,22 +107,21 @@ Repeats the full ViT inference test for 30 minutes. Low reproduction rate (~0% i
 ./vit_n300/scripts/stress_test_copy_stress.sh
 ```
 
-Amplifies the CQ1 copy stall path (10 copies/iteration × 2000 iterations). See `explanations/STRESS_STRATEGY.md`.
+Amplifies the CQ1 copy stall path (10 copies/iteration x 2000 iterations). See `explanations/STRESS_STRATEGY.md`.
 
 ## Root Cause Analysis
 
-From CI triage (`ND_failure.log`):
+Confirmed by two independent CI failures (`ND_failure.log`, `ND_failure2.log`):
 
 1. **Primary**: Tensix cores deadlock in `bmm_large_block_zm_fused_bias_activation`
-   - `reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded` → `noc_semaphore_wait`
-   - `reader_bmm_tile_layout_in1_receiver_writer_padding` → `noc_semaphore_wait`
-   - `bmm_large_block_zm_fused_bias_activation` (trisc0) → `cb_wait_front`
-   - `bmm_large_block_zm_fused_bias_activation` (trisc1) → `matmul_block` (running)
-   - `bmm_large_block_zm_fused_bias_activation` (trisc2) → `pack_main`
+   - Circular wait among 5 RISCs: brisc (output writer) blocked on CB, trisc2 (pack) blocked pushing to full CB, trisc0 (unpack) waiting for context, ncrisc (in0 reader) waiting for brisc
+   - Can also involve cross-core multicast deadlock (multiple cores stuck on `noc_semaphore_wait`)
+   - Occurs at different kernel stages: matmul loop (Failure 1) or bias+activation path (Failure 2)
+   - Different cores each time (race condition, not hardware defect)
 
 2. **Secondary**: CQ0 dispatch stuck in `process_go_signal_mcast_cmd` (waiting for deadlocked workers)
 
-3. **Symptom**: CQ1 prefetcher stuck in `process_stall` → host times out on fetch queue
+3. **Symptom**: CQ1 prefetcher stuck in `process_stall` -> host times out on fetch queue
 
 See `explanations/` for layered analysis.
 
@@ -105,3 +132,6 @@ See `explanations/` for layered analysis.
 | `TT_METAL_HOME`| Auto-detected| Path to tt-metal repo root                     |
 | `ARCH_NAME`    | `wormhole_b0`| Target architecture (N300 uses Wormhole)       |
 | `LOGURU_LEVEL` | `INFO`       | Logging verbosity                              |
+| `TT_METAL_DPRINT_CORES` | Not set | Set to enable DPRINT (e.g. `(0,0),(7,7)`) |
+| `TT_METAL_DPRINT_RISCVS` | Not set | Which RISCs to monitor (e.g. `BR+NC`) |
+| `TT_METAL_DPRINT_FILE` | stdout | File path for DPRINT output |

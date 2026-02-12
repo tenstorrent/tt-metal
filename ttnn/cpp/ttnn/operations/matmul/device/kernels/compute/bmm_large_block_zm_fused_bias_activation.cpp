@@ -253,7 +253,7 @@ void kernel_main() {
                     }
 
                     // CB monitor: log fill levels before waiting on inputs
-                    DPRINT_UNPACK(static uint32_t _dbg_cnt_u = 0; if (++_dbg_cnt_u % 100 == 1) {
+                    DPRINT_UNPACK(static uint32_t _dbg_cnt_u = 0; if (++_dbg_cnt_u % 100000 == 1) {
                         DPRINT << "U:wait in0=" << in0_cb_id << " in1=" << in1_cb_id << " blk=" << block << "/"
                                << num_blocks_inner_dim << " bh=" << bh << " bw=" << bw << ENDL();
                     });
@@ -316,7 +316,7 @@ void kernel_main() {
                                 tile_regs_commit();
                                 // Pack out to output buffer
                                 // CB monitor: log before reserving output space
-                                DPRINT_PACK(static uint32_t _dbg_cnt_p = 0; if (++_dbg_cnt_p % 100 == 1) {
+                                DPRINT_PACK(static uint32_t _dbg_cnt_p = 0; if (++_dbg_cnt_p % 100000 == 1) {
                                     DPRINT << "P:rsrv out=" << mm_out_cb_id << " tiles=" << out_subblock_num_tiles
                                            << " blk=" << block << ENDL();
                                 });
@@ -351,7 +351,7 @@ void kernel_main() {
                                 // memory
                                 if (block == 0) {
                                     // CB monitor: reserving output buffer for first block
-                                    DPRINT_PACK(static uint32_t _dbg_cnt_p2 = 0; if (++_dbg_cnt_p2 % 100 == 1) {
+                                    DPRINT_PACK(static uint32_t _dbg_cnt_p2 = 0; if (++_dbg_cnt_p2 % 100000 == 1) {
                                         DPRINT << "P:rsrv out_cb=" << out_cb_id << " wait=" << out_num_tiles_to_wait
                                                << ENDL();
                                     });
@@ -432,7 +432,7 @@ void kernel_main() {
                 add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
                 // reconfigure unpacker df for src B
                 // CB monitor: entering bias+activation section
-                DPRINT_UNPACK(static uint32_t _dbg_cnt_bias = 0; if (++_dbg_cnt_bias % 50 == 1) {
+                DPRINT_UNPACK(static uint32_t _dbg_cnt_bias = 0; if (++_dbg_cnt_bias % 100000 == 1) {
                     DPRINT << "U:BIAS wait bias_cb=" << bias_cb_id << " bh=" << bh << " bw=" << bw << ENDL();
                 });
                 cb_wait_front(bias_cb_id, in1_block_w);
@@ -466,7 +466,7 @@ void kernel_main() {
 
                         // Pack out to output buffer
                         // CB monitor: reserve output in bias path (Failure 2 deadlock point)
-                        DPRINT_PACK(static uint32_t _dbg_cnt_bp = 0; if (++_dbg_cnt_bp % 50 == 1) {
+                        DPRINT_PACK(static uint32_t _dbg_cnt_bp = 0; if (++_dbg_cnt_bp % 100000 == 1) {
                             DPRINT << "P:BIAS rsrv out=" << untilize_mode_out_cb_id
                                    << " tiles=" << out_subblock_num_tiles << ENDL();
                         });

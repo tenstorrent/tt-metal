@@ -143,7 +143,7 @@ void kernel_main() {
                     // CB monitor (ncrisc): log before reserving in0 space
                     {
                         static uint32_t _dbg_cnt_nc = 0;
-                        if (++_dbg_cnt_nc % 100 == 1) {
+                        if (++_dbg_cnt_nc % 100000 == 1) {
                             DPRINT << "NC:rsrv in0=" << cb_id_in0 << " tiles=" << in0_block_num_tiles
                                    << " blk=" << block << " bh=" << bh << " bw=" << bw << ENDL();
                         }
@@ -204,7 +204,7 @@ void kernel_main() {
                         // CB monitor (ncrisc): sender waiting for receivers
                         {
                             static uint32_t _dbg_cnt_nc2 = 0;
-                            if (++_dbg_cnt_nc2 % 100 == 1) {
+                            if (++_dbg_cnt_nc2 % 100000 == 1) {
                                 DPRINT << "NC:SEND sem_wait blk=" << block
                                        << " sem=" << *in0_mcast_sender_semaphore_addr_ptr << ENDL();
                             }
@@ -302,7 +302,7 @@ void kernel_main() {
                         // CB monitor (ncrisc): receiver waiting for mcast data
                         {
                             static uint32_t _dbg_cnt_nc3 = 0;
-                            if (++_dbg_cnt_nc3 % 100 == 1) {
+                            if (++_dbg_cnt_nc3 % 100000 == 1) {
                                 DPRINT << "NC:RECV sem_wait blk=" << block
                                        << " sem=" << *in0_mcast_receiver_semaphore_addr_ptr << ENDL();
                             }
