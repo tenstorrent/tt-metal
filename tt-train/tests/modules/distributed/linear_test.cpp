@@ -246,6 +246,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
+    // Test failing with watcher enabled, github issue #36312
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = true;
@@ -294,6 +297,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
+    // Test failing with watcher enabled, github issue #36312
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = false;
