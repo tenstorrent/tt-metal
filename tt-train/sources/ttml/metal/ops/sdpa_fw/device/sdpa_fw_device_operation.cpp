@@ -11,7 +11,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::sdpa_fw::device {
-}
 
 void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {

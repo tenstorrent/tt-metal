@@ -14,7 +14,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-}
 
 void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
     const bool use_mla = attrs.use_mla;
