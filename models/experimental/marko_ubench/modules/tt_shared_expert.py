@@ -12,6 +12,13 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from loguru import logger
 
+COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
 
 class TtSharedExpert(LightweightModule):
     """
@@ -43,6 +50,9 @@ class TtSharedExpert(LightweightModule):
         torch_weights: dict = None,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        activations_dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat4_b,
+        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
     ):
         """
         Initialize TtSharedExpert module.
@@ -62,6 +72,9 @@ class TtSharedExpert(LightweightModule):
         self.num_devices = mesh_device.get_num_devices()
         self.num_links = num_links
         self.topology = topology
+        self.activations_dtype = activations_dtype
+        self.weights_dtype = weights_dtype
+        self.compute_kernel_config = compute_kernel_config
 
         logger.info(f"Initializing TtSharedExpert with emb_dim={emb_dim}, hidden_dim={hidden_dim}")
         logger.info(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -71,27 +84,29 @@ class TtSharedExpert(LightweightModule):
         if torch_weights is not None:
             logger.info("Creating weights from provided torch tensors")
             self.gate_proj = self._create_sharded_weight_from_torch(
-                torch_weights["gate_proj"], dims=(None, -1), name="gate_proj"
+                torch_weights["gate_proj"], dims=(None, -1), name="gate_proj", dtype=self.weights_dtype
             )
             self.up_proj = self._create_sharded_weight_from_torch(
-                torch_weights["up_proj"], dims=(None, -1), name="up_proj"
+                torch_weights["up_proj"], dims=(None, -1), name="up_proj", dtype=self.weights_dtype
             )
             self.down_proj = self._create_sharded_weight_from_torch(
-                torch_weights["down_proj"], dims=(None, -2), name="down_proj"
+                torch_weights["down_proj"], dims=(None, -2), name="down_proj", dtype=self.weights_dtype
             )
         else:
             logger.info("Creating random sharded weights")
             self.gate_proj = self._create_random_sharded_weight(
-                shape=(emb_dim, hidden_dim), dims=(None, -1), name="gate_proj"
+                shape=(emb_dim, hidden_dim), dims=(None, -1), name="gate_proj", dtype=self.weights_dtype
             )
             self.up_proj = self._create_random_sharded_weight(
-                shape=(emb_dim, hidden_dim), dims=(None, -1), name="up_proj"
+                shape=(emb_dim, hidden_dim), dims=(None, -1), name="up_proj", dtype=self.weights_dtype
             )
             self.down_proj = self._create_random_sharded_weight(
-                shape=(hidden_dim, emb_dim), dims=(None, -2), name="down_proj"
+                shape=(hidden_dim, emb_dim), dims=(None, -2), name="down_proj", dtype=self.weights_dtype
             )
 
-    def _create_sharded_weight_from_torch(self, torch_weight: torch.Tensor, dims: tuple, name: str) -> ttnn.Tensor:
+    def _create_sharded_weight_from_torch(
+        self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.bfloat16
+    ) -> ttnn.Tensor:
         """
         Convert torch weight to sharded ttnn tensor.
 
@@ -112,19 +127,19 @@ class TtSharedExpert(LightweightModule):
             dims=dims,
         )
 
-        # Convert to ttnn tensor with sharding
+        # Convert to ttnn tensor with sharding (using bfp8 for better throughput)
         tt_weight = ttnn.from_torch(
             torch_weight,
             mesh_mapper=mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
         )
 
         logger.info(f"Created {name}: {tt_weight.shape}")
         return tt_weight
 
-    def _create_random_sharded_weight(self, shape: tuple, dims: tuple, name: str) -> ttnn.Tensor:
+    def _create_random_sharded_weight(self, shape: tuple, dims: tuple, name: str, dtype: ttnn.bfloat16) -> ttnn.Tensor:
         """
         Create random sharded weight.
 
@@ -141,7 +156,7 @@ class TtSharedExpert(LightweightModule):
         # Create random torch tensor
         torch_weight = torch.randn(*shape, dtype=torch.float32)
 
-        return self._create_sharded_weight_from_torch(torch_weight, dims, name)
+        return self._create_sharded_weight_from_torch(torch_weight, dims, name, dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -153,15 +168,19 @@ class TtSharedExpert(LightweightModule):
         Returns:
             Output tensor [batch, seq_len, emb_dim / num_devices]
         """
-        logger.info(f"Forward pass: input shape={x.shape}, num_links={self.num_links}, topology={self.topology}")
+        batch_size = x.shape[0]
+        logger.info(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
+
+        # Convert input to activations dtype if needed
+        if x.dtype != self.activations_dtype:
+            logger.warning(f"{x.dtype=} typecasting {self.activations_dtype}")
+            x = ttnn.typecast(x, self.activations_dtype)
 
         # Step 1: All-gather x across mesh columns
-        # Input: [batch, seq_len, emb_dim / num_devices]
-        # Output: [batch, seq_len, emb_dim]
         x_gathered = ttnn.all_gather(
             x,
-            dim=-1,  # Gather along last dimension
-            cluster_axis=1,  # Gather along mesh columns
+            dim=-1,
+            cluster_axis=1,
             num_links=self.num_links,
             topology=self.topology,
         )
@@ -174,7 +193,7 @@ class TtSharedExpert(LightweightModule):
         assert (
             x_gathered.shape[-1] == self.gate_proj.shape[-2]
         ), f"Matmul shape mismatch: x_gathered[-1]={x_gathered.shape[-1]} != gate_proj[-2]={self.gate_proj.shape[-2]}"
-        gate_out = ttnn.matmul(x_gathered, self.gate_proj)
+        gate_out = ttnn.matmul(x_gathered, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
         logger.info(f"After gate_proj matmul: {gate_out.shape}")
 
         # Step 3: Up projection
@@ -184,7 +203,7 @@ class TtSharedExpert(LightweightModule):
         assert (
             x_gathered.shape[-1] == self.up_proj.shape[-2]
         ), f"Matmul shape mismatch: x_gathered[-1]={x_gathered.shape[-1]} != up_proj[-2]={self.up_proj.shape[-2]}"
-        up_out = ttnn.matmul(x_gathered, self.up_proj)
+        up_out = ttnn.matmul(x_gathered, self.up_proj, compute_kernel_config=self.compute_kernel_config)
         logger.info(f"After up_proj matmul: {up_out.shape}")
 
         # Step 4: SiLU activation and element-wise multiplication (fused)
@@ -204,12 +223,10 @@ class TtSharedExpert(LightweightModule):
         assert (
             activated.shape[-1] == self.down_proj.shape[-2]
         ), f"Matmul shape mismatch: activated[-1]={activated.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
-        output_full = ttnn.matmul(activated, self.down_proj)
+        output_full = ttnn.matmul(activated, self.down_proj, compute_kernel_config=self.compute_kernel_config)
         logger.info(f"After down_proj matmul: {output_full.shape}")
 
         # Step 6: Reduce-scatter output across mesh columns
-        # Input: [batch, seq_len, emb_dim]
-        # Output: [batch, seq_len, emb_dim / num_devices]
         output = ttnn.reduce_scatter(
             output_full,
             dim=-1,  # Scatter along last dimension
