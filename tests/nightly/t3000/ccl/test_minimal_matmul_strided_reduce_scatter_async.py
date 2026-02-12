@@ -295,12 +295,28 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         # Based on experimental_strided_toy_4_correctness_check_3
         # MM output = [1, 1, 512, 2560], slice_Wt=10
         (512, 256, 2560, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 64, 64, 1, 1, ttnn.CoreCoord(8, 2), 4),
+        # RS geometry: mm_cores_y=4, mm_block_ht=8, mm_block_wt=8, mm_N_block_wt=8, cwimb=1
+        # Based on experimental_strided_toy_5_correctness_check
+        # MM output = [1, 1, 4096, 2048], slice_Wt=8
+        (4096, 512, 2048, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 1, 1, ttnn.CoreCoord(8, 4), 1),
+        # RS geometry: mm_cores_y=4, mm_block_ht=8, mm_block_wt=8, mm_N_block_wt=16, cwimb=2
+        # Based on experimental_strided_toy_6_correctness_check
+        # MM output = [1, 1, 4096, 4096], slice_Wt=16
+        (4096, 512, 4096, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 1, 1, ttnn.CoreCoord(8, 4), 2),
+        # RS geometry: mm_cores_y=6, mm_block_ht=8, mm_block_wt=8, mm_N_block_wt=16, cwimb=2
+        # Adapted from experimental_strided_toy_7 (mm_cores_y=8 doesn't fit in fused case --
+        # RS cores need rows below the MM grid, but WH B0 grid is 8x8)
+        # MM output = [1, 1, 3072, 4096], slice_Wt=16
+        (3072, 512, 4096, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 1, 1, ttnn.CoreCoord(8, 6), 2),
     ],
     ids=[
         "small_Nwt2_cwimb1",
         "medium_Nwt4_cwimb1",
         "large_Nwt8_cwimb2",
         "large_Nwt10_cwimb4",
+        "xlarge_4k_Nwt8_cwimb1",
+        "xlarge_4k_Nwt16_cwimb2",
+        "xlarge_4k_y6_Nwt16_cwimb2",
     ],
 )
 @pytest.mark.parametrize(

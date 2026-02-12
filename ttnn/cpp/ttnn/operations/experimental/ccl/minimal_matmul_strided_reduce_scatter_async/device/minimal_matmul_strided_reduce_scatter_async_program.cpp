@@ -173,14 +173,18 @@ minimal_matmul_strided_reduce_scatter_async_program(
     DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
-    // Derive matmul geometry parameters for the RS factory
+    // Derive matmul geometry parameters for the RS factory.
+    // The matmul factory normally transposes its core grid when M > N, but
+    // transposition is disabled when fusing with SRS (the RS iteration structure
+    // requires mm_N_block_wt <= slice_Wt, which can be violated when transposing).
+    // So we always use the non-transposed layout: M parallelized on y, N on x.
+    constexpr uint32_t TILE_WIDTH = 32;
     uint32_t mm_cores_y_val = config.compute_with_storage_grid_size.y;
     uint32_t mm_block_ht_val = config.M_block_size;
     uint32_t mm_block_wt_val = config.N_block_size;
 
-    // Compute mm_N_block_wt: total N tiles per core
-    constexpr uint32_t TILE_WIDTH = 32;
-    uint32_t N_tiles = weight_tensor.padded_shape()[3] / TILE_WIDTH;
+    // Compute mm_N_block_wt: total N tiles per core (N parallelized on x)
+    uint32_t N_tiles = weight_tensor.padded_shape()[-1] / TILE_WIDTH;
     uint32_t num_cores_x = config.compute_with_storage_grid_size.x;
     uint32_t padded_N_tiles = tt::round_up(N_tiles, num_cores_x);
     uint32_t mm_N_block_wt_val = padded_N_tiles / num_cores_x;
