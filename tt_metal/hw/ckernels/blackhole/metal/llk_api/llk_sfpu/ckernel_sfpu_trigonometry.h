@@ -20,7 +20,7 @@ static const float PI_2 = 1.5707964f;
 static const float PI_4 = 0.7853982f;
 static const float FRAC_1_PI = 0.31830987f;
 
-sfpi_inline sfpi::vFloat reduce_pi(sfpi::vFloat v, vInt* i) {
+sfpi_inline sfpi::vFloat reduce_pi(sfpi::vFloat v, vInt& i) {
     // Constants for four-stage Cody-Waite reduction with -PI = P0 + P1 + P2 + P3
     const float P0 = -0x1.92p+1f;       // representable as bf16
     const float P1 = -0x1.fbp-11f;      // representable as fp16
@@ -37,7 +37,7 @@ sfpi_inline sfpi::vFloat reduce_pi(sfpi::vFloat v, vInt* i) {
     j.get() = __builtin_rvtt_bh_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
     // We need the LSB of the integer later, to determine the sign of the result.
-    *i = sfpi::reinterpret<vInt>(j);
+    i = sfpi::reinterpret<vInt>(j);
 
     // Shift mantissa bits back; j is now round(v / PI) in fp32.
     j += -rounding_bias;
@@ -116,7 +116,7 @@ inline void calculate_tangent() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         vInt whole_v;
-        v = reduce_pi(v, &whole_v);
+        v = reduce_pi(v, whole_v);
         sfpi::dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(v);
         sfpi::dst_reg++;
     }
@@ -146,7 +146,7 @@ inline void calculate_sine() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         vInt whole_v;
-        v = reduce_pi(v, &whole_v);
+        v = reduce_pi(v, whole_v);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v * FRAC_1_PI);
 
         v = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(v) ^ (whole_v << 31));
