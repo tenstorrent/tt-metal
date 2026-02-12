@@ -166,6 +166,8 @@ void kernel_main() {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
 #ifdef FUSE_MM_OP_SIGNALER
                 // Wait for matmul to finish writing the next chunk_width_in_mm_blocks output blocks
+                DPRINT << "Waiting for matmul to finish writing the next chunk_width_in_mm_blocks output blocks"
+                       << ENDL();
                 mm_sem_target += chunk_width_in_mm_blocks;
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
 #endif

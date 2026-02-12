@@ -326,7 +326,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         True,
         False,
     ],
-    ids=["non_fused", "fused"],
+    ids=["separate", "fused"],
 )
 @pytest.mark.parametrize(
     "device_params, topology",
