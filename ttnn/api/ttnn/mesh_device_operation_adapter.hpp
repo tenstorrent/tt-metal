@@ -5,6 +5,8 @@
 #pragma once
 
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
 
 #include <memory>
 #include <optional>
@@ -135,6 +137,58 @@ struct MeshDeviceOperationAdapter {
                     *(coordinate_range.begin()),
                     tensor_args,
                     tensor_return_value);
+            }
+        }
+    };
+
+    // An adapter for creating a factory that abides to `MeshWorkloadFactoryConcept` out of
+    // `ProgramDescriptorFactoryConcept` types.  The framework calls create_descriptor once
+    // per cache miss (to build the Program) and once per cache hit (to refresh runtime args).
+    template <ProgramDescriptorFactoryConcept DescriptorFactory>
+    struct DescriptorMeshWorkloadFactoryAdapter {
+        struct shared_variables_t {
+            uint32_t num_kernel_handles{};
+        };
+        using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
+
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            tt::tt_metal::distributed::MeshWorkload mesh_workload;
+            std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+            for (const auto& range : tensor_coords.ranges()) {
+                auto desc = DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value);
+                uint32_t num_kernels = static_cast<uint32_t>(desc.kernels.size());
+                tt::tt_metal::Program program{desc};
+                mesh_workload.add_program(range, std::move(program));
+                shared_variables[range] = shared_variables_t{.num_kernel_handles = num_kernels};
+            }
+            return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+        }
+
+        static void override_runtime_arguments(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                auto desc = DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value);
+
+                // Update runtime args for each kernel from the fresh descriptor.
+                // Kernel handles are assigned sequentially (0, 1, 2, ...) matching
+                // the order in ProgramDescriptor::kernels.
+                for (uint32_t k = 0; k < sv.num_kernel_handles; ++k) {
+                    const auto& kernel_desc = desc.kernels[k];
+                    for (const auto& [core, args] : kernel_desc.runtime_args) {
+                        auto& existing_args = tt::tt_metal::GetRuntimeArgs(program, k, core);
+                        for (size_t i = 0; i < args.size(); ++i) {
+                            existing_args[i] = args[i];
+                        }
+                    }
+                }
             }
         }
     };

@@ -6,6 +6,7 @@
 #include "generic_op_device_operation.hpp"
 #include "generic_op_device_operation_types.hpp"
 
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/reflection.hpp>
 #include <unordered_set>
 
@@ -48,68 +49,6 @@ tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Don't create anything, user is passing output tensor.
     return tensor_args.output_tensor;
-}
-
-tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
-    if (program_descriptor.custom_program_hash) {
-        return *program_descriptor.custom_program_hash;
-    }
-
-    auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
-        return ttsl::hash::hash_objects_with_default_seed(
-            kernel.kernel_source,
-            kernel.source_type,
-            kernel.core_ranges,
-            kernel.compile_time_args,
-            kernel.defines,
-            kernel.common_runtime_args.size(),
-            kernel.runtime_args.size(),
-            kernel.config.index(),
-            kernel.config);
-    };
-
-    auto hash_cb_format_descriptor = [&](const CBFormatDescriptor& format_descriptor) -> size_t {
-        return ttsl::hash::hash_objects_with_default_seed(
-            format_descriptor.buffer_index,
-            format_descriptor.data_format,
-            format_descriptor.page_size,
-            format_descriptor.tile);
-    };
-
-    auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
-        size_t hash = cb.core_ranges.size();
-        for (const auto& core_range : cb.core_ranges.ranges()) {
-            ttsl::hash::hash_combine(hash, core_range);
-        }
-        ttsl::hash::hash_combine(hash, cb.format_descriptors.size());
-        for (const auto& format_descriptor : cb.format_descriptors) {
-            ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
-        }
-        ttsl::hash::hash_combine(hash, cb.remote_format_descriptors.size());
-        for (const auto& format_descriptor : cb.remote_format_descriptors) {
-            ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
-        }
-        ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
-        ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
-        return hash;
-    };
-
-    auto hash_semaphore = [&](const SemaphoreDescriptor& semaphore) -> size_t {
-        return ttsl::hash::hash_objects_with_default_seed(
-            semaphore.core_ranges, semaphore.core_type, semaphore.initial_value);
-    };
-
-    size_t hash = 0;
-    for (const auto& kernel : program_descriptor.kernels) {
-        ttsl::hash::hash_combine(hash, hash_kernel(kernel));
-    }
-    for (const auto& cb : program_descriptor.cbs) {
-        ttsl::hash::hash_combine(hash, hash_circular_buffer(cb));
-    }
-    for (const auto& semaphore : program_descriptor.semaphores) {
-        ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
-    }
-    return hash;
 }
 
 tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
