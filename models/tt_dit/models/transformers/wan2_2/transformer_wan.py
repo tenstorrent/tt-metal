@@ -159,6 +159,7 @@ class WanTransformerBlock(Module):
             total_shape=[1, 1, 6, dim],
             mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
             device=mesh_device,
+            dtype=ttnn.float32,
         )
 
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -208,6 +209,10 @@ class WanTransformerBlock(Module):
         shift_msa_1B1D, scale_msa_1B1D, gate_msa_1B1D, c_shift_msa_1B1D, c_scale_msa_1B1D, c_gate_msa_1B1D = ttnn.chunk(
             shifted_temb_1BTD, 6, dim=2
         )
+
+        # NOTE: workaround - addcmul is less accurate with fp32 gate input
+        gate_msa_1B1D = ttnn.typecast(gate_msa_1B1D, dtype=ttnn.bfloat16)
+        c_gate_msa_1B1D = ttnn.typecast(c_gate_msa_1B1D, dtype=ttnn.bfloat16)
 
         spatial_normed_1BND = self.norm1(
             spatial_1BND, dynamic_weight=(1.0 + scale_msa_1B1D), dynamic_bias=shift_msa_1B1D
