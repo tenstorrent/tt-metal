@@ -8,8 +8,9 @@
 //   Moe    → compile-time args    (Moe::Routed::*, Moe::Shared::*)
 //
 // Fused pipeline (step order):
-//   1.  Mcast Input (routed + shared)
-//  1b.  Residual Mcast (shared, sender → 130 cores, [1, N] — no src CB)
+//   0.  Residual Mcast (sender → 130 cores, pre-RMSNorm input)
+//  0b.  RMSNorm (sender core: raw input → normalized input)
+//   1.  RMSNorm Mcast (normalized input → routed + shared)
 //   2.  Gate Matmul+Sigmoid (routed, 64 cores)
 //   3.  Gate Gather (routed, 64 cores → sender)
 //  3a.  Gate/Up KN-sliced matmul (shared, 128 cores — overlaps with step 2)
@@ -45,6 +46,11 @@
 #include "../../unified_kernels/matmul.hpp"
 #include "../../unified_kernels/moe_gather.hpp"
 #include "../../unified_kernels/deepseek_moe_gate.hpp"
+#if defined(COMPILE_FOR_TRISC)
+#undef REDUCE_OP
+#undef REDUCE_DIM
+#endif
+#include "../../unified_kernels/rmsnorm.hpp"
 #include "../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../unified_kernels/eltwise_mul.hpp"
 #include "../../unified_kernels/eltwise_add.hpp"
@@ -202,6 +208,18 @@ void kernel_main() {
 
             // Eltwise Add (reader — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
+
+            // Residual Mcast — receiver (input from sender → residual CB)
+            using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+            deepseek_b1_ops::Mcast::ReceiverArgs residual_mcast_args{
+                get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore"),
+                get_named_compile_time_arg_val("shared_residual_cb"),
+                get_named_compile_time_arg_val("shared_residual_num_pages"),
+            };
+
+            // RMSNorm (reader — no-op)
+            using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
+            deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
         } routed;
 
         struct Shared {
@@ -271,14 +289,22 @@ void kernel_main() {
 
     // Setup sharded persistent buffers (imperative — outside struct)
     if constexpr (Core::is_sender_core) {
-        constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
-        constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
-        unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
+        // RMSNorm gamma weights (tensor-backed)
+        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+        constexpr uint32_t rmsnorm_gamma_num_pages = get_named_compile_time_arg_val("rmsnorm_gamma_num_pages");
+        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_gamma_num_pages);
 
         constexpr uint32_t gate_bias_cb = get_named_compile_time_arg_val("gate_bias_cb");
         constexpr uint32_t gate_input_indices_cb = get_named_compile_time_arg_val("gate_input_indices_cb");
         unified_kernels::setup_sharded_buffer(gate_bias_cb, 1);
         unified_kernels::setup_sharded_buffer(gate_input_indices_cb, 1);
+
+        // Residual mcast source (pre-RMSNorm input on sender, tensor-backed)
+        constexpr uint32_t shared_residual_mcast_src_cb =
+            get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
+        constexpr uint32_t shared_residual_mcast_src_num_pages =
+            get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
+        unified_kernels::setup_sharded_buffer(shared_residual_mcast_src_cb, shared_residual_mcast_src_num_pages);
     }
     if constexpr (Core::Routed::is_gate_mm_core) {
         constexpr uint32_t gate_mm_in1 = get_named_compile_time_arg_val("gate_mm_in1");
@@ -308,10 +334,7 @@ void kernel_main() {
         constexpr uint32_t shared_down_w = get_named_compile_time_arg_val("shared_down_matmul_out_w_per_core");
         unified_kernels::setup_sharded_buffer(shared_down_in1, shared_down_k * shared_down_w);
 
-        // Residual/bias CB — pre-loaded on mcast grid, no mcast needed
-        constexpr uint32_t shared_residual_cb = get_named_compile_time_arg_val("shared_residual_cb");
-        constexpr uint32_t shared_residual_num_pages = get_named_compile_time_arg_val("shared_residual_num_pages");
-        unified_kernels::setup_sharded_buffer(shared_residual_cb, shared_residual_num_pages);
+        // NOTE: shared_residual_cb is no longer pre-loaded — it is populated by the Residual Mcast (step 0)
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -443,6 +466,26 @@ void kernel_main() {
 
             // Eltwise Add (writer — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::WriterCTArgs;
+
+            // Residual Mcast — sender (input from sender → residual CB, pop_src=false)
+            using ResidualMcastCTArgs = McastCTArgs;
+            deepseek_b1_ops::Mcast::SenderArgs residual_mcast_args{
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("shared_residual_mcast_data_sender_semaphore"),
+                get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore"),
+                get_named_compile_time_arg_val("shared_residual_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("shared_residual_mcast_src_cb"),
+                get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("shared_residual_mcast_src_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("shared_residual_mcast_dst_cb")),
+            };
+
+            // RMSNorm (writer — no-op)
+            using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
+            deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
         } routed;
 
         struct Shared {
@@ -654,6 +697,24 @@ void kernel_main() {
                 get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
                 get_named_compile_time_arg_val("add_sender_index"),
                 get_named_compile_time_arg_val("add_slice_size_bytes")>;
+
+            // Residual Mcast (compute — no-op)
+            using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+            deepseek_b1_ops::Mcast::ComputeArgs residual_mcast_args{};
+
+            // RMSNorm (compute — sender core only)
+            // Input: residual_mcast_src_cb (raw activation), Output: rmsnorm_output_cb
+            using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+                get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+                get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+                get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+            deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
+                get_named_compile_time_arg_val("rmsnorm_input_cb"),  // residual_mcast_src_cb
+                get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+                get_named_compile_time_arg_val("rmsnorm_output_cb"),  // rmsnorm_output_cb
+                get_common_arg_val<uint32_t>(0),                      // epsilon
+                get_common_arg_val<float>(1),                         // scalar (1/sqrt(numel))
+            };
         } routed;
 
         struct Shared {
@@ -723,7 +784,32 @@ void kernel_main() {
     // Operation calls — Moe::Routed::* for types, moe.routed.* for args
     // ============================================================================
 
-    // 1. Mcast Input: Broadcast input from sender core to all receiver cores
+    // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
+    {
+        DeviceZoneScopedN("RESIDUAL_MCAST");
+        deepseek_b1_ops::Mcast::Op<
+            Moe::Routed::ResidualMcastCTArgs,
+            Core::is_sender_core,
+            Core::is_mcast_grid_core,
+            Core::Shared::is_mcast_receiver_core,
+            false>  // pop_src=false: keep input for RMSNorm
+            residual_mcast;
+        residual_mcast.init(moe.routed.residual_mcast_args);
+        residual_mcast(moe.routed.residual_mcast_args);
+    }
+
+    // 0b. RMSNorm: normalize input on sender core (residual_mcast_src → rmsnorm_output)
+    {
+        DeviceZoneScopedN("RMSNORM");
+        deepseek_b1_ops::RMSNorm::Op<
+            Moe::Routed::RMSNormCTArgs,
+            Core::is_sender_core,
+            true>  // pop_input=true: done with raw input in residual_mcast_src_cb
+            rmsnorm;
+        rmsnorm(moe.routed.rmsnorm_args);
+    }
+
+    // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
     deepseek_b1_ops::Mcast::Op<
         Moe::Routed::McastCTArgs,
         Core::is_sender_core,
@@ -731,7 +817,6 @@ void kernel_main() {
         Core::is_input_mcast_receiver,
         true>
         mcast;
-    mcast.init(moe.routed.mcast_args);
     {
         DeviceZoneScopedN("MCAST");
         mcast(moe.routed.mcast_args);
