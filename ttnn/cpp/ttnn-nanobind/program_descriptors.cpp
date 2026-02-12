@@ -387,6 +387,15 @@ void py_module_types(nb::module_& mod) {
                 should not be pinned to any specific tensor's L1 address.
             )pbdoc")
         .def(
+            "has_global_circular_buffer",
+            [](const tt::tt_metal::CBDescriptor& self) { return self.global_circular_buffer != nullptr; },
+            R"pbdoc(
+                Check if this CB uses a GlobalCircularBuffer.
+
+                Returns:
+                    True if a global circular buffer pointer is set, False otherwise.
+            )pbdoc")
+        .def(
             "buffer_address",
             [](const tt::tt_metal::CBDescriptor& self) -> std::optional<uint32_t> {
                 if (self.buffer != nullptr) {

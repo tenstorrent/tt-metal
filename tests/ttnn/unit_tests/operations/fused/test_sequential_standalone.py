@@ -114,6 +114,7 @@ class TestExtractCBInfo:
         cb_desc.total_size = 8192
         cb_desc.core_ranges = "mock_ranges"
         cb_desc.format_descriptors = [fmt_desc]
+        cb_desc.has_global_circular_buffer.return_value = False
 
         # Create mock program descriptor
         prog_desc = MagicMock()
@@ -134,7 +135,9 @@ class TestExtractCBInfo:
         fmt2 = MagicMock(buffer_index=16, data_format="F32", page_size=2048)
 
         cb1 = MagicMock(total_size=2048, core_ranges="r1", format_descriptors=[fmt1])
+        cb1.has_global_circular_buffer.return_value = False
         cb2 = MagicMock(total_size=4096, core_ranges="r2", format_descriptors=[fmt2])
+        cb2.has_global_circular_buffer.return_value = False
 
         prog_desc = MagicMock(cbs=[cb1, cb2])
 
@@ -2145,6 +2148,257 @@ ALWI void kernel_main() {
         all_text = " ".join(b.text for b in blocks)
         assert "namespace g = norm" in all_text or any("norm" in b.text for b in blocks)
         assert "int x = 1" not in all_text
+
+
+class TestCBPoolAllocator:
+    """Tests for CBPoolAllocator pool-based CB slot allocation."""
+
+    def test_basic_allocation_same_config_reuses_slot(self):
+        """Two phases with identical CB configs should reuse the same slot."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        # Phase 0: CB index 0, format "F16", page_size=1024
+        cb_info_0 = {
+            0: CBInfo(0, 2048, "F16", 1024, None, "Default"),
+        }
+        pool.allocate_phase(0, cb_info_0, set())
+
+        # Phase 1: CB index 0, same config
+        cb_info_1 = {
+            0: CBInfo(0, 4096, "F16", 1024, None, "Default"),
+        }
+        pool.allocate_phase(1, cb_info_1, set())
+
+        # Both phases should map CB 0 to the same slot
+        assert pool.get_remap(0)[0] == pool.get_remap(1)[0]
+        # Total size should be max(2048, 4096) = 4096
+        slot_idx = pool.get_remap(0)[0]
+        assert pool._slots[slot_idx].total_size == 4096
+
+    def test_different_page_size_gets_separate_slot(self):
+        """Different page sizes on the same CB index should get separate slots."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        # Phase 0: CB 0, page_size=1024
+        cb_info_0 = {
+            0: CBInfo(0, 2048, "F16", 1024, None, "Default"),
+        }
+        pool.allocate_phase(0, cb_info_0, set())
+
+        # Phase 1: CB 0, page_size=2048 (different)
+        cb_info_1 = {
+            0: CBInfo(0, 4096, "F16", 2048, None, "Default"),
+        }
+        pool.allocate_phase(1, cb_info_1, set())
+
+        # Should get different slots
+        slot_0 = pool.get_remap(0)[0]
+        slot_1 = pool.get_remap(1)[0]
+        assert slot_0 != slot_1
+
+    def test_different_data_format_gets_separate_slot(self):
+        """Different data formats on the same CB index should get separate slots."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(0, cb_info_0, set())
+
+        cb_info_1 = {0: CBInfo(0, 4096, "F32", 1024, None, "Default")}
+        pool.allocate_phase(1, cb_info_1, set())
+
+        assert pool.get_remap(0)[0] != pool.get_remap(1)[0]
+
+    def test_different_unpack_to_dest_mode_gets_separate_slot(self):
+        """Different unpack_to_dest_mode on same (format, page_size) gets separate slots."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(0, cb_info_0, set())
+
+        cb_info_1 = {0: CBInfo(0, 2048, "F16", 1024, None, "UnpackToDestFp32")}
+        pool.allocate_phase(1, cb_info_1, set())
+
+        assert pool.get_remap(0)[0] != pool.get_remap(1)[0]
+
+    def test_overflow_raises_error(self):
+        """Exceeding max_slots raises ValueError."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=3)
+
+        # Allocate 3 different configs
+        for i in range(3):
+            cb_info = {0: CBInfo(0, 1024, f"F{i}", 1024, None, "Default")}
+            pool.allocate_phase(i, cb_info, set())
+
+        # 4th different config should overflow
+        with pytest.raises(ValueError, match="CB pool overflow"):
+            cb_info = {0: CBInfo(0, 1024, "F99", 1024, None, "Default")}
+            pool.allocate_phase(3, cb_info, set())
+
+    def test_phantom_cb_reservation(self):
+        """Phantom CBs get identity-mapped and don't collide with real allocations."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        # Phase 0: real CB at index 0, phantom at index 18
+        cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(0, cb_info_0, phantom_cb_indices={18})
+
+        # Phase 1: real CB at index 0 (same config), real CB at index 5
+        cb_info_1 = {
+            0: CBInfo(0, 2048, "F16", 1024, None, "Default"),
+            5: CBInfo(5, 2048, "F32", 2048, None, "Default"),
+        }
+        pool.allocate_phase(1, cb_info_1, phantom_cb_indices=set())
+
+        # Phantom index 18 should be identity-mapped
+        assert pool.get_remap(0)[18] == 18
+        # Real CB 5 should NOT be allocated at index 18 (reserved by phantom)
+        slot_5 = pool.get_remap(1)[5]
+        assert slot_5 != 18
+
+    def test_multiple_cbs_per_phase(self):
+        """Within a phase, each CB gets its own slot even with same config."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        # Phase 0 has 3 CBs (CB 0 and CB 16 have same config)
+        cb_info_0 = {
+            0: CBInfo(0, 2048, "F16", 1024, None, "Default"),
+            5: CBInfo(5, 4096, "F32", 2048, None, "Default"),
+            16: CBInfo(16, 1024, "F16", 1024, None, "Default"),
+        }
+        pool.allocate_phase(0, cb_info_0, set())
+
+        # CB 0 and CB 16 have the same config but are in the SAME phase,
+        # so they must get separate slots (they hold different data concurrently)
+        assert pool.get_remap(0)[0] != pool.get_remap(0)[16]
+        # CB 5 has different config — separate slot
+        assert pool.get_remap(0)[5] != pool.get_remap(0)[0]
+        # All 3 CBs get unique slots
+        slots = {pool.get_remap(0)[i] for i in [0, 5, 16]}
+        assert len(slots) == 3
+
+    def test_cross_phase_sharing(self):
+        """CBs with same config across different phases should share a slot."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        # Phase 0: CB 0
+        cb_info_0 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(0, cb_info_0, set())
+
+        # Phase 1: CB 0 with same config
+        cb_info_1 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(1, cb_info_1, set())
+
+        # Phase 1's CB 0 should reuse phase 0's slot
+        assert pool.get_remap(0)[0] == pool.get_remap(1)[0]
+
+    def test_cross_phase_sharing_different_index(self):
+        """CBs at different indices but same config across phases share a slot."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        # Phase 0: CB 5 with config_a
+        cb_info_0 = {5: CBInfo(5, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(0, cb_info_0, set())
+
+        # Phase 1: CB 0 with same config_a (different original index)
+        cb_info_1 = {0: CBInfo(0, 2048, "F16", 1024, None, "Default")}
+        pool.allocate_phase(1, cb_info_1, set())
+
+        # Phase 1's CB 0 should reuse phase 0's CB 5 slot
+        assert pool.get_remap(0)[5] == pool.get_remap(1)[0]
+
+    def test_get_all_slot_indices(self):
+        """get_all_slot_indices returns all allocated slots."""
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        CBInfo = _mock_sequential.CBInfo
+
+        pool = CBPoolAllocator(max_slots=32)
+
+        cb_info_0 = {
+            0: CBInfo(0, 2048, "F16", 1024, None, "Default"),
+            5: CBInfo(5, 4096, "F32", 2048, None, "Default"),
+        }
+        pool.allocate_phase(0, cb_info_0, set())
+
+        indices = pool.get_all_slot_indices()
+        assert len(indices) == 2
+        assert all(idx >= 0 for idx in indices)
+
+    def test_named_arg_cb_remapping(self):
+        """CB-reference named args (cb_*) should get remapped values."""
+        merge_fn = _mock_sequential._merge_named_compile_time_args
+
+        # Create mock kernel with named compile-time args
+        kernel = MagicMock()
+        kernel.named_compile_time_args = [
+            ("cb_in0", 0),
+            ("cb_out", 16),
+            ("blk", 4),  # Not a CB arg, should NOT be remapped
+        ]
+
+        phase_kernels = [{"reader": kernel}]
+        # Remap: CB 0 -> slot 3, CB 16 -> slot 7
+        phase_remaps = [{0: 3, 16: 7}]
+
+        result = merge_fn(
+            phase_kernels,
+            "reader",
+            phase_remaps=phase_remaps,
+        )
+
+        result_dict = dict(result)
+        assert result_dict["cb_in0"] == 3  # Remapped from 0 to 3
+        assert result_dict["cb_out"] == 7  # Remapped from 16 to 7
+        assert result_dict["blk"] == 4  # Not remapped (not a cb_ arg)
+
+    def test_named_arg_cb_remapping_phase1_prefix(self):
+        """Phase 1+ named args should be prefixed AND remapped."""
+        merge_fn = _mock_sequential._merge_named_compile_time_args
+
+        kernel0 = MagicMock()
+        kernel0.named_compile_time_args = [("cb_in0", 0)]
+        kernel1 = MagicMock()
+        kernel1.named_compile_time_args = [("cb_in0", 0)]
+
+        phase_kernels = [{"reader": kernel0}, {"reader": kernel1}]
+        # Phase 0: CB 0 -> slot 0, Phase 1: CB 0 -> slot 5
+        phase_remaps = [{0: 0}, {0: 5}]
+
+        result = merge_fn(
+            phase_kernels,
+            "reader",
+            phase_remaps=phase_remaps,
+        )
+
+        result_dict = dict(result)
+        assert result_dict["cb_in0"] == 0  # Phase 0: identity
+        assert result_dict["phase1_cb_in0"] == 5  # Phase 1: remapped + prefixed
 
 
 if __name__ == "__main__":
