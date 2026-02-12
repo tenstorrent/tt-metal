@@ -222,6 +222,22 @@ static std::pair<std::shared_ptr<MeshBuffer>, uint64_t> create_sharded_buffer(
     std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
     std::array<uint32_t, 2> tensor2d_shape_in_pages = {shard_height, tensor_width};
 
+    log_debug(
+        tt::LogTest,
+        "Sharded buffer parameters: shard_shape=[{}, {}], tensor2d_shape_in_pages=[{}, {}], "
+        "page_size={}, pages_per_core={}, num_cores={}, actual_buf_size={}, "
+        "contiguity_factor={}, effective_contiguity={}",
+        shard_shape[0],
+        shard_shape[1],
+        tensor2d_shape_in_pages[0],
+        tensor2d_shape_in_pages[1],
+        page_size,
+        pages_per_core,
+        num_cores,
+        actual_buf_size,
+        contiguity_factor,
+        effective_contiguity);
+
     ShardSpecBuffer shard_spec(
         core_sets, shard_shape, ShardOrientation::ROW_MAJOR, page_shape_array, tensor2d_shape_in_pages);
 
