@@ -3,23 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import csv
-import os
-
 import torch
 from tqdm import tqdm
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-_prefill_rope_collected = set()
-if os.path.exists("rope_1d_prefill_test_cases.csv"):
-    with open("rope_1d_prefill_test_cases.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _prefill_rope_collected.add(",".join(row))
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -247,27 +235,6 @@ class Transformer(LightweightModule):
         # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
         assert mat_len >= seq_len, f"Seqence length {seq_len} exceeds max seq len {mat_len}"
-
-        # Collect prefill test case parameters for rope_1d prefill_forward tests
-        _is_mesh = isinstance(self.mesh_device, ttnn._ttnn.multi_device.MeshDevice)
-        _device_shape = list(self.mesh_device.shape) if _is_mesh else [1, 1]
-        _rope_scaling_str = self.args.rope_scaling.rope_type.value if self.args.rope_scaling is not None else "none"
-        _has_local_rope = hasattr(self, "rope_local_setup")
-        _model_name = self.args.model_name if hasattr(self.args, "model_name") else "unknown"
-        _file_exists = os.path.exists("rope_1d_prefill_test_cases.csv")
-        with open("rope_1d_prefill_test_cases.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "device_shape_x,device_shape_y,head_dim,max_seq_len,rope_theta,rope_scaling,"
-                    "start_pos,seq_len,S,trace_enabled,has_local_rope,model_name\n"
-                )
-            _entry = (
-                f"{_device_shape[0]},{_device_shape[1]},{self.args.head_dim},{self.args.max_seq_len},{self.args.rope_theta},{_rope_scaling_str},"
-                f"{start_pos},{seq_len},{S},{trace_enabled},{_has_local_rope},{_model_name}"
-            )
-            if _entry not in _prefill_rope_collected:
-                _prefill_rope_collected.add(_entry)
-                _f.write(f"{_entry}\n")
 
         # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
         required_end = start_pos + S
