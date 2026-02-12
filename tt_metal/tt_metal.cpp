@@ -1203,8 +1203,8 @@ KernelHandle CreateEthernetKernel(
     TT_FATAL(
         !data_movement_config_status.noc_mode.has_value() ||
             data_movement_config_status.noc_mode.value() == config.noc_mode,
-        "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because "
-        "of a mismatch in NOC mode."
+        "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified cores because "
+        "of a mismatch in NOC mode. "
         "Current NOC Mode: {}, Existing NOC Mode: {}",
         kernel->name(),
         enchantum::to_string(config.noc_mode),
