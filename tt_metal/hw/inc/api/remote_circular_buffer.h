@@ -74,7 +74,7 @@ FORCE_INLINE void update_pages_acked(
     volatile tt_l1_ptr uint32_t* pages_acked_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_acked_addr);
     *pages_acked_ptr += aligned_page_adjustment;
-    uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uint32_t)pages_acked_ptr, noc);
+    uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uintptr_t)pages_acked_ptr, noc);
     noc_fast_atomic_increment<nm>(
         noc,
         cmd_buf,

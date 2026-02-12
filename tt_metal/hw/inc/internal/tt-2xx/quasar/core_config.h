@@ -22,11 +22,15 @@ enum class TensixProcessorTypes : uint8_t {
     DM5 = 5,
     DM6 = 6,
     DM7 = 7,
-    MATH0 = 8,
-    MATH1 = 9,
-    MATH2 = 10,
-    MATH3 = 11,
-    COUNT = 12
+    E0_MATH0 = 8,
+    E0_MATH1 = 9,
+    E0_MATH2 = 10,
+    E0_MATH3 = 11,
+    E1_MATH0 = 12,
+    E1_MATH1 = 13,
+    E1_MATH2 = 14,
+    E1_MATH3 = 15,
+    COUNT = 16
 };
 
 enum class EthProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, COUNT = 2 };
@@ -34,40 +38,43 @@ enum class EthProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, COUNT = 2 };
 enum class DramProcessorTypes : uint8_t { DM0 = 0, COUNT = 1 };
 
 union subordinate_map_t {
-    struct {
-        volatile uint64_t allDMs;
-        volatile uint32_t allNeo0;
-        volatile uint32_t allNeo1;
-        volatile uint32_t allNeo2;
-        volatile uint32_t allNeo3;
-    };
-    struct {
-        volatile uint8_t dm1;  // Keep dm1 name for compatibility
-        volatile uint8_t dm2;
-        volatile uint8_t dm3;
-        volatile uint8_t dm4;
-        volatile uint8_t dm5;
-        volatile uint8_t dm6;
-        volatile uint8_t dm7;
-        volatile uint8_t padding;
-        volatile uint8_t neo0Trisc0;
-        volatile uint8_t neo0Trisc1;
-        volatile uint8_t neo0Trisc2;
-        volatile uint8_t neo0Trisc3;
-        volatile uint8_t neo1Trisc0;
-        volatile uint8_t neo1Trisc1;
-        volatile uint8_t neo1Trisc2;
-        volatile uint8_t neo1Trisc3;
-        volatile uint8_t neo2Trisc0;
-        volatile uint8_t neo2Trisc1;
-        volatile uint8_t neo2Trisc2;
-        volatile uint8_t neo2Trisc3;
-        volatile uint8_t neo3Trisc0;
-        volatile uint8_t neo3Trisc1;
-        volatile uint8_t neo3Trisc2;
-        volatile uint8_t neo3Trisc3;
-        uint8_t pad[12];
-    };
+    // Quasar: expanded structure for multiple DM cores
+    union {
+        struct {
+            volatile uint64_t allDMs;
+            volatile uint32_t allNeo0;
+            volatile uint32_t allNeo1;
+            volatile uint32_t allNeo2;
+            volatile uint32_t allNeo3;
+        };
+        struct {
+            volatile uint8_t dm1;  // Keep dm1 name for compatibility
+            volatile uint8_t dm2;
+            volatile uint8_t dm3;
+            volatile uint8_t dm4;
+            volatile uint8_t dm5;
+            volatile uint8_t dm6;
+            volatile uint8_t dm7;
+            volatile uint8_t padding;
+            volatile uint8_t neo0_trisc0;
+            volatile uint8_t neo0_trisc1;
+            volatile uint8_t neo0_trisc2;
+            volatile uint8_t neo0_trisc3;
+            volatile uint8_t neo1_trisc0;
+            volatile uint8_t neo1_trisc1;
+            volatile uint8_t neo1_trisc2;
+            volatile uint8_t neo1_trisc3;
+            volatile uint8_t neo2_trisc0;
+            volatile uint8_t neo2_trisc1;
+            volatile uint8_t neo2_trisc2;
+            volatile uint8_t neo2_trisc3;
+            volatile uint8_t neo3_trisc0;
+            volatile uint8_t neo3_trisc1;
+            volatile uint8_t neo3_trisc2;
+            volatile uint8_t neo3_trisc3;
+            uint8_t pad[12];
+        };
+    } __attribute__((packed));
 } __attribute__((packed));
 
 constexpr uint8_t MaxProcessorsPerCoreType = 24;
