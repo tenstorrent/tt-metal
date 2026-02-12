@@ -50,8 +50,6 @@ def test_scatter_heads(device, num_input_cores, rows_per_input_core, width):
     torch.manual_seed(42)
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
-    # Define input cores (use a column of cores for input)
-    # Place input cores at the right edge of the grid to avoid overlap with output
     input_core_x = grid_size.x - 1  # Last column
     input_core_list = [ttnn.CoreCoord(input_core_x, y) for y in range(num_input_cores)]
     input_core_range = ttnn.CoreRange(
@@ -60,9 +58,7 @@ def test_scatter_heads(device, num_input_cores, rows_per_input_core, width):
     )
     input_core_range_set = ttnn.CoreRangeSet({input_core_range})
 
-    # Define output cores (use a rectangular grid, avoiding the input column)
-    # We need num_output_cores cores in a grid that doesn't overlap with input
-    available_cols = grid_size.x - 1  # Exclude input column
+    available_cols = grid_size.x - 1
     output_rows = (num_output_cores + available_cols - 1) // available_cols
 
     # Adjust if we need more rows than available
@@ -138,11 +134,7 @@ def test_scatter_heads(device, num_input_cores, rows_per_input_core, width):
 
     # Run scatter_heads operation (using default mapping)
     logger.info("Running scatter_heads operation...")
-    ttnn_result = ScatterHeads.op(
-        ttnn_input,
-        ttnn_output,
-        rows_per_input_core=rows_per_input_core,
-    )
+    ttnn_result = ScatterHeads.op(ttnn_input, ttnn_output)
 
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_result)
@@ -195,16 +187,10 @@ def test_scatter_heads_with_custom_mapping(device, num_input_cores, rows_per_inp
     logger.info(f"Input cores: (0,0) to ({num_input_cores - 1},0)")
     logger.info(f"Output cores: (0,0) to ({num_input_cores - 1},{rows_per_input_core - 1})")
 
-    # Create input with unique identifiable values per row
-    # Input is organized as: input_core_0_row_0, input_core_0_row_1, ..., input_core_7_row_7
     input_shape = (num_input_cores * rows_per_input_core, width)
     output_shape = (num_output_cores, width)
 
-    torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
-    for i in range(input_shape[0]):
-        # Fill each row with its row index as a base value
-        torch_input[i, :] = float(i) + torch.arange(width, dtype=torch.bfloat16) * 0.001
-
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
     # Input cores: (0,0) to (7,0)
     input_core_list = [ttnn.CoreCoord(x, 0) for x in range(num_input_cores)]
     input_core_range = ttnn.CoreRange(
@@ -220,7 +206,6 @@ def test_scatter_heads_with_custom_mapping(device, num_input_cores, rows_per_inp
     )
     output_core_range_set = ttnn.CoreRangeSet({output_core_range})
 
-    # Build output core list in row-major order (y first, then x)
     output_core_list = []
     for y in range(rows_per_input_core):
         for x in range(num_input_cores):

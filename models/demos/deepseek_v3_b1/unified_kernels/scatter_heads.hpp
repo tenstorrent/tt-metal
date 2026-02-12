@@ -24,15 +24,7 @@ namespace deepseek_b1_ops {
 //
 // - NCRISC: Performs the noc_async_read to fetch data from source core
 // - BRISC: No-op
-// - TRISC: No-op (dataflow-only operation)
-//
-// CB States:
-//   NCRISC (Output cores):
-//     - Reserves: dst_cb (dst_num_pages)
-//     - Performs: noc_async_read from source core
-//     - Pushes: dst_cb (dst_num_pages)
-//   BRISC: No-op
-//   TRISC: No-op
+// - TRISC: No-op
 //
 // ============================================================================
 struct ScatterHeads {
@@ -64,20 +56,13 @@ struct ScatterHeads {
         uint32_t dst_num_pages;    // Number of pages to push to CB
     };
 
-    // Writer args (BRISC): used for input core CB setup
     struct WriterArgs {};
 
     // Compute args (TRISC) - not used for scatter (dataflow only)
     struct ComputeArgs {};
 
-    // Note: For scatter, NCRISC=Reader (on output cores), BRISC=Writer (setup on input cores)
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
 
-    // ========================================================================
-    // Op - the actual operation
-    //
-    // IsOutputCore: compile-time flag for output cores that read data
-    // ========================================================================
     template <bool IsOutputCore>
     class Op {
     public:
@@ -112,7 +97,7 @@ struct ScatterHeads {
             // ================================================================
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
-            // TRISC - No-op (scatter is dataflow only)
+            // TRISC - No-op
             // ================================================================
 #endif
         }

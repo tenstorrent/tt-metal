@@ -10,7 +10,6 @@ Input: 8 cores, each with shard shape (8, 512) = 8 rows × 512 elements
 Output: 64 cores, each with shard shape (1, 512) = 1 row × 512 elements
 
 Each input core's 8 rows are scattered to 8 different output cores.
-This is a "pull" model where output cores read from input cores via NOC.
 """
 
 from typing import Optional
@@ -54,7 +53,7 @@ class ScatterHeads:
         input_tensor,
         output_tensor,
         core_mapping: Optional[list] = None,
-        rows_per_input_core: int = 8,
+        rows_per_input_core: Optional[int] = 8,
     ):
         """
         Execute scatter_heads operation using generic_op.
@@ -69,8 +68,6 @@ class ScatterHeads:
                           - output_core: CoreCoord of the output core
                           - input_core: CoreCoord of the input core to read from
                           - row_offset: Which row (0-indexed) to read from the input core's shard
-            rows_per_input_core: Number of rows per input core shard (default: 8).
-                                 Only used when core_mapping is None.
 
         Returns:
             Output tensor with scattered data
@@ -158,17 +155,15 @@ class ScatterHeads:
         # Named compile-time args for each RISC processor
         # ========================================================================
 
-        # NCRISC (Reader) named compile-time args - output core specific
+        # NCRISC (Reader) named compile-time args
         ncrisc_named_compile_time_args = [
             ("data_size_bytes", row_size_bytes),
             ("dst_cb", dst_cb),
             ("dst_num_pages", output_num_pages),
+            ("src_addr", input_buffer_addr),
         ]
 
-        # BRISC (Writer) named compile-time args - input core specific
         brisc_named_compile_time_args = []
-
-        # TRISC (Compute) named compile-time args - empty (no-op)
         trisc_named_compile_time_args = []
 
         # ========================================================================
@@ -190,8 +185,6 @@ class ScatterHeads:
             brisc_named_compile_time_args=brisc_named_compile_time_args,
             # TRISC named compile-time args
             trisc_named_compile_time_args=trisc_named_compile_time_args,
-            # NCRISC runtime args: src_addr (input tensor buffer address)
-            ncrisc_common_runtime_args=[input_buffer_addr],
             # Per-core compile-time role differentiation
             unified_compile_time_core_descriptors=[
                 UnifiedCompileTimeCoreDescriptor(

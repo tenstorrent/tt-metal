@@ -7,8 +7,8 @@
 //
 // Scatters data from 8 input cores (each with 8 rows) to 64 output cores (each with 1 row)
 // - NCRISC: Reader on output cores - performs noc_async_read from source core
-// - BRISC: Writer on input cores - sets up sharded buffer for reading
-// - TRISC: No-op (dataflow-only operation)
+// - BRISC: No-op
+// - TRISC: No-op
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
@@ -31,7 +31,7 @@ void kernel_main() {
     ScatterHeads::ReaderArgs scatter_args{
         get_named_compile_time_arg_val("src_noc_x"),
         get_named_compile_time_arg_val("src_noc_y"),
-        get_common_arg_val<uint32_t>(0),  // src_addr
+        get_named_compile_time_arg_val("src_addr"),
         get_named_compile_time_arg_val("src_row_offset"),
         get_named_compile_time_arg_val("data_size_bytes"),
         get_named_compile_time_arg_val("dst_cb"),
@@ -39,15 +39,14 @@ void kernel_main() {
     };
 
 // ============================================================================
-// BRISC (Writer) - Input cores setup sharded buffer
-// Named compile-time args: scatter writer params
+// BRISC (Writer) - No-op
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
     // Writer args for input cores
     ScatterHeads::WriterArgs scatter_args{};
 
 // ============================================================================
-// TRISC (Compute) - No-op for scatter (dataflow-only operation)
+// TRISC (Compute) - No-op
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
     ScatterHeads::ComputeArgs scatter_args = {};
