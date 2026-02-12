@@ -140,7 +140,32 @@ inline void compute_XW1_XW3_for_r() {
 
 // ============================================================================
 // Compute M[r, :] = SiLU(XW1[r, :]) * XW3[r, :]
+//
+// Batched SiLU: process 2 tiles per acquire/commit using all 4 DST registers.
+// Tile 0: REG 0=XW1, REG 1=XW3, REG 2=sigmoid/SiLU/M → result in REG 0
+// Tile 1: REG 1=XW1, REG 2=XW3, REG 3=sigmoid/SiLU/M → result in REG 1
+// After tile 0, REGs 1,2 are free to reuse for tile 1. REG 0 is preserved.
+// Pack REG 0 and REG 1 together in one commit.
 // ============================================================================
+
+// Process a single SiLU tile: M = SiLU(XW1) * XW3
+// Uses 3 consecutive DST registers starting at base_reg: [xw1, xw3, scratch]
+// Result ends up in base_reg (overwrites xw1).
+inline void compute_silu_tile(uint32_t tile_offset, uint32_t base_reg) {
+    copy_tile_init(cb_xw1_idx);
+    copy_tile(cb_xw1_idx, tile_offset, base_reg);  // base = XW1
+    copy_tile_init(cb_xw3_idx);
+    copy_tile(cb_xw3_idx, tile_offset, base_reg + 1);  // base+1 = XW3
+
+    copy_dest_values_init();
+    copy_dest_values(base_reg, base_reg + 2);  // base+2 = copy of XW1
+    sigmoid_tile_init();
+    sigmoid_tile(base_reg + 2);  // base+2 = sigmoid(XW1)
+    mul_binary_tile_init();
+    mul_binary_tile(base_reg, base_reg + 2, base_reg);  // base = XW1 * sigmoid = SiLU
+    mul_binary_tile(base_reg, base_reg + 1, base_reg);  // base = SiLU * XW3 = M
+}
+
 inline void compute_M_for_r() {
     cb_wait_front(cb_xw1_idx, hidden_Wt_rounded_up);
     cb_wait_front(cb_xw3_idx, hidden_Wt_rounded_up);
@@ -149,49 +174,52 @@ inline void compute_M_for_r() {
         const uint32_t k_block_size =
             (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
-        for (uint32_t k = 0; k < k_block_size; ++k) {
-            constexpr uint32_t xw1_reg = 0U;
-            constexpr uint32_t xw3_reg = 1U;
-            constexpr uint32_t silu_reg = 2U;
-            constexpr uint32_t m_reg = 3U;
+        // Batch: reserve full block of M tiles upfront
+        cb_reserve_back(cb_m_idx, block_size);
 
-            const uint32_t tile_offset = k_block_start + k;
-
+        // Process valid tiles in pairs (2 tiles per acquire/commit)
+        uint32_t k = 0;
+        for (; k + 1 < k_block_size; k += 2) {
             tile_regs_acquire();
-            copy_tile_init(cb_xw1_idx);
-            copy_tile(cb_xw1_idx, tile_offset, xw1_reg);
-            copy_tile_init(cb_xw3_idx);
-            copy_tile(cb_xw3_idx, tile_offset, xw3_reg);
 
-            copy_dest_values_init();
-            copy_dest_values(xw1_reg, silu_reg);
-            sigmoid_tile_init();
-            sigmoid_tile(silu_reg);
-            mul_binary_tile_init();
-            mul_binary_tile(xw1_reg, silu_reg, silu_reg);
-            mul_binary_tile(silu_reg, xw3_reg, m_reg);
+            // Tile 0: uses REGs 0, 1, 2. Result in REG 0.
+            compute_silu_tile(k_block_start + k, 0);
+            // Tile 1: reuses REGs 1, 2 + REG 3. Result in REG 1.
+            compute_silu_tile(k_block_start + k + 1, 1);
 
             tile_regs_commit();
-
-            cb_reserve_back(cb_m_idx, 1);
             tile_regs_wait();
             pack_reconfig_data_format(cb_m_idx);
-            pack_tile(m_reg, cb_m_idx);
+            pack_tile(0, cb_m_idx);  // M tile 0
+            pack_tile(1, cb_m_idx);  // M tile 1
             tile_regs_release();
-            cb_push_back(cb_m_idx, 1);
         }
-        if (k_block_size != block_size) {
-            // Push padding M tiles
+
+        // Handle odd remaining tile (if k_block_size is odd)
+        if (k < k_block_size) {
+            tile_regs_acquire();
+            compute_silu_tile(k_block_start + k, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_m_idx);
+            pack_tile(0, cb_m_idx);
+            tile_regs_release();
+        }
+
+        // Pack padding tiles for incomplete k_block (only when hidden_Wt % block_size != 0)
+        if (k_block_size < block_size) {
+            tile_regs_acquire();
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_m_idx);
             for (uint32_t pad = 0; pad < block_size - k_block_size; ++pad) {
-                cb_reserve_back(cb_m_idx, 1);
-                tile_regs_acquire();
-                tile_regs_commit();
-                tile_regs_wait();
                 pack_tile(0, cb_m_idx);
-                tile_regs_release();
-                cb_push_back(cb_m_idx, 1);
             }
+            tile_regs_release();
         }
+
+        // Batch: push full block at once
+        cb_push_back(cb_m_idx, block_size);
     }
 
     cb_pop_front(cb_xw1_idx, hidden_Wt_rounded_up);
