@@ -65,13 +65,6 @@ class ToolCall(BaseModel):
         return v
 
 
-# class CompletionMessage(BaseModel):
-#     role: Literal[Role.assistant.value] = Role.assistant.value
-#     content: InterleavedTextMedia
-#     stop_reason: StopReason
-#     tool_calls: List[ToolCall] = Field(default_factory=list)
-
-
 class ChatPrediction:
     generation: CompletionMessage
     decoded_tokens: Optional[List[str]] = None
