@@ -8,7 +8,6 @@
 #include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/metal_soc_descriptor.hpp"

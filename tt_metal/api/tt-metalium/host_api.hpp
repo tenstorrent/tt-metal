@@ -41,7 +41,6 @@ struct TraceDescriptor;
 class Program;
 class IDevice;
 class Trace;
-struct Event;
 class Buffer;
 class GlobalSemaphore;
 class CoreRange;
@@ -617,17 +616,6 @@ void ReadMeshDeviceProfilerResults(
     distributed::MeshDevice& mesh_device,
     ProfilerReadState state = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
-
-// clang-format off
-/**
- * Host will query an event for completion status on device.
- * Return value: bool.  True if event is completed, false otherwise.
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | event        | The event object that host will query for completion.                  | std::shared_ptr<Event>        |                                    | Yes      |
- */
-// clang-format on
-bool EventQuery(const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**
