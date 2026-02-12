@@ -1258,7 +1258,8 @@ bool write_to_device_buffer(
                     }
 
                     if (all_aligned) {
-                        pinned_src_addr = pinned_noc_base;
+                        const uint64_t src_offset_base = static_cast<uintptr_t>(src_ptr - pinned_host_base);
+                        pinned_src_addr = pinned_noc_base + src_offset_base;
                         pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
                         use_pinned_transfer = true;
                     }
