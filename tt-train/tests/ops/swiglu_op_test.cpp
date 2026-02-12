@@ -12,6 +12,9 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 
+// Note: SwiGLUAlgorithm enum has been removed. The kernel always uses the
+// ORIGINAL algorithm with dual-NOC architecture and dynamic W2 prefetching.
+
 class SwiGLUOpTest : public ::testing::Test {
 protected:
     static void SetUpTestSuite() {
@@ -76,8 +79,7 @@ void CompareKernelVsReference(
     const xt::xarray<float>& input_data,
     const xt::xarray<float>& w1_data,
     const xt::xarray<float>& w2_data,
-    const xt::xarray<float>& w3_data,
-    ttml::ops::SwiGLUAlgorithm algorithm = ttml::ops::SwiGLUAlgorithm::AUTO) {
+    const xt::xarray<float>& w3_data) {
     using namespace ttml;
 
     // Create input tensors for kernel implementation
@@ -86,8 +88,8 @@ void CompareKernelVsReference(
     auto w2_kernel = autograd::create_tensor(core::from_xtensor(w2_data, &autograd::ctx().get_device()));
     auto w3_kernel = autograd::create_tensor(core::from_xtensor(w3_data, &autograd::ctx().get_device()));
 
-    // Forward pass - kernel implementation with specified algorithm
-    auto result_kernel = ops::swiglu(input_kernel, w1_kernel, w2_kernel, w3_kernel, algorithm);
+    // Forward pass - kernel implementation
+    auto result_kernel = ops::swiglu(input_kernel, w1_kernel, w2_kernel, w3_kernel);
     result_kernel->get_value();
     auto result_kernel_xtensor = core::to_xtensor(result_kernel->get_value());
 
@@ -135,10 +137,7 @@ void CompareKernelVsReference(
  * @param hidden_dim Hidden dimension for the weight matrices
  * @param algorithm Algorithm to use (default: ORIGINAL for testing the optimized path)
  */
-static void CompareKernelVsReferenceWithShape(
-    const std::vector<uint32_t>& input_shape,
-    const uint32_t hidden_dim,
-    ttml::ops::SwiGLUAlgorithm algorithm = ttml::ops::SwiGLUAlgorithm::ORIGINAL) {
+static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input_shape, const uint32_t hidden_dim) {
     using namespace ttml;
 
     // Generate random input data using parallel_generate (following RMSNorm pattern)
@@ -166,7 +165,7 @@ static void CompareKernelVsReferenceWithShape(
     core::parallel_generate<float>(
         w3_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
 
-    CompareKernelVsReference(input_data, w1_data, w2_data, w3_data, algorithm);
+    CompareKernelVsReference(input_data, w1_data, w2_data, w3_data);
 }
 
 }  // namespace
@@ -253,7 +252,7 @@ TEST_F(SwiGLUOpTest, SwiGLU_RepeatedRuns_NoHang) {
 
     const float tolerance = 1e-2f;
     for (int iteration = 0; iteration < 3; ++iteration) {
-        auto output_tensor = ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor, ops::SwiGLUAlgorithm::ORIGINAL);
+        auto output_tensor = ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor);
         auto value = output_tensor->get_value();
         auto output_xtensor = core::to_xtensor(value);
 
