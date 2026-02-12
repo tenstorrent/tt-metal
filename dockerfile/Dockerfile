@@ -93,8 +93,8 @@ RUN umask 000 && \
     uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
 
 # Patch relocatable venv activate for POSIX sh (Docker RUN uses /bin/sh; activate uses $BASH_SOURCE otherwise)
-COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
-RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
+#COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
+#RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -240,8 +240,8 @@ ENV PYTHON_ENV_DIR=/opt/venv
 RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
 
 # Patch relocatable venv activate for POSIX sh (Docker RUN uses /bin/sh)
-COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
-RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
+#COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
+#RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
