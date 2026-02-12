@@ -68,13 +68,6 @@ BernoulliNewDeviceOperation::tensor_return_value_t BernoulliNewDeviceOperation::
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t BernoulliNewDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
-}
-
 }  // namespace ttnn::operations::bernoulli_new
 
 namespace ttnn::prim {
