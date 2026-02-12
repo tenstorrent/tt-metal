@@ -16,6 +16,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_compute)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_riscv)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eltwise_ternary)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eltwise_sfpu)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_compute_kernel)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datamovement_kernel)
@@ -43,6 +44,7 @@ install(
         add_2_integers_in_compute
         add_2_integers_in_riscv
         eltwise_binary
+        eltwise_ternary
         eltwise_sfpu
         hello_world_compute_kernel
         hello_world_datamovement_kernel
@@ -71,6 +73,7 @@ install(
         add_2_integers_in_compute
         add_2_integers_in_riscv
         eltwise_binary
+        eltwise_ternary
         eltwise_sfpu
         hello_world_compute_kernel
         hello_world_datamovement_kernel
