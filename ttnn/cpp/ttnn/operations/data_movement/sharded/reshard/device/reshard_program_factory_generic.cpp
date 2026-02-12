@@ -243,6 +243,7 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> create
             continue;
         }
         std::vector<detail::CompressedStrideBlock> compressed_blocks;
+        compressed_blocks.reserve(page_strides.size());
         auto it = page_strides.cbegin();
         while (it != page_strides.cend()) {
             size_t best_pattern_len = 0;
