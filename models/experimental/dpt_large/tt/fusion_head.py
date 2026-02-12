@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -14,6 +14,7 @@ from .tt_configs import TTLayerConfig
 from .tt_cnn_ops import (
     TTConv2dCached,
     ensure_tt_device_tensor,
+    tt_canonicalize_nchw_spatial,
     tt_relu,
     tt_resize_to_nchw,
     tt_upsample_nchw,
@@ -28,6 +29,13 @@ def _ensure_tt_device_tensor(x, tt_device, ttnn):
 def _tt_relu_with_fallback(hidden_state, tt_device, ttnn):
     """Apply ReLU entirely on TT device in the TT fast path."""
     return tt_relu(hidden_state)
+
+
+def _shape4_hw(x) -> Tuple[int, int]:
+    shape = tuple(int(v) for v in tuple(x.shape))
+    if len(shape) != 4:
+        raise RuntimeError(f"Expected rank-4 tensor, got shape={shape}")
+    return int(shape[-2]), int(shape[-1])
 
 
 class DPTPreActResidualLayerTT(nn.Module):
@@ -170,7 +178,14 @@ class DPTFeatureFusionLayerTT(nn.Module):
             self._tt_proj = TTConv2dCached.from_conv(self.projection)
         return self._tt_proj(x, device=self.tt_device)
 
-    def forward(self, hidden_state, residual=None):
+    def forward(
+        self,
+        hidden_state,
+        residual=None,
+        *,
+        expected_input_hw: Optional[Tuple[int, int]] = None,
+        expected_output_hw: Optional[Tuple[int, int]] = None,
+    ):
         try:
             import ttnn  # type: ignore
         except Exception:
@@ -182,8 +197,18 @@ class DPTFeatureFusionLayerTT(nn.Module):
             and self.tt_device is not None
         ):
             hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
+            hidden_state = tt_canonicalize_nchw_spatial(
+                hidden_state,
+                expected_hw=expected_input_hw,
+                op_name="dpt_fusion.hidden_state.input",
+            )
             if residual is not None:
                 residual = _ensure_tt_device_tensor(residual, self.tt_device, ttnn)
+                residual = tt_canonicalize_nchw_spatial(
+                    residual,
+                    expected_hw=expected_input_hw,
+                    op_name="dpt_fusion.residual.input",
+                )
                 # `ttnn.Shape` does not support slicing, so work with a plain
                 # Python tuple when comparing spatial dims.
                 hs_shape = tuple(hidden_state.shape)
@@ -193,16 +218,26 @@ class DPTFeatureFusionLayerTT(nn.Module):
                         residual,
                         target_hw=(hs_shape[-2], hs_shape[-1]),
                         mode="bilinear",
+                        op_name="dpt_fusion.residual.resize",
                     )
                 residual_out = self.residual_layer1(residual)
                 hidden_state = ttnn.add(hidden_state, residual_out)
 
             hidden_state = self.residual_layer2(hidden_state)
+            in_h, in_w = _shape4_hw(hidden_state)
             hidden_state = tt_upsample_nchw(
                 hidden_state,
                 scale_factor=2,
                 mode="bilinear",
+                expected_input_hw=(in_h, in_w),
+                op_name="dpt_fusion.hidden_state.upsample",
             )
+            if expected_output_hw is not None:
+                hidden_state = tt_canonicalize_nchw_spatial(
+                    hidden_state,
+                    expected_hw=expected_output_hw,
+                    op_name="dpt_fusion.hidden_state.output",
+                )
             hidden_state = self._tt_projection(hidden_state)
             hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             return hidden_state
@@ -254,11 +289,33 @@ class DPTFeatureFusionStageTT(nn.Module):
         hidden_states = hidden_states[::-1]
 
         fused_hidden_states: List[torch.Tensor] = []
-        fused_hidden_state = self.layers[0](hidden_states[0])
+        stage0_in_hw = None
+        stage0_out_hw = None
+        if len(hidden_states) >= 2:
+            next_h, next_w = _shape4_hw(hidden_states[1])
+            if next_h % 2 == 0 and next_w % 2 == 0:
+                stage0_in_hw = (next_h // 2, next_w // 2)
+            stage0_out_hw = (next_h, next_w)
+        fused_hidden_state = self.layers[0](
+            hidden_states[0],
+            expected_input_hw=stage0_in_hw,
+            expected_output_hw=stage0_out_hw,
+        )
         fused_hidden_states.append(fused_hidden_state)
 
-        for hidden_state, layer in zip(hidden_states[1:], self.layers[1:]):
-            fused_hidden_state = layer(fused_hidden_state, hidden_state)
+        for idx, (hidden_state, layer) in enumerate(zip(hidden_states[1:], self.layers[1:]), start=1):
+            exp_in_hw = _shape4_hw(hidden_state)
+            exp_out_hw = (exp_in_hw[0] * 2, exp_in_hw[1] * 2)
+            # For non-terminal fusion layers, anchor expected output to the next
+            # residual map when available.
+            if idx + 1 < len(hidden_states):
+                exp_out_hw = _shape4_hw(hidden_states[idx + 1])
+            fused_hidden_state = layer(
+                fused_hidden_state,
+                hidden_state,
+                expected_input_hw=exp_in_hw,
+                expected_output_hw=exp_out_hw,
+            )
             fused_hidden_states.append(fused_hidden_state)
 
         return fused_hidden_states
@@ -359,6 +416,8 @@ class DPTDepthEstimationHeadTT(nn.Module):
             hidden_state,
             scale_factor=2,
             mode="bilinear",
+            expected_input_hw=_shape4_hw(hidden_state),
+            op_name="dpt_depth_head.upsample",
         )
 
         # Conv to 32 channels + device ReLU

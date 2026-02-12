@@ -99,15 +99,51 @@ def _nhwc_to_nchw(x_nhwc, b: int, h: int, w: int, c: int):
     return ttnn.permute(x_nhwc, (0, 3, 1, 2))
 
 
+def tt_canonicalize_nchw_spatial(
+    x,
+    *,
+    expected_hw: Optional[Tuple[int, int]] = None,
+    op_name: str = "tt_canonicalize_nchw_spatial",
+):
+    _require_ttnn()
+    x = _to_row_major(x)
+    x = _ensure_interleaved(x)
+    b, c, h, w = _shape4(x)
+    if expected_hw is None:
+        return x
+
+    exp_h, exp_w = int(expected_hw[0]), int(expected_hw[1])
+    if exp_h <= 0 or exp_w <= 0:
+        raise RuntimeError(f"{op_name}: invalid expected HxW={exp_h}x{exp_w}")
+    if h == exp_h and w == exp_w:
+        return x
+
+    flat_hw = exp_h * exp_w
+    if h == 1 and w == flat_hw:
+        return ttnn.reshape(x, (b, c, exp_h, exp_w))
+    if w == 1 and h == flat_hw:
+        return ttnn.reshape(x, (b, c, exp_h, exp_w))
+
+    raise RuntimeError(
+        f"{op_name}: unexpected spatial shape={tuple(x.shape)} expected HxW={exp_h}x{exp_w}"
+    )
+
+
 def tt_upsample_nchw(
     x,
     *,
     scale_factor: int | Sequence[int] = 2,
     mode: str = "bilinear",
     memory_config=None,
+    expected_input_hw: Optional[Tuple[int, int]] = None,
+    op_name: str = "tt_upsample_nchw",
 ):
     _require_ttnn()
-    x = _to_row_major(x)
+    x = tt_canonicalize_nchw_spatial(
+        x,
+        expected_hw=expected_input_hw,
+        op_name=f"{op_name}.input",
+    )
     b, c, h, w = _shape4(x)
     x_nhwc = ttnn.permute(x, (0, 2, 3, 1))
 
@@ -148,11 +184,16 @@ def tt_upsample_nchw(
     out_h = h * (sf[0] if isinstance(sf, list) else sf)
     out_w = w * (sf[1] if isinstance(sf, list) else sf)
     y_nchw = ttnn.permute(y_nhwc, (0, 3, 1, 2))
+    y_nchw = tt_canonicalize_nchw_spatial(
+        y_nchw,
+        expected_hw=(out_h, out_w),
+        op_name=f"{op_name}.output",
+    )
     _shape4(y_nchw)
     if int(y_nchw.shape[-2]) != out_h or int(y_nchw.shape[-1]) != out_w:
         # Keep shape checks explicit for easier debug when runtime APIs change.
         raise RuntimeError(
-            f"Unexpected TT upsample output shape: got {tuple(y_nchw.shape)} expected HxW={out_h}x{out_w}"
+            f"{op_name}: unexpected TT upsample output shape: got {tuple(y_nchw.shape)} expected HxW={out_h}x{out_w}"
         )
     return y_nchw
 
@@ -163,6 +204,7 @@ def tt_resize_to_nchw(
     target_hw: Tuple[int, int],
     mode: str = "bilinear",
     memory_config=None,
+    op_name: str = "tt_resize_to_nchw",
 ):
     _require_ttnn()
     _, _, h, w = _shape4(x)
@@ -182,25 +224,53 @@ def tt_resize_to_nchw(
         scale_factor=(target_h // h, target_w // w),
         mode=mode,
         memory_config=memory_config,
+        expected_input_hw=(h, w),
+        op_name=op_name,
     )
 
 
-def tt_depth_to_space_nchw(x, block_size: int):
+def tt_depth_to_space_nchw(
+    x,
+    block_size: int,
+    *,
+    expected_output_hw: Optional[Tuple[int, int]] = None,
+    op_name: str = "tt_depth_to_space_nchw",
+):
     _require_ttnn()
-    x = _to_row_major(x)
-    x = _ensure_interleaved(x)
-    b, c_mul, h, w = _shape4(x)
     scale = int(block_size)
+    if expected_output_hw is not None:
+        exp_h, exp_w = int(expected_output_hw[0]), int(expected_output_hw[1])
+        if exp_h % scale != 0 or exp_w % scale != 0:
+            raise RuntimeError(
+                f"{op_name}: expected output HxW={exp_h}x{exp_w} not divisible by block_size={scale}"
+            )
+        x = tt_canonicalize_nchw_spatial(
+            x,
+            expected_hw=(exp_h // scale, exp_w // scale),
+            op_name=f"{op_name}.input",
+        )
+    else:
+        x = _to_row_major(x)
+        x = _ensure_interleaved(x)
+
+    b, c_mul, h, w = _shape4(x)
     scale_sq = scale * scale
     if c_mul % scale_sq != 0:
         raise RuntimeError(
-            f"depth-to-space channel mismatch: channels={c_mul}, block_size={scale}, expected divisible by {scale_sq}"
+            f"{op_name}: channel mismatch: channels={c_mul}, block_size={scale}, expected divisible by {scale_sq}"
         )
 
     c = c_mul // scale_sq
     x = ttnn.reshape(x, (b, c, scale, scale, h, w))
     x = ttnn.permute(x, (0, 1, 4, 2, 5, 3))
-    return ttnn.reshape(x, (b, c, h * scale, w * scale))
+    y = ttnn.reshape(x, (b, c, h * scale, w * scale))
+    if expected_output_hw is not None:
+        y = tt_canonicalize_nchw_spatial(
+            y,
+            expected_hw=(int(expected_output_hw[0]), int(expected_output_hw[1])),
+            op_name=f"{op_name}.output",
+        )
+    return y
 
 
 @dataclass
@@ -372,7 +442,14 @@ class TTConvTranspose2dCached:
         )
         return scale
 
-    def __call__(self, x, *, device):
+    def __call__(
+        self,
+        x,
+        *,
+        device,
+        expected_input_hw: Optional[Tuple[int, int]] = None,
+        expected_output_hw: Optional[Tuple[int, int]] = None,
+    ):
         _require_ttnn()
         x = ensure_tt_device_tensor(x, device)
 
@@ -380,9 +457,24 @@ class TTConvTranspose2dCached:
             scale = int(self.kernel_size[0])
             if self._tt_pointwise_conv is None:
                 scale = self._build_pointwise_equivalent()
+            x = tt_canonicalize_nchw_spatial(
+                x,
+                expected_hw=expected_input_hw,
+                op_name="tt_conv_transpose2d_fast_path.input",
+            )
             out = self._tt_pointwise_conv(x, device=device)
-            return tt_depth_to_space_nchw(out, scale)
+            return tt_depth_to_space_nchw(
+                out,
+                scale,
+                expected_output_hw=expected_output_hw,
+                op_name="tt_conv_transpose2d_fast_path.depth_to_space",
+            )
 
+        x = tt_canonicalize_nchw_spatial(
+            x,
+            expected_hw=expected_input_hw,
+            op_name="tt_conv_transpose2d.input",
+        )
         x_nhwc, batch_size, _in_channels, input_h, input_w = _nchw_to_nhwc(x)
 
         if self._weight is None:
@@ -421,4 +513,11 @@ class TTConvTranspose2dCached:
         )
 
         out_h, out_w = int(out_hw[0]), int(out_hw[1])
-        return _nhwc_to_nchw(out_nhwc, batch_size, out_h, out_w, self.out_channels)
+        y = _nhwc_to_nchw(out_nhwc, batch_size, out_h, out_w, self.out_channels)
+        if expected_output_hw is not None:
+            y = tt_canonicalize_nchw_spatial(
+                y,
+                expected_hw=expected_output_hw,
+                op_name="tt_conv_transpose2d.output",
+            )
+        return y

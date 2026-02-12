@@ -11,7 +11,12 @@ import torch.nn as nn
 from .config import DPTLargeConfig
 from .vit_backbone import ViTBackboneOutputs
 from .tt_configs import TTLayerConfig
-from .tt_cnn_ops import TTConv2dCached, TTConvTranspose2dCached, ensure_tt_device_tensor
+from .tt_cnn_ops import (
+    TTConv2dCached,
+    TTConvTranspose2dCached,
+    ensure_tt_device_tensor,
+    tt_canonicalize_nchw_spatial,
+)
 
 
 def _ensure_tt_device_tensor(x, tt_device, ttnn):
@@ -56,13 +61,24 @@ class DPTReassembleLayerTT(nn.Module):
             self._tt_proj = TTConv2dCached.from_conv(self.projection)
         return self._tt_proj(x, device=self.tt_device)
 
-    def _tt_resize(self, x):
+    def _tt_resize(
+        self,
+        x,
+        *,
+        expected_input_hw: Optional[tuple[int, int]] = None,
+        expected_output_hw: Optional[tuple[int, int]] = None,
+    ):
         # Preserve HF behavior for upsampling with a learned ConvTranspose2d,
         # but keep execution fully on TT device.
         if self.factor > 1:
             if self._tt_resize_conv_transpose is None:
                 self._tt_resize_conv_transpose = TTConvTranspose2dCached.from_conv_transpose(self.resize)
-            return self._tt_resize_conv_transpose(x, device=self.tt_device)
+            return self._tt_resize_conv_transpose(
+                x,
+                device=self.tt_device,
+                expected_input_hw=expected_input_hw,
+                expected_output_hw=expected_output_hw,
+            )
 
         if isinstance(self.resize, nn.Identity):
             return x
@@ -79,7 +95,24 @@ class DPTReassembleLayerTT(nn.Module):
     def prefers_device_path(self) -> bool:
         return True
 
-    def forward(self, x):
+    def expected_output_hw(self, input_hw: tuple[int, int]) -> tuple[int, int]:
+        in_h, in_w = int(input_hw[0]), int(input_hw[1])
+        if self.factor > 1:
+            scale = int(self.factor)
+            return in_h * scale, in_w * scale
+        if isinstance(self.resize, nn.Identity):
+            return in_h, in_w
+        if isinstance(self.resize, nn.Conv2d):
+            stride_h, stride_w = int(self.resize.stride[0]), int(self.resize.stride[1])
+            pad_h, pad_w = int(self.resize.padding[0]), int(self.resize.padding[1])
+            dil_h, dil_w = int(self.resize.dilation[0]), int(self.resize.dilation[1])
+            k_h, k_w = int(self.resize.kernel_size[0]), int(self.resize.kernel_size[1])
+            out_h = ((in_h + 2 * pad_h - dil_h * (k_h - 1) - 1) // stride_h) + 1
+            out_w = ((in_w + 2 * pad_w - dil_w * (k_w - 1) - 1) // stride_w) + 1
+            return out_h, out_w
+        raise RuntimeError(f"Unsupported resize module type: {type(self.resize)!r}")
+
+    def forward(self, x, *, expected_input_hw: Optional[tuple[int, int]] = None):
         # x: torch.Tensor or ttnn.Tensor of shape [B, hidden_size, H, W] / TT layout.
         try:
             import ttnn  # type: ignore
@@ -88,7 +121,20 @@ class DPTReassembleLayerTT(nn.Module):
 
         if ttnn is not None and isinstance(x, ttnn.Tensor) and self.tt_device is not None:
             x = self._tt_project(x)
-            x = self._tt_resize(x)
+            expected_output_hw = None
+            if expected_input_hw is not None:
+                expected_output_hw = self.expected_output_hw(expected_input_hw)
+            x = self._tt_resize(
+                x,
+                expected_input_hw=expected_input_hw,
+                expected_output_hw=expected_output_hw,
+            )
+            if expected_output_hw is not None:
+                x = tt_canonicalize_nchw_spatial(
+                    x,
+                    expected_hw=expected_output_hw,
+                    op_name="dpt_reassembly.tt_resize",
+                )
             return x
 
         x = self.projection(x)
@@ -238,6 +284,7 @@ class DPTReassembly(nn.Module):
         safe_layers = [min(max(int(i), 0), max_idx) for i in self.config.output_layers]
         for stage_idx, layer_idx in enumerate(safe_layers):
             fmap = feats.features[layer_idx + 1]  # stored with +1 offset
+            _, _, H, W = fmap.shape
 
             # If token-level features (with CLS) are available, replicate
             # HF's DPTReassembleStage readout logic on CPU.
@@ -251,7 +298,6 @@ class DPTReassembly(nn.Module):
                 patch_tokens = tokens[:, 1:]  # [B, N, C]
                 B, N, C = patch_tokens.shape
                 # Use spatial shape from fmap to avoid assumptions about image size.
-                _, _, H, W = fmap.shape
                 if H * W != N:
                     # Fallback to sqrt if shapes are inconsistent, but this
                     # should not happen when backbone and neck are aligned.
@@ -307,7 +353,10 @@ class DPTReassembly(nn.Module):
                 pass
 
             # Reassemble to per-scale channels and resolution.
-            x = self.reassemble_layers[stage_idx](hidden_state)
+            x = self.reassemble_layers[stage_idx](
+                hidden_state,
+                expected_input_hw=(int(H), int(W)),
+            )
 
             # 3x3 conv to common fusion_hidden_size.
             conv = self.convs[stage_idx]
@@ -322,6 +371,13 @@ class DPTReassembly(nn.Module):
                 and isinstance(x, ttnn.Tensor)
                 and self.tt_device is not None
             ):
+                expected_out_hw = self.reassemble_layers[stage_idx].expected_output_hw((int(H), int(W)))
+                if expected_out_hw is not None:
+                    x = tt_canonicalize_nchw_spatial(
+                        x,
+                        expected_hw=expected_out_hw,
+                        op_name=f"dpt_reassembly.stage{stage_idx}",
+                    )
                 # Lazily materialize TT conv for this stage.
                 if self._tt_convs[stage_idx] is None:
                     self._tt_convs[stage_idx] = TTConv2dCached.from_conv(conv)
