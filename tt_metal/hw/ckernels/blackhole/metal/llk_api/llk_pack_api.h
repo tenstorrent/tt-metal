@@ -112,7 +112,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
 
     LLK_ASSERT(
         are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces),
+            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim),
         "");
 
     _llk_pack_init_<untilize, zero_output, tilize>(
@@ -147,10 +147,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     LLK_ASSERT(
         are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id],
-            pack_dst_format[output_id],
-            get_output_face_r_dim(output_id),
-            get_output_num_faces(output_id)),
+            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output_id)),
         "");
 
     LLK_ASSERT((tile_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
@@ -173,7 +170,7 @@ inline void llk_pack_untilize_init(
 
     LLK_ASSERT(
         are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces),
+            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim),
         "");
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
@@ -211,7 +208,7 @@ inline void llk_pack_untilize(
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         LLK_ASSERT(
             are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-                pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces),
+                pack_src_format[output_id], pack_dst_format[output_id], face_r_dim),
             "");
 
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
@@ -263,10 +260,7 @@ inline void llk_pack_rows(
 
     LLK_ASSERT(
         are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id],
-            pack_dst_format[output_id],
-            get_output_face_r_dim(output_id),
-            get_output_num_faces(output_id)),
+            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output_id)),
         "");
 
     _llk_pack_rows_(dst_index, pack_addr);
@@ -298,7 +292,6 @@ inline void llk_matmul_pack(
                 pack_src_format[output_id],
                 pack_dst_format[output_id],
                 get_output_face_r_dim(output_id),
-                get_output_num_faces(output_id)),
             "");
 
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
