@@ -3388,31 +3388,33 @@ class TestCrossOpCompilation:
     def _read_and_process(kernel_path, defines=None):
         """Read a kernel source file and process through the pipeline."""
         import os
-        from models.experimental.ops.descriptors.sequential import (
-            _inline_local_includes,
-            _resolve_ifdef_directives,
+        from models.experimental.ops.descriptors.cpp_parser import (
+            inline_local_includes,
+            resolve_ifdef_directives,
         )
 
         with open(kernel_path, "r") as f:
             source = f.read()
 
         kernel_dir = os.path.dirname(os.path.abspath(kernel_path))
-        source = _inline_local_includes(source, kernel_dir)
-        source = _resolve_ifdef_directives(source, defines or set())
+        source = inline_local_includes(source, kernel_dir)
+        source = resolve_ifdef_directives(source, defines or set())
         return source
 
     @staticmethod
     def _build_fused_source(sources_with_indices):
         """Build a complete compilable fused source from processed phase sources."""
+        from models.experimental.ops.descriptors.cpp_parser import (
+            collect_includes,
+            collect_defines,
+        )
         from models.experimental.ops.descriptors.sequential import (
-            _collect_includes,
-            _collect_defines,
             _collect_all_pre_main_code,
         )
 
         all_sources = [s for _, s in sources_with_indices]
-        includes = _collect_includes(all_sources)
-        defines = _collect_defines(all_sources)
+        includes = collect_includes(all_sources)
+        defines = collect_defines(all_sources)
         pre_main, _ = _collect_all_pre_main_code(sources_with_indices)
 
         lines = [
