@@ -29,7 +29,7 @@ void kernel_main() {
             llk_pop_tiles(0, per_core_block_c_tiles);
             llk_pop_tiles(1, per_core_block_c_tiles);
 
-            llk_unpack_AB_init<BroadcastType::NONE>();
+            llk_unpack_AB_init<BroadcastType::NONE>(24, 1);
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_wait_tiles(24, 1);
                 llk_wait_tiles(1, 1);

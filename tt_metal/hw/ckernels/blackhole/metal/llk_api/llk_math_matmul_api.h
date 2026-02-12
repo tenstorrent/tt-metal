@@ -28,13 +28,6 @@ inline void llk_math_matmul_init(
 
     const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
 
-    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL>(
-        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
-}
-
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, uint32_t num_faces = 4 /*not used*/>
-inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
-    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
     // Validate matmul compatibility: in0's column dimension must match in1's row dimension
     LLK_ASSERT(
         in0_tile_c_dim == in1_tile_r_dim, "in0_tile_c_dim must equal in1_tile_r_dim for valid matrix multiplication");
