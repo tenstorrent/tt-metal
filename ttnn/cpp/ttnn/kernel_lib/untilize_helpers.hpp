@@ -62,7 +62,7 @@ constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
  */
 enum class ReconfigureRegisterDatatypeMode : uint8_t {
     NoReconfigure,            // No reconfiguration (default)
-    UnpackReconfigure,        // Reconfigure unpack registers (srcA/srcB)
+    UnpackReconfigure,        // Reconfigure unpack registers (srcA)
     PackReconfigure,          // Reconfigure pack registers (output)
     UnpackAndPackReconfigure  // Reconfigure both unpack and pack registers
 };
