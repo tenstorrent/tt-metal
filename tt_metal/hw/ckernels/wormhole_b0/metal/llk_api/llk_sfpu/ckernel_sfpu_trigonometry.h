@@ -20,6 +20,39 @@ static const float PI_2 = 1.5707964f;
 static const float PI_4 = 0.7853982f;
 static const float FRAC_1_PI = 0.31830987f;
 
+sfpi_inline vFloat reduce_pi(vFloat v, vInt* i) {
+    // Constants for four-stage Cody-Waite reduction with -PI = P0 + P1 + P2 + P3
+    const float P0 = -0x1.92p+1f;       // representable as bf16
+    const float P1 = -0x1.fbp-11f;      // representable as fp16
+    const float P2 = -0x1.51p-21f;      // requires fp32
+    const float P3 = -0x1.0b4612p-33f;  // requires fp32
+
+    // Compute j = round(v / PI).
+    // First, j = v * INV_PI + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
+    // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+    vFloat rounding_bias;
+    rounding_bias.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
+    vFloat inv_pi = FRAC_1_PI;
+    vFloat j;
+    j.get() = __builtin_rvtt_bh_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
+
+    // We need the LSB of the integer later, to determine the sign of the result.
+    *i = reinterpret<vInt>(j);
+
+    // Shift mantissa bits back; j is now round(v / PI) in fp32.
+    j += -rounding_bias;
+
+    // Four-stage Cody-Waite reduction; a = v - j * PI.
+    // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
+    vFloat a = v + j * P0;
+    // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
+    a = a + j * P1;
+    a = a + j * P2;
+    a = a + j * P3;
+
+    return a;
+}
+
 static sfpi_inline vFloat sfpu_tan_large(vFloat x) {
     const vFloat r = 4.0f * sfpi::abs(x) - 5.0f;
     const vFloat y =
@@ -81,9 +114,10 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_tangent() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0] * FRAC_1_PI;
-        v -= int32_to_float(float_to_int16(v, 0), 0);
-        dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(PI * v);
+        vFloat v = dst_reg[0];
+        vInt whole_v;
+        v = reduce_pi(v, &whole_v);
+        dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(v);
         dst_reg++;
     }
 }
@@ -110,10 +144,10 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v, 0);
-        v -= int32_to_float(whole_v, 0);
-        v = sfpu_sinpi<APPROXIMATION_MODE>(v);
+        vFloat v = dst_reg[0];
+        vInt whole_v;
+        v = reduce_pi(v, &whole_v);
+        v = sfpu_sinpi<APPROXIMATION_MODE>(v * FRAC_1_PI);
 
         v = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(v) ^ (whole_v << 31));
         dst_reg[0] = v;
@@ -128,7 +162,7 @@ inline void calculate_cosine() {
         vFloat v = dst_reg[0] * FRAC_1_PI + 0.5f;
         vInt whole_v = float_to_int16(v, 0);
         v -= int32_to_float(whole_v, 0);
-        v = sfpu_sinpi<APPROXIMATION_MODE>(v);
+        v = sfpu_sinpi<APPROXIMATION_MODE>(v * FRAC_1_PI);
 
         v = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(v) ^ (whole_v << 31));
         dst_reg[0] = v;
