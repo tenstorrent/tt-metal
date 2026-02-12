@@ -99,7 +99,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     // Sort cores by (descending y, descending x) to create a ring that flows naturally
     std::vector<uint32_t> ring_pos2bank_id(num_cores);
     std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
-    auto device = tensor_args.input_tensor.device();
+    auto *device = tensor_args.input_tensor.device();
 
     std::sort(
         ring_pos2bank_id.begin(),
