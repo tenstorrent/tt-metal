@@ -342,11 +342,7 @@ void multicast_tensor_tensix(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_multicast_ex1/kernels/compute/tiles_copy.cpp",
         receiver_cores_logical,
-        ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = tiles_copy_compile_args});
+        ComputeConfig{.compile_args = tiles_copy_compile_args});
 
     ////////// RUNTIME ARGS SETUP //////////
 
