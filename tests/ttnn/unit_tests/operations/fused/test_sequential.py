@@ -3432,7 +3432,18 @@ class TestCrossOpCompilation:
 
     @staticmethod
     def _compile_source(device, source):
-        """Compile a kernel source by creating a ProgramDescriptor and dispatching."""
+        """Compile a fused kernel source via the JIT build system.
+
+        Creates a ProgramDescriptor with the source and dispatches via
+        generic_op, which triggers JIT compilation. Compilation failures
+        produce RuntimeError with "build failed" in the message — we
+        detect that specifically so non-compilation failures propagate
+        normally rather than being misreported as compile errors.
+
+        No Python API exists for compile-only (CompileProgram is C++-only),
+        so we must dispatch to trigger compilation. The empty kernel_main()
+        is a valid no-op on hardware.
+        """
         core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
 
         kernel = ttnn.KernelDescriptor()
@@ -3465,7 +3476,17 @@ class TestCrossOpCompilation:
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
-        ttnn.generic_op([dummy_in, dummy_out], desc)
+        try:
+            ttnn.generic_op([dummy_in, dummy_out], desc)
+        except RuntimeError as e:
+            msg = str(e)
+            if "build failed" in msg:
+                source_preview = source[:2000] + ("..." if len(source) > 2000 else "")
+                raise AssertionError(
+                    f"Kernel compilation failed.\n\nCompiler output:\n{msg}\n\n"
+                    f"Generated source (first 2000 chars):\n{source_preview}"
+                ) from None
+            raise  # Non-compilation failure — propagate as-is
 
     def test_compile_layernorm_plus_matmul(self, device):
         """LN compute (namespace aliases + ALWI) + matmul (using declaration)."""
