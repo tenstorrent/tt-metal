@@ -13,8 +13,14 @@
 namespace tt::tt_metal {
 
 namespace detail {
+// TODO: These functions in the detail namespace are sharding utility functions and should be moved to a separate
+// header.
 UncompressedBufferPageMapping compute_page_mapping(
     const Shape& tensor_shape, const Shape& shard_shape, const std::vector<CoreCoord>& cores);
+
+// Squeezes tensor and shard shapes to minimize rank while preserving sharding semantics.
+// The returned shapes are guaranteed to have the same rank.
+std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Shape& shard_shape);
 }
 
 class BufferDistributionSpec {

@@ -15,15 +15,13 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_stats = tt::CBIndex::c_1;
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
@@ -212,4 +210,3 @@ void MAIN {
 
     cb_pop_front(cb_eps, 1);
 }
-}  // namespace NAMESPACE

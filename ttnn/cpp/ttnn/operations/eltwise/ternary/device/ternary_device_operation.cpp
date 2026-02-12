@@ -212,11 +212,6 @@ tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() 
         sub_core_grids);
 }
 
-void TernaryDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void TernaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;
@@ -235,6 +230,19 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
         input_a.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input to be on Device. Input storage type: {}",
         static_cast<int>(input_a.storage_type()));
+
+    if (input_b.has_value()) {
+        TT_FATAL(
+            input_b->storage_type() == StorageType::DEVICE,
+            "Ternary operation requires input to be on Device. Input storage type: {}",
+            static_cast<int>(input_b->storage_type()));
+    }
+    if (input_c.has_value()) {
+        TT_FATAL(
+            input_c->storage_type() == StorageType::DEVICE,
+            "Ternary operation requires input to be on Device. Input storage type: {}",
+            static_cast<int>(input_c->storage_type()));
+    }
 
     TT_FATAL(
         input_a.buffer() != nullptr,
@@ -557,8 +565,9 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
 
     // This variant is only for operations that need a scalar parameter with TTT variant
     TT_FATAL(
-        op_type == ttnn::operations::ternary::TernaryOpType::ADDCMUL,
-        "This variant with scalar parameter is only supported for ADDCMUL operation");
+        op_type == ttnn::operations::ternary::TernaryOpType::ADDCMUL ||
+            op_type == ttnn::operations::ternary::TernaryOpType::ADDCDIV,
+        "This variant with scalar parameter is only supported for ADDCMUL and ADDCDIV operations");
 
     // Detect broadcast type for TTT variant
     ttnn::operations::ternary::TernaryBroadcastType broadcast_type = ttnn::operations::ternary::get_broadcast_type(
@@ -575,7 +584,7 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
-        .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL scalar value
+        .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL/ADDCDIV scalar value
         .scalar_input_b = std::nullopt,
     };
 

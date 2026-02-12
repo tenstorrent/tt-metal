@@ -9,7 +9,18 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
-#include "program/dispatch.hpp"
+
+namespace tt::tt_metal {
+namespace distributed {
+class MeshWorkloadImpl;
+class MeshDevice;
+}  // namespace distributed
+
+namespace program_dispatch {
+// NOLINTNEXTLINE(readability-redundant-declaration)
+uint32_t program_base_addr_on_core(distributed::MeshWorkloadImpl&, distributed::MeshDevice*, HalProgrammableCoreType);
+}  // namespace program_dispatch
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
@@ -57,8 +68,8 @@ private:
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
-    template <typename WorkloadType, typename DeviceType>
-    friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
+    friend uint32_t program_dispatch::program_base_addr_on_core(
+        MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
     friend class tt::tt_metal::Program;

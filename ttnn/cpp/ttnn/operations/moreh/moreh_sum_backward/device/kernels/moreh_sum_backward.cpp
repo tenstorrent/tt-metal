@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
@@ -44,4 +43,3 @@ void MAIN {
     }
     cb_pop_front(cb_in1, onetile);
 }
-}  // namespace NAMESPACE

@@ -25,11 +25,6 @@ def is_wormhole_b0():
     return "wormhole_b0" in ARCH_NAME
 
 
-def is_grayskull():
-    ARCH_NAME = os.getenv("ARCH_NAME")
-    return "grayskull" in ARCH_NAME
-
-
 class TestSuiteType(Enum):
     BUILD_KERNELS_FOR_RISCV = auto()
     LLRT = auto()
@@ -44,10 +39,6 @@ TestEntry = namedtuple("TestEntry", ["test_name", "executable_name", "extra_para
 
 def void_for_whb0(x):
     return (not is_wormhole_b0()) and x or None
-
-
-def void_for_gs(x):
-    return (not is_grayskull()) and x or None
 
 
 def void_for_bh(x):

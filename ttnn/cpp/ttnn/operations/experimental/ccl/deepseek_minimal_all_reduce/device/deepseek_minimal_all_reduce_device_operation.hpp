@@ -31,8 +31,6 @@ struct DeepseekMinimalAllReduceDeviceOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
@@ -50,6 +48,7 @@ ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce::DeepseekMinima
         tt::tt_fabric::Topology topology,
         std::optional<uint32_t> cluster_axis,
         const std::optional<ttnn::Tensor>& intermediate_tensor,
-        const std::optional<ttnn::Tensor>& residual_tensor = std::nullopt);
+        const std::optional<ttnn::Tensor>& residual_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

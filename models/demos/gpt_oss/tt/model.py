@@ -229,6 +229,10 @@ class Model:
 
         return instance
 
+    def switch_mode(self, mode: Mode):
+        # No-op; required by tt_transformers generator interface.
+        return None
+
     def _forward_layers_and_head(
         self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True, user_id=0
     ):
@@ -340,8 +344,8 @@ class Model:
         else:
             # Slice cos/sin matrices for prefill sequence length (matches tt-transformers model.py lines 156-159)
             rope_mats = [
-                self.rope_setup.cos_matrix[:, :, :seq_len, :],
-                self.rope_setup.sin_matrix[:, :, :seq_len, :],
+                self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+                self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
             ]
 
         # Forward through layers and head (shared with decode)
@@ -474,9 +478,6 @@ class Model:
         global_user_id=None,
     ):
         """Prepare inputs for prefill mode"""
-        # Default global_user_id to 0 if not provided
-        if global_user_id is None:
-            global_user_id = 0
         # Embed the tokens
         if tokens.dim() == 2:
             tokens = tokens.reshape(1, 1, 1, -1)
@@ -496,8 +497,8 @@ class Model:
         # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
         seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
         rot_mats_global = [
-            self.rope_setup.cos_matrix[:, :, :seq_len, :],
-            self.rope_setup.sin_matrix[:, :, :seq_len, :],
+            self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+            self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
         ]
         rot_mats_local = None
 
@@ -519,6 +520,9 @@ class Model:
             elif self.users_row_sharded and page_table.shape[0] == 1:
                 # Single-user prefill with row-sharding: create page table with valid entries
                 # only on the target row to prevent KV cache corruption on other rows
+                assert (
+                    global_user_id is not None
+                ), "global_user_id is required for single-user row-sharded prefill to target the correct mesh row"
                 num_rows = self.mesh_device.shape[0]
                 users_per_row = getattr(self.args, "max_local_batch_size", self.args.max_batch_size // num_rows)
                 target_row = global_user_id // users_per_row

@@ -19,11 +19,6 @@ RotaryEmbeddingLlamaFusedQKDeviceOperation::select_program_factory(
     return RotaryEmbeddingLlamaFusedQKProgramFactory{};
 }
 
-void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& q_input_tensor = tensor_args.q_input;
@@ -70,8 +65,7 @@ void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
         "Q input tensor and K input tensor must have same head dimensions");
     uint32_t head_dim = q_input_tensor.logical_shape()[-1];
     TT_FATAL(
-        head_dim <= 128 ||
-            std::get<ttnn::WormholeComputeKernelConfig>(args.compute_kernel_config).fp32_dest_acc_en == false,
+        head_dim <= 128 || args.compute_kernel_config.fp32_dest_acc_en == false,
         "If head_dim is > 128, fp32_dest_acc_en must be False");
 
     if (args.row_major_QK) {

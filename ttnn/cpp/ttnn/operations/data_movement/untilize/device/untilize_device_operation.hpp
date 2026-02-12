@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,8 +12,10 @@
 #include "factories/untilize_multi_core_sub_core_grids_program_factory.hpp"
 #include "factories/untilize_multi_core_block_program_factory.hpp"
 #include "factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
+#include "factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.hpp"
 #include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
 #include "factories/untilize_multi_core_program_factory.hpp"
+#include "factories/untilize_multi_core_nd_shard_input_program_factory.hpp"
 #include "untilize_device_operation_types.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -41,12 +43,13 @@ struct UntilizeDeviceOperation {
         UntilizeMultiCoreSubCoreGridsProgramFactory,
         UntilizeMultiCoreBlockProgramFactory,
         UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory,
+        UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory,
         UntilizeMultiCoreParallelizeColumnProgramFactory,
-        UntilizeMultiCoreProgramFactory>;
+        UntilizeMultiCoreProgramFactory,
+        UntilizeMultiCoreNDShardInputProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

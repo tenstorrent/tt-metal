@@ -1017,12 +1017,6 @@ def is_conv_supported_on_device(conv_params):
     return True
 
 
-# detect E75 Grayskull card
-def is_e75(device):
-    compute_grid_size = device.compute_with_storage_grid_size()
-    return (device.arch() == Arch.GRAYSKULL) and (compute_grid_size.x * compute_grid_size.y == 88)
-
-
 def is_x2_harvested(device):
     grid = device.compute_with_storage_grid_size()
     return device.arch() == Arch.WORMHOLE_B0 and (grid.x, grid.y) == (8, 7)
@@ -1042,9 +1036,14 @@ def is_wormhole_b0():
     return "wormhole_b0" in ARCH_NAME
 
 
-def is_grayskull():
-    ARCH_NAME = ttnn.get_arch_name()
-    return "grayskull" in ARCH_NAME
+def is_watcher_enabled():
+    watcher = os.environ.get("TT_METAL_WATCHER")
+    lightweight_asserts = os.environ.get("TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS")
+    return (watcher is not None and watcher != "") or lightweight_asserts == "1"
+
+
+def is_n300():
+    return os.environ.get("MESH_DEVICE", "N150") == "N300"
 
 
 def is_slow_dispatch():
@@ -1063,16 +1062,16 @@ def skip_for_wormhole_b0(reason_str="not a wormhole test"):
     return ti_skip(is_wormhole_b0(), reason=reason_str)
 
 
+def skip_with_watcher(reason_str="Test is not passing with watcher enabled"):
+    return ti_skip(is_watcher_enabled(), reason=reason_str)
+
+
 def run_for_blackhole(reason_str="only runs for Blackhole"):
     return ti_skip(not is_blackhole(), reason=reason_str)
 
 
 def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
     return ti_skip(not is_wormhole_b0(), reason=reason_str)
-
-
-def run_for_grayskull(reason_str="only runs for Grayskull"):
-    return ti_skip(not is_grayskull(), reason=reason_str)
 
 
 def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):

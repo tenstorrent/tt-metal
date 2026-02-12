@@ -531,7 +531,7 @@ The function can be summarized by the following pseudo-code:
    read_runtime_arguments()
    read_compile_time_arguments()
    create_address_generators()
-   for (i in 0 .. n_tiles) {
+   for (i in 0 .. n_tiles - 1) {
        transfer_tile_from_dram_to_circular_buffer(in0, i)
        transfer_tile_from_dram_to_circular_buffer(in1, i)
    }
@@ -576,7 +576,7 @@ The function can be summarized by the following pseudo-code:
 
    read_compile_time_arguments()
    initialize_tensix_engine_for_elementwise_addition()
-   for (i in 0 .. n_tiles) {
+   for (i in 0 .. n_tiles - 1) {
        add_tiles_in_input_circular_buffers()
        write_result_to_output_circular_buffer()
    }
@@ -641,7 +641,7 @@ The kernel code can be summarized by the following pseudo-code:
 
 .. code-block:: cpp
 
-   for (i in 0 .. n_tiles) {
+   for (i in 0 .. n_tiles - 1) {
        transfer_tile_from_circular_buffer_to_dram(out0, i)
    }
 
@@ -1163,10 +1163,10 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    so your code only needs to generate indices in the right order.
 
 #. Update the compute kernel to perform matrix multiplication rather than elementwise addition.
-   To initialize the Tensix Engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
+   To initialize the Tensix Engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/hw/inc/api/compute/matmul.h``.
    Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
    applicable to elementwise operations, not to matrix multiplication).
-   To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
+   To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/hw/inc/api/compute/matmul.h``.
    This function accumulates the result into the destination register; i.e. it adds to the existing values in the register rather than overwriting existing content.
    By judiciously choosing when to call ``tile_regs_acquire``, which initializes all tiles in the destination register array to zero, and when to call
    ``tile_regs_commit``, which signals that the compute core is done writing to the destination register,

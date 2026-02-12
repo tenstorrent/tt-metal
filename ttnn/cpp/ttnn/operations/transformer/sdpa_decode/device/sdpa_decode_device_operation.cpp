@@ -20,11 +20,6 @@ SdpaDecodeDeviceOperation::program_factory_t SdpaDecodeDeviceOperation::select_p
     return SdpaDecodeProgramFactory{};
 }
 
-void SdpaDecodeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     bool use_mla = operation_attributes.use_mla.value_or(false);
@@ -58,13 +53,22 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     const auto q_shape = input_tensors.at(0).padded_shape();
     const auto q_shape_unpadded = input_tensors.at(0).logical_shape();
     const auto k_shape = input_tensors.at(1).padded_shape();
+    const auto v_shape = input_tensors.size() > 2 ? input_tensors.at(2).padded_shape() : k_shape;
 
     // When using multi-latent attention, the V tensor is the same as K tensor, but of smaller head dimension.
-    // For the sake validation, we will use the K tensor shape for V tensor, and validate head_dim_v separately.
-    const auto v_shape = use_mla ? input_tensors.at(1).padded_shape() : input_tensors.at(2).padded_shape();
+    // If V tensor is not provided, we assume that V is subset of K in the hidden dimension. Hence we use K shape for V.
+    // If V tensor is provided, we take the V tensor and use that to validate head_dim_v. (hidden dim of V must be equal
+    // to head_dim_v)
 
     if (use_mla) {
         // Head dim v validation
+        if (tensor_args.v.has_value()) {
+            TT_FATAL(
+                v_shape[3] == operation_attributes.head_dim_v.value(),
+                "Head dimension of V must be equal to head_dim_v, got {} and {}",
+                v_shape[3],
+                operation_attributes.head_dim_v.value());
+        }
         TT_FATAL(
             q_shape[3] == k_shape[3],
             "Head dimension of Q must be equal to head dim of K, got {} and {}",
@@ -210,8 +214,20 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         }
 
         TT_FATAL(k_shape[2] == v_shape[2], "K and V must have same block size");
-        TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
 
+        if (use_mla) {
+            TT_FATAL(
+                k_shape[3] == q_shape[3], "Q and K must have same hidden size, got {} and {}", k_shape[3], q_shape[3]);
+            if (tensor_args.v.has_value()) {
+                TT_FATAL(
+                    v_shape[3] == operation_attributes.head_dim_v.value(),
+                    "V must have hidden size equal to head_dim_v, got {} and {}",
+                    v_shape[3],
+                    operation_attributes.head_dim_v.value());
+            }
+        } else {
+            TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
+        }
         // Validate chunk size for paged version
         // k_chunk_size can also be zero; if k_chunk_size = 0, figure it out in kernels
         TT_FATAL(
@@ -275,12 +291,14 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "K tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
             k_shape[-1],
             D);
-        TT_FATAL(
-            v_shape[-1] == D,
-            "V tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
-            v_shape[-1],
-            D);
 
+        if (!use_mla) {
+            TT_FATAL(
+                v_shape[-1] == D,
+                "V tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
+                v_shape[-1],
+                D);
+        }
         // Check valid seqlen
         for (unsigned int cur_pos_val : operation_attributes.cur_pos) {
             TT_FATAL(cur_pos_val < k_shape[-2], "cur_pos must be <= K sequence dim");

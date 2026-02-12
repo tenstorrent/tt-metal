@@ -7,15 +7,10 @@ on:
         required: false
         default: false
         type: boolean
-      version:
-        description: "Ubuntu version for building and testing"
+      platform:
+        description: "Platform for building and testing (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04')"
         required: false
-        default: 22.04
-        type: number
-      distro:
-        description: "Ubuntu distribution for building and testing"
-        required: false
-        default: ubuntu
+        default: "Ubuntu 22.04"
         type: string
       tag-version:
         description: "Tag version to create, e.g. 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
@@ -27,11 +22,11 @@ on:
         required: false
         default: "false"
         type: string
-      main-os-version:
-        description: "Main OS version that all test workflows should run on"
+      main-platform:
+        description: "Main platform that all test workflows should run on"
         required: false
-        default: 22.04
-        type: number
+        default: "Ubuntu 22.04"
+        type: string
 
 permissions:
   contents: write
@@ -39,18 +34,38 @@ permissions:
   id-token: write
 
 jobs:
+  # Parse platform to extract distro/version for downstream workflows.
+  # NOTE: This parse-platform is needed because create-docker-release-image and
+  # release-docs jobs use the parsed distro/version values to construct image tags.
+  # This is different from workflows that just pass platform to build-artifact.yaml.
+  parse-platform:
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+
   build-artifact:
+      needs: parse-platform
       uses: ./.github/workflows/build-artifact.yaml
       permissions:
         packages: write
       secrets: inherit
       with:
-        version: ${{ inputs.version || 22.04 }}
-        distro: ${{ inputs.distro || 'ubuntu' }}
+        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
         build-wheel: true
         tracy: false
         fetch-depth: 0
         skip-tt-train: false
+        enable-lto: false
 
   single-card-demo-tests:
     needs: build-artifact
@@ -66,54 +81,42 @@ jobs:
 
   t3000-demo-tests:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
+    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: "wh_llmbox_perf"
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
       extra-tag: "in-release"
 
   galaxy-demos:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
+    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u
+      enabled-skus: wh_galaxy
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-      extra-tag: "in-release"
 
   blackhole-demo-tests:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
+    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix:
-        test-group: ["P100", "P150", "p150b"]
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      regenerate-ttnn-cache: false
-
-  blackhole-multi-card-demo-tests:
-    needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
         test-group:
+          - name: P150 Demo tests
+            runner-label: P150
+            extra-tag: pipeline-perf
+            num_devices: 1
           - name: LLMBox Demo tests
             runner-label: BH-LLMBox
             extra-tag: pipeline-perf
@@ -157,20 +160,21 @@ jobs:
   create-docker-release-image:
     needs:
       - build-artifact
+      - parse-platform
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     with:
-      os: ${{ inputs.distro || 'ubuntu' }}-${{ inputs.version || '22.04' }}
+      os: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
       version: ${{ inputs.tag-version }}
       tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
 
-  # Only run docs release once per run on the main OS version
+  # Only run docs release once per run on the main platform
   release-docs:
-    needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
+    needs: [build-artifact, parse-platform]
+    if: ${{ inputs.platform == inputs.main-platform && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ inputs.tag-version }}

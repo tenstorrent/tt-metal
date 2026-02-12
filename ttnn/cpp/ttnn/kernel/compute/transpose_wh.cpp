@@ -4,10 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/transpose_wh.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t NHtWt = get_compile_time_arg_val(0);
     transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
@@ -28,4 +27,3 @@ void MAIN {
         cb_pop_front(tt::CBIndex::c_0, 1);
     }
 }
-}  // namespace NAMESPACE

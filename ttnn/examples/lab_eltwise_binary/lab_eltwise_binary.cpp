@@ -64,20 +64,20 @@ void reference_add(const std::vector<bfloat16>& a, const std::vector<bfloat16>& 
  */
 // clang-format on
 struct ProgramState {
-    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device;
     Program program;
     tt::tt_metal::CoreCoord core;
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range;
-    distributed::MeshCommandQueue& cq;
+    tt::tt_metal::distributed::MeshWorkload workload;
+    tt::tt_metal::distributed::MeshCoordinateRange device_range;
+    tt::tt_metal::distributed::MeshCommandQueue& cq;
 
     ProgramState(
-        std::shared_ptr<distributed::MeshDevice> mesh_device,
+        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
         Program program,
         tt::tt_metal::CoreCoord core,
-        distributed::MeshWorkload workload,
-        distributed::MeshCoordinateRange device_range,
-        distributed::MeshCommandQueue& cq) :
+        tt::tt_metal::distributed::MeshWorkload workload,
+        tt::tt_metal::distributed::MeshCoordinateRange device_range,
+        tt::tt_metal::distributed::MeshCommandQueue& cq) :
         mesh_device(std::move(mesh_device)),
         program(std::move(program)),
         core(core),
@@ -99,14 +99,16 @@ ProgramState init_program() {
     // Open device
     constexpr int device_id = 0;
     // In TT-Metal, all operations use a mesh abstraction - even a single device is represented as a 1x1 mesh.
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device =
+        tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
     // Ordering of operations in the mesh is managed by a command queue.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    tt::tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // MeshWorkload represents a collection of programs to be executed across the mesh.
-    distributed::MeshWorkload workload;
+    tt::tt_metal::distributed::MeshWorkload workload;
     // Each program in the workload is associated with a range of devices where it should run.
     // In our case, we have a single program running on our entire (unit) mesh.
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt::tt_metal::distributed::MeshCoordinateRange device_range =
+        tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape());
     // This program uses only a single Tensix core at [0, 0].
     tt::tt_metal::CoreCoord core({0, 0});
     // Create a program object. A program is a collection of kernels that are executed on the device.

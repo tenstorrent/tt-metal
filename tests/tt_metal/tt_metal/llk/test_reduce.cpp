@@ -101,20 +101,19 @@ float get_scaler(const ReduceConfig& test_config) {
 
 void set_math_fid_masks_binary(
     uint16_t& srca_fid_mask, uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_umd_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: {
             break;
         }
         case MathFidelity::HiFi2: {
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             ;
             break;
         }
         case MathFidelity::LoFi: {
             srca_fid_mask = 0xFFF8;
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             break;
         }
         default: {
@@ -520,9 +519,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                    continue;
-                }
                 for (bool dst_full_sync_en : {true, false}) {
                     ReduceConfig test_config = {
                         .shape = shape,
@@ -629,9 +625,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                    continue;
-                }
                 for (bool dst_full_sync_en : {true, false}) {
                     ReduceConfig test_config = {
                         .shape = shape,
@@ -703,9 +696,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWTinyTiles) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                    continue;
-                }
                 for (bool dst_full_sync_en : {true, false}) {
                     ReduceConfig test_config = {
                         .tile_shape = tile_shape,

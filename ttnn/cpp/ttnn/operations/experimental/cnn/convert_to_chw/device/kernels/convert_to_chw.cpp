@@ -4,8 +4,8 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/transpose_wh.h"
 
 template <int BATCH_SIZE>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
@@ -25,8 +25,7 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
 
     cb_push_back(cb_out, BATCH_SIZE);
 }
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr int BATCH_SIZE = 8;
     const uint32_t total_tiles = get_arg_val<uint32_t>(0);
     const uint32_t num_batches = total_tiles / BATCH_SIZE;
@@ -49,4 +48,3 @@ void MAIN {
     }
     pack_untilize_uninit(cb_transpose_in);
 }
-}  // namespace NAMESPACE

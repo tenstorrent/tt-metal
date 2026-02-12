@@ -202,6 +202,30 @@ tests:
       transactions and the transaction size, but with extra degradation due to needing to read
       parameters from L1.
 
+  24:
+    name: "One to All Multicast Linked Semaphore 2x2 Packet Sizes"
+    comment: |
+      Unlike other One to All tests, we measure performance using the receiver cores.
+      This is because we no longer use write barriers to wait for all cores to finish writing.
+      Instead we use semaphores to wait for the receiver cores to finish receiving the data.
+      Transaction size limit is also extended to observe the saturation bandwidth.
+
+  25:
+    name: "One to All Multicast Linked Semaphore 5x5 Packet Sizes"
+    comment: |
+      Unlike other One to All tests, we measure performance using the receiver cores.
+      This is because we no longer use write barriers to wait for all cores to finish writing.
+      Instead we use semaphores to wait for the receiver cores to finish receiving the data.
+      Transaction size limit is also extended to observe the saturation bandwidth.
+
+  26:
+    name: "One to All Multicast Linked Semaphore Packet Sizes"
+    comment: |
+      Unlike other One to All tests, we measure performance using the receiver cores.
+      This is because we no longer use write barriers to wait for all cores to finish writing.
+      Instead we use semaphores to wait for the receiver cores to finish receiving the data.
+      Transaction size limit is also extended to observe the saturation bandwidth.
+
   30:
     name: "One from All Directed Ideal"
 
@@ -226,6 +250,9 @@ tests:
 
   55:
     name: "Loopback Directed Ideal"
+
+  56:
+    name: "One to All Multicast Linked Semaphore Directed Ideal"
 
   61:
     name: "DRAM Interleaved Page Numbers"
@@ -536,6 +563,30 @@ tests:
 
   320:
     name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
+
+  321:
+    name: "Single source Multicast Atomic Increment"
+
+  322:
+    name: "Multi source Multicast Atomic Increment"
+
+  323:
+    name: "Single source Multicast Atomic Increment - NOC 1"
+
+  324:
+    name: "Multi source Multicast Atomic Increment - NOC 1"
+
+  325:
+    name: "Multicast Atomic Larger Increment"
+
+  326:
+    name: "Multicast Atomic Larger Increment - NOC 1"
+
+  327:
+    name: "Single source Multicast Atomic Increment 2.0 API"
+
+  328:
+    name: "Multicast Atomic Larger Increment 2.0 API"
 
   400:
     name: "I2S - DRAM Sharded Row Major Writer"

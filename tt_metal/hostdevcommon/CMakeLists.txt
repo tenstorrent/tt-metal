@@ -26,6 +26,10 @@ target_sources(
             api/hostdevcommon/flags.hpp
             api/hostdevcommon/fabric_common.h
             api/hostdevcommon/tensor_accessor/arg_config.hpp
+        FILE_SET hostdev_headers
+        TYPE HEADERS
+        BASE_DIRS ${PROJECT_SOURCE_DIR}
+        FILES ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h
 )
 
 target_include_directories(ttmetalium_hostdevcommon INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>")
@@ -49,4 +53,8 @@ install(
     FILE_SET
     api
         COMPONENT metalium-dev
+    FILE_SET
+    hostdev_headers
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
+        COMPONENT metalium-runtime
 )

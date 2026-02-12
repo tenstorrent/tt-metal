@@ -10,6 +10,7 @@
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 
 namespace ttnn::prim {
@@ -25,15 +26,13 @@ struct MatmulDeviceOperation {
         MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory,
         MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory,
         MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory,
-        MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory>;
+        MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory,
+        MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(

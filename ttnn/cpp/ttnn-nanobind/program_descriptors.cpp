@@ -685,6 +685,33 @@ void py_module_types(nb::module_& mod) {
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
         .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
 
+    mod.def(
+        "merge_program_descriptors",
+        &tt::tt_metal::merge_program_descriptors,
+        nb::arg("descriptors"),
+        R"pbdoc(
+            Merge multiple ProgramDescriptors into a single one.
+
+            The core ranges of all descriptors must not overlap with each other.
+            This returns a new ProgramDescriptor containing all kernels, semaphores,
+            and circular buffers from all input descriptors.
+
+            Args:
+                descriptors: List of ProgramDescriptors to merge.
+
+            Returns:
+                A new ProgramDescriptor containing all merged content.
+
+            Raises:
+                RuntimeError: If any kernel core ranges overlap between any of the descriptors.
+
+            Example:
+                >>> desc1 = ttnn.ProgramDescriptor()  # operates on cores (0,0)-(1,1)
+                >>> desc2 = ttnn.ProgramDescriptor()  # operates on cores (2,2)-(3,3)
+                >>> desc3 = ttnn.ProgramDescriptor()  # operates on cores (4,4)-(5,5)
+                >>> merged = ttnn.merge_program_descriptors([desc1, desc2, desc3])
+        )pbdoc");
+
     nb::class_<tt::tt_metal::experimental::MeshProgramDescriptor>(mod, "MeshProgramDescriptor", R"pbdoc(
         Descriptor for a mesh program.
 

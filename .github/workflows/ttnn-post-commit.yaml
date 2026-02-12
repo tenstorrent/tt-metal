@@ -37,6 +37,11 @@ on:
         required: false
         type: boolean
         default: false
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
 
   workflow_dispatch:
     inputs:
@@ -71,41 +76,34 @@ on:
 jobs:
   define-ttnn-tests:
     runs-on: ubuntu-latest
+    env:
+      TTNN_TESTS_YAML: tests/pipeline_reorg/ttnn-tests.yaml
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
-    strategy:
-      matrix:
-        default-ttnn-tests:
-          [[
-            { name: "ttnn example tests", cmd: "./tests/scripts/run_ttnn_examples.sh", merge_gate: true },
-            { name: "ttnn eltwise group 1", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 1 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn eltwise group 2", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 2 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn eltwise group 3", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 3 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn eltwise group 4", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 4 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn eltwise group 5", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 5 -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn conv group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn pool group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn matmul group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn fused group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn transformers group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn reduce and misc ops group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "core ttnn unit test group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            # { name: "ttnn fast runtime off", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off', merge_gate: false, fast_runtime_mode_off: true },
-          ]]
     steps:
+      - name: Checkout repository for test definitions
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: ${{ env.TTNN_TESTS_YAML }}
+          sparse-checkout-cone-mode: false
+
       - name: Compute tests
         shell: bash
         id: compute-tests
         run: |
           set -euo pipefail
-          echo "[info] Outputing default values"
-          default_ttnn_tests='${{ toJSON(matrix.default-ttnn-tests) }}'
-          echo $default_ttnn_tests
-          echo $default_ttnn_tests | jq
-          requested_ttnn_tests=$default_ttnn_tests
 
-          requested_ttnn_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ttnn_tests")
-          echo "[info] after filtering for requested workflow tests: $requested_ttnn_tests"
+          # Read test definitions from shared YAML file
+          echo "[info] Reading test definitions from $TTNN_TESTS_YAML"
+          default_ttnn_tests=$(yq -o=json '.tests' "$TTNN_TESTS_YAML")
+          echo "[info] Loaded tests:"
+          echo "$default_ttnn_tests" | jq
+
+          # Filter based on merge-gate-call input
+          requested_ttnn_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" \
+            '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$default_ttnn_tests")
+          echo "[info] After filtering for merge_gate=${{ inputs.merge-gate-call }}: $requested_ttnn_tests"
 
           # Check that we have a valid test list that's not empty
           echo "$requested_ttnn_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
@@ -146,6 +144,7 @@ jobs:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
