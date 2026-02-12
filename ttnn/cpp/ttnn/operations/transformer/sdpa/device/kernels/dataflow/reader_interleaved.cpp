@@ -53,33 +53,36 @@ void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t Sqt = get_compile_time_arg_val(3);
-    constexpr uint32_t Skt = get_compile_time_arg_val(4);
-    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(5);
-    constexpr uint32_t valid_Skt = get_compile_time_arg_val(6);
-    constexpr uint32_t DHt = get_compile_time_arg_val(7);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(8);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(9);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(10);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(11);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(13);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t broadcast_provided_mask_batch = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(19) == 1;
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(20);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(21);
-    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t NVH = get_compile_time_arg_val(3);
+    constexpr uint32_t Sqt = get_compile_time_arg_val(4);
+    constexpr uint32_t Skt = get_compile_time_arg_val(5);
+    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(6);
+    constexpr uint32_t valid_Skt = get_compile_time_arg_val(7);
+    constexpr uint32_t DHt = get_compile_time_arg_val(8);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(9);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(10);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(12);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(15) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t broadcast_provided_mask_batch = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(19) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(20) == 1;
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(21);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(22);
+    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t use_mla = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t mla_kv_overlap = get_compile_time_arg_val(25) == 1;
 
     // Semaphore IDs for KV chain forwarding (non-causal only, but always present in compile args)
-    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(23);
-    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(24);
-    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(25);
+    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(26);
+    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(27);
+    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(28);
 
-    constexpr auto q_args = TensorAccessorArgs<26>();
+    constexpr auto q_args = TensorAccessorArgs<29>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -193,7 +196,8 @@ void kernel_main() {
     constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
     constexpr uint32_t attention_sink_tile_bytes = use_attention_sink ? get_tile_size(cb_attention_sink) : 0;
 
-    constexpr uint32_t q_heads_per_kv = NQH / NKH;
+    constexpr uint32_t q_heads_per_k = NQH / NKH;
+    constexpr uint32_t q_heads_per_v = NQH / NVH;
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
@@ -205,9 +209,17 @@ void kernel_main() {
         TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
     const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr, 4);
 
+    constexpr uint32_t skip_src_cols = (use_mla && mla_kv_overlap) ? DHt - vDHt : 0;
+
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
-    const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
+
+    // If we have MLA:
+    // - if k and v tensors are overlapped, we want to read from the k tensor, but just a portion of it, hence setting
+    // the v tile shape dim to DHt (and skip accordingly based on skip_src_cols)
+    // - if k and v tensors are not overlapped, we want to read from the v tensor, hence setting the v tile shape dim to
+    // vDHt Otherwise head dim of k and v are same
+    const auto v_tile_shape = TensorTileShape(B, NVH, valid_Skt, use_mla && !mla_kv_overlap ? vDHt : DHt);
     const auto attention_sink_tile_shape = TensorTileShape(B, NQH, 1, 1);
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
@@ -338,17 +350,19 @@ void kernel_main() {
                         q_high_idx = Skt;
                     }
 
-                    const uint32_t kv_head = nq / q_heads_per_kv;
+                    const uint32_t k_head = nq / q_heads_per_k;
+                    const uint32_t v_head = nq / q_heads_per_v;
 
                     // loop while k_low < q_high
                     for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                         const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                         const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
 
-                        const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
-                        const uint32_t k_row_end_tile = std::min(k_row_start_tile + Sk_chunk_t, valid_Skt_bound);
-                        const uint32_t k_row_tile_count = k_row_end_tile - k_row_start_tile;
-                        const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
+                        const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
+                        const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
+                        const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
+                        const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, k_head, kv_row_start_tile, 0);
+                        const uint32_t v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
 
                         // K: either read locally (injector or not participant) or receive from previous core
                         uint32_t cb_k_start_address = 0;
@@ -378,9 +392,9 @@ void kernel_main() {
                                 read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                                     k_reader,
                                     cb_k_in,
-                                    kv_head,
+                                    k_head,
                                     k_chunk_start_row_num,
-                                    k_row_tile_count,
+                                    kv_row_tile_count,
                                     DHt,
                                     Sk_chunk_t,
                                     DHt,
@@ -392,13 +406,13 @@ void kernel_main() {
                             } else {
                                 if (should_forward_k) {
                                     cb_k_start_address = read_chunk_for_forwarding<k_tile_bytes, true>(
-                                        k_reader, cb_k_in, k_start_tile_id, k_row_tile_count, DHt, Sk_chunk_t, DHt);
+                                        k_reader, cb_k_in, k_start_tile_id, kv_row_tile_count, DHt, Sk_chunk_t, DHt);
                                 } else {
                                     read_chunk_with_padding<k_tile_bytes>(
                                         k_reader,
                                         cb_k_in,
                                         k_start_tile_id,
-                                        k_row_tile_count,
+                                        kv_row_tile_count,
                                         DHt,
                                         Sk_chunk_t,
                                         DHt,
@@ -487,13 +501,13 @@ void kernel_main() {
                             // Read V chunk from DRAM
                             if constexpr (is_chunked) {
                                 // Use page table to read V chunk (forwarding not supported for paged mode)
-                                const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
+                                const uint32_t kv_chunk_start_row_num = k_chunk * Sk_chunk_t;
                                 read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                                     v_reader,
                                     cb_v_in,
-                                    kv_head,
-                                    k_chunk_start_row_num,
-                                    k_row_tile_count,
+                                    v_head,
+                                    kv_chunk_start_row_num,
+                                    kv_row_tile_count,
                                     vDHt,
                                     Sk_chunk_t,
                                     vDHt,
@@ -501,30 +515,30 @@ void kernel_main() {
                                     barrier_threshold,
                                     page_table_ptr,
                                     false,
-                                    DHt - vDHt /* src_skip_cols */);
+                                    skip_src_cols);
                             } else {
                                 if (should_forward_v) {
                                     cb_v_start_address = read_chunk_for_forwarding<v_tile_bytes, false>(
                                         v_reader,
                                         cb_v_in,
-                                        k_start_tile_id,
-                                        k_row_tile_count,
+                                        v_start_tile_id,
+                                        kv_row_tile_count,
                                         vDHt,
                                         Sk_chunk_t,
                                         vDHt,
-                                        DHt - vDHt);
+                                        skip_src_cols);
                                 } else {
                                     read_chunk_with_padding<v_tile_bytes>(
                                         v_reader,
                                         cb_v_in,
-                                        k_start_tile_id,
-                                        k_row_tile_count,
+                                        v_start_tile_id,
+                                        kv_row_tile_count,
                                         vDHt,
                                         Sk_chunk_t,
                                         vDHt,
                                         barrier_threshold,
                                         false,
-                                        DHt - vDHt /* src_skip_cols */);
+                                        skip_src_cols);
                                 }
                             }
                         }
