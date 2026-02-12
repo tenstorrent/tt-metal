@@ -468,7 +468,6 @@ std::string to_string_impl(const Tensor& tensor) {
         return ss.str();
     }
 
-    TT_FATAL(is_device_tensor(tensor), "Unsupported storage type");
     const auto& storage = tensor.device_storage();
     auto cpu_tensor = tensor.cpu();
     if (storage.mesh_buffer == nullptr) {
