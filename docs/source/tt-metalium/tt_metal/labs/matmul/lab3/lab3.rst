@@ -195,7 +195,8 @@ with all semaphores at their initial values.
 The sender core has just read a tile from DRAM into its input CB, and is ready to multicast it
 to other cores. However, it must wait until all receivers signal that they are ready for the tile.
 The way this is achieved is by waiting for the ``receivers_ready`` semaphore,
-which resided **in the senders on-chip SRAM**, to reach the number of receivers.
+which resided **in the senders on-chip SRAM**, to reach the value equal to the number of receivers,
+which is three in our example program.
 Waiting on a semaphore is a blocking call and does **not** involve any NoC traffic since the
 semaphore is in the local on-chip SRAM.
 
@@ -560,7 +561,7 @@ you can observe that it encodes the waypoint "NSW" (for "NoC Semaphore Wait") be
 
 
 Exercise 1: Using Watcher to Debug NoC Errors and Hangs
-=======================================================
+*******************************************************
 
 To illustrate how Watcher can be used to debug NoC errors and hangs, we will use the ``lab_multicast`` example program.
 
@@ -611,7 +612,7 @@ You will change that in Exercise 1.
 
 
 
-Exercise 1: Extending the Standalone Multicast Example
+Exercise ?: Extending the Standalone Multicast Example
 ******************************************************
 
 In the provided example, the sender core only forwards data, while receivers perform the copy and writeback. In this exercise you will:
