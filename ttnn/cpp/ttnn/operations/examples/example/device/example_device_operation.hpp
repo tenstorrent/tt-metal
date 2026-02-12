@@ -112,11 +112,12 @@ struct ExampleDeviceOperation {
     // Select the program factory based on the operation attributes and tensor args
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // Validate the operation when it creates a program. Usually will have more checks
+    // Validate the operation when it creates a program. Also called on cache hit by default.
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    // Validate the operation when it reuses a program. Usually will have less checks
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    // Optional: override to use lighter validation on cache hit.
+    // If not provided, the framework calls validate_on_program_cache_miss.
+    // static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Compute the output specs based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

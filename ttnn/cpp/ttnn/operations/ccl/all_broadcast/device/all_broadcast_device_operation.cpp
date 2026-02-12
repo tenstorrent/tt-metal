@@ -15,11 +15,6 @@ AllBroadcastDeviceOperation::program_factory_t AllBroadcastDeviceOperation::sele
     return AllBroadcastProgramFactory{};
 }
 
-void AllBroadcastDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const Tensor& input) {
-    validate_on_program_cache_miss(operation_attributes, input);
-}
-
 void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const Tensor& input) {
     const auto& input_tensor = input;

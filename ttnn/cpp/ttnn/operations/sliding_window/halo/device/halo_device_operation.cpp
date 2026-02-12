@@ -45,11 +45,6 @@ void HaloDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec should not be empty");
 }
 
-void HaloDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;

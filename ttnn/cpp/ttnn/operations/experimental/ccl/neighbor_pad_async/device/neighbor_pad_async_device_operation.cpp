@@ -18,11 +18,6 @@ NeighborPadAsyncDeviceOperation::program_factory_t NeighborPadAsyncDeviceOperati
     return NeighborPadAsyncMeshWorkloadFactory{};
 }
 
-void NeighborPadAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.dim < 3, "Error, neighbor pad currently only supports padding non last dim, provided {}", args.dim);

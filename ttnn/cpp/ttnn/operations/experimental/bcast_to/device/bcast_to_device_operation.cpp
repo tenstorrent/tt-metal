@@ -86,11 +86,6 @@ void BcastToOperation::validate_on_program_cache_miss(
     validate(operation_attributes, tensor_args);
 };
 
-void BcastToOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate(operation_attributes, tensor_args);
-};
-
 BcastToOperation::spec_return_value_t BcastToOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {

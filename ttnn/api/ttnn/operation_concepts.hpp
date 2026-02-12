@@ -60,11 +60,19 @@ concept HasComputeOutputSpecs = requires(
     } -> std::same_as<typename device_operation_t::spec_return_value_t>;
 };
 
+// Detect if operation provides custom cache-hit validation.
+// If not provided, the framework defaults to calling validate_on_program_cache_miss.
+template <typename device_operation_t>
+concept HasValidateOnProgramCacheHit = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    device_operation_t::validate_on_program_cache_hit(attrs, tensor_args);
+};
+
 template <typename device_operation_t>
 concept DeviceOperationConcept = requires {
     [](const typename device_operation_t::operation_attributes_t& operation_attributes,
        const typename device_operation_t::tensor_args_t& tensor_args) {
-        device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
         using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;

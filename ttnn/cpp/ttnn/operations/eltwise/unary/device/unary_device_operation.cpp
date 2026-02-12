@@ -62,11 +62,6 @@ UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_fac
     return UnaryProgramFactory{};
 }
 
-void UnaryDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void UnaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;

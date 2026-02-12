@@ -64,11 +64,6 @@ void MorehDotBackwardOperation::validate_on_program_cache_miss(
     validate_tensors(operation_attributes, tensor_args);
 }
 
-void MorehDotBackwardOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-}
-
 MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     std::vector<std::optional<TensorSpec>> output_specs;

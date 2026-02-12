@@ -54,11 +54,6 @@ void MorehArangeOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehArangeOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
 MorehArangeOperation::spec_return_value_t MorehArangeOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {

@@ -16,11 +16,6 @@ LlamaAllGatherMatmulAsyncDeviceOperation::select_program_factory(
     return LlamaAllGatherMatmulAsyncProgramFactory{};
 }
 
-void LlamaAllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void LlamaAllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input0 = tensor_args.input0;

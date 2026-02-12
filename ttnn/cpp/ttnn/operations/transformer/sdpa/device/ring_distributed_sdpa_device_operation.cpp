@@ -21,11 +21,6 @@ RingDistributedSdpaDeviceOperation::program_factory_t RingDistributedSdpaDeviceO
     return RingDistributedSdpaMeshWorkloadFactory{};
 }
 
-void RingDistributedSdpaDeviceOperation::validate_on_program_cache_hit(
-    const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
     std::vector<Tensor> input_tensors = {tensor_args.q, tensor_args.k, tensor_args.v};

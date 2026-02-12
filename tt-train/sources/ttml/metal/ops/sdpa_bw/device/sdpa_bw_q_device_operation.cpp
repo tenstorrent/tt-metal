@@ -19,11 +19,6 @@ SDPABackwardQDeviceOperation::program_factory_t SDPABackwardQDeviceOperation::se
     return SDPABackwardQProgramFactory{};
 }
 
-void SDPABackwardQDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& grad_output = tensor_args.grad_output;
