@@ -16,7 +16,15 @@
   cmd: pytest tests/nightly/tg/ccl
   skus:
     wh_galaxy:
-      timeout: 40
+      timeout: 38
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+
+- name: Galaxy MoE tests
+  cmd: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe
+  skus:
+    wh_galaxy:
+      timeout: 2
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
