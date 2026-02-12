@@ -291,6 +291,7 @@ bool socket_wait_for_pages(
     } while (bytes_recv < num_bytes);
     return true;
 #endif
+    return true;
 }
 
 void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
