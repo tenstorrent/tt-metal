@@ -251,7 +251,39 @@ class MoE(SharedStateAddOn, AbstractModule):
         return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
-    def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        ccl = cfg["ccl"]  # CCL runtime initialization in execution order
+        seq_len = 1
+        batch_size_per_device = x.shape[-2]
+        batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
+
+        # All Gather
+        x = cls._fwd_all_gather(x, cfg)
+
+        # MoE Gate
+        topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
+
+        # Repeat + Permute Expert weights
+        topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
+
+        # MOE
+        post_combine_output_tensor = cls._fwd_moe_decode(
+            x,
+            topk_experts_indices,
+            topk_experts_weights,
+            cfg,
+            batch_size_per_device,
+            batch_size,
+            seq_len,
+        )
+
+        # Reduce Scatter
+        post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
+
+        return post_combine_output_tensor
+
+    @classmethod
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
         chunk_tokens = int(cfg.get("prefill_chunk_size", 16384))
@@ -260,7 +292,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         if global_tokens > chunk_tokens:
             chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
             return cls._forward_chunked_prefill(x, cfg, chunk_size)
-        return cls._forward_impl(x, cfg)
+        return cls._forward_prefill_impl(x, cfg)
 
     @classmethod
     def _forward_chunked_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, chunk_size: int) -> ttnn.Tensor:
@@ -270,7 +302,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         for start in range(0, seq_len, chunk_size):
             end = min(start + chunk_size, seq_len)
             x_chunk = ttnn.slice(x, [0, 0, start, 0], [x.shape[0], x.shape[1], end, x.shape[3]])
-            output_chunks.append(cls._forward_impl(x_chunk, cfg))
+            output_chunks.append(cls._forward_prefill_impl(x_chunk, cfg))
             ttnn.deallocate(x_chunk)
 
         if len(output_chunks) == 1:
@@ -281,8 +313,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         return output
 
     @classmethod
-    def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        # breakpoint()
+    def _forward_prefill_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         ccl = cfg["ccl"]  # CCL runtime initialization in execution order
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
         batch_size_per_device = x.shape[
@@ -308,16 +339,13 @@ class MoE(SharedStateAddOn, AbstractModule):
             x = cls._fwd_all_gather(x, cfg)
 
         # MoE Gate
-
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
         # Repeat + Permute Expert weights
-
         topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
 
         # MOE
-
-        post_combine_output_tensor = cls._fwd_moe(
+        post_combine_output_tensor = cls._fwd_moe_prefill(
             x,
             topk_experts_indices,
             topk_experts_weights,
@@ -328,28 +356,86 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         # Reduce Scatter
-
         post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
 
         return post_combine_output_tensor
 
     @classmethod
-    def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return MoEGate.forward(x, cfg["moe_gate"])
+    def _fwd_moe_decode(
+        cls,
+        x: ttnn.Tensor,
+        topk_experts_indices: ttnn.Tensor,
+        topk_experts_weights: ttnn.Tensor,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+        batch_size_per_device: int,
+        batch_size: int,
+        seq_len: int,
+    ):
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = ttnn.reshape(
+            x_rm,
+            shape=(batch_size_per_device, 1, seq_len, cfg["hidden_size"]),
+        )
+
+        topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+        topk_experts_indices_rm = ttnn.reshape(
+            topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
+        )
+
+        all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
+            x_rm,
+            topk_experts_indices_rm,
+            cfg["expert_mapping_tensors"],
+            **cfg["all_to_all_dispatch"],
+        )
+
+        post_all_to_all_dispatch_output = ttnn.reshape(
+            all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
+        )
+        post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
+        # repeat remap_topk_mask for the num_tokens known at runtime
+
+        remap_topk_mask = ttnn.repeat(
+            cfg["remap_topk_mask"], ttnn.Shape((1, batch_size_per_device, 1, 1))
+        )  # TODO: move to static path
+
+        _, sparsity_t = ttnn.moe_expert_token_remap(
+            remap_topk_mask,
+            cfg["expert_mapping_tensors"],
+            all_to_all_dispatch_metadata_tensors,
+            reduction_size=cfg["sparsity_block_size"],
+        )
+
+        experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, sparsity_t, cfg["moe_experts"])
+        ttnn.deallocate(post_all_to_all_dispatch_output)
+
+        experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
+        experts_output = ttnn.reshape(
+            experts_output, shape=(cfg["num_experts_per_device"], batch_size, seq_len, cfg["hidden_size"])
+        )
+
+        all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
+            experts_output,
+            all_to_all_dispatch_metadata_tensors,
+            cfg["expert_mapping_tensors"],
+            **cfg["all_to_all_combine"],
+        )
+
+        post_combine_output_tensor = ttnn.reshape(
+            all_to_all_combine_output_tensors,
+            shape=(cfg["num_experts_per_tok"], 1, batch_size_per_device * seq_len, cfg["hidden_size"]),
+        )
+        post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
+
+        post_combine_output_tensor = ttnn.mul(
+            post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]
+        )
+
+        post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
+        return post_combine_output_tensor
 
     @classmethod
-    def _fwd_repeat_permute_expert_weights(
-        cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
-    ) -> ttnn.Tensor:
-        topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
-        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
-        topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(topk_experts_weights_rm)
-        return topk_experts_weights
-
-    @classmethod
-    def _fwd_moe(
+    def _fwd_moe_prefill(
         cls,
         x: ttnn.Tensor,
         topk_experts_indices: ttnn.Tensor,
@@ -466,21 +552,28 @@ class MoE(SharedStateAddOn, AbstractModule):
         return post_combine_output_tensor
 
     @classmethod
+    def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
+
+    @classmethod
+    def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        return MoEGate.forward(x, cfg["moe_gate"])
+
+    @classmethod
+    def _fwd_repeat_permute_expert_weights(
+        cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
+    ) -> ttnn.Tensor:
+        topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
+        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
+        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
+        topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(topk_experts_weights_rm)
+        return topk_experts_weights
+
+    @classmethod
     def _fwd_reduce_scatter(
         cls, post_combine_output_tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, ccl: CCL
     ) -> ttnn.Tensor:
         return ttnn.experimental.reduce_scatter_minimal_async(
             post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
         )
-
-    @classmethod
-    def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
-
-    @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
-
-    @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
