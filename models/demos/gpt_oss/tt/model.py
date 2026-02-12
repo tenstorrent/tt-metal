@@ -445,7 +445,7 @@ class Model:
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def prepare_inputs_prefill_trace(
+    def prepare_prefill_inputs_trace(
         self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
     ):
         """Prepare inputs on host so we later send them to device"""
@@ -462,7 +462,6 @@ class Model:
     def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
         """Transform and embed tokens on device"""
         tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        tokens.deallocate(True)
         if len(tokens_embd.shape) == 3:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         return tokens_embd, tt_page_table, tt_chunk_page_table
@@ -478,6 +477,10 @@ class Model:
         global_user_id=None,
     ):
         """Prepare inputs for prefill mode"""
+        # Default global_user_id to 0 if not provided
+        if global_user_id is None:
+            global_user_id = 0
+
         # Embed the tokens
         if tokens.dim() == 2:
             tokens = tokens.reshape(1, 1, 1, -1)
@@ -495,7 +498,7 @@ class Model:
                 tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
-        seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
+        seq_len = tokens.shape[-1] if trace_enabled else tokens_embd.shape[-2]
         rot_mats_global = [
             self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
             self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
@@ -582,6 +585,21 @@ class Model:
             tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
             tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
             return ttnn.to_torch(tt_output_tensor)
+
+    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+        """Slice logits to extract window around last token after prefill trace.
+
+        In trace mode, ttnn_prefill_forward runs with get_last_token=-1 (no slicing),
+        so norm+lm_head are applied to the full sequence. This method extracts
+        the 32-token window containing the last token.
+        """
+        get_last_token = (last_token_idx // 32) * 32
+        logits = ttnn.slice(
+            logits,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, logits.shape[-1]),
+        )
+        return logits
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """Process prefill output and extract last token logits"""

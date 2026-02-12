@@ -172,7 +172,8 @@ class ModelArgs:
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         model_specific_supported_seq_lens = {
-            # exmaple : #base_model_name : {device_name : [sequence_lengths]}
+            # model_name : {device_name : [sequence_lengths]}
+            "gpt-oss-120b": {"TG": [128, 256, 512, 1024, 2048]},
         }
 
         model_name = self.model_name
