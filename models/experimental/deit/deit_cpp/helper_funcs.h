@@ -11,7 +11,45 @@
 #include <functional>
 #include <torch/torch.h>
 
+#include <chrono>
+#include <unordered_map>
+#include <string>
+#include <cassert>
+
 namespace helper_funcs {
+
+class Profiler {
+public:
+    Profiler() = default;
+    ~Profiler() = default;
+
+    void start(const std::string& name) { timings[name] = std::chrono::high_resolution_clock::now(); }
+
+    void stop(const std::string& name) {
+        assert(timings.find(name) != timings.end());
+        auto& start_time = timings[name];
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration<double>(end_time - start_time).count();
+        if (results.find(name) != results.end()) {
+            results[name] += duration;
+        } else {
+            results[name] = duration;
+        }
+    }
+
+    double get(const std::string& name) const {
+        auto it = results.find(name);
+        if (it != results.end()) {
+            return it->second;
+        }
+        return 0;
+    }
+
+private:
+    std::unordered_map<std::string, std::chrono::high_resolution_clock::time_point> timings;
+    std::unordered_map<std::string, double> results;
+};
+
 
 /**
  * Linear transformation function

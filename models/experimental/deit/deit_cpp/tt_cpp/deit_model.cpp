@@ -67,10 +67,8 @@ TtDeiTModel::TtDeiTModel(
             );
         }
 
-        std::cout << "TtDeiTModel initialized successfully" << std::endl;
 
     } catch (const std::exception& e) {
-        std::cerr << "Error initializing TtDeiTModel: " << e.what() << std::endl;
         throw;
     }
 }
@@ -160,7 +158,6 @@ TtDeiTModel::forward(
         );
 
     } catch (const std::exception& e) {
-        std::cerr << "Error in TtDeiTModel forward pass: " << e.what() << std::endl;
         throw;
     }
 }
