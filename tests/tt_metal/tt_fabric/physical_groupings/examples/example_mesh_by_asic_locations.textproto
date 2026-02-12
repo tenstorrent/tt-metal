@@ -1,52 +1,37 @@
 # Example: Mesh Defined by ASIC Locations
 # This example shows meshes defined directly at the ASIC location level
 
-
+# Custom meshes defined directly at ASIC location level
 groupings {
-  name: "trays"
-  items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 },
-    { asic_location: ASIC_LOCATION_5 },
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
+  custom_name: "meshes"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 }  # Each mesh uses 1 ASIC location (smaller mesh example)
   ]
 }
 
 groupings {
-  name: "hosts"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 4 } }
+  custom_name: "pods"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },
+    { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "meshes"
-  items: [
-    { asic_location: ASIC_LOCATION_1 }  # Each mesh uses 1 ASIC location (smaller mesh example)
+  custom_name: "superpods"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "pods" } },  # Each superpod contains 2 pods
+    { id: 1 grouping_ref { custom_name: "pods" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }
+  custom_name: "clusters"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "superpods" } },  # Each cluster contains 2 superpods
+    { id: 1 grouping_ref { custom_name: "superpods" } }
   ]
-}
-
-groupings {
-  name: "superpods"
-  items: [
-    { grouping_ref { grouping_name: "pods" count: 2 } }  # Each superpod contains 2 pods
-  ]
-}
-
-groupings {
-  name: "clusters"
-  items: [
-    { grouping_ref { grouping_name: "superpods" count: 2 } }  # Each cluster contains 2 superpods
-  ]
+  all_to_all { num_connections: 2 }
 }
