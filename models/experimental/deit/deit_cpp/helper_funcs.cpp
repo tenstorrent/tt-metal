@@ -7,6 +7,8 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "tt_metal/api/tt-metalium/bfloat8.hpp"
+#include "tt_metal/api/tt-metalium/bfloat4.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <torch/torch.h>
 #include <vector>
@@ -95,7 +97,7 @@ tt::tt_metal::HostBuffer create_row_major_host_buffer(
     }
 
     // No modifications needed; direclty return buffer
-    if (tt::tt_metal::tensor_impl::logical_matches_physical(tensor_spec)) {
+    if (tt::tt_metal::logical_matches_physical(tensor_spec)) {
         return host_buffer;
     }
 

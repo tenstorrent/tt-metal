@@ -44,13 +44,6 @@ TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
     // Set the weights and bias for the Conv2d module
     projection_->weight.data() = weight_torch;
     projection_->bias.data() = bias_torch;
-
-    std::cout << "TtDeiTPatchEmbeddings initialized with:" << std::endl;
-    std::cout << "  Image size: (" << image_size_.first << ", " << image_size_.second << ")" << std::endl;
-    std::cout << "  Patch size: (" << patch_size_.first << ", " << patch_size_.second << ")" << std::endl;
-    std::cout << "  Num patches: " << num_patches_ << std::endl;
-    std::cout << "  Num channels: " << num_channels_ << std::endl;
-    std::cout << "  Hidden size: " << hidden_size_ << std::endl;
 }
 
 torch::Tensor TtDeiTPatchEmbeddings::forward(const torch::Tensor& pixel_values) {

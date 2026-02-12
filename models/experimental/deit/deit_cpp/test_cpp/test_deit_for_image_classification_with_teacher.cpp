@@ -23,6 +23,7 @@
 #include "../tt_cpp/deit_for_image_classification_with_teacher.h"
 #include "../helper_funcs.h"
 #include "../image_utils.h"
+#include <iomanip>
 
 namespace {
 
@@ -198,6 +199,30 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     } else {
         std::cout << "FAILED: One or more PCC values are below threshold (" << pcc_threshold << ")" << std::endl;
     }
+
+    // Profiling
+    helper_funcs::Profiler profiler;
+    int batch_size = 1;
+    for (int i = 0; i < 10; i++) {
+        profiler.start("inference_time");
+        auto [tt_averaged_logits_prof, tt_cls_logits_prof, tt_distillation_logits_prof, attention_weights_prof, hidden_states_prof] = tt_model.forward(
+            tt_input,
+            head_mask.has_value() ? &head_mask.value() : nullptr,
+            output_attentions,
+            output_hidden_states,
+            return_dict
+        );
+        profiler.stop("inference_time");
+        auto tt_averaged_logits_host_prof = ttnn::from_device(tt_averaged_logits_prof);
+    }
+
+    auto inference_time = profiler.get("inference_time");
+    double inference_time_avg = inference_time / 10.0;
+    double fps = batch_size / inference_time_avg;
+    std::cout << std::fixed << std::setprecision(6);
+    std::cout << "DeiT_For_Image_Classification_With_Teacher_batch_size_" << batch_size 
+              << ". One inference iteration time (sec): " << inference_time_avg 
+              << ", FPS: " << std::setprecision(2) << fps << std::endl;
 
     // Clean up device resources
     device->close();

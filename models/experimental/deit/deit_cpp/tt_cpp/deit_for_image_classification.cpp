@@ -71,10 +71,7 @@ TtDeiTForImageClassification::TtDeiTForImageClassification(
             throw std::runtime_error("Classifier bias not found in state_dict: " + classifier_bias_key);
         }
 
-        std::cout << "TtDeiTForImageClassification initialized with " << num_labels_ << " classes" << std::endl;
-
     } catch (const std::exception& e) {
-        std::cerr << "Error initializing TtDeiTForImageClassification: " << e.what() << std::endl;
         throw;
     }
 }
@@ -126,7 +123,6 @@ TtDeiTForImageClassification::forward(
         return std::make_tuple(logits, hidden_states_output, attentions_output);
 
     } catch (const std::exception& e) {
-        std::cerr << "Error in TtDeiTForImageClassification forward pass: " << e.what() << std::endl;
         throw;
     }
 }
@@ -156,7 +152,6 @@ ttnn::Tensor TtDeiTForImageClassification::apply_classifier(const ttnn::Tensor& 
         return logits;
 
     } catch (const std::exception& e) {
-        std::cerr << "Error applying classifier: " << e.what() << std::endl;
         throw;
     }
 }

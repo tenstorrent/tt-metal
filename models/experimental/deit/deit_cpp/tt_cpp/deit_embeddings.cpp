@@ -50,11 +50,6 @@ TtDeiTEmbeddings::TtDeiTEmbeddings(
         // Create a dummy mask token (won't be used)
         mask_token_ = cls_token_.clone();
     }
-
-    std::cout << "TtDeiTEmbeddings initialized with:" << std::endl;
-    std::cout << "  Hidden size: " << hidden_size_ << std::endl;
-    std::cout << "  Use mask token: " << (use_mask_token_ ? "true" : "false") << std::endl;
-    std::cout << "  Num patches: " << get_num_patches() << std::endl;
 }
 
 torch::Tensor TtDeiTEmbeddings::forward(
