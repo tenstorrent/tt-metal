@@ -6,6 +6,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "moe_ring_common.h"
 
+namespace detail {
+inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
+}  // namespace detail
+
 void kernel_main() {
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
@@ -22,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
     constexpr uint32_t tilize_drain_core_noc_x = get_named_compile_time_arg_val("tilize_drain_core_noc_x");
     constexpr uint32_t tilize_drain_core_noc_y = get_named_compile_time_arg_val("tilize_drain_core_noc_y");
-    
+
     // Compile time arguments for writing to sharded output for combine
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("tile_width");
@@ -60,7 +64,7 @@ void kernel_main() {
     constexpr auto cb_w2c_md = tt::CBIndex::c_5;
 
     // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_0;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_14;
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
 
     // Tile sizes
@@ -73,34 +77,34 @@ void kernel_main() {
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
     constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
 
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
 
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
-    
+
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
         num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     constexpr uint32_t source_width_tiles = 20;  // token segments/core are all padded up to 20
-    const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
-
-    const uint32_t width_tile_base = detail::accumulate(moe_ring::W2_TILES_PER_CORE_A, ring_core_id);
+    const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
+    // offset in tiles into the token width for this core
+    const uint32_t width_tile_base = moe_ring::COMBINE_W_OFFSET_PER_CORE_B[ring_core_id];
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
     // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_A;
+    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_B;
 
     // The number of steps to take in the all2all is the number of cores
     constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
 
     // The number of tiles to send in each step
     // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
-    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_A;  // max(num_w0_w1_tiles_w)
+    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_B;  // max(num_w0_w1_tiles_w)
 
     //-------------------------------------------------------------------------
     // Ring NoC setup
@@ -127,9 +131,6 @@ void kernel_main() {
         LOCAL_BUFFER_OFFSET[i] = local_base_addr + i * a2a_xfer_bytes_per_step;
     }
     uint32_t semaphore_value = 0;
-
-    // Set state for the data writes
-    noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
     //-------------------------------------------------------------------------
     // Init synchronization with tilize cores
@@ -174,16 +175,20 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
-        
+
         const uint32_t active_tokens = per_expert_counts_ptr[expert_id];
         const uint32_t height_blocks = detail::div_up(active_tokens, tile_height);
         const uint32_t max_tokens_per_height_shard = detail::div_up(active_tokens, height_shard_dim);
         const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
-        
+
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Wait for compute core to tell us that all mm01 data is ready
             cb_wait_front(cb_c2w_rdy, 1);
             cb_pop_front(cb_c2w_rdy, 1);
+
+            // Set state for the data writes
+            noc_async_write_one_packet_set_state</*posted=*/true>(
+                neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
             // Signal to tilize cores that they can send another chunk of tiles
             noc_semaphore_inc</*posted=*/true>(
@@ -227,10 +232,10 @@ void kernel_main() {
                     noc_async_posted_writes_flushed();
                 }
             }
-            
+
             const uint32_t dest_height_shard_start = (hb * tile_height) / max_tokens_per_height_shard;
             const uint32_t shard_row_start = (hb * tile_height) % max_tokens_per_height_shard;
-            
+
             uint32_t width_tiles_to_send = output_width_tiles_core;  // 18 or 19
             uint32_t width_tiles_sent = 0;
 

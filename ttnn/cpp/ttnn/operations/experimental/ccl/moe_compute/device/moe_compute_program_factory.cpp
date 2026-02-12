@@ -48,6 +48,7 @@ std::tuple<
     CoreRangeSet,            // T CoreRangeSet
     CoreRangeSet,            // MM CoreRangeSet
     CoreRangeSet,            // T + MM CoreRangeSet
+    std::vector<CoreCoord>,  // Combine vector of CoreCoord
     CoreRange,               // T bounding box
     CoreRange>               // MM bounding box
 get_cores(ttnn::MeshDevice* mesh_device) {
@@ -78,6 +79,16 @@ get_cores(ttnn::MeshDevice* mesh_device) {
     const CoreRange combine_core_range({5, 0}, {6, 7});
     const CoreRangeSet combine_core_range_set = CoreRangeSet(combine_core_range);
     const CoreRange combine_bounding_box = combine_core_range_set.bounding_box();
+
+    // consistent order matters for the list of combine cores so produce them as a sorted vector
+    auto combine_cores = corerange_to_cores(combine_core_range_set);
+    std::sort(combine_cores.begin(), combine_cores.end(), [](const auto& ca, const auto& cb) {
+        if (ca.x != cb.x) {
+            return ca.x < cb.x;
+        }
+        return ca.y < cb.y;
+    });
+
     TT_FATAL(!combine_bounding_box.intersects(tilize_bounding_box), "combine and tilize bounding boxes cannot overlap");
     TT_FATAL(!combine_bounding_box.intersects(matmul_bounding_box), "combine and matmul bounding boxes cannot overlap");
 
@@ -87,6 +98,7 @@ get_cores(ttnn::MeshDevice* mesh_device) {
         tilize_core_range_set,
         matmul_core_range_set,
         tilize_matmul_core_range_set,
+        combine_cores,
         tilize_bounding_box,
         matmul_bounding_box};
 }
@@ -108,13 +120,12 @@ std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& c
 namespace ttnn::experimental::prim {
 
 // expose a helper function so callers know what cores are available for subsequently running a2a combine
-ttnn::CoreRangeSet get_occupied_cores(ttnn::MeshDevice* mesh_device){
+std::vector<ttnn::CoreCoord> get_combine_cores(ttnn::MeshDevice* mesh_device) {
+    constexpr auto comine_cores_return_index = 5;
+
     const auto get_cores_return = get_cores(mesh_device);
-    
-    const auto & tilize_core_range_set=std::get<2>(get_cores_return);
-    const auto & matmul_core_range_set=std::get<3>(get_cores_return);
-    
-    return tilize_core_range_set.merge(matmul_core_range_set);
+
+    return std::get<comine_cores_return_index>(get_cores_return);
 }
 
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
@@ -235,6 +246,7 @@ MoEComputeMeshWorkloadFactory::create_at(
          tilize_core_range_set,
          matmul_core_range_set,
          tilize_matmul_core_range_set,
+         combine_cores,
          tilize_bounding_box,
          matmul_bounding_box] = get_cores(mesh_device);
 
@@ -333,8 +345,8 @@ MoEComputeMeshWorkloadFactory::create_at(
     uint32_t matmul_writer_cb_id = tt::CBIndex::c_14; // TODO, cleaner to make this c_1 and change all the others
 
     // All cores (not just Tilize and Matmul)
+    const CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
     const uint32_t shared_cb_num_pages = output_pages / shard_cores.num_cores();
-    CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
     auto output_cb = tt::tt_metal::create_cb(
         tilize_output_cb_id,
         program,
@@ -344,7 +356,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype()),
         tilize_output_tensor.buffer());
     tt::tt_metal::CBHandle sharded_output_cb_handle = std::get<1>(output_cb);
-    
+
     // MoE output for combine uses the same buffer as input but create a new CB to manage control flow
     auto matmul_writer_cb = tt::tt_metal::create_cb(
         matmul_writer_cb_id,
@@ -355,7 +367,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype()),
         tilize_output_tensor.buffer());
     tt::tt_metal::CBHandle matmul_writer_cb_handle = std::get<1>(matmul_writer_cb);
-    
+
     //-------------------------------------------------------------------------
     // Tilize CBs
     //-------------------------------------------------------------------------
@@ -898,7 +910,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     for (const auto& tensor : matmul_tensors) {
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(matmul_compile_time_args);
     }
-    
+
     const uint32_t tile_width = tilize_input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tilize_input_tensor.tensor_spec().tile().get_height();
     //const uint32_t num_tokens_total = operation_attributes.num_tokens_total;
@@ -937,10 +949,9 @@ MoEComputeMeshWorkloadFactory::create_at(
             .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
-    
-    const auto& output_shard_cores = args.output_shard_cores;
+
     std::map<std::string, std::string> dm1_defines = {
-        {"OUTPUT_SHARD_CORE_MAP", serialize_physical_core_coords(output_shard_cores, *mesh_device)}};
+        {"OUTPUT_SHARD_CORE_MAP", serialize_physical_core_coords(combine_cores, *mesh_device)}};
 
     auto matmul_dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
@@ -1074,7 +1085,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
         // Update sharded circular buffer address
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
             program, shared_variables.sharded_output_cb_handle, *tilize_output_tensor.buffer());
-            
+
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
             program, shared_variables.matmul_writer_cb_handle, *tilize_output_tensor.buffer());
 

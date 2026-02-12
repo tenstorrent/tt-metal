@@ -72,8 +72,8 @@ void kernel_main() {
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
     constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
 
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;

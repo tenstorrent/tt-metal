@@ -65,8 +65,8 @@ void kernel_main() {
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
     constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
 
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -157,16 +157,15 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            
             // Zero out dest registers
             MATH(ckernel::zeroacc());
-            
+
              // Initialize matmul for W0
              mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
-         
+
              // Initialize SFPU for SILU and eltwise multiply
              PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
-            
+
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
             //---------------------------------------------------------------------
@@ -237,7 +236,7 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in2 @ W2 (in pairs of 4)
             //---------------------------------------------------------------------
-            
+
             pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
@@ -293,7 +292,7 @@ void kernel_main() {
 
             // Toggle the buffer to use
             use_second_half_buffer = !use_second_half_buffer;
-            
+
             pack_untilize_uninit(cb_c2s_out);
         }  // end for (chunk)
     }  // end for (expert_id)

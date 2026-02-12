@@ -24,7 +24,6 @@ struct ExecuteMoECompute {
         uint32_t layer_id,
         uint32_t output_height_shard_dim,
         uint32_t output_width_shard_dim,
-        const std::vector<ttnn::CoreCoord>& output_shard_cores,
         const std::optional<uint32_t>& cluster_axis);
 };
 

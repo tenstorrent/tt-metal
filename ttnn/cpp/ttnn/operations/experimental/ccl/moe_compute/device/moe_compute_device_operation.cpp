@@ -169,7 +169,6 @@ std::vector<ttnn::Tensor> moe_compute(
     const uint32_t layer_id,
     const uint32_t output_height_shard_dim,
     const uint32_t output_width_shard_dim,
-    const std::vector<ttnn::CoreCoord>& output_shard_cores,
     const std::optional<uint32_t>& cluster_axis) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
@@ -178,7 +177,6 @@ std::vector<ttnn::Tensor> moe_compute(
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
             .output_width_shard_dim = output_width_shard_dim,
-            .output_shard_cores = output_shard_cores,
             .cluster_axis = cluster_axis},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,

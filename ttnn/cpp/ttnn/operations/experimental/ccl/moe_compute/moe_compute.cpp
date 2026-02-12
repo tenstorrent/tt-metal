@@ -20,7 +20,6 @@ std::vector<ttnn::Tensor> ExecuteMoECompute::invoke(
     const uint32_t layer_id,
     const uint32_t output_height_shard_dim,
     const uint32_t output_width_shard_dim,
-    const std::vector<ttnn::CoreCoord>& output_shard_cores,
     const std::optional<uint32_t>& cluster_axis) {
     return ttnn::prim::moe_compute(
         tilize_input_tensor,
@@ -32,7 +31,6 @@ std::vector<ttnn::Tensor> ExecuteMoECompute::invoke(
         layer_id,
         output_height_shard_dim,
         output_width_shard_dim,
-        output_shard_cores,
         cluster_axis);
 }
 

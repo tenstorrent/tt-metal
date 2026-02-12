@@ -35,7 +35,6 @@ void bind_moe_compute(nb::module_& mod, const ccl_operation_t& operation, const 
                const uint32_t layer_id,
                const uint32_t output_height_shard_dim,
                const uint32_t output_width_shard_dim,
-               const std::vector<ttnn::CoreCoord>& output_shard_cores,
                const std::optional<uint32_t> cluster_axis) {
                 return self(
                     tilize_input_tensor,
@@ -47,7 +46,6 @@ void bind_moe_compute(nb::module_& mod, const ccl_operation_t& operation, const 
                     layer_id,
                     output_height_shard_dim,
                     output_width_shard_dim,
-                    output_shard_cores,
                     cluster_axis);
             },
             nb::arg("tilize_input_tensor").noconvert(),
@@ -59,7 +57,6 @@ void bind_moe_compute(nb::module_& mod, const ccl_operation_t& operation, const 
             nb::arg("layer_id"),
             nb::arg("output_height_shard_dim"),
             nb::arg("output_width_shard_dim"),
-            nb::arg("output_shard_cores"),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none()});
 }

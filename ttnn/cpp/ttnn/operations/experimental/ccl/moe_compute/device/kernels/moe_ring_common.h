@@ -97,33 +97,33 @@ constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP_B[NUM_CORES][NUM_CORES] = {
 };
 
 constexpr uint32_t W2_TILES_PER_CORE_A[NUM_CORES] = {
-    20,
-    20,
     18,
     18,
+    19,
+    19,
+    19,
+    19,
+    19,
+    19,
     18,
     18,
-    18,
-    18,
-    20,
-    20,
-    18,
-    18,
+    19,
+    19,
 };
 
 constexpr uint32_t W2_TILES_PER_CORE_B[NUM_CORES] = {
-    20,
     18,
+    19,
+    19,
     18,
-    20,
+    19,
+    19,
     18,
+    19,
+    19,
     18,
-    20,
-    18,
-    18,
-    20,
-    18,
-    18,
+    19,
+    19,
 };
 
 constexpr uint32_t IN2_TILES_PER_STEP_A = *std::max_element(
@@ -147,5 +147,15 @@ constexpr uint32_t NUM_A2A_ITERS_B = *std::max_element(
                                          W2_TILES_PER_CORE_B + NUM_CORES,
                                          [](uint32_t a, uint32_t b) { return (a / 2) < (b / 2); }) /
                                      4;
+
+constexpr std::array<uint32_t, NUM_CORES> COMBINE_W_OFFSET_PER_CORE_B = []() constexpr {
+    std::array<uint32_t, NUM_CORES> arr = {};
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < NUM_CORES; ++i) {
+        arr[i] = sum;
+        sum += W2_TILES_PER_CORE_B[i];
+    }
+    return arr;
+}();
 
 }  // namespace moe_ring
