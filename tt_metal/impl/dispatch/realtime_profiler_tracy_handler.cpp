@@ -8,6 +8,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #if defined(TRACY_ENABLE)
+#include <common/TracyColor.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #endif
 
@@ -118,6 +119,43 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
 
     TracyTTPushStartMarker(ctx, start);
     TracyTTPushEndMarker(ctx, end);
+#endif
+}
+
+void RealtimeProfilerTracyHandler::PushSyncCheckMarker(uint32_t chip_id, uint64_t device_timestamp, double frequency) {
+#if defined(TRACY_ENABLE)
+    TracyTTCtx ctx = GetContext(chip_id);
+    if (!ctx) {
+        return;
+    }
+
+    // Create a short device-side zone at the given device timestamp.
+    // Uses the same core as the realtime profiler zones but with an orange color to distinguish.
+    constexpr uint32_t kRealtimeProfilerCore_X = 100;
+    constexpr uint32_t kRealtimeProfilerCore_Y = 100;
+
+    tracy::TTDeviceMarker start_marker;
+    start_marker.chip_id = chip_id;
+    start_marker.core_x = kRealtimeProfilerCore_X;
+    start_marker.core_y = kRealtimeProfilerCore_Y;
+    start_marker.risc = tracy::RiscType::NONE;
+    start_marker.timestamp = device_timestamp;
+    start_marker.runtime_host_id = 0;
+    start_marker.marker_name = "SYNC_CHECK";
+    start_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
+    start_marker.file = "sync_check";
+    start_marker.line = 0;
+    start_marker.color = tracy::Color::Orange;
+
+    // End marker: 1µs after start (just enough to be visible in Tracy)
+    uint64_t end_timestamp = device_timestamp + static_cast<uint64_t>(frequency * 1000.0);
+
+    tracy::TTDeviceMarker end_marker = start_marker;
+    end_marker.timestamp = end_timestamp;
+    end_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
+
+    TracyTTPushStartMarker(ctx, start_marker);
+    TracyTTPushEndMarker(ctx, end_marker);
 #endif
 }
 

@@ -1635,6 +1635,60 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             dev_state.sync_frequency);
     }
 
+    // Emit sync verification markers: take one independent device measurement per device
+    // and push paired host + device events. In Tracy, the horizontal distance between the
+    // host "SYNC_CHECK" zone and the device "SYNC_CHECK" zone is the sync error.
+    for (auto& dev_state : realtime_profiler_devices_) {
+        // Re-enter sync mode
+        std::vector<uint32_t> sync_req = {1};
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.sync_request_addr,
+            sync_req,
+            CoreType::WORKER);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        // Send a host timestamp to trigger device response
+        uint32_t host_time_id = 0x5C5C5C5C;  // recognizable pattern
+        std::vector<uint32_t> host_time_data = {host_time_id};
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.sync_host_ts_addr,
+            host_time_data,
+            CoreType::WORKER);
+
+        // Wait for device response
+        dev_state.socket->wait_for_pages(1);
+        uint32_t* data = dev_state.socket->get_read_ptr();
+        uint64_t device_time = (static_cast<uint64_t>(data[0]) << 32) | data[1];
+        dev_state.socket->pop_pages(1);
+        dev_state.socket->notify_sender();
+
+        // Exit sync mode
+        sync_req[0] = 0;
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.sync_request_addr,
+            sync_req,
+            CoreType::WORKER);
+
+        // Push host-side mark right now
+        TracyMessageL("SYNC_CHECK");
+
+        // Push device-side mark at the device timestamp we just measured
+        realtime_profiler_tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+
+        log_info(
+            tt::LogMetal,
+            "[Real-time profiler] Device {} sync check: device_time={} cycles",
+            dev_state.chip_id,
+            device_time);
+    }
+
     // Start background receiver thread that polls all device sockets round-robin
     realtime_profiler_stop_.store(false);
     realtime_profiler_thread_ = std::thread([this]() {
