@@ -4,7 +4,6 @@
 
 #include "dram_prefetcher.hpp"
 #include <optional>
-#include <tt-metalium/global_circular_buffer.hpp>
 #include "device/dram_prefetcher_device_operation.hpp"
 
 namespace ttnn::operations::dram_prefetcher {

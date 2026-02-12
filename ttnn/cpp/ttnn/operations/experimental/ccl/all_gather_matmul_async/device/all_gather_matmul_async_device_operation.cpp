@@ -15,8 +15,6 @@
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
-#include <tt-metalium/core_coord.hpp>
-
 namespace ttnn::experimental::prim {
 
 AllGatherMatmulAsyncDeviceOperation::program_factory_t AllGatherMatmulAsyncDeviceOperation::select_program_factory(

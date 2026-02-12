@@ -5,7 +5,6 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 
 #include "device/move_device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"

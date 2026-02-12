@@ -12,7 +12,6 @@
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric::fabric_tests {

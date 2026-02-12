@@ -8,8 +8,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
-
 // Forward declarations to break circular dependency
 namespace tt::tt_fabric {
 template <typename NodeId>

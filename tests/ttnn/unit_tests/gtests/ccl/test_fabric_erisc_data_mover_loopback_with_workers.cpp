@@ -17,14 +17,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -39,7 +35,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operation.hpp"

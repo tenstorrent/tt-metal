@@ -15,7 +15,6 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"

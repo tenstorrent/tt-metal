@@ -12,8 +12,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-logger/tt-logger.hpp>
-
 using namespace tt;
 using namespace tt::tt_metal;
 

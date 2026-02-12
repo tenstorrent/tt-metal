@@ -5,7 +5,6 @@
 #include "device/plusone_device_operation.hpp"
 #include "ttnn/operations/experimental/plusone/plusone.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::experimental {
