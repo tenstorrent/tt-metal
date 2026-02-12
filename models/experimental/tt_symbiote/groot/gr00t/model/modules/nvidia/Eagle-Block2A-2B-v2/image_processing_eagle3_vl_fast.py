@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 # --------------------------------------------------------
 # NVIDIA
 # Copyright (c) 2025 NVIDIA
@@ -52,9 +55,7 @@ else:
     from torchvision.transforms import functional as F
 
 
-def crop(
-    img: torch.Tensor, left: int, top: int, right: int, bottom: int
-) -> torch.Tensor:
+def crop(img: torch.Tensor, left: int, top: int, right: int, bottom: int) -> torch.Tensor:
     """Crop the given numpy array.
 
     Args:
@@ -128,9 +129,7 @@ class Eagle3_VLImageProcessorFast(BaseImageProcessorFast):
                     number of patches in the batch. Padding will be applied to the bottom and right with zeros.
         """,
     )
-    def preprocess(
-        self, images: ImageInput, **kwargs: Unpack[Eagle3_VLFastImageProcessorKwargs]
-    ) -> BatchFeature:
+    def preprocess(self, images: ImageInput, **kwargs: Unpack[Eagle3_VLFastImageProcessorKwargs]) -> BatchFeature:
         return super().preprocess(images, **kwargs)
 
     def _prepare_images_structure(
@@ -165,10 +164,7 @@ class Eagle3_VLImageProcessorFast(BaseImageProcessorFast):
         do_pad: bool,
         return_tensors: Optional[Union[str, TensorType]],
     ) -> BatchFeature:
-        image_sizes = [
-            get_image_size(image, channel_dim=ChannelDimension.FIRST)
-            for image in images
-        ]
+        image_sizes = [get_image_size(image, channel_dim=ChannelDimension.FIRST) for image in images]
 
         # Group images by size for further processing
         # Needed in case do_resize is False, or resize returns images with different sizes
@@ -186,9 +182,7 @@ class Eagle3_VLImageProcessorFast(BaseImageProcessorFast):
             )
             processed_images_grouped[shape] = stacked_images
 
-        processed_images = reorder_images(
-            processed_images_grouped, grouped_images_index
-        )
+        processed_images = reorder_images(processed_images_grouped, grouped_images_index)
         processed_images = torch.stack(processed_images)
 
         return BatchFeature(
@@ -241,9 +235,7 @@ class Eagle3_VLImageProcessorFast(BaseImageProcessorFast):
         # torch resize uses interpolation instead of resample
         resample = kwargs.pop("resample")
         kwargs["interpolation"] = (
-            pil_torch_interpolation_mapping[resample]
-            if isinstance(resample, (PILImageResampling, int))
-            else resample
+            pil_torch_interpolation_mapping[resample] if isinstance(resample, (PILImageResampling, int)) else resample
         )
 
         # Pop kwargs that are not needed in _preprocess

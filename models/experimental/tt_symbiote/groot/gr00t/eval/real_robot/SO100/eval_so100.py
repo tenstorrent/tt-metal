@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """
 SO100 Real-Robot Gr00T Policy Evaluation Script
 
@@ -137,10 +140,7 @@ class So100Adapter:
 
         full = np.concatenate([single_arm, gripper], axis=0)  # (6,)
 
-        return {
-            joint_name: float(full[i])
-            for i, joint_name in enumerate(self.robot_state_keys)
-        }
+        return {joint_name: float(full[i]) for i, joint_name in enumerate(self.robot_state_keys)}
 
     def get_action(self, obs: Dict) -> List[Dict[str, float]]:
         """

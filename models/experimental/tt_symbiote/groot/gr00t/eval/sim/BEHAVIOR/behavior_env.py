@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from collections import OrderedDict
 import csv
 import json
@@ -151,13 +154,9 @@ TASK_NAMES_TO_INDICES = {
     "canning_food": 48,
     "make_pizza": 49,
 }
-TASK_NAMES_TO_INSTRUCTIONS = {
-    k: k.replace("_", " ") for k in TASK_NAMES_TO_INDICES.keys()
-}
+TASK_NAMES_TO_INSTRUCTIONS = {k: k.replace("_", " ") for k in TASK_NAMES_TO_INDICES.keys()}
 # Capitalize the first letter of each word and add a period at the end
-TASK_NAMES_TO_INSTRUCTIONS = {
-    k: v.capitalize() + "." for k, v in TASK_NAMES_TO_INSTRUCTIONS.items()
-}
+TASK_NAMES_TO_INSTRUCTIONS = {k: v.capitalize() + "." for k, v in TASK_NAMES_TO_INSTRUCTIONS.items()}
 
 
 def recursively_convert_to_torch(state):
@@ -183,17 +182,10 @@ def load_task_instance_for_env(env, robot, instance_id: int) -> None:
         activity_definition_id=env.task.activity_definition_id,
         activity_instance_id=instance_id,
     )
-    tro_file = (
-        Path(__file__).parent
-        / "test_instances"
-        / f"{env.task.activity_name}"
-        / f"{tro_filename}-tro_state.json"
-    )
+    tro_file = Path(__file__).parent / "test_instances" / f"{env.task.activity_name}" / f"{tro_filename}-tro_state.json"
     tro_file_path = str(tro_file)
 
-    assert (
-        tro_file.exists()
-    ), f"Could not find TRO file at {tro_file_path}, did you run ./populate_behavior_tasks.sh?"
+    assert tro_file.exists(), f"Could not find TRO file at {tro_file_path}, did you run ./populate_behavior_tasks.sh?"
     with open(tro_file_path, "r") as f:
         tro_state = recursively_convert_to_torch(json.load(f))
     for tro_key, tro_state in tro_state.items():
@@ -246,9 +238,7 @@ def preprocess_obs(env, obs: dict) -> dict:
     obs["video.observation.images.rgb.right_wrist_256_256"] = (
         obs["robot_r1:right_realsense_link:Camera:0::rgb"].cpu().numpy()[..., :3]
     )
-    obs["video.observation.images.rgb.head_256_256"] = (
-        obs["robot_r1:zed_link:Camera:0::rgb"].cpu().numpy()[..., :3]
-    )
+    obs["video.observation.images.rgb.head_256_256"] = obs["robot_r1:zed_link:Camera:0::rgb"].cpu().numpy()[..., :3]
     obs.pop("robot_r1:left_realsense_link:Camera:0::rgb")
     obs.pop("robot_r1:right_realsense_link:Camera:0::rgb")
     obs.pop("robot_r1:zed_link:Camera:0::rgb")
@@ -269,18 +259,14 @@ def preprocess_action(action: dict):
     for action_name, action_indices in ACTION_MAP.items():
         action_name = f"action.{action_name}"
         th_action[action_indices] = (
-            th.from_numpy(action[action_name])
-            if isinstance(action[action_name], np.ndarray)
-            else action[action_name]
+            th.from_numpy(action[action_name]) if isinstance(action[action_name], np.ndarray) else action[action_name]
         )
 
     return {"robot_r1": th_action}
 
 
 def postprocess_info(info: dict):
-    info["success"] = (
-        False if info["done"]["success"] is None else info["done"]["success"]
-    )
+    info["success"] = False if info["done"]["success"] is None else info["done"]["success"]
     return info
 
 
@@ -299,9 +285,7 @@ class RGBLowResWrapper(EnvironmentWrapper):
         for camera_id, camera_name in ROBOT_CAMERA_NAMES["R1Pro"].items():
             sensor_name = camera_name.split("::")[1]
             if camera_id == "head":
-                robot.sensors[
-                    sensor_name
-                ].horizontal_aperture = 40.0  # this is what we used in data collection
+                robot.sensors[sensor_name].horizontal_aperture = 40.0  # this is what we used in data collection
             robot.sensors[sensor_name].image_height = 256
             robot.sensors[sensor_name].image_width = 256
         # reload observation space
@@ -323,12 +307,7 @@ class BEHAVIORGr00tEnv(gym.Wrapper):
             "left_eef_displacement": [],
             "right_eef_displacement": [],
         }
-        human_stats_path = (
-            Path(gm.DATA_PATH)
-            / "2025-challenge-task-instances"
-            / "metadata"
-            / "episodes.jsonl"
-        )
+        human_stats_path = Path(gm.DATA_PATH) / "2025-challenge-task-instances" / "metadata" / "episodes.jsonl"
         with open(human_stats_path, "r") as f:
             episodes = [json.loads(line) for line in f]
         for episode in episodes:
@@ -347,18 +326,14 @@ class BEHAVIORGr00tEnv(gym.Wrapper):
         flat_obs_dict.pop("robot_r1:left_realsense_link:Camera:0::rgb")
         flat_obs_dict.pop("robot_r1:right_realsense_link:Camera:0::rgb")
         flat_obs_dict.pop("robot_r1:zed_link:Camera:0::rgb")
-        flat_obs_dict[
-            "video.observation.images.rgb.left_wrist_256_256"
-        ] = gym.spaces.Box(0, 255, (256, 256, 3), np.uint8)
-        flat_obs_dict[
-            "video.observation.images.rgb.right_wrist_256_256"
-        ] = gym.spaces.Box(0, 255, (256, 256, 3), np.uint8)
-        flat_obs_dict["video.observation.images.rgb.head_256_256"] = gym.spaces.Box(
+        flat_obs_dict["video.observation.images.rgb.left_wrist_256_256"] = gym.spaces.Box(
             0, 255, (256, 256, 3), np.uint8
         )
-        flat_obs_dict["annotation.human.coarse_action"] = gym.spaces.Text(
-            max_length=512
+        flat_obs_dict["video.observation.images.rgb.right_wrist_256_256"] = gym.spaces.Box(
+            0, 255, (256, 256, 3), np.uint8
         )
+        flat_obs_dict["video.observation.images.rgb.head_256_256"] = gym.spaces.Box(0, 255, (256, 256, 3), np.uint8)
+        flat_obs_dict["annotation.human.coarse_action"] = gym.spaces.Text(max_length=512)
         # replace `proprio` with fine-grained state obs
         proprio_space = flat_obs_dict.pop("proprio")
         fine_grained_proprio_space = OrderedDict()
@@ -391,19 +366,14 @@ class BEHAVIORGr00tEnv(gym.Wrapper):
         assert env_idx < total_n_envs, "env_idx must be less than total_n_envs"
         n_instances_per_env = len(instances_to_run) // total_n_envs
         self._instance_indices_this_env = (
-            instances_to_run[
-                env_idx * n_instances_per_env : (env_idx + 1) * n_instances_per_env
-            ]
+            instances_to_run[env_idx * n_instances_per_env : (env_idx + 1) * n_instances_per_env]
             if env_idx < (total_n_envs - 1)
             else instances_to_run[env_idx * n_instances_per_env :]
         )
         self._instance_idx_pointer = 0
         # load csv file
         task_instance_csv_path = (
-            Path(gm.DATA_PATH)
-            / "2025-challenge-task-instances"
-            / "metadata"
-            / "test_instances.csv"
+            Path(gm.DATA_PATH) / "2025-challenge-task-instances" / "metadata" / "test_instances.csv"
         )
         with open(task_instance_csv_path, "r") as f:
             lines = list(csv.reader(f))[1:]
@@ -421,12 +391,8 @@ class BEHAVIORGr00tEnv(gym.Wrapper):
             self.info["valid"] = False
             return self.obs, self.info
 
-        instance_id = self._all_test_instances[
-            self._instance_indices_this_env[self._instance_idx_pointer]
-        ]
-        self._instance_idx_pointer = (self._instance_idx_pointer + 1) % len(
-            self._instance_indices_this_env
-        )
+        instance_id = self._all_test_instances[self._instance_indices_this_env[self._instance_idx_pointer]]
+        self._instance_idx_pointer = (self._instance_idx_pointer + 1) % len(self._instance_indices_this_env)
         # the correct way to do: first reset then load task instance
         self.env.reset()
         load_task_instance_for_env(self.env, self.robot, instance_id)
@@ -450,9 +416,7 @@ class BEHAVIORGr00tEnv(gym.Wrapper):
 
         # avoid PhysX errors crashing the evaluator
         try:
-            obs, _, terminated, truncated, info = self.env.step(
-                action, n_render_iterations=1
-            )
+            obs, _, terminated, truncated, info = self.env.step(action, n_render_iterations=1)
         except Exception as e:
             self._physx_crashed = True
             terminated = True
@@ -467,12 +431,9 @@ class BEHAVIORGr00tEnv(gym.Wrapper):
                 metric.step_callback(self.env)
 
             if len(self._task_progress_dict) == 0:
-                self._task_progress_dict = {
-                    k: False for k in self.info["task_progress"]
-                }
+                self._task_progress_dict = {k: False for k in self.info["task_progress"]}
             self._task_progress_dict = {
-                k: old_progress or self.info["task_progress"][k]
-                for k, old_progress in self._task_progress_dict.items()
+                k: old_progress or self.info["task_progress"][k] for k, old_progress in self._task_progress_dict.items()
             }
 
         if terminated or truncated:
@@ -490,11 +451,7 @@ class BEHAVIORGr00tEnv(gym.Wrapper):
         if self._physx_crashed:
             task_progress = 0.0
         else:
-            task_progress = (
-                sum(self._task_progress_dict.values())
-                / len(self._task_progress_dict)
-                * 100
-            )
+            task_progress = sum(self._task_progress_dict.values()) / len(self._task_progress_dict) * 100
         self.info["task_progress"] = task_progress
 
         return self.obs, 0, terminated, truncated, self.info
@@ -509,14 +466,10 @@ class BEHAVIORGr00tEnv(gym.Wrapper):
             rule.ENABLED = False
         # Load config file
         available_tasks = load_available_tasks()
-        assert (
-            self.task_name in available_tasks
-        ), f"Got invalid OmniGibson task name: {self.task_name}"
+        assert self.task_name in available_tasks, f"Got invalid OmniGibson task name: {self.task_name}"
         # Load the seed instance by default
         task_cfg = available_tasks[self.task_name][0]
-        cfg = generate_basic_environment_config(
-            task_name=self.task_name, task_cfg=task_cfg
-        )
+        cfg = generate_basic_environment_config(task_name=self.task_name, task_cfg=task_cfg)
         cfg["robots"] = [
             generate_robot_config(
                 task_name=self.task_name,
@@ -529,9 +482,7 @@ class BEHAVIORGr00tEnv(gym.Wrapper):
         logger.info(
             f"Setting timeout to be 2x the average length of human demos: {int(self.human_stats['length'] * 2)}"
         )
-        cfg["task"]["termination_config"]["max_steps"] = int(
-            self.human_stats["length"] * 2
-        )
+        cfg["task"]["termination_config"]["max_steps"] = int(self.human_stats["length"] * 2)
         cfg["task"]["include_obs"] = False
         env = og.Environment(configs=cfg)
         env = RGBLowResWrapper(env)

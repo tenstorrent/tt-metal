@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 # Launch finetuning for N1.6 on "single node".
 # This script tries to provide a similar user experience as current OSS.
 
@@ -22,9 +25,7 @@ def load_modality_config(modality_config_path: str):
         importlib.import_module(path.stem)
         print(f"Loaded modality config: {path}")
     else:
-        raise FileNotFoundError(
-            f"Modality config path does not exist: {modality_config_path}"
-        )
+        raise FileNotFoundError(f"Modality config path does not exist: {modality_config_path}")
 
 
 if __name__ == "__main__":

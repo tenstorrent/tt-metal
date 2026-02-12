@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env python3
 """
 Benchmark script for GR00T inference timing.
@@ -128,11 +131,7 @@ def get_device_name():
 
 def compute_e2e_from_components(components):
     """Compute E2E timing as sum of components (more stable than separate measurement)."""
-    return (
-        components["data_processing"]
-        + components["backbone"]
-        + components["action_head"]
-    )
+    return components["data_processing"] + components["backbone"] + components["action_head"]
 
 
 def benchmark_data_processing(policy, observation, num_iterations=20, warmup=10):
@@ -249,9 +248,7 @@ def benchmark_components(policy, observation, num_iterations=20, warmup=3):
         action_head_times.append(end - start)
 
     # Benchmark data processing separately with proper warmup
-    data_processing_times = benchmark_data_processing(
-        policy, observation, num_iterations, warmup=10
-    )
+    data_processing_times = benchmark_data_processing(policy, observation, num_iterations, warmup=10)
 
     return {
         "data_processing": data_processing_times,
@@ -269,12 +266,8 @@ def print_markdown_table(results, device_name, denoising_steps):
 
     # Component breakdown table (using median for robustness against outliers)
     print("### Component-wise Breakdown\n")
-    print(
-        "| Device | Mode | Data Processing | Backbone | Action Head | E2E | Frequency |"
-    )
-    print(
-        "|--------|------|-----------------|----------|-------------|-----|-----------|"
-    )
+    print("| Device | Mode | Data Processing | Backbone | Action Head | E2E | Frequency |")
+    print("|--------|------|-----------------|----------|-------------|-----|-----------|")
 
     for mode, data in results.items():
         dp_median = np.median(data["data_processing"])
@@ -300,9 +293,7 @@ def print_markdown_table(results, device_name, denoising_steps):
             ah_median = np.median(data["action_head"])
             e2e_speedup = baseline_e2e / e2e_median
             ah_speedup = baseline_ah / ah_median
-            print(
-                f"| {device_name} | {mode} | {e2e_speedup:.2f}x | {ah_speedup:.2f}x |"
-            )
+            print(f"| {device_name} | {mode} | {e2e_speedup:.2f}x | {ah_speedup:.2f}x |")
 
     print("\n" + "=" * 100)
 
@@ -351,9 +342,7 @@ def main():
     print("=" * 100)
     print("GR00T INFERENCE BENCHMARK")
     print("=" * 100)
-    print(
-        f"Device: {device_name} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})"
-    )
+    print(f"Device: {device_name} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
     print(f"Model: {args.model_path}")
     print(f"Dataset: {args.dataset_path}")
     print(f"Iterations: {args.num_iterations}")
@@ -400,13 +389,9 @@ def main():
                     allow_padding=False,
                 )
                 obs = {
-                    "video": {
-                        k: np.stack(step_data.images[k])[None] for k in step_data.images
-                    },
+                    "video": {k: np.stack(step_data.images[k])[None] for k in step_data.images},
                     "state": {k: step_data.states[k][None] for k in step_data.states},
-                    "language": {
-                        modality_config["language"].modality_keys[0]: [[step_data.text]]
-                    },
+                    "language": {modality_config["language"].modality_keys[0]: [[step_data.text]]},
                 }
                 observations.append(obs)
             except Exception:
@@ -427,9 +412,7 @@ def main():
         observation = {
             "video": {k: np.stack(step_data.images[k])[None] for k in step_data.images},
             "state": {k: step_data.states[k][None] for k in step_data.states},
-            "language": {
-                modality_config["language"].modality_keys[0]: [[step_data.text]]
-            },
+            "language": {modality_config["language"].modality_keys[0]: [[step_data.text]]},
         }
 
     results = {}
@@ -443,9 +426,7 @@ def main():
     print("Benchmarking Data Processing (shared across all modes)...")
     print("-" * 50)
 
-    shared_data_processing_times = benchmark_data_processing(
-        policy, observation, args.num_iterations, warmup=10
-    )
+    shared_data_processing_times = benchmark_data_processing(policy, observation, args.num_iterations, warmup=10)
     print(
         f"  Data Processing: {np.mean(shared_data_processing_times):.2f} ± {np.std(shared_data_processing_times):.2f} ms"
     )
@@ -457,9 +438,7 @@ def main():
     print("Benchmarking PyTorch Eager...")
     print("-" * 50)
 
-    times_components = benchmark_components(
-        policy, observation, args.num_iterations, args.warmup
-    )
+    times_components = benchmark_components(policy, observation, args.num_iterations, args.warmup)
 
     components = {
         "data_processing": shared_data_processing_times,
@@ -537,9 +516,7 @@ def main():
 
         # TensorRT needs extra warmup for engine initialization and CUDA context setup
         trt_warmup = max(args.warmup + 5, 10)
-        times_components = benchmark_components(
-            policy_trt, observation, args.num_iterations, warmup=trt_warmup
-        )
+        times_components = benchmark_components(policy_trt, observation, args.num_iterations, warmup=trt_warmup)
 
         components = {
             "data_processing": shared_data_processing_times,
@@ -573,9 +550,7 @@ def main():
     print("\n" + "=" * 100)
     print("DETAILED SUMMARY")
     print("=" * 100)
-    print(
-        f"\nHardware: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}"
-    )
+    print(f"\nHardware: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
     print(f"Model: {args.model_path}")
     print(f"Action Horizon: {action_horizon}")
     print(f"Denoising Steps: {denoising_steps}")
@@ -587,9 +562,7 @@ def main():
             f"  E2E:             median={np.median(e2e):.1f} ms, mean={np.mean(e2e):.1f} ± {np.std(e2e):.1f} ms, "
             f"min={np.min(e2e):.1f}, max={np.max(e2e):.1f} ({1000 / np.median(e2e):.1f} Hz)"
         )
-        print(
-            f"  Data Processing: {np.median(data['data_processing']):.2f} ms (median)"
-        )
+        print(f"  Data Processing: {np.median(data['data_processing']):.2f} ms (median)")
         print(f"  Backbone:        {np.median(data['backbone']):.2f} ms (median)")
         print(f"  Action Head:     {np.median(data['action_head']):.2f} ms (median)")
 

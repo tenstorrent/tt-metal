@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import cv2
 import gymnasium as gym
 from gymnasium.envs.registration import register
@@ -28,51 +31,25 @@ class GoogleFractalEnv(gym.Env):
                 "state.x": gym.spaces.Box(low=obs_low[0], high=obs_high[0], shape=(1,)),
                 "state.y": gym.spaces.Box(low=obs_low[1], high=obs_high[1], shape=(1,)),
                 "state.z": gym.spaces.Box(low=obs_low[2], high=obs_high[2], shape=(1,)),
-                "state.rx": gym.spaces.Box(
-                    low=obs_low[3], high=obs_high[3], shape=(1,)
-                ),
-                "state.ry": gym.spaces.Box(
-                    low=obs_low[4], high=obs_high[4], shape=(1,)
-                ),
-                "state.rz": gym.spaces.Box(
-                    low=obs_low[5], high=obs_high[5], shape=(1,)
-                ),
-                "state.rw": gym.spaces.Box(
-                    low=obs_low[6], high=obs_high[6], shape=(1,)
-                ),
-                "state.gripper": gym.spaces.Box(
-                    low=obs_low[7], high=obs_high[7], shape=(1,)
-                ),
-                "annotation.human.action.task_description": gym.spaces.Text(
-                    max_length=512
-                ),
+                "state.rx": gym.spaces.Box(low=obs_low[3], high=obs_high[3], shape=(1,)),
+                "state.ry": gym.spaces.Box(low=obs_low[4], high=obs_high[4], shape=(1,)),
+                "state.rz": gym.spaces.Box(low=obs_low[5], high=obs_high[5], shape=(1,)),
+                "state.rw": gym.spaces.Box(low=obs_low[6], high=obs_high[6], shape=(1,)),
+                "state.gripper": gym.spaces.Box(low=obs_low[7], high=obs_high[7], shape=(1,)),
+                "annotation.human.action.task_description": gym.spaces.Text(max_length=512),
             }
         )
         action_low = env.action_space.low
         action_high = env.action_space.high
         self.action_space = gym.spaces.Dict(
             {
-                "action.x": gym.spaces.Box(
-                    low=action_low[0], high=action_high[0], shape=(1,)
-                ),
-                "action.y": gym.spaces.Box(
-                    low=action_low[1], high=action_high[1], shape=(1,)
-                ),
-                "action.z": gym.spaces.Box(
-                    low=action_low[2], high=action_high[2], shape=(1,)
-                ),
-                "action.roll": gym.spaces.Box(
-                    low=action_low[3], high=action_high[3], shape=(1,)
-                ),
-                "action.pitch": gym.spaces.Box(
-                    low=action_low[4], high=action_high[4], shape=(1,)
-                ),
-                "action.yaw": gym.spaces.Box(
-                    low=action_low[5], high=action_high[5], shape=(1,)
-                ),
-                "action.gripper": gym.spaces.Box(
-                    low=action_low[6], high=action_high[6], shape=(1,)
-                ),
+                "action.x": gym.spaces.Box(low=action_low[0], high=action_high[0], shape=(1,)),
+                "action.y": gym.spaces.Box(low=action_low[1], high=action_high[1], shape=(1,)),
+                "action.z": gym.spaces.Box(low=action_low[2], high=action_high[2], shape=(1,)),
+                "action.roll": gym.spaces.Box(low=action_low[3], high=action_high[3], shape=(1,)),
+                "action.pitch": gym.spaces.Box(low=action_low[4], high=action_high[4], shape=(1,)),
+                "action.yaw": gym.spaces.Box(low=action_low[5], high=action_high[5], shape=(1,)),
+                "action.gripper": gym.spaces.Box(low=action_low[6], high=action_high[6], shape=(1,)),
             }
         )
         self.image_size = image_size
@@ -162,51 +139,25 @@ class WidowXBridgeEnv(gym.Env):
                 "state.x": gym.spaces.Box(low=obs_low[0], high=obs_high[0], shape=(1,)),
                 "state.y": gym.spaces.Box(low=obs_low[1], high=obs_high[1], shape=(1,)),
                 "state.z": gym.spaces.Box(low=obs_low[2], high=obs_high[2], shape=(1,)),
-                "state.roll": gym.spaces.Box(
-                    low=obs_low[3], high=obs_high[3], shape=(1,)
-                ),
-                "state.pitch": gym.spaces.Box(
-                    low=obs_low[4], high=obs_high[4], shape=(1,)
-                ),
-                "state.yaw": gym.spaces.Box(
-                    low=obs_low[5], high=obs_high[5], shape=(1,)
-                ),
-                "state.pad": gym.spaces.Box(
-                    low=obs_low[6], high=obs_high[6], shape=(1,)
-                ),
-                "state.gripper": gym.spaces.Box(
-                    low=obs_low[7], high=obs_high[7], shape=(1,)
-                ),
-                "annotation.human.action.task_description": gym.spaces.Text(
-                    max_length=512
-                ),
+                "state.roll": gym.spaces.Box(low=obs_low[3], high=obs_high[3], shape=(1,)),
+                "state.pitch": gym.spaces.Box(low=obs_low[4], high=obs_high[4], shape=(1,)),
+                "state.yaw": gym.spaces.Box(low=obs_low[5], high=obs_high[5], shape=(1,)),
+                "state.pad": gym.spaces.Box(low=obs_low[6], high=obs_high[6], shape=(1,)),
+                "state.gripper": gym.spaces.Box(low=obs_low[7], high=obs_high[7], shape=(1,)),
+                "annotation.human.action.task_description": gym.spaces.Text(max_length=512),
             }
         )
         action_low = env.action_space.low
         action_high = env.action_space.high
         self.action_space = gym.spaces.Dict(
             {
-                "action.x": gym.spaces.Box(
-                    low=action_low[0], high=action_high[0], shape=(1,)
-                ),
-                "action.y": gym.spaces.Box(
-                    low=action_low[1], high=action_high[1], shape=(1,)
-                ),
-                "action.z": gym.spaces.Box(
-                    low=action_low[2], high=action_high[2], shape=(1,)
-                ),
-                "action.roll": gym.spaces.Box(
-                    low=action_low[3], high=action_high[3], shape=(1,)
-                ),
-                "action.pitch": gym.spaces.Box(
-                    low=action_low[4], high=action_high[4], shape=(1,)
-                ),
-                "action.yaw": gym.spaces.Box(
-                    low=action_low[5], high=action_high[5], shape=(1,)
-                ),
-                "action.gripper": gym.spaces.Box(
-                    low=action_low[6], high=action_high[6], shape=(1,)
-                ),
+                "action.x": gym.spaces.Box(low=action_low[0], high=action_high[0], shape=(1,)),
+                "action.y": gym.spaces.Box(low=action_low[1], high=action_high[1], shape=(1,)),
+                "action.z": gym.spaces.Box(low=action_low[2], high=action_high[2], shape=(1,)),
+                "action.roll": gym.spaces.Box(low=action_low[3], high=action_high[3], shape=(1,)),
+                "action.pitch": gym.spaces.Box(low=action_low[4], high=action_high[4], shape=(1,)),
+                "action.yaw": gym.spaces.Box(low=action_low[5], high=action_high[5], shape=(1,)),
+                "action.gripper": gym.spaces.Box(low=action_low[6], high=action_high[6], shape=(1,)),
             }
         )
         self.image_size = image_size

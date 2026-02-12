@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 from pathlib import Path
 import uuid
@@ -180,9 +183,7 @@ class VideoRecordingWrapper(gym.Wrapper):
                 # Ensure even width for H.264 compatibility
                 new_width = new_width - (new_width % 2)
 
-                resized_frame = cv2.resize(
-                    frame, (new_width, target_height), interpolation=cv2.INTER_LINEAR
-                )
+                resized_frame = cv2.resize(frame, (new_width, target_height), interpolation=cv2.INTER_LINEAR)
                 resized_frames.append(resized_frame)
             else:
                 resized_frames.append(frame)
@@ -196,11 +197,7 @@ class VideoRecordingWrapper(gym.Wrapper):
         self.step_count = 1
         self.video_recorder.stop()
 
-        if (
-            self.video_dir is not None
-            and self.file_path is not None
-            and self.file_path.exists()
-        ):
+        if self.video_dir is not None and self.file_path is not None and self.file_path.exists():
             # rename the file to indicate success or failure
             original_filestem = self.file_path.stem
             new_filestem = f"{original_filestem}_s{int(self.is_success)}"
@@ -235,15 +232,10 @@ class VideoRecordingWrapper(gym.Wrapper):
             #     new_filestem += f"_d-dist{min_gripper_distractor_dist:.4f}"
 
             # Add language following metrics to the filename
-            if (
-                "grasp_obj" in self.intermediate_signals
-                and "grasp_distractor_obj" in self.intermediate_signals
-            ):
+            if "grasp_obj" in self.intermediate_signals and "grasp_distractor_obj" in self.intermediate_signals:
                 success = self.is_success
                 grasp_obj = self.intermediate_signals["grasp_obj"]
-                not_grasp_distractor_obj = not self.intermediate_signals[
-                    "grasp_distractor_obj"
-                ]
+                not_grasp_distractor_obj = not self.intermediate_signals["grasp_distractor_obj"]
 
                 # 6 cases in total
                 cases = [False] * 6
@@ -279,9 +271,7 @@ class VideoRecordingWrapper(gym.Wrapper):
 
                 # Add language following metrics to the filename
                 # Because the 6 cases are mutually exclusive, we can just use the semantic meaning of the cases
-                new_filestem += (
-                    f"_{case_semantic}_lf-rate{int(language_following_rate)}"
-                )
+                new_filestem += f"_{case_semantic}_lf-rate{int(language_following_rate)}"
 
             # We temporarily disable contact metrics because they are not as indicative
             # if (
@@ -345,9 +335,7 @@ class VideoRecordingWrapper(gym.Wrapper):
     def step(self, action):
         result = super().step(action)
         self.step_count += 1
-        if self.file_path is not None and (
-            (self.step_count % self.steps_per_render) == 0
-        ):
+        if self.file_path is not None and ((self.step_count % self.steps_per_render) == 0):
             if not self.video_recorder.is_ready():
                 self.video_recorder.start(self.file_path)
 
@@ -374,9 +362,7 @@ class VideoRecordingWrapper(gym.Wrapper):
             if self.overlay_text:
                 # Droid dataset has "language.language_instruction"
                 auto_language_key = [
-                    k
-                    for k in result[0].keys()
-                    if k.startswith("annotation.") or k.startswith("language.")
+                    k for k in result[0].keys() if k.startswith("annotation.") or k.startswith("language.")
                 ][0]
                 # assert auto_language_key in [
                 #     "annotation.human.coarse_action",
@@ -395,23 +381,17 @@ class VideoRecordingWrapper(gym.Wrapper):
                 font_scale = 1.0
 
                 # Binary search to find the right font scale
-                text_size = cv2.getTextSize(language, font, font_scale, font_thickness)[
-                    0
-                ]
+                text_size = cv2.getTextSize(language, font, font_scale, font_thickness)[0]
                 if text_size[0] > target_width:
                     # Text too big, scale down
                     while text_size[0] > target_width and font_scale > 0.1:
                         font_scale *= 0.9
-                        text_size = cv2.getTextSize(
-                            language, font, font_scale, font_thickness
-                        )[0]
+                        text_size = cv2.getTextSize(language, font, font_scale, font_thickness)[0]
                 else:
                     # Text too small, scale up
                     while text_size[0] < target_width and font_scale < 2.0:
                         font_scale *= 1.1
-                        text_size = cv2.getTextSize(
-                            language, font, font_scale, font_thickness
-                        )[0]
+                        text_size = cv2.getTextSize(language, font, font_scale, font_thickness)[0]
                     font_scale *= 0.9  # Scale back slightly to ensure fit
 
                 # Calculate position

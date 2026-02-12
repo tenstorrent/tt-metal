@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import logging
 from pathlib import Path
@@ -78,9 +81,7 @@ class BasicPipeline(ModelPipeline):
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         logging.info(f"Total parameters: {total_params:,}")
-        logging.info(
-            f"Trainable parameters: {trainable_params:,} ({100 * trainable_params / total_params:.2f}%)"
-        )
+        logging.info(f"Trainable parameters: {trainable_params:,} ({100 * trainable_params / total_params:.2f}%)")
         return model
 
     def _create_dataset(self, save_cfg_dir: Path):

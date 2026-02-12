@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from pathlib import Path
 
 from bddl.activity import Conditions
@@ -62,9 +65,7 @@ def augment_rooms(relevant_rooms, scene_model, task_name):
                     augmented_rooms.append(dependent_room)
 
     # Additionally add any task-specific rooms
-    augmented_rooms += TASK_SPECIFIC_EXTRA_ROOMS.get(task_name, dict()).get(
-        scene_model, []
-    )
+    augmented_rooms += TASK_SPECIFIC_EXTRA_ROOMS.get(task_name, dict()).get(scene_model, [])
     # Remove redundancies
     augmented_rooms = list(set(augmented_rooms))
 
@@ -108,16 +109,14 @@ def infer_torso_qpos_from_trunk_translate(translate):
         # Interpolate between upright and down positions
         interpolation_factor = translate
         interpolated_trunk_pos = (
-            (1 - interpolation_factor) * R1_UPRIGHT_TORSO_JOINT_POS
-            + interpolation_factor * R1_DOWNWARD_TORSO_JOINT_POS
-        )
+            1 - interpolation_factor
+        ) * R1_UPRIGHT_TORSO_JOINT_POS + interpolation_factor * R1_DOWNWARD_TORSO_JOINT_POS
     else:
         # Interpolate between down and ground positions
         interpolation_factor = translate - 1.0
         interpolated_trunk_pos = (
-            (1 - interpolation_factor) * R1_DOWNWARD_TORSO_JOINT_POS
-            + interpolation_factor * R1_GROUND_TORSO_JOINT_POS
-        )
+            1 - interpolation_factor
+        ) * R1_DOWNWARD_TORSO_JOINT_POS + interpolation_factor * R1_GROUND_TORSO_JOINT_POS
 
     return interpolated_trunk_pos
 
@@ -175,9 +174,7 @@ def generate_robot_config(task_name=None, task_cfg=None):
     return robot_config
 
 
-def get_camera_config(
-    name, relative_prim_path, position, orientation, resolution, modalities=[]
-):
+def get_camera_config(name, relative_prim_path, position, orientation, resolution, modalities=[]):
     """
     Generate a camera configuration dictionary
 

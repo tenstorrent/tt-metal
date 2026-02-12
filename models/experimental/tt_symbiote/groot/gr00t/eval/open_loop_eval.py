@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from copy import deepcopy
 from dataclasses import dataclass, field
 import logging
@@ -111,9 +114,7 @@ def plot_trajectory_results(
     plt.close()  # Close the figure to free memory
 
 
-def parse_observation_gr00t(
-    obs: dict[str, Any], modality_configs: dict[str, Any]
-) -> dict[str, Any]:
+def parse_observation_gr00t(obs: dict[str, Any], modality_configs: dict[str, Any]) -> dict[str, Any]:
     new_obs = {}
     for modality in ["video", "state", "language"]:
         new_obs[modality] = {}
@@ -150,26 +151,18 @@ def evaluate_single_trajectory(
     traj = loader[traj_id]
     traj_length = len(traj)
     actual_steps = min(steps, traj_length)
-    logging.info(
-        f"Using {actual_steps} steps (requested: {steps}, trajectory length: {traj_length})"
-    )
+    logging.info(f"Using {actual_steps} steps (requested: {steps}, trajectory length: {traj_length})")
 
     pred_action_across_time = []
 
     # Extract state and action keys separately and sort for consistent order
     state_keys = loader.modality_configs["state"].modality_keys
-    action_keys = (
-        loader.modality_configs["action"].modality_keys
-        if modality_keys is None
-        else modality_keys
-    )
+    action_keys = loader.modality_configs["action"].modality_keys if modality_keys is None else modality_keys
 
     modality_configs = deepcopy(loader.modality_configs)
     modality_configs.pop("action")
     for step_count in range(0, actual_steps, action_horizon):
-        data_point = extract_step_data(
-            traj, step_count, modality_configs, embodiment_tag
-        )
+        data_point = extract_step_data(traj, step_count, modality_configs, embodiment_tag)
         logging.info(f"inferencing at step: {step_count}")
         obs = {}
         for k, v in data_point.states.items():
@@ -185,10 +178,7 @@ def evaluate_single_trajectory(
             # NOTE: concat_pred_action = action[f"action.{modality_keys[0]}"][j]
             # the np.atleast_1d is to ensure the action is a 1D array, handle where single value is returned
             concat_pred_action = np.concatenate(
-                [
-                    np.atleast_1d(np.atleast_1d(action_chunk[f"action.{key}"])[j])
-                    for key in action_keys
-                ],
+                [np.atleast_1d(np.atleast_1d(action_chunk[f"action.{key}"])[j]) for key in action_keys],
                 axis=0,
             )
             pred_action_across_time.append(concat_pred_action)
@@ -200,12 +190,8 @@ def evaluate_single_trajectory(
         return np.concatenate([np_dict[column] for column in columns], axis=-1)
 
     # plot the joints
-    state_joints_across_time = extract_state_joints(
-        traj, [f"state.{key}" for key in state_keys]
-    )
-    gt_action_across_time = extract_state_joints(
-        traj, [f"action.{key}" for key in action_keys]
-    )[:actual_steps]
+    state_joints_across_time = extract_state_joints(traj, [f"state.{key}" for key in state_keys])
+    gt_action_across_time = extract_state_joints(traj, [f"action.{key}" for key in action_keys])[:actual_steps]
     pred_action_across_time = np.array(pred_action_across_time)[:actual_steps]
     assert (
         gt_action_across_time.shape == pred_action_across_time.shape
@@ -289,17 +275,11 @@ def main(args: ArgsConfig):
         if match:
             try:
                 global_step = int(match.group(1))
-                logging.info(
-                    f"Extracted global_step {global_step} from checkpoint path"
-                )
+                logging.info(f"Extracted global_step {global_step} from checkpoint path")
             except ValueError:
-                logging.warning(
-                    f"Could not parse step number from checkpoint path: {local_model_path}"
-                )
+                logging.warning(f"Could not parse step number from checkpoint path: {local_model_path}")
         else:
-            logging.warning(
-                f"Could not find checkpoint-<step> pattern in path: {local_model_path}"
-            )
+            logging.warning(f"Could not find checkpoint-<step> pattern in path: {local_model_path}")
 
     if local_model_path is not None:
         import torch

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env python3
 """
 Export GrootN1d6 model components to ONNX for TensorRT optimization.
@@ -27,9 +30,7 @@ import torch.onnx
 
 
 # Set up logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -63,20 +64,14 @@ class DiTInputCapture:
             logger.info(" Captured DiT inputs:")
             logger.info(f"  sa_embs shape: {self.sa_embs.shape}")
             logger.info(f"  vl_embs shape: {self.vl_embs.shape}")
-            logger.info(
-                f"  timestep shape: {self.timestep.shape if self.timestep is not None else 'None'}"
-            )
-            logger.info(
-                f"  image_mask shape: {self.image_mask.shape if self.image_mask is not None else 'None'}"
-            )
+            logger.info(f"  timestep shape: {self.timestep.shape if self.timestep is not None else 'None'}")
+            logger.info(f"  image_mask shape: {self.image_mask.shape if self.image_mask is not None else 'None'}")
             logger.info(
                 f"  backbone_attention_mask shape: {self.backbone_attention_mask.shape if self.backbone_attention_mask is not None else 'None'}"
             )
 
 
-def parse_observation_gr00t(
-    obs: dict[str, Any], modality_configs: dict[str, Any]
-) -> dict[str, Any]:
+def parse_observation_gr00t(obs: dict[str, Any], modality_configs: dict[str, Any]) -> dict[str, Any]:
     new_obs = {}
     for modality in ["video", "state", "language"]:
         new_obs[modality] = {}
@@ -176,9 +171,7 @@ def export_dit_to_onnx(
 
     sa_embs = torch.randn(captured_inputs.sa_embs.shape, dtype=dtype, device="cuda")
     vl_embs = torch.randn(captured_inputs.vl_embs.shape, dtype=dtype, device="cuda")
-    timestep = torch.ones(
-        captured_inputs.timestep.shape, dtype=torch.int64, device="cuda"
-    )
+    timestep = torch.ones(captured_inputs.timestep.shape, dtype=torch.int64, device="cuda")
 
     export_inputs = [sa_embs, vl_embs, timestep]
     input_names = ["sa_embs", "vl_embs", "timestep"]
@@ -196,9 +189,7 @@ def export_dit_to_onnx(
 
     image_mask = None
     if captured_inputs.image_mask is not None:
-        image_mask = torch.ones(
-            captured_inputs.image_mask.shape, dtype=torch.bool, device="cuda"
-        )
+        image_mask = torch.ones(captured_inputs.image_mask.shape, dtype=torch.bool, device="cuda")
         export_inputs.append(image_mask)
         input_names.append("image_mask")
         dynamic_axes["image_mask"] = {0: "batch_size", 1: "vl_seq_len"}
@@ -221,9 +212,7 @@ def export_dit_to_onnx(
     if image_mask is not None:
         logger.info(f"  image_mask: {image_mask.shape} ({image_mask.dtype})")
     if backbone_attention_mask is not None:
-        logger.info(
-            f"  backbone_attention_mask: {backbone_attention_mask.shape} ({backbone_attention_mask.dtype})"
-        )
+        logger.info(f"  backbone_attention_mask: {backbone_attention_mask.shape} ({backbone_attention_mask.dtype})")
 
     # Create output directory
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -241,9 +230,7 @@ def export_dit_to_onnx(
             self.dit_model = dit_model
             self.has_backbone_mask = has_backbone_mask
 
-        def forward(
-            self, sa_embs, vl_embs, timestep, image_mask, backbone_attention_mask=None
-        ):
+        def forward(self, sa_embs, vl_embs, timestep, image_mask, backbone_attention_mask=None):
             # Call DiT with keyword arguments
             if self.has_backbone_mask:
                 return self.dit_model(
@@ -300,9 +287,7 @@ def export_dit_to_onnx(
             # Model is large, just verify it can be loaded
             logger.info("Model is very large, skipping full validation...")
             try:
-                onnx.shape_inference.infer_shapes_path(
-                    output_path, output_path + ".tmp"
-                )
+                onnx.shape_inference.infer_shapes_path(output_path, output_path + ".tmp")
                 os.remove(output_path + ".tmp")
                 logger.info(" ONNX model structure verified!")
             except Exception as e2:
@@ -346,9 +331,7 @@ def main(args):
 
     # Set up hook to capture inputs
     capture = DiTInputCapture()
-    hook = policy.model.action_head.model.register_forward_pre_hook(
-        capture.hook_fn, with_kwargs=True
-    )
+    hook = policy.model.action_head.model.register_forward_pre_hook(capture.hook_fn, with_kwargs=True)
 
     # Run one inference to capture shapes
     observation = prepare_observation(policy, dataset, traj_idx=0)
@@ -382,9 +365,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export GrootN1d6 model to ONNX")
-    parser.add_argument(
-        "--model_path", type=str, required=True, help="Path to the model checkpoint"
-    )
+    parser.add_argument("--model_path", type=str, required=True, help="Path to the model checkpoint")
     parser.add_argument(
         "--dataset_path",
         type=str,

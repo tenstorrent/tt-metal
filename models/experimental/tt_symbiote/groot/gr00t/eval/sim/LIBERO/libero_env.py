@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """
 LIBERO environment
 
@@ -13,7 +16,6 @@ import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.registration import register
 from libero.libero import benchmark
-
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
@@ -93,12 +95,8 @@ class LiberoEnv(gym.Env):
         # Convert Gym action space to Gymnasium.
         self.observation_space = gym.spaces.Dict(
             {
-                "video.image": gym.spaces.Box(
-                    low=0, high=255, shape=(256, 256, 3), dtype=np.uint8
-                ),
-                "video.wrist_image": gym.spaces.Box(
-                    low=0, high=255, shape=(256, 256, 3), dtype=np.uint8
-                ),
+                "video.image": gym.spaces.Box(low=0, high=255, shape=(256, 256, 3), dtype=np.uint8),
+                "video.wrist_image": gym.spaces.Box(low=0, high=255, shape=(256, 256, 3), dtype=np.uint8),
                 "state.x": gym.spaces.Box(low=-1, high=1, shape=(1,)),
                 "state.y": gym.spaces.Box(low=-1, high=1, shape=(1,)),
                 "state.z": gym.spaces.Box(low=-1, high=1, shape=(1,)),
@@ -106,9 +104,7 @@ class LiberoEnv(gym.Env):
                 "state.pitch": gym.spaces.Box(low=-1, high=1, shape=(1,)),
                 "state.yaw": gym.spaces.Box(low=-1, high=1, shape=(1,)),
                 "state.gripper": gym.spaces.Box(low=-1, high=1, shape=(2,)),
-                "annotation.human.action.task_description": gym.spaces.Text(
-                    max_length=512
-                ),
+                "annotation.human.action.task_description": gym.spaces.Text(max_length=512),
             }
         )
         self.action_space = spaces.Dict(
@@ -186,9 +182,7 @@ def register_libero_envs():
             task = task_suite.get_task(task_id)
             task_name = task.name
             task_description = task.language
-            task_bddl_file = os.path.join(
-                get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
-            )
+            task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
             register(
                 id=f"libero_sim/{task_name}",
                 entry_point="gr00t.eval.sim.LIBERO.libero_env:LiberoEnv",
@@ -218,9 +212,7 @@ if __name__ == "__main__":
     task = task_suite.get_task(task_id)
     task_name = task.name
     task_description = task.language
-    task_bddl_file = os.path.join(
-        get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
-    )
+    task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
     print(
         f"[info] retrieving task {task_id} from suite {task_suite_name}, the "
         + f"language instruction is {task_description}, and the bddl file is {task_bddl_file}"

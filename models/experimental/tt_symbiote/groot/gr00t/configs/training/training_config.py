@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -43,9 +46,7 @@ class TrainingConfig:
     save_total_limit: int = 5
 
     # Model saving
-    save_vl_model: bool = (
-        False  # Control whether to save VL model and processor in callbacks
-    )
+    save_vl_model: bool = False  # Control whether to save VL model and processor in callbacks
 
     # Checkpoint uploading
     upload_checkpoints: bool = False

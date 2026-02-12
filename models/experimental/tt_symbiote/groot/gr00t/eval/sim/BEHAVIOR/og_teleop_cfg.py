@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from enum import Enum
 
 from omnigibson.transition_rules import (
@@ -113,15 +116,11 @@ ROBOT_TYPE = "R1Pro"  # This should always be our robot generally since GELLO is
 ROBOT_NAME = "robot_r1"
 
 # R1 robot-specific configurations
-R1_UPRIGHT_TORSO_JOINT_POS = th.tensor(
-    [0.45, -0.4, 0.0, 0.0], dtype=th.float32
-)  # For upper cabinets, shelves, etc.
+R1_UPRIGHT_TORSO_JOINT_POS = th.tensor([0.45, -0.4, 0.0, 0.0], dtype=th.float32)  # For upper cabinets, shelves, etc.
 R1_DOWNWARD_TORSO_JOINT_POS = th.tensor(
     [1.6, -2.5, -0.94, 0.0], dtype=th.float32
 )  # For bottom cabinets, dishwashers, etc.
-R1_GROUND_TORSO_JOINT_POS = th.tensor(
-    [1.735, -2.57, -2.1, 0.0], dtype=th.float32
-)  # For ground object pick up
+R1_GROUND_TORSO_JOINT_POS = th.tensor([1.735, -2.57, -2.1, 0.0], dtype=th.float32)  # For ground object pick up
 R1_WRIST_CAMERA_LOCAL_POS = th.tensor(
     [0.1, 0.0, -0.1], dtype=th.float32
 )  # Local position of the wrist camera relative to eef
@@ -151,7 +150,9 @@ USE_VERTICAL_VISUALIZERS = False
 GHOST_APPEAR_THRESHOLD = 0.1  # Threshold for showing ghost
 GHOST_APPEAR_TIME = 10  # Number of frames to wait before showing ghost
 USE_REACHABILITY_VISUALIZERS = True
-AUTO_CHECKPOINTING = False  # checkpoint when 1) a new termination condition is met 2) some fixed amount of time has passed
+AUTO_CHECKPOINTING = (
+    False  # checkpoint when 1) a new termination condition is met 2) some fixed amount of time has passed
+)
 STEPS_TO_AUTO_CHECKPOINT = 6000  # Assuming 20 fps, this is about 5 minutes
 
 # Visualization cylinder configs
