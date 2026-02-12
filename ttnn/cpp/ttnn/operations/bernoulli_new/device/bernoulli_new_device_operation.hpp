@@ -54,8 +54,10 @@ struct BernoulliNewDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Same hash as original Bernoulli: exclude seed so cache hits work across different seeds.
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // No compute_program_hash needed: the framework auto-derives it from
+    // create_descriptor via compute_program_descriptor_hash, which hashes
+    // only compile-time parts (kernel sources, core ranges, compile-time args,
+    // defines, CB configs) and ignores runtime args (seed, buffer addresses).
 };
 
 }  // namespace ttnn::operations::bernoulli_new
