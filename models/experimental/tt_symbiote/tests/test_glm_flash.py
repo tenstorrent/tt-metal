@@ -19,7 +19,6 @@ from models.experimental.tt_symbiote.modules.linear import (
 )
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
-
 import transformers
 from models.experimental.tt_symbiote.core.run_config import TracedRun
 
@@ -51,10 +50,13 @@ assert transformers.__version__.startswith("5."), "This test requires transforme
 )
 def test_glm(mesh_device):
     """Test GLM model with TTNN acceleration."""
-    nn_to_ttnn = {nn.Linear: TTNNLinearIColShardedWRowSharded}  # TTNNLinearLLamaIColShardedWRowSharded,
 
     tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash")
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash")
+    nn_to_ttnn = {
+        nn.Linear: TTNNLinearIColShardedWRowSharded,  # TTNNLinearLLamaIColShardedWRowSharded
+    }
+
     messages = [
         {
             "role": "user",
@@ -68,7 +70,6 @@ def test_glm(mesh_device):
         return_dict=True,
         return_tensors="pt",
     ).to(model.device)
-    persistent_weights = set()
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
     set_device(model, mesh_device)
     all_modules = {**modules1}
@@ -79,7 +80,7 @@ def test_glm(mesh_device):
     print("Running inference...")
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
-    outputs = model.generate(**inputs, max_new_tokens=1, use_cache=True)
+    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True)
     DispatchManager.clear_timings()
     outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True)
     print(f"GLM OUTPUT: {tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:])}")

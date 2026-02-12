@@ -91,7 +91,12 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
         assert t_tensor.shape == n_tensor.shape, "Mismatched output shapes between TTNN and Torch."
         pcc = torch.corrcoef(torch.stack([t_tensor.flatten(), n_tensor.flatten()]))[0, 1]
         diff = torch.abs(t_tensor - n_tensor)
-        if pcc < 0.999 or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1):
+        if (
+            pcc < 0.999
+            or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1)
+            or pcc.isnan().any()
+            or diff.isnan().any()
+        ):
             passed = False
             print(
                 f"Warning: High discrepancy detected in operation {func_name}. "

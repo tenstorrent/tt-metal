@@ -22,6 +22,7 @@ def initialize_module(
         if isinstance(new_module, TTNNModule):
             if old_module in module_names:
                 new_module._unique_name = module_names[old_module]
+                new_module.override_children_module_names()
             new_module.set_model_config(model_config)
         return new_module
     return None

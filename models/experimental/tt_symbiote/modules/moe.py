@@ -19,7 +19,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
-
+from models.experimental.tt_symbiote.core.run_config import disable_trace
 
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 SPARSITY_BLOCK_SIZE = 32
@@ -428,46 +428,103 @@ class Glm4MoeMoE(torch.nn.Module):
         return hidden_states
 
 
+class TTNNGlm4MoeExpertLayers(TTNNModule):
+    """TTNN module that handles expert layer execution."""
+
+    def __init__(self, num_experts: int, hidden_dim: int, intermediate_dim: int, num_experts_off_chip: int = 20):
+        super().__init__()
+        self.num_experts = num_experts
+        self.hidden_dim = hidden_dim
+        self.intermediate_dim = intermediate_dim
+        self.num_experts_off_chip = num_experts_off_chip
+        self.gate_layers = {}
+        self.up_layers = {}
+        self.down_layers = {}
+
+    @classmethod
+    def from_parameters(cls, gate_up_proj: torch.Tensor, down_proj: torch.Tensor, num_experts_off_chip: int = 20):
+        """Create from expert weight tensors."""
+        num_experts, _, hidden_dim = gate_up_proj.shape
+        intermediate_dim = down_proj.shape[-1]
+
+        module = cls(num_experts, hidden_dim, intermediate_dim, num_experts_off_chip)
+
+        for i in range(num_experts):
+            linear_class = (
+                TTNNLinearLLamaIColShardedWRowSharded if i < num_experts_off_chip else TTNNLinearIColShardedWRowSharded
+            )
+
+            module.gate_layers[i] = TTNNLinearSilu.from_parameters(
+                gate_up_proj[i, :intermediate_dim, :], linear_class=linear_class
+            )
+
+            up_linear_class = (
+                TTNNLinearLLamaIColShardedWRowSharded if i < num_experts_off_chip else TTNNLinearIColShardedWRowSharded
+            )
+            module.up_layers[i] = up_linear_class.from_parameters(gate_up_proj[i, intermediate_dim:, :])
+
+            down_linear_class = (
+                TTNNLinearLLamaIColShardedWRowSharded if i < num_experts_off_chip else TTNNLinearIColShardedWRowSharded
+            )
+            module.down_layers[i] = down_linear_class.from_parameters(down_proj[i, :, :])
+
+        return module
+
+    @disable_trace
+    def forward(self, current_state: torch.Tensor, expert_idx: int) -> torch.Tensor:
+        """Execute single expert forward pass."""
+        gate = self.gate_layers[expert_idx](current_state)
+        up = self.up_layers[expert_idx](current_state)
+        current_hidden_states = gate.to_ttnn * up.to_ttnn
+        current_hidden_states = self.down_layers[expert_idx](current_hidden_states)
+        return current_hidden_states
+
+
+class Glm4MoeExpertLayersTorch(nn.Module):
+    """Collection of expert layers stored as separate linear modules."""
+
+    def __init__(self, gate_up_proj: torch.Tensor, down_proj: torch.Tensor):
+        super().__init__()
+        self.gate_up_proj = nn.Parameter(gate_up_proj)
+        self.down_proj = nn.Parameter(down_proj)
+        self.act_fn = nn.SiLU()
+
+    def forward(self, current_state: torch.Tensor, expert_idx: int) -> torch.Tensor:
+        """Execute single expert forward pass."""
+        gate, up = nn.functional.linear(current_state, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+        current_hidden_states = self.act_fn(gate) * up
+        current_hidden_states = nn.functional.linear(current_hidden_states, self.down_proj[expert_idx])
+        return current_hidden_states
+
+
 class Glm4MoeNaiveMoeHybrid(nn.Module):
-    """Collection of expert weights stored as 3D tensors."""
+    """Collection of expert weights with hybrid TTNN execution."""
 
     def __init__(self, old_layer, num_experts_off_chip: int = 20):
         super().__init__()
         self.num_experts = old_layer.num_experts
         self.hidden_dim = old_layer.hidden_dim
         self.intermediate_dim = old_layer.intermediate_dim
-        self.gate_layers = {
-            i: TTNNLinearSilu.from_parameters(
-                old_layer.gate_up_proj[i, : self.intermediate_dim, :],
-                linear_class=TTNNLinearLLamaIColShardedWRowSharded
-                if i < num_experts_off_chip
-                else TTNNLinearIColShardedWRowSharded,
+
+        # Create TTNN expert layers module
+        ttnn = False
+        if ttnn:
+            self.expert_layers = TTNNGlm4MoeExpertLayers.from_parameters(
+                old_layer.gate_up_proj, old_layer.down_proj, num_experts_off_chip=num_experts_off_chip
             )
-            for i in range(self.num_experts)
-        }
-        self.up_layers = {
-            i: TTNNLinearLLamaIColShardedWRowSharded.from_parameters(
-                old_layer.gate_up_proj[i, self.intermediate_dim :, :]
-            )
-            if i < num_experts_off_chip
-            else TTNNLinearIColShardedWRowSharded.from_parameters(old_layer.gate_up_proj[i, self.intermediate_dim :, :])
-            for i in range(self.num_experts)
-        }
-        del old_layer.gate_up_proj
-        self.down_layers = {
-            i: TTNNLinearLLamaIColShardedWRowSharded.from_parameters(old_layer.down_proj[i, :, :])
-            if i < num_experts_off_chip
-            else TTNNLinearIColShardedWRowSharded.from_parameters(old_layer.down_proj[i, :, :])
-            for i in range(self.num_experts)
-        }
-        del old_layer.down_proj
+
+            # Clean up old layer weights
+            del old_layer.gate_up_proj
+            del old_layer.down_proj
+        else:
+            self.expert_layers = Glm4MoeExpertLayersTorch(old_layer.gate_up_proj, old_layer.down_proj)
+
         assert old_layer.config.hidden_act == "silu", "Only SiLU activation is supported in naive MoE."
 
     @classmethod
-    def from_torch(cls, moe_module: Glm4MoeNaiveMoe, num_experts_off_chip: int = 20) -> "TTNNGlm4MoeNaiveMoe":
-        """Create TTNNGlm4MoeNaiveMoe from PyTorch Glm4MoeNaiveMoe layer."""
-        new_moe = cls(moe_module, num_experts_off_chip=num_experts_off_chip)
-        return new_moe
+    def from_torch(cls, moe_module: Glm4MoeNaiveMoe, num_experts_off_chip: int = 20) -> "Glm4MoeNaiveMoeHybrid":
+        """Create Glm4MoeNaiveMoeHybrid from PyTorch Glm4MoeNaiveMoe layer."""
+        return cls(moe_module, num_experts_off_chip=num_experts_off_chip)
 
     def forward(
         self,
@@ -487,11 +544,10 @@ class Glm4MoeNaiveMoeHybrid(nn.Module):
                 continue
             top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
             current_state = hidden_states[token_idx]
-            int_expert = expert_idx.item()
-            gate = self.gate_layers[int_expert](current_state)
-            up = self.up_layers[int_expert](current_state)
-            current_hidden_states = gate * up
-            current_hidden_states = self.down_layers[int_expert](current_hidden_states)
+
+            # Use TTNN expert layers
+            current_hidden_states = self.expert_layers(current_state, expert_idx.item())
+
             current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
             final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
 
@@ -566,8 +622,6 @@ class TTNNGlm4MoeMLP(TTNNModule):
             x_gate.to_ttnn,
             x_up.to_ttnn,
         )
-        ttnn.deallocate(x_gate.to_ttnn)
-        ttnn.deallocate(x_up.to_ttnn)
         x = self.down_proj(x)
         return x
 
@@ -725,6 +779,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
         ttnn_module.gate = TTNNGlm4MoeTopkRouter.from_parameters(
             torch_module.gate.weight, torch_module.gate.e_score_correction_bias
         )
+        ttnn_module.gate._fallback_torch_layer = torch_module.gate
         ttnn_module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_module.shared_experts)
         ttnn_module.route_tokens_to_experts = TTNNGlm4MoeRouteTokenToExperts.from_torch(
             Glm4MoeRouteTokenToExperts(
@@ -746,8 +801,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
         orig_shape = list(hidden_states.shape)
         router_logits = self.gate(hidden_states)
         topk_indices, topk_weights = self.torch_layer.route_tokens_to_experts(router_logits)
-        hidden_states = hidden_states.view(-1, hidden_states.shape[-1] * 8)
-        orig_shape[-1] = -1
+        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         hidden_states = self.experts(hidden_states, topk_indices.to(dtype=torch.int64), topk_weights).view(*orig_shape)
         hidden_states = hidden_states + self.shared_experts(residuals)
         return hidden_states.to_ttnn

@@ -44,6 +44,21 @@ class DistributedTensorConfig:
 
     mesh_mapper: Any
     mesh_composer: Any
+    logical_shape_fn: Optional[Any] = None
+
+    def get_logical_shape(self, sharded_shape):
+        if self.logical_shape_fn is not None:
+            return self.logical_shape_fn(sharded_shape)
+        return sharded_shape
+
+
+def logical_shape_for_batch_channel_sharding(mesh_shape):
+    def _logical_shape(shape):
+        shape = list(shape)
+        logical_shape = [shape[0] * mesh_shape[0]] + shape[1:-1] + [shape[-1] * mesh_shape[1]]
+        return tuple(logical_shape)
+
+    return _logical_shape
 
 
 @dataclass
@@ -59,9 +74,20 @@ class DistributedConfig:
             self.tensor_config = DistributedTensorConfig(
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (0, -1)),
                 mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, self.mesh_device.shape, (0, -1)),
+                logical_shape_fn=logical_shape_for_batch_channel_sharding(self.mesh_device.shape),
             )
         if self.ccl_manager is None and self.mesh_device.get_num_devices() > 1:
             self.ccl_manager = TT_CCL(self.mesh_device)
+
+    def get_tensor_config_for_tensor(self, module_name, tensor):
+        if tensor is not None:
+            if (
+                len(tensor.shape) < 2
+                or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
+                or tensor.shape[0] % self.mesh_device.shape[0] != 0
+            ):
+                return None
+        return self.tensor_config
 
 
 @contextlib.contextmanager
@@ -109,6 +135,10 @@ def copy_to_torch(func):
         res = e
         if isinstance(e, TorchTTNNTensor):
             res = TorchTTNNTensor(e.to_torch.clone())
+            res.ttnn_tensor = None
+        elif isinstance(e, ttnn.Tensor):
+            res = TorchTTNNTensor(e).to_torch
+            res.ttnn_tensor = None
         elif isinstance(e, torch.Tensor):
             res = e.clone()
         return res
@@ -359,7 +389,7 @@ def post_process_ttnn_module_output(self, result):
     return result
 
 
-def get_default_distributed_tensor_config(mesh_device=None):
+def get_default_distributed_tensor_config(mesh_device=None, torch_tensor=None, module_name=None):
     from models.experimental.tt_symbiote.utils.device_management import DeviceInit
 
     state = None
@@ -372,6 +402,8 @@ def get_default_distributed_tensor_config(mesh_device=None):
         state = next(iter(DeviceInit.DEVICE_TO_STATE_DICT.values()))
     if state is None:
         return None
+    if torch_tensor is not None:
+        return state.get_tensor_config_for_tensor(module_name, torch_tensor)
     return state.tensor_config
 
 
@@ -417,7 +449,7 @@ class NormalRun:
         # ...the real tensor is held as an element on the tensor.
         r.ttnn_tensor = ttnn_tensor  # Initialize ttnn_tensor
         r.elem = elem if not delete_elem else None
-        distributed_tensor_config = get_default_distributed_tensor_config()
+        distributed_tensor_config = get_default_distributed_tensor_config(torch_tensor=elem)
         r.set_distributed_tensor_config(distributed_tensor_config)
         assert isinstance(r.elem, torch.Tensor) or isinstance(
             ttnn_tensor, ttnn.Tensor
@@ -884,6 +916,7 @@ class TraceEntry:
 
 # Registry of trace-enabled classes
 _TRACE_ENABLED_CLASSES: Set[Type] = set()
+_TRACE_RUNNING = False
 
 
 def trace_enabled(cls: Type) -> Type:
@@ -1059,10 +1092,16 @@ class TracedRun(NormalRun):
 
         begin = time.time()
         # Check if this module is trace-enabled
-        if not is_trace_enabled(self):
-            print(
-                f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Running Normally]"
-            )
+        global _TRACE_RUNNING
+        if not is_trace_enabled(self) or _TRACE_RUNNING:
+            if _TRACE_RUNNING:
+                print(
+                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Already Running Trace Elsewhere, Running Normally]"
+                )
+            else:
+                print(
+                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Running Normally]"
+                )
             # Fall back to normal execution
             result = self.forward(*func_args, **func_kwargs)
             end = time.time()
@@ -1083,16 +1122,31 @@ class TracedRun(NormalRun):
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
             result = entry.trace_output
         else:
+            _TRACE_RUNNING = True
             print(
                 f"{self.__class__.__name__}: {self.module_name} on device {self.device} [First Run - Capturing Trace]"
             )
             # Capture new trace
             entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
             result = entry.trace_output
+            _TRACE_RUNNING = False
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
         return post_process_ttnn_module_output(self, result)
+
+
+def disable_trace(fn):
+    def new_fn(*args, **kwargs):
+        global _TRACE_RUNNING
+        was_tracing = _TRACE_RUNNING
+        _TRACE_RUNNING = True
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _TRACE_RUNNING = was_tracing
+
+    return new_fn
 
 
 # Add at module level

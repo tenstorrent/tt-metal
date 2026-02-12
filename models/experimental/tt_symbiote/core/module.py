@@ -33,6 +33,30 @@ def set_distributed_tensor_config(distribute_tensor_config: DistributedTensorCon
     return _set_distributed_config
 
 
+def set_module_name_recursively(module, prefix=""):
+    """Override children's module names based on this module's name."""
+    for name, child in module.__dict__.items():
+        if isinstance(child, TTNNModule):
+            child._unique_name = f"{prefix}.{name}"
+            child.override_children_module_names()
+        elif isinstance(child, torch.nn.Module):
+            set_module_name_recursively(child, f"{prefix}.{name}")
+        elif isinstance(child, dict):
+            for k, v in child.items():
+                if isinstance(v, TTNNModule):
+                    v._unique_name = f"{prefix}.{name}[{k}]"
+                    v.override_children_module_names()
+                elif isinstance(v, torch.nn.Module):
+                    set_module_name_recursively(v, f"{prefix}.{name}[{k}]")
+        elif isinstance(child, (list, tuple)):
+            for i, v in enumerate(child):
+                if isinstance(v, TTNNModule):
+                    v._unique_name = f"{prefix}.{name}[{i}]"
+                    v.override_children_module_names()
+                elif isinstance(v, torch.nn.Module):
+                    set_module_name_recursively(v, f"{prefix}.{name}[{i}]")
+
+
 class TTNNModule:
     """Base class for TTNN-accelerated modules with automatic fallback to PyTorch."""
 
@@ -190,6 +214,9 @@ class TTNNModule:
             if isinstance(child, (torch.nn.Module, TTNNModule)):
                 child_prefix = prefix + ("." if prefix else "") + name
                 yield from child.named_modules(memo, child_prefix, remove_duplicate)
+
+    def override_children_module_names(self):
+        set_module_name_recursively(self, self.module_name)
 
 
 def deallocate_weights_after(func):
