@@ -269,8 +269,12 @@ class DPTTTPipeline:
                 ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 1)
                 write_event = ttnn.record_event(self.backbone.tt_device, 1)
                 ttnn.wait_for_event(0, write_event)
-                self._trace_op_event = ttnn.record_event(self.backbone.tt_device, 0)
                 ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=False)
+                # Record completion after enqueuing trace execution and wait for
+                # it before reading from the persistent trace output tensor.
+                completion_event = ttnn.record_event(self.backbone.tt_device, 0)
+                ttnn.wait_for_event(0, completion_event)
+                self._trace_op_event = completion_event
             else:
                 ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 0)
                 ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=True)

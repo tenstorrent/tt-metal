@@ -193,10 +193,14 @@ def main():
         tt_stats = time_pipeline(tt, images, warmup=args.warmup, repeat=args.repeat)
 
         # PCC: compare per-image TT vs CPU, then summarize.
+        # Use the CPU reference model attached to the TT pipeline so both sides
+        # share identical weights, including HF-missing keys that initialize
+        # randomly during model construction.
+        cpu_ref = tt.fallback
         pccs: list[float] = []
         pcc_pass_flags: list[bool] = []
         for img in images:
-            depth_cpu = cpu.forward(img, normalize=True)
+            depth_cpu = cpu_ref.forward(img, normalize=True)
             depth_tt = tt.forward(img, normalize=True)
             passed, pcc = comp_pcc(depth_cpu, depth_tt, pcc=0.99)
             pccs.append(float(pcc))
