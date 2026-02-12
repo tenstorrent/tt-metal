@@ -153,11 +153,6 @@ void GridSampleOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape());
 }
 
-void GridSampleOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 TensorSpec GridSampleOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;

@@ -47,7 +47,6 @@ class BroadcastRMSNorm:
         cluster_axis=0,
         secondary_cluster_axis=None,
         num_links=1,
-        using_persistent_buffers=True,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         rsqrt_fast_approx=False,
@@ -185,7 +184,6 @@ class BroadcastRMSNorm:
 
                 # Determine if this device has secondary axis connections
                 has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
-                has_reverse_secondary_connection = is_secondary_sender
 
                 # Calculate mcast distances
                 start_distance_forward = 1 if num_targets_forward > 0 else 0
@@ -205,7 +203,6 @@ class BroadcastRMSNorm:
                     ("core_noc_x", core_noc_x if not skip_ccl else 0),
                     ("core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("is_active_broadcaster", int(is_sender or is_secondary_sender) if not skip_ccl else 0),
                     ("rmsnorm_input_cb", rmsnorm_input_source_cb),
                     ("rmsnorm_num_tiles", num_tiles),
                 ]
@@ -223,12 +220,10 @@ class BroadcastRMSNorm:
                     ("core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
                     ("has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
-                    ("has_reverse_secondary_connection", int(has_reverse_secondary_connection) if not skip_ccl else 0),
                     ("start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
                     ("range_hops_forward", range_hops_forward if not skip_ccl else 0),
                     ("start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
                     ("range_hops_backward", range_hops_backward if not skip_ccl else 0),
-                    ("using_persistent_buffers", (1 if using_persistent_buffers else 0) if not skip_ccl else 0),
                     # RMSNorm/common args (always valid)
                     # In multi-device mode, intermediate_cb = input_cb (CB 0) because broadcast
                     # writes to CB 0 which is backed by intermediate_tensor_mesh
@@ -267,12 +262,6 @@ class BroadcastRMSNorm:
                     if has_secondary_target:
                         secondary_coord = ttnn.MeshCoordinate(row, 1)  # Other column
                         dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-
-                    # Reverse secondary connection (for secondary sender back to sender when we need to sync)
-                    if has_reverse_secondary_connection and not using_persistent_buffers:
-                        sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
-
                     num_connections = len(dst_nodes)
 
                 # Common runtime args for reader (broadcast args shared across cores)
