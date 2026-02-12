@@ -1637,16 +1637,18 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                     uint32_t start_id = read_ptr[2];
                     uint64_t end_time = (static_cast<uint64_t>(read_ptr[4]) << 32) | read_ptr[5];
 
-                    // Invoke registered real-time profiler callbacks
-                    {
+                    // Invoke registered real-time profiler callbacks.
+                    // Skip records with id==0: these are non-GO dispatch commands
+                    // (e.g. SET_NUM_WORKER_SEMS, SET_GO_SIGNAL_NOC_DATA) that have
+                    // no valid program and may contain stale end timestamps.
+                    if (start_id != 0) {
                         tt::ProgramRealtimeRecord record;
                         record.program_id = start_id;
                         record.start_timestamp = start_time;
                         record.end_timestamp = end_time;
                         record.frequency = dev_state.sync_frequency;
                         record.chip_id = dev_state.chip_id;
-                        record.kernel_sources =
-                            start_id > 0 ? tt::GetKernelSourcesVecForRuntimeId(start_id) : std::vector<std::string>{};
+                        record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
                         tt::InvokeProgramRealtimeProfilerCallbacks(record);
                     }
 
