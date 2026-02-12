@@ -126,7 +126,6 @@ void py_module(nb::module_& mod) {
     broadcast_to::detail::bind_broadcast_to(mod);
 
     operations::experimental::ternary::detail::bind_where(mod);
-
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
 
