@@ -137,6 +137,10 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
+    language: str = "en",
+    task: str = "transcribe",
+    prompt: Optional[str] = None,
+    use_trace: bool = True,
     batch_size_per_device=WHISPER_BATCH_SIZE,
 ):
     """
@@ -149,14 +153,16 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         mesh_device: The target device
         model_repo: HuggingFace model repository ID. Must be one of the supported models.
         generation_params: Generation parameters for the model. If None, defaults will be used.
+        language: Language code for transcription (batch-homogeneous)
+        task: Task type ("transcribe" or "translate") (batch-homogeneous)
+        prompt: Optional prompt to guide style/spelling (batch-homogeneous)
+        use_trace: Whether to use traced execution for decoder (batch-homogeneous)
     """
     if generation_params is None:
         generation_params = GenerationParams()
-    # For model loading, use first item if list (language/task are batch-homogeneous)
-    params_for_model = generation_params[0] if isinstance(generation_params, list) else generation_params
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model(
-        model_repo, params_for_model.language, params_for_model.task
+        model_repo, language, task
     )
     parameters, ttnn_linear_weight, kv_cache, cross_attn_cache = init_conditional_generation_tt_model(
         hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper, max_batch_size=batch_size_per_device
@@ -196,6 +202,10 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         return generator.generate(
             current_batch=current_batch,
             generation_params=params,
+            language=language,
+            task=task,
+            prompt=prompt,
+            use_trace=use_trace,
             stream_generation=stream,
             return_perf_metrics=return_perf_metrics,
         )
@@ -304,6 +314,10 @@ def run_demo_whisper_for_conditional_generation_inference(
     num_inputs,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
+    language: str = "en",
+    task: str = "transcribe",
+    prompt: Optional[str] = None,
+    use_trace: bool = True,
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
@@ -313,6 +327,10 @@ def run_demo_whisper_for_conditional_generation_inference(
         mesh_device,
         model_repo,
         generation_params,
+        language=language,
+        task=task,
+        prompt=prompt,
+        use_trace=use_trace,
         batch_size_per_device=batch_size_per_device,
     )
 
@@ -379,6 +397,10 @@ def run_demo_whisper_for_conditional_generation_dataset(
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
+    language: str = "en",
+    task: str = "transcribe",
+    prompt: Optional[str] = None,
+    use_trace: bool = True,
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
@@ -388,6 +410,10 @@ def run_demo_whisper_for_conditional_generation_dataset(
         mesh_device,
         model_repo,
         generation_params,
+        language=language,
+        task=task,
+        prompt=prompt,
+        use_trace=use_trace,
         batch_size_per_device=batch_size_per_device,
     )
 
@@ -457,6 +483,8 @@ def run_demo_whisper_for_translation_dataset(
     model_repo,
     num_inputs,
     generation_params: Optional[GenerationParams] = None,
+    language: str = "French",
+    task: str = "translate",
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
@@ -469,8 +497,6 @@ def run_demo_whisper_for_translation_dataset(
             logprob_threshold=-2.0,
             no_speech_threshold=0.6,
             return_timestamps=False,
-            language="French",
-            task="translate",
         )
 
     language_code_map = {
@@ -484,20 +510,20 @@ def run_demo_whisper_for_translation_dataset(
         "English": "en_us",
     }
 
-    source_lang_code_full = language_code_map.get(generation_params.language, "fr_fr")  # Default to French
-    logger.info(
-        f"Setting up translation pipeline: source_language={generation_params.language} -> target_language=English"
-    )
-    logger.info(f"Using source language code: {source_lang_code_full} with task={generation_params.task}")
+    source_lang_code_full = language_code_map.get(language, "fr_fr")  # Default to French
+    logger.info(f"Setting up translation pipeline: source_language={language} -> target_language=English")
+    logger.info(f"Using source language code: {source_lang_code_full} with task={task}")
 
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
         mesh_device,
         model_repo,
         generation_params,
+        language=language,
+        task=task,
         batch_size_per_device=batch_size_per_device,
     )
 
-    logger.info(f"Loading FLEURS dataset for {generation_params.language} (code: {source_lang_code_full})")
+    logger.info(f"Loading FLEURS dataset for {language} (code: {source_lang_code_full})")
 
     # Load source language dataset
     ds = load_dataset("google/fleurs", source_lang_code_full, split="validation", streaming=True)
@@ -515,7 +541,7 @@ def run_demo_whisper_for_translation_dataset(
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     total_inputs = num_inputs * batch_size
 
-    logger.info(f"Testing translation from {generation_params.language} to English")
+    logger.info(f"Testing translation from {language} to English")
     logger.info(
         f"Processing {total_inputs} samples (batch_size={batch_size}: {batch_size_per_device} per device x {mesh_device.get_num_devices()} devices)"
     )
@@ -778,9 +804,6 @@ def test_demo_for_conditional_generation(
                 logprob_threshold=logprob_threshold,
                 no_speech_threshold=no_speech_threshold,
                 return_timestamps=(i % 2 == 0),
-                language=language,
-                task=task,
-                prompt=prompt,
             )
             generation_params.append(params)
     else:
@@ -790,9 +813,6 @@ def test_demo_for_conditional_generation(
             logprob_threshold=logprob_threshold,
             no_speech_threshold=no_speech_threshold,
             return_timestamps=return_timestamps,
-            language=language,
-            task=task,
-            prompt=prompt,
         )
 
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
@@ -801,7 +821,10 @@ def test_demo_for_conditional_generation(
         num_inputs,
         model_repo,
         generation_params,
-        batch_size_per_device,
+        language=language,
+        task=task,
+        prompt=prompt,
+        batch_size_per_device=batch_size_per_device,
         stream=stream,
     )
 
@@ -913,15 +936,15 @@ def test_demo_for_conditional_generation_dataset(
         logprob_threshold=logprob_threshold,
         no_speech_threshold=no_speech_threshold,
         return_timestamps=return_timestamps,
-        language=language,
-        task=task,
-        prompt=prompt,
     )
     return run_demo_whisper_for_conditional_generation_dataset(
         mesh_device,
         model_repo,
         generation_params,
-        batch_size_per_device,
+        language=language,
+        task=task,
+        prompt=prompt,
+        batch_size_per_device=batch_size_per_device,
         stream=stream,
     )
 
@@ -982,14 +1005,14 @@ def test_demo_for_translation_dataset(
         logprob_threshold=logprob_threshold,
         no_speech_threshold=no_speech_threshold,
         return_timestamps=return_timestamps,
-        language=source_language,
-        task="translate",
     )
     return run_demo_whisper_for_translation_dataset(
         mesh_device,
         model_repo,
         num_inputs,
         generation_params,
-        batch_size_per_device,
+        language=source_language,
+        task="translate",
+        batch_size_per_device=batch_size_per_device,
         stream=stream,
     )

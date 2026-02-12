@@ -23,19 +23,17 @@ from . import ttnn_optimized_functional_whisper
 
 @dataclass
 class GenerationParams:
-    """Dataclass for Whisper generation parameters."""
+    """Dataclass for Whisper generation parameters.
+
+    Note: language, task, prompt, and use_trace are batch-homogeneous and must be
+    passed as separate parameters to generate().
+    """
 
     temperatures: Union[float, Tuple[float, ...]] = 0.0
     compression_ratio_threshold: Optional[float] = 2.4
     logprob_threshold: Optional[float] = -2.0
     no_speech_threshold: Optional[float] = 0.6
     return_timestamps: bool = False
-    language: str = "en"
-    task: str = "transcribe"
-    prompt: Optional[
-        str
-    ] = None  # Prompt to guide the model's style or specify how to spell unfamiliar words (limited to 224 tokens)
-    use_trace: bool = True  # Enable traced execution for decoder
 
 
 # Default values for quality metrics
@@ -257,6 +255,10 @@ class WhisperGenerator:
         self,
         current_batch,
         generation_params: Optional[Union[GenerationParams, List[GenerationParams]]] = None,
+        language: str = "en",
+        task: str = "transcribe",
+        prompt: Optional[str] = None,
+        use_trace: bool = True,
         stream_generation=False,
         return_perf_metrics=False,
     ):
@@ -266,6 +268,10 @@ class WhisperGenerator:
         Args:
             current_batch: List of (sampling_rate, audio_array) tuples
             generation_params: Single GenerationParams (broadcast to all) or list of per-request generation parameters
+            language: Language code for transcription (batch-homogeneous)
+            task: Task type ("transcribe" or "translate") (batch-homogeneous)
+            prompt: Optional prompt to guide style/spelling (batch-homogeneous)
+            use_trace: Whether to use traced execution for decoder (batch-homogeneous)
             stream_generation: Whether to stream tokens
             return_perf_metrics: Whether to return performance metrics
 
@@ -274,32 +280,26 @@ class WhisperGenerator:
         """
         if generation_params is None:
             generation_params = [GenerationParams() for _ in range(len(current_batch))]
-        elif not isinstance(generation_params, list):
-            # Single GenerationParams: broadcast to all batch items
+        elif isinstance(generation_params, list):
+            if len(generation_params) < len(current_batch):
+                for _ in range(len(generation_params), len(current_batch)):
+                    generation_params.append(GenerationParams())
+            elif len(generation_params) > len(current_batch):
+                raise ValueError("Generation parameters list cannot be longer than the current batch")
+        else:
             generation_params = [generation_params] * len(current_batch)
-        elif len(generation_params) != len(current_batch):
-            for i in range(len(generation_params), len(current_batch)):
-                generation_params.append(GenerationParams())
 
         temperatures = []
         compression_ratio_threshold = []
         logprob_threshold = []
         no_speech_threshold = []
         return_timestamps = []
-        language = []
-        task = []
-        prompt = []
-        use_trace = []
         for params in generation_params:
             temperatures.append(params.temperatures)
             compression_ratio_threshold.append(params.compression_ratio_threshold)
             logprob_threshold.append(params.logprob_threshold)
             no_speech_threshold.append(params.no_speech_threshold)
             return_timestamps.append(params.return_timestamps)
-            language.append(params.language)
-            task.append(params.task)
-            prompt.append(params.prompt)
-            use_trace.append(params.use_trace)
 
         # Invalidate cross-attention cache for new generation
         self._invalidate_cross_attn_cache()
@@ -517,18 +517,9 @@ class WhisperGenerator:
 
         Uses pre-allocated self.encoder_hidden_states instead of a passed encoder_hidden_states parameter.
         """
-        # Normalize list params to single values for decoder prefix (batch-homogeneous)
-        if isinstance(language, list):
-            language = language[0] if language else "en"
-        if isinstance(task, list):
-            task = task[0] if task else "transcribe"
-        if isinstance(prompt, list):
-            prompt = prompt[0] if prompt else None
         return_timestamps_for_prefix = (
             any(return_timestamps) if isinstance(return_timestamps, list) else return_timestamps
         )
-        if isinstance(use_trace, list):
-            use_trace = use_trace[0] if use_trace else True
 
         # Input ids - use forced decoder IDs for translation
         forced_decoder_ids = self.processor.get_decoder_prompt_ids(language=language, task=task)
