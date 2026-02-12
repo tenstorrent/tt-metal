@@ -81,6 +81,75 @@ void validate_dfb_tile_counters(
             << "Consumer RISC " << (int)risc_id << " has wrong TC count";
     }
 
+    // Validate should_init_tc based on Tensix/DM RISC types
+    // Key constraint: Only DM RISCs can initialize TCs
+    bool producer_has_dm = (config.producer_risc_mask & 0xFF) != 0;
+    bool producer_is_tensix_only = !producer_has_dm && ((config.producer_risc_mask & 0x0F00) != 0);
+
+    if (producer_is_tensix_only) {
+        // Producer is Tensix-only: first DM consumer should have should_init_tc = true
+        bool found_init_tc_consumer = false;
+        for (const auto& [risc_id, rc] : producer_configs) {
+            EXPECT_FALSE(rc->config.should_init_tc)
+                << "Tensix producer RISC " << (int)risc_id << " should not have should_init_tc=true";
+        }
+        for (const auto& [risc_id, rc] : consumer_configs) {
+            bool is_dm_risc = risc_id < 8;
+            if (is_dm_risc && !found_init_tc_consumer) {
+                EXPECT_TRUE(rc->config.should_init_tc) << "First DM consumer RISC " << (int)risc_id
+                                                       << " should have should_init_tc=true when producer is Tensix";
+                found_init_tc_consumer = true;
+            } else {
+                EXPECT_FALSE(rc->config.should_init_tc)
+                    << "Consumer RISC " << (int)risc_id << " should not have should_init_tc=true";
+            }
+        }
+        EXPECT_TRUE(found_init_tc_consumer) << "No DM consumer found to init TCs when producer is Tensix";
+    } else {
+        // Producer has DM: producer should have should_init_tc = true
+        for (const auto& [risc_id, rc] : producer_configs) {
+            bool is_dm_risc = risc_id < 8;
+            if (is_dm_risc) {
+                EXPECT_TRUE(rc->config.should_init_tc)
+                    << "DM producer RISC " << (int)risc_id << " should have should_init_tc=true";
+            }
+        }
+        for (const auto& [risc_id, rc] : consumer_configs) {
+            EXPECT_FALSE(rc->config.should_init_tc)
+                << "Consumer RISC " << (int)risc_id << " should not have should_init_tc=true when producer is DM";
+        }
+    }
+
+    // Validate TC tensix_id for Tensix RISCs
+    // Key constraint: Tensix RISCs can only access TCs from their own tensix_id
+    for (const auto& [risc_id, rc] : producer_configs) {
+        bool is_tensix_risc = risc_id >= 8;
+        if (is_tensix_risc) {
+            uint8_t expected_tensix_id = (risc_id - 8) % 4;
+            for (uint8_t tc = 0; tc < rc->config.num_tcs_to_rr; tc++) {
+                auto ptc = rc->config.packed_tile_counter[tc];
+                uint8_t actual_tensix_id = ::experimental::get_tensix_id(ptc);
+                EXPECT_EQ(actual_tensix_id, expected_tensix_id)
+                    << "Tensix producer RISC " << (int)risc_id << " TC[" << (int)tc
+                    << "] must use tensix_id=" << (int)expected_tensix_id << " but has " << (int)actual_tensix_id;
+            }
+        }
+    }
+
+    for (const auto& [risc_id, rc] : consumer_configs) {
+        bool is_tensix_risc = risc_id >= 8;
+        if (is_tensix_risc) {
+            uint8_t expected_tensix_id = (risc_id - 8) % 4;
+            for (uint8_t tc = 0; tc < rc->config.num_tcs_to_rr; tc++) {
+                auto ptc = rc->config.packed_tile_counter[tc];
+                uint8_t actual_tensix_id = ::experimental::get_tensix_id(ptc);
+                EXPECT_EQ(actual_tensix_id, expected_tensix_id)
+                    << "Tensix consumer RISC " << (int)risc_id << " TC[" << (int)tc
+                    << "] must use tensix_id=" << (int)expected_tensix_id << " but has " << (int)actual_tensix_id;
+            }
+        }
+    }
+
     // For BLOCKED mode, validate remapper pair indices
     if (config.cap == ::experimental::AccessPattern::BLOCKED) {
         std::set<uint8_t> seen_remapper_indices;
@@ -182,7 +251,36 @@ void validate_dfb_tile_counters(
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4SConfig) {
+TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x10,
+        .num_consumers = 1,
+        .cap = ::experimental::AccessPattern::STRIDED,
+        .enable_implicit_sync = false};
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+
+    DFBTileCounterExpectation expectation{
+        .expected_producer_tc_count = 1,  // 1 producer with 1 consumer -> 1 TC per producer
+        .expected_consumer_tc_count = 1,  // 1 consumer with 1 producer -> 1 TC per consumer
+        .producer_to_consumer_pairings = {
+            {0, {{0, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 0 TC[0]
+        }};
+
+    validate_dfb_tile_counters(program, logical_core, config, expectation);
+}
+
+TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -216,7 +314,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1SConfig) {
+TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx1SConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -248,7 +346,39 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4SConfig) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1SConfig) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0xF,
+        .num_producers = 4,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x10,
+        .num_consumers = 1,
+        .cap = ::experimental::AccessPattern::STRIDED,
+        .enable_implicit_sync = false};
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+
+    DFBTileCounterExpectation expectation{
+        .expected_producer_tc_count = 1,  // Each producer pairs with 1 consumer -> 1 TC per producer
+        .expected_consumer_tc_count = 4,  // 1 consumer with 4 producers -> 4 TCs per consumer
+        .producer_to_consumer_pairings = {
+            {0, {{4, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 4 TC[0]
+            {1, {{4, 0, 1}}},  // Producer 1 TC[0] pairs with Consumer risc 4 TC[1]
+            {2, {{4, 0, 2}}},  // Producer 2 TC[0] pairs with Consumer risc 4 TC[2]
+            {3, {{4, 0, 3}}},  // Producer 3 TC[0] pairs with Consumer risc 4 TC[3]
+        }};
+
+    validate_dfb_tile_counters(program, logical_core, config, expectation);
+}
+
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4SConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -280,7 +410,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4SConfig) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4SConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -318,7 +448,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2SConfig) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2SConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -350,7 +480,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx1BConfig) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1BConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -379,7 +509,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx1BConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4BConfig) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -413,7 +543,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4BConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1BConfig) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1BConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -445,7 +575,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1BConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4BConfig) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -501,7 +631,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4BConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2BConfig) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -552,7 +682,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2BConfig) {
 // 2S x 4B: 2 producers (riscs 0,1) with 4 blocked consumers (riscs 2,3,4,5)
 // Each producer has 1 TC, each consumer has 2 TCs (num_producers TCs)
 // BLOCKED: Each consumer's TC[i] pairs with producer[i]
-TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4BConfig) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }

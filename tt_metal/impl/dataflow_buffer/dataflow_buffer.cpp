@@ -134,6 +134,10 @@ std::vector<uint8_t> extract_tensix_ids(uint16_t risc_mask) {
 // Round-robins through 0-3 based on pair index
 uint8_t get_dm_tensix_id_for_pair(uint8_t pair_index) { return pair_index % 4; }
 
+bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }
+
+bool has_tensix_risc(uint16_t risc_mask) { return (risc_mask & 0x0F00) != 0; }
+
 // Holds tile counters allocated together for a producer-consumer group
 struct TileCounterGroup {
     ::experimental::PackedTileCounter producer_tc{};
@@ -296,11 +300,21 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     TT_FATAL(config.num_entries > 0, "Num entries must be > 0");
     TT_FATAL(config.producer_risc_mask != 0, "producer_risc_mask must have at least one bit set");
     TT_FATAL(config.consumer_risc_mask != 0, "consumer_risc_mask must have at least one bit set");
-    TT_FATAL((config.producer_risc_mask & 0xFF00) == 0, "producer cannot be a Tensix yet");
-    TT_FATAL((config.consumer_risc_mask & 0xFF00) == 0, "consumer cannot be a Tensix yet");
     TT_FATAL(
         (config.producer_risc_mask & config.consumer_risc_mask) == 0,
         "producer_risc_mask and consumer_risc_mask must not overlap");
+
+    bool producer_has_dm = has_dm_risc(config.producer_risc_mask);
+    bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
+    bool producer_is_tensix_only = !producer_has_dm && has_tensix_risc(config.producer_risc_mask);
+    bool consumer_is_tensix_only = !consumer_has_dm && has_tensix_risc(config.consumer_risc_mask);
+    TT_FATAL(
+        !(producer_is_tensix_only && consumer_is_tensix_only),
+        "Both producer and consumer cannot be Tensix-only RISCs - at least one DM RISC is required to initialize tile "
+        "counters");
+    TT_FATAL(
+        !(producer_is_tensix_only && config.cap == ::experimental::AccessPattern::BLOCKED),
+        "Tensix producer with BLOCKED consumer pattern is not supported");
     TT_FATAL(config.pap != ::experimental::AccessPattern::BLOCKED, "Blocked producer pattern not supported");
     TT_FATAL(!config.enable_implicit_sync, "Implicit sync not supported yet");
     TT_FATAL(
@@ -371,25 +385,21 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         }
     }
 
-    // Extract tensix IDs from risc masks
-    std::vector<uint8_t> producer_tensix_ids = extract_tensix_ids(config.producer_risc_mask);
-    std::vector<uint8_t> consumer_tensix_ids = extract_tensix_ids(config.consumer_risc_mask);
-    bool has_tensix_riscs = !producer_tensix_ids.empty() || !consumer_tensix_ids.empty();
-
-    // Determine tensix_id to use for allocation
-    // If tensix RISCs are used, use those specific tensix_ids
-    // If only DM RISCs, round-robin through 0-3 per producer-consumer pair
-    auto get_tensix_id_for_pair = [&](uint8_t pair_index) -> uint8_t {
-        if (has_tensix_riscs) {
-            // Use tensix_ids from masks, round-robin if multiple
-            std::vector<uint8_t> all_tensix_ids = producer_tensix_ids;
-            all_tensix_ids.insert(all_tensix_ids.end(), consumer_tensix_ids.begin(), consumer_tensix_ids.end());
-            if (all_tensix_ids.empty()) {
-                return get_dm_tensix_id_for_pair(pair_index);
-            }
-            return all_tensix_ids[pair_index % all_tensix_ids.size()];
+    // Determine tensix_id based on which RISC in the pair is Tensix
+    // Key constraint: Tensix RISCs can only access TCs from their own tensix_id
+    // DM RISCs can access any TC
+    auto get_tensix_id_for_pair =
+        [&](uint8_t producer_risc_id, uint8_t consumer_risc_id, uint8_t pair_counter) -> uint8_t {
+        if (producer_risc_id >= 8) {
+            // Producer is Tensix: must use producer's tensix_id
+            return (producer_risc_id - 8) % 4;
+        } else if (consumer_risc_id >= 8) {
+            // Consumer is Tensix: must use consumer's tensix_id
+            return (consumer_risc_id - 8) % 4;
+        } else {
+            // Both DM: round-robin across tensix_ids
+            return get_dm_tensix_id_for_pair(pair_counter);
         }
-        return get_dm_tensix_id_for_pair(pair_index);
     };
 
     std::vector<std::vector<TileCounterGroup>> tc_groups;  // [producer_idx][tc_slot]
@@ -428,6 +438,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     // For each producer, allocate TC groups (one per TC slot)
+    uint8_t pair_counter = 0;  // For round-robin tensix_id when both producer and consumer are DM
     for (size_t producer_idx = 0; producer_idx < producer_risc_ids.size(); producer_idx++) {
         tc_groups[producer_idx].resize(num_producer_tcs);
 
@@ -439,19 +450,23 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                 // Strided pairing: producer N pairs with consumers N, N+num_producers, N+2*num_producers, etc.
                 uint8_t consumer_idx = (producer_idx + tc_slot * producer_risc_ids.size()) % consumer_risc_ids.size();
 
-                // Determine tensix_id based on consumer (all producers pairing with same consumer use same tensix_id)
-                uint8_t tensix_id = get_tensix_id_for_pair(consumer_idx);
+                // Determine tensix_id based on which RISC is Tensix
+                uint8_t producer_risc_id = producer_risc_ids[producer_idx];
+                uint8_t consumer_risc_id = consumer_risc_ids[consumer_idx];
+                uint8_t tensix_id = get_tensix_id_for_pair(producer_risc_id, consumer_risc_id, pair_counter++);
 
                 group.producer_tc = tile_counter_allocator_.allocate(tensix_id);
                 group.consumer_tcs.push_back(group.producer_tc);  // Shared TC for strided
 
                 log_info(
                     tt::LogMetal,
-                    "Strided: Producer[{}] TC[{}] (tensix_id={}) pairs with Consumer[{}]",
+                    "Strided: Producer[{}] (risc_id={}) TC[{}] (tensix_id={}) pairs with Consumer[{}] (risc_id={})",
                     producer_idx,
+                    producer_risc_id,
                     tc_slot,
                     tensix_id,
-                    consumer_idx);
+                    consumer_idx,
+                    consumer_risc_id);
             } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
                 // Producer TC: use producer's risc_id % 4 as tensix_id
                 uint8_t producer_tensix_id = producer_risc_ids[producer_idx] % 4;
@@ -489,9 +504,16 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         DFBRiscConfig risc_config;
         risc_config.risc_id = risc_id;
         risc_config.is_producer = true;
-        risc_config.config.should_init_tc = true;  // producer is responsible for initializing tile counters
+        // Producer inits TCs only if it's a DM RISC (Tensix RISCs can't run TC init code)
+        bool producer_is_dm = risc_id < 8;
+        risc_config.config.should_init_tc = producer_is_dm;
 
-        log_info(tt::LogMetal, "Producer risc {} uses {} TCs", risc_id, num_producer_tcs);
+        log_info(
+            tt::LogMetal,
+            "Producer risc {} uses {} TCs (should_init_tc={})",
+            risc_id,
+            num_producer_tcs,
+            risc_config.config.should_init_tc);
 
         for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
             risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][tc].producer_tc;
@@ -518,6 +540,10 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     // Create consumer risc_configs and assign TCs from groups
+    // If producer is Tensix, the first DM consumer should init TCs
+    bool need_consumer_dm_init = !producer_risc_ids.empty() && producer_risc_ids[0] >= 8;
+    bool first_dm_consumer_assigned = false;
+
     for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
         uint8_t risc_id = consumer_risc_ids[consumer_idx];
 
@@ -525,7 +551,21 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         risc_config.risc_id = risc_id;
         risc_config.is_producer = false;
 
-        log_info(tt::LogMetal, "Consumer risc {} uses {} TCs", risc_id, num_consumer_tcs);
+        // Determine if this consumer should init TCs
+        bool is_dm_risc = risc_id < 8;
+        if (need_consumer_dm_init && is_dm_risc && !first_dm_consumer_assigned) {
+            risc_config.config.should_init_tc = true;
+            first_dm_consumer_assigned = true;
+        } else {
+            risc_config.config.should_init_tc = false;
+        }
+
+        log_info(
+            tt::LogMetal,
+            "Consumer risc {} uses {} TCs (should_init_tc={})",
+            risc_id,
+            num_consumer_tcs,
+            risc_config.config.should_init_tc);
 
         for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
             if (config.cap == ::experimental::AccessPattern::STRIDED) {

@@ -10,7 +10,8 @@
 void kernel_main() {
     const uint32_t dst_addr_base = get_compile_time_arg_val(0);
     const uint32_t num_entries_per_consumer = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    const uint32_t blocked_consumer = get_compile_time_arg_val(2);
+    constexpr auto dst_args = TensorAccessorArgs<3>();
 
     uint32_t consumer_mask = get_arg_val<uint32_t>(0);
     const uint32_t num_consumers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
@@ -34,16 +35,21 @@ void kernel_main() {
         dfb.wait_front(1);
         // in blocked case maybe each consumer can modify the data so host knows that each have consumed it
         // DPRINT << "wfd" << ENDL();
-        uint32_t page_id = /*is blocked?*/ tile_id; /*: tile_id * num_consumers + consumer_idx*/
-        ;
+        uint32_t page_id = 0;
+        if constexpr (blocked_consumer) {
+            page_id = tile_id;
+        } else {
+            page_id = tile_id * num_consumers + consumer_idx;
+        }
         DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
         // for blocked consumer each consumer reads each tile .. user kernel shouldn't have to think about this (tensor
-        // accessor will abstract) noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id}); DPRINT
-        // << "pfw" << ENDL();
+        // accessor will abstract)
+        noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id});
+        // DPRINT << "pfw" << ENDL();
         dfb.pop_front(1);
         // DPRINT << "pfd" << ENDL();
     }
     DPRINT << "CBW" << ENDL();
-    // noc.async_write_barrier();
+    noc.async_write_barrier();
     DPRINT << "CBWD" << ENDL();
 }
