@@ -14,6 +14,7 @@ from tracy import signpost
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.experimental.tt_symbiote.core.utils import (
+    TORCH_TO_TTNN,
     compare_fn_outputs,
     torch_dtype_to_ttnn_dtype,
     ttnn_dtype_to_torch_dtype,
@@ -735,7 +736,7 @@ class SELRun(NormalRun):
 class DPLRun(NormalRun):
     @staticmethod
     def module_run(self, *args, **kwds):
-        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+        pass
 
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
