@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +13,8 @@ import torch.nn as nn
 import ttnn
 
 # Import from local reference files instead of HuggingFace
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
 from models.demos.deepseek_v3.utils.config_helpers import even_int_div, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -69,22 +70,15 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
     return out_state_dict
 
 
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+
+
 @pytest.mark.parametrize(
     "mode, seq_len",
     [
         ("decode", 128),
-    ]
-    + [
-        ("prefill", seq_len)
-        if seq_len == 128
-        else pytest.param(
-            "prefill",
-            seq_len,
-            marks=pytest.mark.skip(
-                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-            ),
-        )
-        for seq_len in PREFILL_SEQ_LENS
+        ("prefill", _prefill_seq_len),
     ],
 )
 @pytest.mark.parametrize(
