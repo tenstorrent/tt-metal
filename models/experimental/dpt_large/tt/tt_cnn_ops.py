@@ -103,7 +103,9 @@ def _nhwc_to_nchw(x_nhwc, b: int, h: int, w: int, c: int):
     x_nhwc = _to_row_major(x_nhwc)
     x_nhwc = _ensure_interleaved(x_nhwc)
     s_b, s1, s2, s3 = _shape4(x_nhwc)
-    if s_b != int(b):
+    # Some runtimes keep the logical batch in dim0, while others can fold it
+    # into flattened spatial dims and report dim0 == 1.
+    if s_b != int(b) and s_b != 1:
         raise RuntimeError(
             f"Unexpected TT NHWC batch dimension: got {tuple(x_nhwc.shape)} expected batch={int(b)}"
         )
