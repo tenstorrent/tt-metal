@@ -57,9 +57,6 @@ jobs:
         DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
         MESH_DEVICE: TG
-        TT_METAL_WATCHER: ${{ inputs.enable-watcher && '1' || '0' }}
-        TT_METAL_ENABLE_LIGHTWEIGHT_KERNEL_ASSERTS: ${{ inputs.enable-lightweight-kernel-asserts && '1' || '0' }}
-        TT_METAL_ENABLE_LLK_ASSERTS: ${{ inputs.enable-llk-asserts && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
