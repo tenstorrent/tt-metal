@@ -98,8 +98,6 @@ class DPTPreActResidualLayerTT(nn.Module):
         # TT caches
         self._tt_conv1 = None
         self._tt_conv2 = None
-        self._tt_bn1 = None
-        self._tt_bn2 = None
 
     @staticmethod
     def _fuse_conv_bn(conv: nn.Conv2d, bn: nn.BatchNorm2d) -> tuple[torch.Tensor, torch.Tensor]:
@@ -148,37 +146,6 @@ class DPTPreActResidualLayerTT(nn.Module):
                 self._tt_conv1 = cache
             else:
                 self._tt_conv2 = cache
-        return cache(x)
-
-    def _tt_batch_norm(self, which: int, x):
-        import tt_lib.fallback_ops as fallback_ops  # type: ignore
-        import ttnn  # type: ignore
-
-        if not self.use_batch_norm:
-            return x
-
-        bnorm = self.batch_norm1 if which == 1 else self.batch_norm2
-        cache = self._tt_bn1 if which == 1 else self._tt_bn2
-
-        if cache is None:
-            w = torch_to_tt_tensor_rm(bnorm.weight.detach(), self.tt_device, put_on_device=True)
-            b = torch_to_tt_tensor_rm(bnorm.bias.detach(), self.tt_device, put_on_device=True)
-            rm = torch_to_tt_tensor_rm(bnorm.running_mean.detach(), self.tt_device, put_on_device=True)
-            rv = torch_to_tt_tensor_rm(bnorm.running_var.detach(), self.tt_device, put_on_device=True)
-            cache = fallback_ops.BatchNorm2d(
-                weights=w,
-                biases=b,
-                running_mean=rm,
-                running_var=rv,
-                num_batches_tracked=bnorm.num_batches_tracked,
-                num_features=bnorm.num_features,
-                eps=bnorm.eps,
-                momentum=bnorm.momentum,
-            )
-            if which == 1:
-                self._tt_bn1 = cache
-            else:
-                self._tt_bn2 = cache
         return cache(x)
 
     def forward(self, hidden_state: torch.Tensor):
