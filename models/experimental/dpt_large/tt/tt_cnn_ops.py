@@ -115,6 +115,12 @@ def _nhwc_to_nchw(x_nhwc, b: int, h: int, w: int, c: int):
         x_nhwc = ttnn.reshape(x_nhwc, (int(b), exp_h, exp_w, exp_c))
     elif (s1, s2, s3) == (exp_h * exp_w, 1, exp_c):
         x_nhwc = ttnn.reshape(x_nhwc, (int(b), exp_h, exp_w, exp_c))
+    # Some conv paths can fold batch into the flattened spatial dimension,
+    # yielding [1, 1, B*H*W, C] or [1, B*H*W, 1, C]. Reconstruct logical NHWC.
+    elif s_b == 1 and (s1, s2, s3) == (1, int(b) * exp_h * exp_w, exp_c):
+        x_nhwc = ttnn.reshape(x_nhwc, (int(b), exp_h, exp_w, exp_c))
+    elif s_b == 1 and (s1, s2, s3) == (int(b) * exp_h * exp_w, 1, exp_c):
+        x_nhwc = ttnn.reshape(x_nhwc, (int(b), exp_h, exp_w, exp_c))
     else:
         raise RuntimeError(
             f"Unexpected TT NHWC logical shape: got {tuple(x_nhwc.shape)} expected {(int(b), exp_h, exp_w, exp_c)}"
