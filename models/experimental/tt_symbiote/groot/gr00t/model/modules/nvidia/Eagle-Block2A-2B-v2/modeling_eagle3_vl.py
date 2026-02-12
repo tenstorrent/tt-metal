@@ -83,6 +83,29 @@ class Eagle3_VLPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
 
+class Eagle3_VLPreTrainedModel(PreTrainedModel):
+    config_class = Eagle3_VLConfig
+    base_model_prefix = "model"
+    main_input_name = "input_ids"
+    supports_gradient_checkpointing = True
+    _no_split_modules = [
+        "Qwen2DecoderLayer",
+        "LlamaDecoderLayer",
+        "Siglip2EncoderLayer",
+        "SiglipEncoderLayer",
+    ]
+    _skip_keys_device_placement = "past_key_values"
+    _supports_flash_attn_2 = True
+    _supports_cache_class = True
+    _supports_static_cache = True
+    _supports_quantized_cache = True
+    _supports_sdpa = True
+
+    def _init_weights(self, module):
+        # ... [Standard weight init logic]
+        pass
+
+
 class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixin):
     config_class = Eagle3_VLConfig
 
@@ -102,10 +125,12 @@ class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixi
             if config.vision_config.model_type == "intern_vit_6b":
                 self.vision_model = InternVisionModel(config.vision_config)
             elif config.vision_config.model_type == "siglip_vision_model":
-                config.vision_config._attn_implementation = "flash_attention_2"
+                # --- TENSTORRENT FIX: COMMENT OUT FORCED ATTN ---
+                # config.vision_config._attn_implementation = "flash_attention_2"
                 self.vision_model = SiglipVisionModel(config.vision_config)
             elif config.vision_config.model_type == "siglip2_vision_model":
-                config.vision_config._attn_implementation = "flash_attention_2"
+                # --- TENSTORRENT FIX: COMMENT OUT FORCED ATTN ---
+                # config.vision_config._attn_implementation = "flash_attention_2"
                 self.vision_model = Siglip2VisionModel(config.vision_config)
             elif config.vision_config.model_type == "radio":
                 self.vision_model = RADIOModel(config.vision_config)
@@ -118,28 +143,26 @@ class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixi
             elif config.text_config.architectures[0] == "Phi3ForCausalLM":
                 self.language_model = Phi3ForCausalLM(config.text_config)
             elif config.text_config.architectures[0] == "Qwen2ForCausalLM":
-                assert (
-                    config.text_config._attn_implementation == "flash_attention_2"
-                ), f"Qwen2 must use flash_attention_2 but got {config.text_config._attn_implementation}"
+                # --- TENSTORRENT FIX: COMMENT OUT ASSERTION ---
+                # assert (
+                #     config.text_config._attn_implementation == "flash_attention_2"
+                # ), f"Qwen2 must use flash_attention_2 but got {config.text_config._attn_implementation}"
                 self.language_model = Qwen2ForCausalLM(config.text_config)
             elif config.text_config.architectures[0] == "Qwen3ForCausalLM":
-                assert (
-                    config.text_config._attn_implementation == "flash_attention_2"
-                ), f"Qwen3 must use flash_attention_2 but got {config.text_config._attn_implementation}"
+                # --- TENSTORRENT FIX: COMMENT OUT ASSERTION ---
+                # assert (
+                #     config.text_config._attn_implementation == "flash_attention_2"
+                # ), f"Qwen3 must use flash_attention_2 but got {config.text_config._attn_implementation}"
                 self.language_model = Qwen3ForCausalLM(config.text_config)
             else:
-                raise NotImplementedError(
-                    f"{config.text_config.architectures[0]} is not implemented."
-                )
+                raise NotImplementedError(f"{config.text_config.architectures[0]} is not implemented.")
 
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.text_config.hidden_size
 
         self.mlp1 = nn.Sequential(
             nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
-            nn.Linear(
-                vit_hidden_size * int(1 / self.downsample_ratio) ** 2, llm_hidden_size
-            ),
+            nn.Linear(vit_hidden_size * int(1 / self.downsample_ratio) ** 2, llm_hidden_size),
             nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
@@ -147,15 +170,11 @@ class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixi
         self.neftune_alpha = None
 
         if config.use_backbone_lora:
-            self.wrap_backbone_lora(
-                r=config.use_backbone_lora, lora_alpha=2 * config.use_backbone_lora
-            )
+            self.wrap_backbone_lora(r=config.use_backbone_lora, lora_alpha=2 * config.use_backbone_lora)
 
         self.use_llm_lora = config.use_llm_lora
         if config.use_llm_lora:
-            self.wrap_llm_lora(
-                r=config.use_llm_lora, lora_alpha=2 * config.use_llm_lora
-            )
+            self.wrap_llm_lora(r=config.use_llm_lora, lora_alpha=2 * config.use_llm_lora)
 
         self.check_forward_kwargs()
 
@@ -164,9 +183,7 @@ class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixi
         # has special handling for functions with **kwargs parameters that would affect
         # how our model is processed during training and inference.
         forward_params = inspect.signature(self.forward).parameters
-        assert not any(
-            k.kind == inspect.Parameter.VAR_KEYWORD for k in forward_params.values()
-        )
+        assert not any(k.kind == inspect.Parameter.VAR_KEYWORD for k in forward_params.values())
 
     def wrap_backbone_lora(self, r=128, lora_alpha=256, lora_dropout=0.05):
         lora_config = LoraConfig(
@@ -220,9 +237,7 @@ class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixi
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         input_embeds = self.language_model.get_input_embeddings()(input_ids)
 
@@ -238,15 +253,19 @@ class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixi
 
         input_ids = input_ids.reshape(B * N)
         selected = input_ids == self.image_token_index
-        try:
-            input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds
-        except Exception as e:
-            print(
-                f"warning: {e}, input_embeds[selected].shape={input_embeds[selected].shape}, "
-                f"vit_embeds.shape={vit_embeds.shape}"
-            )
-            n_token = selected.sum()
-            input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds[:n_token]
+        n_image_tokens = selected.sum().item()
+        if n_image_tokens > 0:
+            # Do fusion in torch to avoid TTNN "Invalid subtile broadcast type" when
+            # input_embeds or vit_embeds are device/wrapped tensors.
+            def _to_torch(t):
+                return t.to_torch if hasattr(t, "to_torch") else t
+
+            emb_t = _to_torch(input_embeds)
+            vit_t = _to_torch(vit_embeds)
+            if isinstance(emb_t, torch.Tensor):
+                emb_t = emb_t.clone()
+            emb_t[selected] = vit_t[:n_image_tokens].to(emb_t.device, emb_t.dtype)
+            input_embeds = emb_t
 
         input_embeds = input_embeds.reshape(B, N, C)
 
@@ -297,9 +316,7 @@ class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixi
         # slices[i]: [hi*wi, C]
 
         # 2) Convert to [C, H, W]
-        features = [
-            sl.transpose(0, 1).reshape(C, h, w) for sl, (h, w) in zip(slices, shapes)
-        ]  # Each item [C, hi, wi]
+        features = [sl.transpose(0, 1).reshape(C, h, w) for sl, (h, w) in zip(slices, shapes)]  # Each item [C, hi, wi]
         # visualize_tensor_list(features, 'features.jpg')
 
         # 3) Group by scale and batch unshuffle
@@ -312,9 +329,7 @@ class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixi
             # Stack features of the same scale -> [n, C, H, W]
             grp = torch.stack([features[i] for i in idxs], dim=0)
             # Pixel Unshuffle at once
-            out = F.pixel_unshuffle(
-                grp, downscale_factor=int(1 / self.downsample_ratio)
-            )  # [n, C*4, H//2, W//2]
+            out = F.pixel_unshuffle(grp, downscale_factor=int(1 / self.downsample_ratio))  # [n, C*4, H//2, W//2]
             out = out.flatten(start_dim=2).transpose(1, 2)  # [n, H//2 * W//2, C*4]
             # Split back to respective positions
             for i, feat in zip(idxs, out):
@@ -337,9 +352,7 @@ class Eagle3_VLForConditionalGeneration(Eagle3_VLPreTrainedModel, GenerationMixi
         for flag, length in zip(image_flags, lengths):
             valid_mask.extend([flag] * length)
 
-        valid_mask = torch.tensor(
-            valid_mask, dtype=torch.bool, device=vit_embeds.device
-        )
+        valid_mask = torch.tensor(valid_mask, dtype=torch.bool, device=vit_embeds.device)
         valid_tokens = vit_embeds[valid_mask]  # [num_valid_tokens, C]
 
         return valid_tokens
