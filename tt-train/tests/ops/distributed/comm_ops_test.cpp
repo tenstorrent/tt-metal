@@ -230,6 +230,9 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
 }
 
 TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
+    // Test failing with watcher enabled, github issue #36312
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -336,6 +339,9 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
 }
 
 TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
+    // Test failing with watcher enabled, github issue #36312
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
