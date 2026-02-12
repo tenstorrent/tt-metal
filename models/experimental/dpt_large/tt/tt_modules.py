@@ -420,23 +420,15 @@ class TTAttention:
         try:
             if self._wqkv_tt is None or self._bqkv_tt is None:
                 raise RuntimeError("QKV fused weights not available on device")
-            memcfg = getattr(self.program_config, "qkv_memcfg", None)
-            if memcfg is None:
-                memcfg = getattr(self, "output_mem", None)
+            memcfg = getattr(self, "output_mem", None)
             if memcfg is None:
                 memcfg = ttnn.DRAM_MEMORY_CONFIG
-            qkv_kwargs = {
-                "bias": self._bqkv_tt,
-                "dtype": ttnn.bfloat16,
-                "memory_config": memcfg,
-            }
-            qkv_pc = getattr(self.program_config, "qkv_program_config", None)
-            if qkv_pc is not None:
-                qkv_kwargs["program_config"] = qkv_pc
             qkv4 = ttnn.linear(
                 x4,
                 self._wqkv_tt,
-                **qkv_kwargs,
+                bias=self._bqkv_tt,
+                dtype=ttnn.bfloat16,
+                memory_config=memcfg,
             )
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
@@ -497,23 +489,15 @@ class TTAttention:
         if self._proj_w_tt is not None and self._proj_b_tt is not None:
             # Ensure TT and 4D shape [B, 1, N, C] for ttnn.linear
             ctx_tt4 = ctx if len(getattr(ctx, "shape", [])) == 4 else ttnn.reshape(ctx, (B, 1, N, C))
-            memcfg = getattr(self.program_config, "proj_memcfg", None)
-            if memcfg is None:
-                memcfg = getattr(self, "output_mem", None)
+            memcfg = getattr(self, "output_mem", None)
             if memcfg is None:
                 memcfg = ttnn.DRAM_MEMORY_CONFIG
-            proj_kwargs = {
-                "bias": self._proj_b_tt,
-                "dtype": ttnn.bfloat16,
-                "memory_config": memcfg,
-            }
-            proj_pc = getattr(self.program_config, "proj_program_config", None)
-            if proj_pc is not None:
-                proj_kwargs["program_config"] = proj_pc
             out_tt4 = ttnn.linear(
                 ctx_tt4,
                 self._proj_w_tt,
-                **proj_kwargs,
+                bias=self._proj_b_tt,
+                dtype=ttnn.bfloat16,
+                memory_config=memcfg,
             )
             # Back to [B, N, C]
             out = out_tt4
@@ -586,24 +570,12 @@ class TTMLP:
                 B, _, N, C = shape
             else:
                 raise ValueError(f"TTMLP expects 3D/4D TT tensor, got {shape}")
-            memcfg = getattr(self.program_config, "mlp_memcfg", None)
-            if memcfg is None:
-                memcfg = getattr(self, "output_mem", None)
+            memcfg = getattr(self, "output_mem", None)
             if memcfg is None:
                 memcfg = ttnn.DRAM_MEMORY_CONFIG
-
-            y1_kwargs = {"bias": self.b1_tt, "dtype": ttnn.bfloat16, "memory_config": memcfg}
-            ff1_pc = getattr(self.program_config, "ff1_program_config", None)
-            if ff1_pc is not None:
-                y1_kwargs["program_config"] = ff1_pc
-            y1 = ttnn.linear(x4, self.w1_tt, **y1_kwargs)
+            y1 = ttnn.linear(x4, self.w1_tt, bias=self.b1_tt, dtype=ttnn.bfloat16, memory_config=memcfg)
             y1 = ttnn.gelu(y1)
-
-            y2_kwargs = {"bias": self.b2_tt, "dtype": ttnn.bfloat16, "memory_config": memcfg}
-            ff2_pc = getattr(self.program_config, "ff2_program_config", None)
-            if ff2_pc is not None:
-                y2_kwargs["program_config"] = ff2_pc
-            y2 = ttnn.linear(y1, self.w2_tt, **y2_kwargs)
+            y2 = ttnn.linear(y1, self.w2_tt, bias=self.b2_tt, dtype=ttnn.bfloat16, memory_config=memcfg)
             return y2 if len(shape) == 4 else ttnn.reshape(y2, (B, N, self.w2_tt.shape[-1]))
         except Exception as exc:
             if not self.allow_cpu_fallback:
