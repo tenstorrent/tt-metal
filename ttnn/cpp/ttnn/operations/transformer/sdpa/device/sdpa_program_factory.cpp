@@ -712,6 +712,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             auto& work = core_work[i];
             work.logical_core = core;
             work.physical_core = device->worker_core_from_logical_core(core);
+            work.head_work.reserve((local_batch_end - local_batch_start) * (local_nh_end - local_nh_start));
 
             // Track each (batch, head, q_chunk_range) this core handles
             for (uint32_t b = local_batch_start; b < local_batch_end; ++b) {
@@ -918,25 +919,26 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         // Get chain info for this core
         const auto& chain = core_chain_info[i];
 
-        std::vector<uint32_t> reader_args = {
-            q_addr,
-            k_addr,
-            v_addr,
-            mask_addr,
-            is_chunked ? page_table.value().buffer()->address() : 0,
-            attention_sink_addr,
-            flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer()->address() : 0,
-            i,
-            local_batch_start,
-            local_batch_end,
-            local_nh_start,
-            local_nh_end,
-            local_q_start,
-            local_q_end,
-            num_phases,
-            chunked_q_chunk_offset,
-            read_offset  // read_offset
-        };
+        std::vector<uint32_t> reader_args;
+        reader_args.reserve(is_causal ? 17 : 29);
+        reader_args.emplace_back(q_addr);
+        reader_args.emplace_back(k_addr);
+        reader_args.emplace_back(v_addr);
+        reader_args.emplace_back(mask_addr);
+        reader_args.emplace_back(is_chunked ? page_table.value().buffer()->address() : 0);
+        reader_args.emplace_back(attention_sink_addr);
+        reader_args.emplace_back(
+            flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer()->address() : 0);
+        reader_args.emplace_back(i);
+        reader_args.emplace_back(local_batch_start);
+        reader_args.emplace_back(local_batch_end);
+        reader_args.emplace_back(local_nh_start);
+        reader_args.emplace_back(local_nh_end);
+        reader_args.emplace_back(local_q_start);
+        reader_args.emplace_back(local_q_end);
+        reader_args.emplace_back(num_phases);
+        reader_args.emplace_back(chunked_q_chunk_offset);
+        reader_args.emplace_back(read_offset);
 
         // Add chain metadata for non-causal case
         if (!is_causal) {

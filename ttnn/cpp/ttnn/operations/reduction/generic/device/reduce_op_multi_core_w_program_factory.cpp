@@ -138,6 +138,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     uint32_t out_dim_divider = Wt;
     std::vector<CoreCoord> cores;
     if (operation_attributes.sub_core_grids.has_value()) {
+        cores.reserve(all_cores.num_cores());
         for (const auto& range : all_cores.ranges()) {
             for (int y = range.start_coord.y; y <= range.end_coord.y; ++y) {
                 for (int x = range.start_coord.x; x <= range.end_coord.x; ++x) {

@@ -533,7 +533,12 @@ static void serialize_gather_route(const GatherRoute& route, std::vector<uint16_
 
 // config = len [route0 route1 ...]
 static std::vector<uint16_t> serialize_gather_config(const GatherConfig& config) {
+    size_t total_size = 1;  // for routes.size()
+    for (const auto& route : config.routes) {
+        total_size += 3 + 3 * route.transfers.size();  // header + transfers
+    }
     std::vector<uint16_t> output;
+    output.reserve(total_size);
     output.push_back(config.routes.size());
     for (const auto& route : config.routes) {
         TT_FATAL(!route.transfers.empty(), "Expected all routes to have at least one transfer");

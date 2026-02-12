@@ -69,6 +69,7 @@ MorehAdamWDeviceOperation::spec_return_value_t MorehAdamWDeviceOperation::comput
     auto memory_config = operation_attributes.memory_config;
 
     std::vector<std::optional<TensorSpec>> result;
+    result.reserve(4);
     TensorSpec outSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 
     if (tensor_args.param_out.has_value()) {
@@ -106,6 +107,7 @@ MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::crea
     auto* device = tensor_args.param_in.device();
 
     tensor_return_value_t result;
+    result.reserve(4);
 
     if (tensor_args.param_out.has_value()) {
         result.push_back(tensor_args.param_out);
