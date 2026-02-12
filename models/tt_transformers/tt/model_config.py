@@ -1237,15 +1237,24 @@ class ModelArgs:
                         num_cores=self.mlp2_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
-            return self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
-                n=self.dim,
-                grid_size=self.mlp2_grid(seq_len),
-                per_core_N=math.ceil(self.dim / (self.tile_size * self.dram_shard_grid_width))
-                if not self.is_galaxy
-                else None,
-            )
+            if seq_len > 128:
+                grid = self.mlp2_grid(seq_len)
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                )
+            else:
+                return self.matmul_config(
+                    m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                    k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
+                    n=self.dim,
+                    grid_size=self.mlp2_grid(seq_len),
+                    per_core_N=math.ceil(self.dim / (self.tile_size * self.dram_shard_grid_width))
+                    if not self.is_galaxy
+                    else None,
+                )
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1527,26 +1536,36 @@ class ModelArgs:
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
-            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
-                in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=7
-                if self.device_name == "P100"
-                else (
-                    max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                        1,
-                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
-                    )
-                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(
-                    self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
-                ),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
-            )
+            if seq_len > 128:
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                )
+            else:
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
+                    in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                    out_subblock_h=1,  # Must be divisible by per_core_M
+                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                    per_core_M=7
+                    if self.device_name == "P100"
+                    else (
+                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
+                            1,
+                            8
+                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
+                            else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                        )
+                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    per_core_N=math.ceil(
+                        self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
+                    ),  # N / TILE_WIDTH / grid width
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+                )
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
