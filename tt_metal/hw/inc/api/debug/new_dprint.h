@@ -72,60 +72,68 @@
     }                                                                                                        \
     constexpr uint32_t variable_name = __COUNTER__;
 
-#define NEW_DPRINT(format, ...)                                                                                      \
-    {                                                                                                                \
-        /* Validate format string syntax */                                                                          \
-        static_assert(                                                                                               \
-            dprint_detail::checks::is_valid_format_string(format),                                                   \
-            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");                        \
-        /* Validate placeholder format */                                                                            \
-        static_assert(                                                                                               \
-            !dprint_detail::checks::has_mixed_placeholders(format),                                                  \
-            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");                 \
-        /* For indexed placeholders, validate no index exceeds argument count */                                     \
-        static_assert(                                                                                               \
-            !dprint_detail::checks::has_indexed_placeholders(format) ||                                              \
-                dprint_detail::checks::get_max_index(format) <                                                       \
-                    static_cast<int>(dprint_detail::helpers::count_arguments(__VA_ARGS__)),                          \
-            "Placeholder index exceeds number of arguments");                                                        \
-        /* For indexed placeholders, validate all arguments are referenced */                                        \
-        static_assert(                                                                                               \
-            !dprint_detail::checks::has_indexed_placeholders(format) ||                                              \
-                dprint_detail::checks::all_arguments_referenced(format, __VA_ARGS__),                                \
-            "All arguments must be referenced when using indexed placeholders");                                     \
-        /* For non-indexed placeholders, count must match argument count */                                          \
-        static_assert(                                                                                               \
-            dprint_detail::checks::has_indexed_placeholders(format) ||                                               \
-                dprint_detail::checks::count_placeholders(format) ==                                                 \
-                    dprint_detail::helpers::count_arguments(__VA_ARGS__),                                            \
-            "Number of {} placeholders must match number of arguments");                                             \
-        /* TODO: In case we decide to optimize write into dprint buffer, we might want to reorder arguments. This */ \
-        /* will influence serialization and format update. Server side will remain the same.*/                       \
-        /* Update format to include all necessary data */                                                            \
-        constexpr auto updated_format =                                                                              \
-            dprint_detail::formatting::update_format_string_from_args(format, ##__VA_ARGS__);                        \
-        /* Store updated format string in a special section for dprint */                                            \
-        NEW_DPRINT_GET_STRING_INDEX(dprint_info_index, updated_format);                                              \
-        /* Get buffer lock (once we change to be single buffer per L1 instead of per risc)*/                         \
-        dprint_detail::locking::acquire_lock();                                                                      \
-        /* Generate dprint message header */                                                                         \
-        dprint_detail::structures::DPrintHeader header = {};                                                         \
-        header.is_kernel = NEW_DPRINT_IS_KERNEL;                                                                     \
-        header.risc_id = PROCESSOR_INDEX;                                                                            \
-        static_assert(                                                                                               \
-            dprint_info_index <= dprint_detail::structures::DPrintHeader::max_info_id_value,                         \
-            "Too many DPRINT calls, exceeds limit");                                                                 \
-        header.info_id = dprint_info_index;                                                                          \
-        uint16_t header_value = header.value;                                                                        \
-        /* Get dprint buffer and write header and arguments */                                                       \
-        volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer = get_new_debug_print_buffer();                     \
-        dprint_detail::serialization::serialize_argument(dprint_buffer, header_value);                               \
-        dprint_detail::serialization::serialize_arguments(dprint_buffer, ##__VA_ARGS__);                             \
-        /* Release buffer lock */                                                                                    \
-        dprint_detail::locking::release_lock();                                                                      \
+#define NEW_DPRINT(format, ...)                                                                                        \
+    {                                                                                                                  \
+        /* Validate format string syntax */                                                                            \
+        static_assert(                                                                                                 \
+            dprint_detail::checks::is_valid_format_string(format),                                                     \
+            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");                          \
+        /* Validate placeholder format */                                                                              \
+        static_assert(                                                                                                 \
+            !dprint_detail::checks::has_mixed_placeholders(format),                                                    \
+            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");                   \
+        /* For indexed placeholders, validate no index exceeds argument count */                                       \
+        static_assert(                                                                                                 \
+            !dprint_detail::checks::has_indexed_placeholders(format) ||                                                \
+                dprint_detail::checks::get_max_index(format) <                                                         \
+                    static_cast<int>(dprint_detail::helpers::count_arguments(__VA_ARGS__)),                            \
+            "Placeholder index exceeds number of arguments");                                                          \
+        /* For indexed placeholders, validate all arguments are referenced */                                          \
+        static_assert(                                                                                                 \
+            !dprint_detail::checks::has_indexed_placeholders(format) ||                                                \
+                dprint_detail::checks::all_arguments_referenced(format, __VA_ARGS__),                                  \
+            "All arguments must be referenced when using indexed placeholders");                                       \
+        /* For non-indexed placeholders, count must match argument count */                                            \
+        static_assert(                                                                                                 \
+            dprint_detail::checks::has_indexed_placeholders(format) ||                                                 \
+                dprint_detail::checks::count_placeholders(format) ==                                                   \
+                    dprint_detail::helpers::count_arguments(__VA_ARGS__),                                              \
+            "Number of {} placeholders must match number of arguments");                                               \
+        /* TODO: In case we decide to optimize write into dprint buffer, we might want to reorder arguments. This */   \
+        /* will influence serialization and format update. Server side will remain the same.*/                         \
+        /* Update format to include all necessary data */                                                              \
+        constexpr auto updated_format =                                                                                \
+            dprint_detail::formatting::update_format_string_from_args(format, __VA_ARGS__);                            \
+        /* Store updated format string in a special section for dprint */                                              \
+        NEW_DPRINT_GET_STRING_INDEX(dprint_info_index, updated_format);                                                \
+        /* Get buffer lock (once we change to be single buffer per L1 instead of per risc)*/                           \
+        dprint_detail::locking::acquire_lock();                                                                        \
+        /* Get dprint buffer*/                                                                                         \
+        volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer = get_new_debug_print_buffer();                       \
+        /* TODO: Check if we need to wrap buffer and wait for enough space in it */                                    \
+        /* Generate dprint message header */                                                                           \
+        dprint_detail::structures::DPrintHeader header = {};                                                           \
+        header.is_kernel = NEW_DPRINT_IS_KERNEL;                                                                       \
+        header.risc_id = PROCESSOR_INDEX;                                                                              \
+        static_assert(                                                                                                 \
+            dprint_info_index <= dprint_detail::structures::DPrintHeader::max_info_id_value,                           \
+            "Too many DPRINT calls, exceeds limit");                                                                   \
+        header.info_id = dprint_info_index;                                                                            \
+        auto header_value = header.value;                                                                              \
+        /* Serialize message */                                                                                        \
+        auto dprint_buffer_ptr = dprint_buffer->data + dprint_buffer->aux.wpos;                                        \
+        dprint_detail::formatting::dprint_type<decltype(header_value)>::serialize(dprint_buffer_ptr, 0, header_value); \
+        dprint_detail::serialization::serialize_arguments(dprint_buffer_ptr, __VA_ARGS__);                             \
+        /* Move write pointer in dprint buffer */                                                                      \
+        dprint_buffer->aux.wpos += dprint_detail::serialization::get_total_message_size(__VA_ARGS__);                  \
+        /* Release buffer lock */                                                                                      \
+        dprint_detail::locking::release_lock();                                                                        \
     }
 
 namespace dprint_detail {
+
+template <typename BufferType>
+using dprint_buffer_ptr = volatile tt_l1_ptr BufferType*;
 
 namespace helpers {
 
@@ -536,66 +544,135 @@ struct dprint_type_info {
 template <typename T>
 struct dprint_type {
     static constexpr dprint_type_info value = {'#', 0};  // Unknown type default
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, T argument) {
+        static_assert(true, "No serialization defined for this type");
+    }
 };
 
 // Specializations for different types
 template <>
 struct dprint_type<std::int8_t> {
     static constexpr dprint_type_info value = {'b', sizeof(std::int8_t)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, int8_t argument) {
+        *reinterpret_cast<dprint_buffer_ptr<int8_t>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<std::uint8_t> {
     static constexpr dprint_type_info value = {'B', sizeof(std::uint8_t)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, uint8_t argument) {
+        *reinterpret_cast<dprint_buffer_ptr<uint8_t>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<std::int16_t> {
     static constexpr dprint_type_info value = {'h', sizeof(std::int16_t)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, int16_t argument) {
+        *reinterpret_cast<dprint_buffer_ptr<int16_t>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<std::uint16_t> {
     static constexpr dprint_type_info value = {'H', sizeof(std::uint16_t)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, uint16_t argument) {
+        *reinterpret_cast<dprint_buffer_ptr<uint16_t>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<std::int32_t> {
     static constexpr dprint_type_info value = {'i', sizeof(std::int32_t)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, int32_t argument) {
+        *reinterpret_cast<dprint_buffer_ptr<int32_t>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<std::uint32_t> {
     static constexpr dprint_type_info value = {'I', sizeof(std::uint32_t)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, uint32_t argument) {
+        *reinterpret_cast<dprint_buffer_ptr<uint32_t>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<std::int64_t> {
     static constexpr dprint_type_info value = {'q', sizeof(std::int64_t)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, int64_t argument) {
+        *reinterpret_cast<dprint_buffer_ptr<int64_t>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<std::uint64_t> {
     static constexpr dprint_type_info value = {'Q', sizeof(std::uint64_t)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, uint64_t argument) {
+        *reinterpret_cast<dprint_buffer_ptr<uint64_t>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<float> {
     static constexpr dprint_type_info value = {'f', sizeof(float)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, float argument) {
+        *reinterpret_cast<dprint_buffer_ptr<float>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<double> {
     static constexpr dprint_type_info value = {'d', sizeof(double)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, double argument) {
+        *reinterpret_cast<dprint_buffer_ptr<double>>(dprint_buffer + offset) = argument;
+    }
 };
 template <>
 struct dprint_type<bool> {
     static constexpr dprint_type_info value = {'?', 1};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, bool argument) {
+        *(dprint_buffer + offset) = static_cast<uint8_t>(argument);
+    }
 };
 
 // Pointer types (including strings)
 template <typename T>
 struct dprint_type<T*> {
     static constexpr dprint_type_info value = {'p', sizeof(T*)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, T* argument) {
+        if constexpr (sizeof(T*) == 4) {
+            *reinterpret_cast<dprint_buffer_ptr<uint32_t>>(dprint_buffer + offset) =
+                reinterpret_cast<uint32_t>(argument);
+        } else if constexpr (sizeof(T*) == 8) {
+            *reinterpret_cast<dprint_buffer_ptr<uint64_t>>(dprint_buffer + offset) =
+                reinterpret_cast<uint64_t>(argument);
+        } else {
+            static_assert(sizeof(T*) == 4 || sizeof(T*) == 8, "Unsupported pointer size");
+        }
+    }
 };
 template <>
 struct dprint_type<char*> {
     static constexpr dprint_type_info value = {'s', sizeof(char*)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, char* argument) {
+        if constexpr (sizeof(char*) == 4) {
+            *reinterpret_cast<dprint_buffer_ptr<uint32_t>>(dprint_buffer + offset) =
+                reinterpret_cast<uint32_t>(argument);
+        } else if constexpr (sizeof(char*) == 8) {
+            *reinterpret_cast<dprint_buffer_ptr<uint64_t>>(dprint_buffer + offset) =
+                reinterpret_cast<uint64_t>(argument);
+        } else {
+            static_assert(sizeof(char*) == 4 || sizeof(char*) == 8, "Unsupported pointer size");
+        }
+    }
 };
 template <>
 struct dprint_type<const char*> {
     static constexpr dprint_type_info value = {'s', sizeof(const char*)};
+    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, const char* argument) {
+        if constexpr (sizeof(const char*) == 4) {
+            *reinterpret_cast<dprint_buffer_ptr<uint32_t>>(dprint_buffer + offset) =
+                reinterpret_cast<uint32_t>(argument);
+        } else if constexpr (sizeof(const char*) == 8) {
+            *reinterpret_cast<dprint_buffer_ptr<uint64_t>>(dprint_buffer + offset) =
+                reinterpret_cast<uint64_t>(argument);
+        } else {
+            static_assert(sizeof(const char*) == 4 || sizeof(const char*) == 8, "Unsupported pointer size");
+        }
+    }
 };
 
 // Array types (treat as strings)
@@ -641,6 +718,19 @@ constexpr std::array<uint32_t, sizeof...(Args)> get_arg_reorder() {
         }
     }
     return arg_reorder;
+}
+
+template <typename... Args>
+constexpr std::array<uint32_t, sizeof...(Args)> get_arg_offsets() {
+    constexpr auto type_infos = get_types_info<Args...>();
+    constexpr auto arg_reorder = get_arg_reorder<Args...>();
+    std::array<uint32_t, sizeof...(Args)> arg_offset = {};
+    uint32_t current_offset = sizeof(dprint_detail::structures::DPrintHeader::value);
+    for (std::size_t i = 0; i < arg_offset.size(); ++i) {
+        arg_offset[i] = current_offset;
+        current_offset += type_infos[arg_reorder[i]].size_in_bytes;
+    }
+    return arg_offset;
 }
 
 // Main function to update format string with type information
@@ -901,88 +991,37 @@ void initialize_lock() {
 
 namespace serialization {
 
-void serialize_argument(
-    volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, const uint8_t* argument_data, uint32_t size) {
-    volatile uint8_t* start_pointer = dprint_buffer->data;
-    volatile uint8_t* end_pointer = dprint_buffer->data + sizeof(dprint_buffer->data);
-    volatile uint8_t* write_pointer = dprint_buffer->data + dprint_buffer->aux.wpos;
-    volatile uint8_t* read_pointer = dprint_buffer->data + dprint_buffer->aux.rpos;
-
-    if (write_pointer >= read_pointer) {
-        if (write_pointer + size <= end_pointer) {
-            // We have enough space to write the argument
-            for (uint32_t i = 0; i < size; ++i) {
-                write_pointer[i] = argument_data[i];
-            }
-            write_pointer += size;
-            dprint_buffer->aux.wpos = write_pointer - start_pointer;
-            return;
-        }
-
-        // Write what we can and then wrap around
-        uint32_t space_to_end = end_pointer - write_pointer;
-        if (space_to_end > 0) {
-            for (uint32_t i = 0; i < space_to_end; ++i) {
-                write_pointer[i] = argument_data[i];
-            }
-            argument_data += space_to_end;
-            size -= space_to_end;
-        }
-        write_pointer = start_pointer;  // Wrap around to the beginning of the buffer
-    }
-
-    // Now write the remaining argument data at the beginning of the buffer
-    if (write_pointer + size > read_pointer) {
-        // We need to wait for the reader to advance, so that we don't overwrite unread data.
-        WAYPOINT("DPW");
-        while (dprint_buffer->aux.wpos + size > dprint_buffer->aux.rpos) {
-            invalidate_l1_cache();
-#if defined(COMPILE_FOR_ERISC)
-            internal_::risc_context_switch();
-#endif
-            // If we've closed the device, we've now disabled printing on it, don't hang.
-            if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
-                return;
-            };  // wait for host to catch up to wpos with it's rpos
-        }
-        WAYPOINT("DPD");
-    }
-
-    for (uint32_t i = 0; i < size; ++i) {
-        write_pointer[i] = argument_data[i];
-    }
-    write_pointer += size;
-    dprint_buffer->aux.wpos = write_pointer - start_pointer;
-}
-
 // Helper to serialize a single argument based on its type info
 template <typename ArgumentType>
-void serialize_argument(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, const ArgumentType& argument) {
-    serialize_argument(
-        dprint_buffer,
-        reinterpret_cast<const uint8_t*>(&argument),
-        formatting::get_type_info<ArgumentType>().size_in_bytes);
+void serialize_argument(volatile tt_l1_ptr uint8_t* dprint_buffer, uint32_t offset, const ArgumentType& argument) {
+    using base_type = std::remove_cv_t<std::remove_reference_t<ArgumentType>>;
+    formatting::dprint_type<base_type>::serialize(dprint_buffer, offset, argument);
 }
 
-template <>
-void serialize_argument(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, const bool& argument) {
-    serialize_argument(dprint_buffer, static_cast<uint8_t>(argument ? 1 : 0));
-}
-
-template <typename Tuple, std::size_t... Is>
+template <typename Tuple, typename ArgOffsetsType, std::size_t... Is>
 inline void serialize_arguments_impl(
-    volatile NewDebugPrintMemLayout* dprint_buffer, Tuple&& tup, std::index_sequence<Is...>) {
-    (serialize_argument(dprint_buffer, std::get<Is>(std::forward<Tuple>(tup))), ...);
+    volatile tt_l1_ptr uint8_t* dprint_buffer, Tuple&& tup, ArgOffsetsType arg_offsets, std::index_sequence<Is...>) {
+    (serialize_argument(dprint_buffer, arg_offsets[Is], std::get<Is>(std::forward<Tuple>(tup))), ...);
 }
 
-// Variadic template to serialize all arguments in order
 template <typename... Args>
-void serialize_arguments(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, Args&&... args) {
+void serialize_arguments(volatile tt_l1_ptr uint8_t* dprint_buffer, Args&&... args) {
     auto tup = std::forward_as_tuple(std::forward<Args>(args)...);
 
+    constexpr auto arg_offsets = formatting::get_arg_offsets<Args...>();
     using seq = formatting::arg_reorder_seq_t<Args...>;  // std::index_sequence<perm[0], perm[1], ...>
 
-    serialize_arguments_impl(dprint_buffer, tup, seq{});
+    serialize_arguments_impl(dprint_buffer, tup, arg_offsets, seq{});
+}
+
+template <typename... Args>
+uint32_t get_total_message_size(Args&&...) {
+    constexpr auto type_infos = formatting::get_types_info<Args...>();
+    uint32_t total_size = sizeof(dprint_detail::structures::DPrintHeader::value);  // Start with header size
+    for (const auto& info : type_infos) {
+        total_size += info.size_in_bytes;
+    }
+    return total_size;
 }
 
 }  // namespace serialization
