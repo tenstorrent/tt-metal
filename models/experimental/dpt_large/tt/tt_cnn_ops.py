@@ -147,6 +147,23 @@ def tt_resize_to_nchw(
     )
 
 
+def tt_depth_to_space_nchw(x, block_size: int):
+    _require_ttnn()
+    x = _to_row_major(x)
+    b, c_mul, h, w = _shape4(x)
+    scale = int(block_size)
+    scale_sq = scale * scale
+    if c_mul % scale_sq != 0:
+        raise RuntimeError(
+            f"depth-to-space channel mismatch: channels={c_mul}, block_size={scale}, expected divisible by {scale_sq}"
+        )
+
+    c = c_mul // scale_sq
+    x = ttnn.reshape(x, (b, c, scale, scale, h, w))
+    x = ttnn.permute(x, (0, 1, 4, 2, 5, 3))
+    return ttnn.reshape(x, (b, c, h * scale, w * scale))
+
+
 @dataclass
 class TTConv2dCached:
     weight_torch: torch.Tensor
@@ -259,6 +276,7 @@ class TTConvTranspose2dCached:
 
     _weight: object = None
     _bias: object = None
+    _tt_pointwise_conv: "TTConv2dCached | None" = None
 
     @classmethod
     def from_conv_transpose(cls, conv_t: torch.nn.ConvTranspose2d) -> "TTConvTranspose2dCached":
@@ -276,9 +294,56 @@ class TTConvTranspose2dCached:
             groups=int(conv_t.groups),
         )
 
+    def _can_use_pointwise_depth_to_space(self) -> bool:
+        return (
+            self.groups == 1
+            and self.dilation == (1, 1)
+            and self.padding == (0, 0)
+            and self.output_padding == (0, 0)
+            and self.kernel_size == self.stride
+            and self.kernel_size[0] == self.kernel_size[1]
+            and self.kernel_size[0] > 1
+        )
+
+    def _build_pointwise_equivalent(self):
+        scale = int(self.kernel_size[0])
+        out_channels = int(self.out_channels)
+        in_channels = int(self.in_channels)
+
+        # ConvTranspose2d (stride=kernel, no overlap) is equivalent to a 1x1
+        # conv producing C_out * scale^2 channels followed by depth-to-space.
+        # weight_torch layout: [C_in, C_out, K, K]
+        repacked_weight = (
+            self.weight_torch.permute(1, 2, 3, 0)
+            .contiguous()
+            .reshape(out_channels * scale * scale, in_channels, 1, 1)
+            .contiguous()
+        )
+        repacked_bias = None
+        if self.bias_torch is not None:
+            repacked_bias = self.bias_torch.repeat_interleave(scale * scale).contiguous()
+
+        self._tt_pointwise_conv = TTConv2dCached.from_tensors(
+            weight_torch=repacked_weight,
+            bias_torch=repacked_bias,
+            stride=(1, 1),
+            padding=(0, 0),
+            dilation=(1, 1),
+            groups=1,
+        )
+        return scale
+
     def __call__(self, x, *, device):
         _require_ttnn()
         x = ensure_tt_device_tensor(x, device)
+
+        if self._can_use_pointwise_depth_to_space():
+            scale = int(self.kernel_size[0])
+            if self._tt_pointwise_conv is None:
+                scale = self._build_pointwise_equivalent()
+            out = self._tt_pointwise_conv(x, device=device)
+            return tt_depth_to_space_nchw(out, scale)
+
         x_nhwc, batch_size, _in_channels, input_h, input_w = _nchw_to_nhwc(x)
 
         if self._weight is None:
