@@ -32,6 +32,10 @@ public:
     // Callback handler invoked by the real-time profiler system for each program record.
     void HandleRecord(const tt::ProgramRealtimeRecord& record);
 
+    // Push a sync-check marker on the device GPU timeline at the given device timestamp.
+    // Used to verify host-device clock sync accuracy in the Tracy GUI.
+    void PushSyncCheckMarker(uint32_t chip_id, uint64_t device_timestamp, double frequency);
+
 private:
     TracyTTCtx GetContext(uint32_t chip_id);
 
