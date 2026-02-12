@@ -385,6 +385,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     const ttnn::SmallVector<uint32_t>& unpad_elements,
     const int dim) {
     std::vector<ttnn::Tensor> combined_tensors;
+    combined_tensors.reserve(num_devices);
 
     ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
     ttnn::SmallVector<uint32_t> ends = {1, 1, 1, 1};
