@@ -167,6 +167,8 @@ class PreSDPA:
         krope_sin_tensor,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
+        kv_cache_tensor,
+        position_id,
         output_tensor,
         sender_coord,
         semaphores=None,
@@ -512,6 +514,9 @@ class PreSDPA:
         krope_output_cb = 27  # Output CB for KV Cache Branch RoPE
         krope_cos_cb = 28  # Cos CB for RoPE
         krope_sin_cb = 29  # Sin CB for RoPE
+        kv_cache_output_cb = 30  # Output CB for KV Cache Branch
+        kv_cache_intermed_cb = 32  # Intermed CB for KV Cache Branch
+        kv_cache_input_cb = 31  # Input CB for KV Cache Branch
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -889,6 +894,7 @@ class PreSDPA:
 
         # Get NOC coordinates for gather destination (receiver core)
         dkv_gather_dest_noc_core = device.worker_core_from_logical_core(dkv_gather_receiver_core)
+        print(dkv_gather_dest_noc_core)
 
         # Get number of sender cores (matmul grid)
         dkv_gather_sender_cores_list = ttnn.corerange_to_cores(dkv_gather_sender_grid, row_wise=True)
@@ -941,12 +947,8 @@ class PreSDPA:
         ]
 
         # KV Cache Branch: RoPE
-        krope_brisc_named_compile_time_args = [
-            ("krope_output_cb", krope_output_cb),
-            ("krope_Wt", 1),  # Needed for KV Cache update
-            ("krope_Ht", 1),  # Needed for KV Cache update
-        ]
         krope_ncrisc_named_compile_time_args = [
+            ("krope_output_cb", krope_output_cb),
             ("krope_in_cb", dkv_matmul_output_cb),
             ("krope_cos_cb", krope_cos_cb),
             ("krope_sin_cb", krope_sin_cb),
@@ -967,6 +969,33 @@ class PreSDPA:
             ("krope_Ht", 1),
         ]
 
+        kv_cache_num_tiles = 2
+        # KVCacheUpdate CB indices and krope_Wt passed as runtime args (ReaderArgs/WriterArgs/ComputeArgs)
+        kv_cache_brisc_named_compile_time_args = [
+            ("krope_output_cb", krope_output_cb),
+            ("kv_cache_output_cb", kv_cache_output_cb),
+            ("kv_cache_input_cb", kv_cache_input_cb),
+            ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("krope_Wt", 1),
+            ("krope_Ht", 1),
+        ]
+        kv_cache_ncrisc_named_compile_time_args = [
+            ("kv_cache_output_cb", kv_cache_output_cb),
+            ("kv_cache_input_cb", kv_cache_input_cb),
+            ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),  # only needed for the address calculation
+            ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_num_tiles", kv_cache_num_tiles),
+            ("kv_cache_dest_noc_x", dkv_gather_dest_noc_core.x),
+            ("kv_cache_dest_noc_y", dkv_gather_dest_noc_core.y),
+        ]
+        kv_cache_trisc_named_compile_time_args = [
+            ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
+            ("kv_cache_output_cb", kv_cache_output_cb),
+            ("kv_cache_input_cb", kv_cache_input_cb),
+            ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_num_tiles", kv_cache_num_tiles),
+        ]
+
         # Create tile descriptor for proper tile dimensions
         tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
 
@@ -978,6 +1007,45 @@ class PreSDPA:
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
+
+        TILE_32x32 = ttnn.Tile((32, 32))
+        kv_cache_page_size = TILE_32x32.get_tile_size(ttnn.bfloat8_b)
+        kv_cache_input_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=kv_cache_input_cb,
+            data_format=ttnn.bfloat8_b,
+            page_size=kv_cache_page_size,
+            tile=ttnn.TileDescriptor(TILE_32x32),
+        )
+        kv_cache_input_cb_descriptor = ttnn.CBDescriptor(
+            total_size=16 * kv_cache_page_size,
+            core_ranges=kv_rmsnorm_core_grid,
+            format_descriptors=[kv_cache_input_cb_format],
+        )
+        kv_cache_output_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=kv_cache_output_cb,
+            data_format=ttnn.bfloat8_b,
+            page_size=kv_cache_page_size,
+            tile=ttnn.TileDescriptor(TILE_32x32),
+        )
+        kv_cache_output_cb_descriptor = ttnn.CBDescriptor(
+            total_size=16 * kv_cache_page_size,
+            core_ranges=kv_rmsnorm_core_grid,
+            format_descriptors=[kv_cache_output_cb_format],
+        )
+        kv_cache_intermed_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=kv_cache_intermed_cb,
+            data_format=ttnn.bfloat16,
+            page_size=TILE_32x32.get_tile_size(ttnn.bfloat16),
+            tile=ttnn.TileDescriptor(TILE_32x32),
+        )
+        kv_cache_intermed_cb_descriptor = ttnn.CBDescriptor(
+            total_size=16 * TILE_32x32.get_tile_size(ttnn.bfloat16),
+            core_ranges=kv_rmsnorm_core_grid,
+            format_descriptors=[kv_cache_intermed_cb_format],
+        )
+        kv_cache_tensor_accessor_args = ttnn.TensorAccessorArgs(kv_cache_tensor)
+        brisc_compile_time_args = kv_cache_tensor_accessor_args.get_compile_time_args()
+        ncrisc_compile_time_args = kv_cache_tensor_accessor_args.get_compile_time_args()
         # ========================================================================
         # Kernel descriptors
         # ========================================================================
