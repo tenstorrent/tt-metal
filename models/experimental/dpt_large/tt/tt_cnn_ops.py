@@ -208,14 +208,12 @@ class TTConv2dCached:
                 self.weight_torch,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
             )
         if self.bias_torch is not None and self._bias is None:
             self._bias = ttnn.from_torch(
                 self.bias_torch.reshape(1, 1, 1, -1),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
             )
 
         out_nhwc, out_hw, weights_bias = ttnn.conv2d(
@@ -288,14 +286,12 @@ class TTConvTranspose2dCached:
                 self.weight_torch,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
             )
         if self.bias_torch is not None and self._bias is None:
             self._bias = ttnn.from_torch(
                 self.bias_torch.reshape(1, 1, 1, -1),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
             )
 
         out_nhwc, out_hw, weights_bias = ttnn.conv_transpose2d(
