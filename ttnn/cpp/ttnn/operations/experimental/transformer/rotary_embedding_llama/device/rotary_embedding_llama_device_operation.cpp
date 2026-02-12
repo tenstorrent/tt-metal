@@ -19,11 +19,6 @@ RotaryEmbeddingLlamaDeviceOperation::program_factory_t RotaryEmbeddingLlamaDevic
     return RotaryEmbeddingLlamaMultiCore{};
 }
 
-void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;

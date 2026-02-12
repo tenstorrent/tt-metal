@@ -20,11 +20,6 @@ SamplingDeviceOperation::program_factory_t SamplingDeviceOperation::select_progr
     return SamplingProgramFactory{};
 }
 
-void SamplingDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void SamplingDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_values_tensor = tensor_args.input_values;
