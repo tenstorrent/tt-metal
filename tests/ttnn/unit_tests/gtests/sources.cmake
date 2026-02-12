@@ -14,6 +14,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
 set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_add.cpp
     test_add_int.cpp
+    test_bernoulli_descriptor_benchmark.cpp
     test_broadcast_to.cpp
     test_convert_to_hwc_gather.cpp
     test_generic_op.cpp
