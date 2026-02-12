@@ -1,96 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
+
 # SPDX-License-Identifier: Apache-2.0
+
+"""
+Unit tests for ReduceToOneB1 operation.
+
+This test validates the 3-level reduction tree for a 4x2 mesh
+"""
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 from tracy import signpost
-from models.perf.benchmarking_utils import BenchmarkProfiler
+
+import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
-
-# CoreRangeSet for CCL operations (subset of compute grid)
-CCL_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7))])
-
-
-def setup_all_reduce_sync(submesh_device, num_buffers=8):
-    """
-    Set up resources for all_reduce used as device synchronization barrier.
-    Returns semaphores, intermediate tensors, and memory config needed for all_reduce_async.
-    """
-    # Create global semaphores for all_reduce
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh_device, CCL_CRS, 0) for _ in range(num_buffers)]
-
-    # Simple tensor shape for sync (small footprint, tile-aligned 32x32)
-    sync_shape = [4, 2, 32, 32]  # mesh_shape + minimal 32x32 tile
-    cluster_shape = (4, 2)
-
-    # Memory config for sync tensor (32x32 shard for tile alignment)
-    sync_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-            [32, 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-
-    # Intermediate tensor shape for all_reduce (gather dimension expanded)
-    intermediate_shape = [4, 2, 32, 32 * cluster_shape[0]]  # expanded along cluster_axis=0
-    intermediate_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-            [32, 32 * cluster_shape[0]],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-
-    # Create sync input tensor
-    sync_data = torch.ones(sync_shape, dtype=torch.bfloat16)
-    sync_tensor = ttnn.from_torch(
-        sync_data,
-        device=submesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=sync_mem_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-    )
-
-    # Create intermediate tensors for all_reduce
-    intermediate_data = torch.zeros(intermediate_shape, dtype=torch.bfloat16)
-    intermediate_tensors = []
-    for _ in range(num_buffers):
-        intermediate_tensor = ttnn.from_torch(
-            intermediate_data,
-            device=submesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=intermediate_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(submesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-        )
-        intermediate_tensors.append(intermediate_tensor)
-
-    return {
-        "semaphores": ccl_semaphore_handles,
-        "sync_tensor": sync_tensor,
-        "intermediate_tensors": intermediate_tensors,
-        "mem_config": sync_mem_config,
-    }
-
-
-def compute_reference_reduce_to_one(data_per_device):
-    """
-    Compute the reference output for reduce_to_one operation.
-    Simple sum of all device tensors.
-    """
-    result = data_per_device[0].clone()
-    for i in range(1, len(data_per_device)):
-        result = result + data_per_device[i]
-    return result
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOneB1
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def setup_reduce_to_one_test(mesh_device):
@@ -160,7 +86,6 @@ def setup_reduce_to_one_test(mesh_device):
         intermediate_tensors.append(intermediate_tensor)
 
     # Create output tensor sharded on a single core (bottom-right of compute grid)
-    # Get the full compute grid and use the bottom-right core
     compute_grid = submesh_device.compute_with_storage_grid_size()
     output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
     logger.info(f"Compute grid: {compute_grid}, output core: {output_core}")
@@ -210,7 +135,12 @@ def setup_reduce_to_one_test(mesh_device):
     )
 
     # Compute reference output
-    ref_output = compute_reference_reduce_to_one(data_per_device)
+    ref_output = ReduceToOneB1.golden(data_per_device)
+
+    # Create 4 semaphores for reduce_to_one (round1, round2, round3, exit)
+    num_cores = compute_grid.x * compute_grid.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
+    semaphores = [ttnn.create_global_semaphore(submesh_device, available_cores, 0) for _ in range(4)]
 
     return {
         "submesh_device": submesh_device,
@@ -221,6 +151,7 @@ def setup_reduce_to_one_test(mesh_device):
         "root_coord": root_coord,
         "exit_coord": exit_coord,
         "output_core": output_core,
+        "semaphores": semaphores,
     }
 
 
@@ -228,39 +159,65 @@ def verify_output(output_tensor, submesh_device, root_coord, ref_output):
     """Verify output matches reference."""
     output_torch = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
 
+    print(f"DEBUG: output_torch.shape = {output_torch.shape}")
+    print(f"DEBUG: ref_output.shape = {ref_output.shape}")
+    print(f"DEBUG: root_coord = {root_coord}")
+
     root_device_idx = root_coord[0] * submesh_device.shape[1] + root_coord[1]
+    print(f"DEBUG: root_device_idx = {root_device_idx}")
     output_root = output_torch[root_device_idx]
+    print(f"DEBUG: output_root.shape = {output_root.shape}")
+
+    # Squeeze extra dimensions if needed
+    output_root_squeezed = output_root  # .squeeze()
+    ref_output_squeezed = ref_output  # .squeeze()
+    print(f"DEBUG: output_root_squeezed.shape = {output_root_squeezed.shape}")
+    print(f"DEBUG: ref_output_squeezed.shape = {ref_output_squeezed.shape}")
+
+    # Print more values to see the pattern
+    print(f"DEBUG: ref_output_squeezed[:32] = {ref_output_squeezed[:32]}")
+    print(f"DEBUG: output_root_squeezed[:32] = {output_root_squeezed[:32]}")
+
+    # Check non-zero count
+    nonzero_count = (output_root_squeezed != 0).sum().item()
+    print(f"DEBUG: nonzero_count in output = {nonzero_count} out of {output_root_squeezed.numel()}")
 
     rtol = 0.01
     atol = 0.05
 
-    match = torch.allclose(output_root, ref_output, rtol=rtol, atol=atol)
+    match = torch.allclose(output_root_squeezed, ref_output_squeezed, rtol=rtol, atol=atol)
 
     if not match:
         print(f"Output mismatch!")
-        print(f"Reference:\n{ref_output[:1, :8]}")
-        print(f"Output:\n{output_root[:1, :8]}")
-        diff = torch.abs(output_root - ref_output)
+        print(f"Reference:\n{ref_output_squeezed[:8]}")
+        print(f"Output:\n{output_root_squeezed[:8]}")
+        diff = torch.abs(output_root_squeezed - ref_output_squeezed)
         print(f"Max diff: {diff.max()}, Mean diff: {diff.mean()}")
+
+        # Find where differences occur
+        diff_mask = diff > atol
+        diff_indices = torch.where(diff_mask)[0]
+        if len(diff_indices) > 0:
+            print(f"DEBUG: First 10 indices with large diff: {diff_indices[:10].tolist()}")
 
     return match
 
 
-def run_reduce_to_one(mesh_device, topology):
+def run_reduce_to_one(mesh_device):
     """Run reduce_to_one test."""
-    print(f"\n=== Testing reduce_to_one with {topology} ===")
+    print(f"\n=== Testing reduce_to_one ===")
 
     config = setup_reduce_to_one_test(mesh_device)
 
     # Run reduce_to_one
     print("Running reduce_to_one...")
-    output_tensor = ttnn.experimental.deepseek_b1_reduce_to_one(
+    output_tensor = ReduceToOneB1.op(
         config["input_tensor"],
-        root_coord=ttnn.MeshCoordinate(config["root_coord"]),
-        exit_coord=ttnn.MeshCoordinate(config["exit_coord"]),
-        topology=topology,
-        output_tensor=config["output_tensor"],
-        intermediate_tensors=config["intermediate_tensors"],
+        config["intermediate_tensors"],
+        config["output_tensor"],
+        config["semaphores"],
+        ttnn.MeshCoordinate(config["root_coord"]),
+        ttnn.MeshCoordinate(config["exit_coord"]),
     )
     ttnn.synchronize_device(config["submesh_device"])
 
@@ -277,9 +234,9 @@ def run_reduce_to_one(mesh_device, topology):
     print("Test passed!")
 
 
-def run_reduce_to_one_with_trace(mesh_device, topology):
+def run_reduce_to_one_with_trace(mesh_device):
     """Run reduce_to_one test with trace capture and replay."""
-    print(f"\n=== Testing reduce_to_one with trace ({topology}) ===")
+    print(f"\n=== Testing reduce_to_one with trace ===")
 
     config = setup_reduce_to_one_test(mesh_device)
     submesh_device = config["submesh_device"]
@@ -289,112 +246,66 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
     root_coord = config["root_coord"]
     exit_coord = config["exit_coord"]
     ref_output = config["ref_output"]
-
-    # Set up all_reduce for device synchronization
-    sync_config = setup_all_reduce_sync(submesh_device, num_buffers=8)
-    sync_semaphores = sync_config["semaphores"]
-    sync_tensor = sync_config["sync_tensor"]
-    sync_intermediate_tensors = sync_config["intermediate_tensors"]
-    sync_mem_config = sync_config["mem_config"]
-
-    profiler = BenchmarkProfiler()
+    semaphores = config["semaphores"]
 
     # Run once to compile
     print("Running reduce_to_one (compiling)...")
-    output_tensor = ttnn.experimental.deepseek_b1_reduce_to_one(
+    output_tensor = ReduceToOneB1.op(
         input_tensor,
-        root_coord=ttnn.MeshCoordinate(root_coord),
-        exit_coord=ttnn.MeshCoordinate(exit_coord),
-        topology=topology,
-        output_tensor=output_tensor_preallocated,
-        intermediate_tensors=intermediate_tensors,
-    )
-    # Also compile all_reduce
-    _ = ttnn.experimental.all_reduce_async(
-        sync_tensor,
-        sync_intermediate_tensors[0],
-        cluster_axis=0,
-        mesh_device=submesh_device,
-        multi_device_global_semaphore=sync_semaphores[0],
-        memory_config=sync_mem_config,
-        dtype=ttnn.bfloat16,
-        topology=ttnn.Topology.Linear,
-        num_links=1,
+        intermediate_tensors,
+        output_tensor_preallocated,
+        semaphores,
+        ttnn.MeshCoordinate(root_coord),
+        ttnn.MeshCoordinate(exit_coord),
     )
     ttnn.synchronize_device(submesh_device)
 
-    # Helper to run reduce_to_one with all_reduce sync every 4 iterations
-    def run_with_sync(num_iters, sem_offset=0):
-        for i in range(num_iters):
-            output_tensor = ttnn.experimental.deepseek_b1_reduce_to_one(
-                input_tensor,
-                root_coord=ttnn.MeshCoordinate(root_coord),
-                exit_coord=ttnn.MeshCoordinate(exit_coord),
-                topology=topology,
-                output_tensor=output_tensor_preallocated,
-                intermediate_tensors=intermediate_tensors,
-            )
-            # Insert all_reduce every 4 iterations for device sync
-            if (i + 1) % 4 == 0:
-                sem_idx = ((i // 4) + sem_offset) % len(sync_semaphores)
-                _ = ttnn.experimental.all_reduce_async(
-                    sync_tensor,
-                    sync_intermediate_tensors[sem_idx],
-                    cluster_axis=0,
-                    mesh_device=submesh_device,
-                    multi_device_global_semaphore=sync_semaphores[sem_idx],
-                    memory_config=sync_mem_config,
-                    dtype=ttnn.bfloat16,
-                    topology=ttnn.Topology.Linear,
-                    num_links=1,
-                )
+    # Helper to run reduce_to_one multiple iterations
+    profiler = BenchmarkProfiler()
 
-    # Warmup trace
+    def run_iterations(num_iters):
+        for _ in range(num_iters):
+            output_tensor = ReduceToOneB1.op(
+                input_tensor,
+                intermediate_tensors,
+                output_tensor_preallocated,
+                semaphores,
+                ttnn.MeshCoordinate(root_coord),
+                ttnn.MeshCoordinate(exit_coord),
+            )
+
+    # Capture warmup trace
     logger.info("Capturing warmup trace")
     trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    run_with_sync(15, sem_offset=0)
+    run_iterations(15)
     ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh_device)
 
     # Capture main trace
     logger.info("Capturing main trace")
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    run_with_sync(20, sem_offset=3)
+    run_iterations(30)
     ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(submesh_device)
-
-    # Capture tail trace
-    logger.info("Capturing tail trace")
-    trace_id_tail = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    run_with_sync(20, sem_offset=7)
-    ttnn.end_trace_capture(submesh_device, trace_id_tail, cq_id=0)
     ttnn.synchronize_device(submesh_device)
 
     # Execute warmup trace
     logger.info("Execute trace warmup")
-    profiler.start("reduce-to-one-warmup")
+    profiler.start("warmup-trace")
     ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)
     ttnn.release_trace(submesh_device, trace_id_warmup)
     ttnn.synchronize_device(submesh_device)
-    profiler.end("reduce-to-one-warmup")
+    profiler.end("warmup-trace")
 
     # Execute main trace
     logger.info("Execute main trace")
     signpost("start")
-    profiler.start("reduce-to-one-trace")
+    profiler.start("main-trace")
     ttnn.execute_trace(submesh_device, trace_id, blocking=False)
     ttnn.release_trace(submesh_device, trace_id)
     ttnn.synchronize_device(submesh_device)
-    profiler.end("reduce-to-one-trace")
-    signpost("stop")
 
-    # Execute tail trace
-    logger.info("Execute tail trace")
-    profiler.start("reduce-to-one-tail")
-    ttnn.execute_trace(submesh_device, trace_id_tail, blocking=False)
-    ttnn.release_trace(submesh_device, trace_id_tail)
-    ttnn.synchronize_device(submesh_device)
-    profiler.end("reduce-to-one-tail")
+    profiler.end("main-trace")
+    signpost("stop")
 
     # Verify output
     print("\nVerifying trace output...")
@@ -414,7 +325,19 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
 )
 def test_reduce_to_one_1d(bh_2d_mesh_device):
     """Test reduce_to_one with 1D fabric."""
-    run_reduce_to_one(bh_2d_mesh_device, ttnn.Topology.Linear)
+    run_reduce_to_one(bh_2d_mesh_device)
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+def test_reduce_to_one_2d(bh_2d_mesh_device):
+    """Test reduce_to_one with 2D fabric."""
+    run_reduce_to_one(bh_2d_mesh_device)
 
 
 # === Trace Tests ===
@@ -427,4 +350,16 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
 )
 def test_reduce_to_one_with_trace_1d(bh_2d_mesh_device):
     """Test reduce_to_one with trace capture/replay on 1D fabric."""
-    run_reduce_to_one_with_trace(bh_2d_mesh_device, ttnn.Topology.Linear)
+    run_reduce_to_one_with_trace(bh_2d_mesh_device)
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 425984})],
+    indirect=["device_params"],
+    ids=["fabric_2d_trace"],
+)
+def test_reduce_to_one_with_trace_2d(bh_2d_mesh_device):
+    """Test reduce_to_one with trace capture/replay on 2D fabric."""
+    run_reduce_to_one_with_trace(bh_2d_mesh_device)

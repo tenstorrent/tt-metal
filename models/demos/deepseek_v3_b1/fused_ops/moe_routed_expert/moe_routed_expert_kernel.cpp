@@ -34,6 +34,9 @@
 #include "../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../unified_kernels/eltwise_mul.hpp"
 #include "../../unified_kernels/eltwise_add.hpp"
+#ifdef ENABLE_REDUCE_TO_ONE
+#include "../../unified_kernels/reduce_to_one_b1.hpp"
+#endif
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
@@ -43,6 +46,9 @@ struct Core {
     static constexpr bool is_gate_proj_core = get_named_compile_time_arg_val("is_gate_proj_core") == 1;
     // Cores that need to receive the input mcast (routing matmul OR dram matmul)
     static constexpr bool is_input_mcast_receiver = is_gate_mm_core || is_gate_proj_core;
+    // Reduce-to-one core roles
+    static constexpr bool is_reduce_worker_core = get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
+    static constexpr bool is_reduce_fabric_core = get_named_compile_time_arg_val("is_reduce_fabric_core") == 1;
 };
 
 void kernel_main() {
@@ -210,6 +216,26 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
 
+#ifdef ENABLE_REDUCE_TO_ONE
+    // ------------------------------------------------------------------------
+    // ReduceToOneB1 (reader - receives data from fabric via semaphore waits)
+    // ------------------------------------------------------------------------
+    using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ReaderCTArgs<
+        get_named_compile_time_arg_val("reduce_device_role"),
+        get_named_compile_time_arg_val("reduce_num_tiles"),
+        get_named_compile_time_arg_val("reduce_local_cb"),
+        get_named_compile_time_arg_val("reduce_received_cb_r1"),
+        get_named_compile_time_arg_val("reduce_received_cb_r2"),
+        get_named_compile_time_arg_val("reduce_received_cb_r3"),
+        get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+
+    // Reader runtime args
+    deepseek_b1_ops::ReduceToOneB1::ReaderArgs reduce_rt_args{
+        get_common_arg_val<uint32_t>(0),  // recv_sem_round1
+        get_common_arg_val<uint32_t>(1),  // recv_sem_round2
+        get_common_arg_val<uint32_t>(2),  // recv_sem_round3
+    };
+#endif
     // ------------------------------------------------------------------------
     // Setup sharded persistent buffers
     // ------------------------------------------------------------------------
@@ -392,6 +418,43 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     using AddCTArgs = deepseek_b1_ops::EltwiseAdd::WriterCTArgs;
 
+#ifdef ENABLE_REDUCE_TO_ONE
+    // ------------------------------------------------------------------------
+    // ReduceToOneB1 (writer - sends data via fabric or NOC)
+    // ------------------------------------------------------------------------
+    using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::WriterCTArgs<
+        get_named_compile_time_arg_val("reduce_device_role"),
+        get_named_compile_time_arg_val("reduce_num_tiles"),
+        get_named_compile_time_arg_val("reduce_payload_size_bytes"),
+        get_named_compile_time_arg_val("reduce_local_cb"),
+        get_named_compile_time_arg_val("reduce_scratch_cb"),
+        get_named_compile_time_arg_val("reduce_packet_cb"),
+        get_named_compile_time_arg_val("reduce_num_hops"),
+        get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
+        get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
+        get_named_compile_time_arg_val("reduce_output_core_noc_x"),
+        get_named_compile_time_arg_val("reduce_output_core_noc_y"),
+        get_named_compile_time_arg_val("reduce_num_workers"),
+        get_named_compile_time_arg_val("reduce_slot_size_bytes"),
+        get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+
+    // Writer runtime args for worker cores
+    constexpr size_t reduce_brisc_arg_start = 0;  // Fabric args start at 0
+    deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
+    if constexpr (Core::is_reduce_worker_core) {
+        reduce_rt_args = deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs{
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),  // fabric_core_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),  // fabric_core_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),  // my_slot_idx
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),  // worker_sem_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),  // dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),  // dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),  // output_base_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),  // shard_idx
+        };
+    }
+#endif
+
 #elif defined(COMPILE_FOR_TRISC)
     // ------------------------------------------------------------------------
     // Mcast (no-op for TRISC)
@@ -523,6 +586,25 @@ void kernel_main() {
         get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
         get_named_compile_time_arg_val("add_sender_index"),
         get_named_compile_time_arg_val("add_slice_size_bytes")>;
+
+#ifdef ENABLE_REDUCE_TO_ONE
+    // ------------------------------------------------------------------------
+    // ReduceToOneB1 (compute - performs reduction)
+    // ------------------------------------------------------------------------
+    using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ComputeCTArgs<
+        get_named_compile_time_arg_val("reduce_device_role"),
+        get_named_compile_time_arg_val("reduce_num_tiles"),
+        get_named_compile_time_arg_val("reduce_local_cb"),
+        get_named_compile_time_arg_val("reduce_received_cb_r1"),
+        get_named_compile_time_arg_val("reduce_received_cb_r2"),
+        get_named_compile_time_arg_val("reduce_received_cb_r3"),
+        get_named_compile_time_arg_val("reduce_output_cb"),
+        get_named_compile_time_arg_val("reduce_scratch_cb"),
+        get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+
+    // Compute has no runtime args
+    deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
+#endif
 #endif
 
     // ============================================================================
@@ -673,6 +755,20 @@ void kernel_main() {
         add_op();
     }
 
+    // ========================================================================
+    // 13. ReduceToOneB1: Multi-device reduce-to-one across 4x2 mesh
+    //     Reduces final_output from all 8 devices to ROOT1 device
+    // ========================================================================
+#ifdef ENABLE_REDUCE_TO_ONE
+    {
+        DeviceZoneScopedN("REDUCE_TO_ONE");
+        // SkipLocalCbPush=true: eltwise_add already pushed data to local_cb (add_cb_out)
+        // IsReduceCore includes both worker cores and fabric cores
+        constexpr bool is_reduce_core = Core::is_reduce_worker_core || Core::is_reduce_fabric_core;
+        deepseek_b1_ops::ReduceToOneB1::Op<ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
+        reduce_op(reduce_rt_args);
+    }
+#endif
     // Only need one teardown since all mcasts reuse the same semaphores
     mcast.teardown();
 
