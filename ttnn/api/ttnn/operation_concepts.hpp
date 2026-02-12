@@ -98,6 +98,15 @@ template <typename Variant>
 concept AllFactoriesValid =
     detail::all_factories_valid<Variant>(std::make_index_sequence<std::variant_size_v<Variant>>{});
 
+// Detect if operation provides custom cache-hit validation.
+// If not provided, the framework defaults to calling validate_on_program_cache_miss.
+template <typename device_operation_t>
+concept HasValidateOnProgramCacheHit = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    device_operation_t::validate_on_program_cache_hit(attrs, tensor_args);
+};
+
 template <typename device_operation_t>
 concept DeviceOperationConcept = requires {
     typename device_operation_t::program_factory_t;
