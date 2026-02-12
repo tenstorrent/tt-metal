@@ -14,7 +14,7 @@
 *
 * @brief Initialize matrix multiply operation of Input 0 * Input 1 -> SrcB * SrcA
 
-* @tparam NUM_FIDELITY_PHASES: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when
+* @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when
 math is in Fp32 format
 * @param ct_dim: number of tiles in the column dimension for a matrix multiply
 * @param rt_dim: number of tiles in the row dimension for a matrix multiply
@@ -24,9 +24,9 @@ math is in Fp32 format
 * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]
 * Output is a matrix block of dimension [rt_dim, ct_dim]
 */
-template <std::uint8_t NUM_FIDELITY_PHASES>
+template <ckernel::MathFidelity math_fidelity>
 inline void llk_math_matmul_init(const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
-    _llk_math_matmul_init_<static_cast<ckernel::MathFidelity>(NUM_FIDELITY_PHASES)>(ct_dim, rt_dim);
+    _llk_math_matmul_init_<math_fidelity>(NUM_FIDELITY_PHASES) > (ct_dim, rt_dim);
 }
 
 /**
