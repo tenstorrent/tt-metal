@@ -252,6 +252,12 @@ public:
     // TODO #32045: Remove this function since IDs are assigned in the constructor.
     static std::uint64_t next_tensor_id();
 
+    /**
+     * The tensor could be valueless if it is default initialized or in a moved-from state.
+     * Any operations on a valueless tensor will be undefined behavior.
+     */
+    bool is_valueless() const;
+
 private:
     // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
     // If not set, the tensor can either be on host or allocated on a single device.
