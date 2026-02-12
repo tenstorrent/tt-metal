@@ -42,11 +42,6 @@ void NlpCreateHeadsFalcon7BDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.output_mem_config.memory_layout());
 }
 
-void NlpCreateHeadsFalcon7BDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 NlpCreateHeadsFalcon7BDeviceOperation::spec_return_value_t NlpCreateHeadsFalcon7BDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (operation_attributes.output_mem_config.is_sharded()) {

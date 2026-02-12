@@ -54,11 +54,6 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
         "Grid size for sharding must be less than or equal to total grid available");
 }
 
-void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     auto shape = input_tensor.padded_shape();

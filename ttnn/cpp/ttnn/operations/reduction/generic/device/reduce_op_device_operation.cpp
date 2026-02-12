@@ -38,11 +38,6 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.dtype());
 }
 
-void ReduceDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();

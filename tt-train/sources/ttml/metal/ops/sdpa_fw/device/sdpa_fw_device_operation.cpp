@@ -17,11 +17,6 @@ SDPAForwardDeviceOperation::program_factory_t SDPAForwardDeviceOperation::select
     return SDPAForwardProgramFactory{};
 }
 
-void SDPAForwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& query = tensor_args.query;

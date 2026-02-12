@@ -24,11 +24,6 @@ LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_pro
     return LayerNormMultiCoreProgramFactory{};
 }
 
-void LayerNormDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input;

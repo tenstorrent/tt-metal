@@ -20,11 +20,6 @@ AllGatherConcatDeviceOperation::program_factory_t AllGatherConcatDeviceOperation
     return AllGatherConcatMeshWorkloadFactory{};
 }
 
-void AllGatherConcatDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void AllGatherConcatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;

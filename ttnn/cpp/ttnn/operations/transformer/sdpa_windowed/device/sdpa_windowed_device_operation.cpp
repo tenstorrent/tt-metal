@@ -23,11 +23,6 @@ WindowedScaledDotProductAttentionDeviceOperation::select_program_factory(
     return WindowedSDPAProgramFactory{};
 }
 
-void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
-    validate_on_program_cache_miss(attrs, tensors);
-}
-
 void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     // Common validations for windowed SDPA
