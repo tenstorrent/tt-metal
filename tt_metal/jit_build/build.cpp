@@ -638,11 +638,12 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
         for (size_t i = 0; i < num_objs; ++i) {
             auto temp_obj = out_dir + this->temp_objs_[i];
             if (!fs::exists(temp_obj)) {
-                // If reuse up-to-date .o files, we should give them temporary names for linking, because:
-                // 1. There is no guarantee that another process will not rename their compiled object to this .o during
-                // our linking.
-                // 2. JIT compiler is not deterministic.  Different .o files are produced from the same source.
-                // 3. LTO opens the object file multiple times.  Atomic rename doesn't prevent linker gets confused.
+                // If reusing up-to-date .o files, we should give them temporary names for linking because:
+                // 1. There is no guarantee that another process will not rename its compiled object to this .o during
+                //    our linking.
+                // 2. JIT compiler is not deterministic. Different .o files can be produced from the same source.
+                // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
+                //    getting confused.
                 hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
                 compiled[i] = false;
             }
