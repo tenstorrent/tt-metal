@@ -248,6 +248,7 @@ FORCE_INLINE
             }
             // Shift the packet encoding to the next chunk
             packet_encoding >>= 2;
+
             if (chunk_count > 2) {
                 chunk_encoding = packet_encoding & CHUNK_ENCODING_MASK;
                 destination_noc_address = scatter.noc_address[1];
@@ -273,7 +274,9 @@ FORCE_INLINE
                 } else {
                     ASSERT(false);
                 }
+                // Shift the packet encoding to the next chunk
                 packet_encoding >>= 2;
+
                 if (chunk_count == 4) [[likely]] {
                     chunk_encoding = packet_encoding & CHUNK_ENCODING_MASK;
                     destination_noc_address = scatter.noc_address[2];
@@ -299,6 +302,8 @@ FORCE_INLINE
                     } else {
                         ASSERT(false);
                     }
+                    // Shift the packet encoding to the next chunk
+                    packet_encoding >>= 2;
                 }
             }
 
