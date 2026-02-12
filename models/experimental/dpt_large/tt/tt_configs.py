@@ -91,10 +91,14 @@ class TTLayerConfig:
         base = min(seq_len, 256)
         base = max(32, (base // 32) * 32)
         q_chunk = base
-        # When seq_len is tile-aligned (perf path padding), prefer the largest
-        # 32-aligned divisor so masked SDPA does not reject q_seq_len/chunk.
+        # When seq_len is tile-aligned (perf path padding), prefer a power-of-two
+        # 32-aligned divisor so masked SDPA accepts q_seq_len/chunk and runtime
+        # stats granularity constraints remain valid.
         if seq_len > 0 and (seq_len % 32) == 0:
-            for candidate in range(base, 31, -32):
+            max_pow2 = 1 << (base.bit_length() - 1)
+            for candidate in (max_pow2, max_pow2 // 2, max_pow2 // 4, max_pow2 // 8):
+                if candidate < 32:
+                    continue
                 if seq_len % candidate == 0:
                     q_chunk = candidate
                     break
