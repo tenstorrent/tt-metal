@@ -37,10 +37,6 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
 namespace ttnn::graph::test {
 
 struct BufferTestParam {
