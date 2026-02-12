@@ -128,6 +128,7 @@ void kernel_main() {
     // pre-populate packet headers
     // auto unicast_scatter_write_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     // auto unicast_sem_inc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto unicast_atomic_inc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
 
     uint8_t unicast_num_hops[] = {static_cast<uint8_t>(1)};
@@ -137,7 +138,7 @@ void kernel_main() {
         pre_op_barrier_semaphore_noc0_x, pre_op_barrier_semaphore_noc0_y, pre_op_barrier_semaphore, 0);
     fabric_unicast_noc_unicast_atomic_inc(
         fabric_connection,
-        unicast_route_id,  // unicast sem inc route id
+        unicast_atomic_inc_route_id,  // unicast sem inc route id
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_address, 1, false},
         unicast_num_hops);
 
