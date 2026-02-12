@@ -694,6 +694,8 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     const BufferCorePageMapping& core_page_mapping,
     const CoreCoord& core,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
+    std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
@@ -761,15 +763,20 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             total_relay_length += relay_sub_cmd.length;
         }
 
+ //       fmt::println(stderr, "Total relay length: {} write sub cmds: {} relay sub cmds: {} \n", total_relay_length, write_sub_cmds.size(), relay_sub_cmds.size());
+
         // Use calculator to compute command sequence size
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_packed_large_unicast(write_sub_cmds.size());
+        //calculator.add_prefetch_relay_linear_packed(relay_sub_cmds.size());
         void* cmd_region = sysmem_manager.issue_queue_reserve(calculator.write_offset_bytes(), dispatch_params.cq_id);
         HugepageDeviceCommand command_sequence(cmd_region, calculator.write_offset_bytes());
 
         // Add write packed large unicast command
         command_sequence.add_dispatch_write_packed_large_unicast(
             CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, l1_alignment, write_sub_cmds.size(), write_sub_cmds);
+       // command_sequence.add_prefetch_relay_linear_packed(
+        //    pinned_src_noc_xy, total_relay_length, relay_sub_cmds, relay_sub_cmds.size(), 0);
 
         TT_ASSERT(
             command_sequence.write_offset_bytes() == calculator.write_offset_bytes(),
@@ -781,6 +788,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
         sysmem_manager.fetch_queue_write(calculator.write_offset_bytes(), dispatch_params.cq_id);
 
+        #if 1
         calculator.clear();
 
         // Put the CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H into its own fetch queue entry so prefetch_h knows to process
@@ -812,6 +820,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         sysmem_manager.issue_queue_push_back(calculator.write_offset_bytes(), dispatch_params.cq_id);
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
         sysmem_manager.fetch_queue_write(calculator.write_offset_bytes(), dispatch_params.cq_id);
+        #endif
 
         // Clear for next batch
         write_sub_cmds.clear();
@@ -919,6 +928,9 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
 
     // Emit final command pair with remaining sub-commands
     emit_command_pair();
+    std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> duration = end_time - start_time;
+    //log_info(tt::LogMetal, "Time taken to build command sequence: {} microseconds", duration.count() * 1000000);
 }
 
 // Issue dispatch commands for writing buffer data
@@ -1139,6 +1151,8 @@ bool write_to_device_buffer(
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
+    std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
+
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return false;
     }
@@ -1275,6 +1289,10 @@ bool write_to_device_buffer(
             use_pinned_transfer,
             remote_chip);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
+
+        std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
+        std::chrono::duration<double> duration = end_time - start_time;
+        //log_info(tt::LogMetal, "Time taken to start write sharded buffer: {} microseconds", duration.count() * 1000000);
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
             for (const BufferCorePageMapping& core_page_mapping :
