@@ -59,6 +59,7 @@ def create_fabric_router_config(max_payload_size):
     indirect=True,
 )
 @pytest.mark.parametrize("fuse_residual_add", [False, True])
+@pytest.mark.parametrize("ccl_enabled", [True, False], ids=["ccl_on", "ccl_off"])
 def test_post_sdpa(
     mesh_device,
     num_devices,
@@ -71,12 +72,17 @@ def test_post_sdpa(
     in1_dtype,
     cluster_axis,
     fuse_residual_add,
+    ccl_enabled,
 ):
-    """Test full post_sdpa fused operation with CCL all-reduce"""
+    """Test post_sdpa fused operation with optional CCL all-reduce"""
 
     # Validate mesh size
     if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
+
+    # Residual add is part of CCL reduction; skip when CCL is disabled
+    if not ccl_enabled and fuse_residual_add:
+        pytest.skip("Residual add requires CCL to be enabled")
 
     # Create submesh - fabric requires opening full system mesh first
     submesh = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -170,15 +176,24 @@ def test_post_sdpa(
         torch_residual = None
 
     # ========================================================================
-    # Compute golden reference (full CCL all-reduce)
+    # Compute golden reference
     # ========================================================================
-    torch_expected = PostSDPA.golden(
-        [inp.float() for inp in device_inputs],
-        torch_weights1.float(),
-        torch_weights2.float(),
-        torch_residual.float() if torch_residual is not None else None,
-    ).bfloat16()
-    logger.info(f"Golden output shape: {torch_expected.shape}")
+    if ccl_enabled:
+        # Full CCL all-reduce: sum across devices + optional residual
+        torch_expected = PostSDPA.golden(
+            [inp.float() for inp in device_inputs],
+            torch_weights1.float(),
+            torch_weights2.float(),
+            torch_residual.float() if torch_residual is not None else None,
+        ).bfloat16()
+        logger.info(f"Golden output shape (all-reduced): {torch_expected.shape}")
+    else:
+        # Per-device matmul only: input @ W1 @ W2
+        torch_expected_per_device = []
+        for inp in device_inputs:
+            result = (inp.float() @ torch_weights1.float() @ torch_weights2.float()).bfloat16()
+            torch_expected_per_device.append(result)
+        logger.info(f"Golden output shape (per-device): {torch_expected_per_device[0].shape}")
 
     # ========================================================================
     # Create mesh mapper
@@ -312,64 +327,55 @@ def test_post_sdpa(
     logger.info(f"Created gather2 output tensor: {gather2_output_shard_shape} on gather core per device")
 
     # ========================================================================
-    # Create CCL intermediate tensor (1x32 tiles to match gather2 output format)
-    # Shape: [1, 7168] = 224 tiles of 1x32
+    # Create CCL tensors and semaphores (only when CCL is enabled)
     # ========================================================================
-    ccl_intermediate_shape = [M, output_size]  # [1, 7168]
-    ccl_intermediate_shard_shape = tuple(ccl_intermediate_shape)
-    ccl_intermediate_shard_spec = ttnn.ShardSpec(
-        gather_core_grid,
-        ccl_intermediate_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    ccl_intermediate_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ccl_intermediate_shard_spec
-    )
+    ttnn_ccl_intermediate = None
+    ttnn_output = None
+    ttnn_residual = None
+    semaphores = None
 
-    torch_ccl_intermediate = torch.zeros(ccl_intermediate_shape, dtype=torch.bfloat16)
-    mesh_ccl_intermediate_torch = torch.cat([torch_ccl_intermediate] * num_devices, dim=0)
-    ttnn_ccl_intermediate = ttnn.from_torch(
-        mesh_ccl_intermediate_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,  # 1x32 tiles to match gather2 output
-        dtype=ttnn.bfloat16,
-        memory_config=ccl_intermediate_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-    )
-    logger.info(f"Created CCL intermediate tensor: {ccl_intermediate_shape} on gather core per device")
+    if ccl_enabled:
+        # CCL intermediate tensor (1x32 tiles to match gather2 output format)
+        # Shape: [1, 7168] = 224 tiles of 1x32
+        ccl_intermediate_shape = [M, output_size]  # [1, 7168]
+        ccl_intermediate_shard_shape = tuple(ccl_intermediate_shape)
+        ccl_intermediate_shard_spec = ttnn.ShardSpec(
+            gather_core_grid,
+            ccl_intermediate_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        ccl_intermediate_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ccl_intermediate_shard_spec
+        )
 
-    # ========================================================================
-    # Create final output tensor ([1, 7168] on gather core)
-    # ========================================================================
-    output_shard_shape = (M, output_size)  # [1, 7168]
-    output_shard_spec = ttnn.ShardSpec(
-        gather_core_grid,
-        output_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+        torch_ccl_intermediate = torch.zeros(ccl_intermediate_shape, dtype=torch.bfloat16)
+        mesh_ccl_intermediate_torch = torch.cat([torch_ccl_intermediate] * num_devices, dim=0)
+        ttnn_ccl_intermediate = ttnn.from_torch(
+            mesh_ccl_intermediate_torch,
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            tile=a_tile,  # 1x32 tiles to match gather2 output
+            dtype=ttnn.bfloat16,
+            memory_config=ccl_intermediate_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        )
+        logger.info(f"Created CCL intermediate tensor: {ccl_intermediate_shape} on gather core per device")
 
-    torch_output_zeros = torch.zeros((M, output_size), dtype=torch.bfloat16)
-    mesh_output_torch = torch.cat([torch_output_zeros] * num_devices, dim=0)
-    ttnn_output = ttnn.from_torch(
-        mesh_output_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=output_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-    )
-    logger.info(f"Created output tensor: {output_shard_shape} on gather core per device")
+        # Final output tensor ([1, 7168] on gather core)
+        output_shard_shape = (M, output_size)  # [1, 7168]
+        output_shard_spec = ttnn.ShardSpec(
+            gather_core_grid,
+            output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+        )
 
-    # ========================================================================
-    # Create residual tensor (optional)
-    # ========================================================================
-    if fuse_residual_add:
-        mesh_residual_torch = torch.cat([torch_residual] * num_devices, dim=0)
-        ttnn_residual = ttnn.from_torch(
-            mesh_residual_torch,
+        torch_output_zeros = torch.zeros((M, output_size), dtype=torch.bfloat16)
+        mesh_output_torch = torch.cat([torch_output_zeros] * num_devices, dim=0)
+        ttnn_output = ttnn.from_torch(
+            mesh_output_torch,
             device=submesh,
             layout=ttnn.TILE_LAYOUT,
             tile=a_tile,
@@ -377,24 +383,34 @@ def test_post_sdpa(
             memory_config=output_mem_config,
             mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
         )
-        logger.info(f"Created residual tensor: {output_shard_shape} on gather core per device")
-    else:
-        ttnn_residual = None
+        logger.info(f"Created output tensor: {output_shard_shape} on gather core per device")
 
-    # ========================================================================
-    # Create global semaphores for CCL
-    # ========================================================================
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [semaphore1, semaphore2]
-    logger.info("Created global semaphores for CCL synchronization")
+        # Residual tensor (optional)
+        if fuse_residual_add:
+            mesh_residual_torch = torch.cat([torch_residual] * num_devices, dim=0)
+            ttnn_residual = ttnn.from_torch(
+                mesh_residual_torch,
+                device=submesh,
+                layout=ttnn.TILE_LAYOUT,
+                tile=a_tile,
+                dtype=ttnn.bfloat16,
+                memory_config=output_mem_config,
+                mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+            )
+            logger.info(f"Created residual tensor: {output_shard_shape} on gather core per device")
+
+        # Global semaphores for CCL
+        num_cores = compute_grid_size.x * compute_grid_size.y
+        available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+        semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
+        semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
+        semaphores = [semaphore1, semaphore2]
+        logger.info("Created global semaphores for CCL synchronization")
 
     # ========================================================================
     # Run fused operation
     # ========================================================================
-    logger.info("Running full post_sdpa fused operation with CCL all-reduce...")
+    logger.info(f"Running post_sdpa fused operation (ccl_enabled={ccl_enabled})...")
     ttnn_result = PostSDPA.op(
         ttnn_input,
         ttnn_weights1,
@@ -407,6 +423,7 @@ def test_post_sdpa(
         cluster_axis=cluster_axis,
         residual_tensor_mesh=ttnn_residual,
         fp32_dest_acc_en=False,
+        ccl_enabled=ccl_enabled,
     )
     ttnn.synchronize_device(submesh)
 
@@ -419,7 +436,6 @@ def test_post_sdpa(
 
     # ========================================================================
     # Verify results using PCC (Pearson Correlation Coefficient)
-    # All devices should have the same all-reduced result
     # ========================================================================
     all_passed = True
     pcc_threshold = 0.99  # Require 99% correlation
@@ -430,12 +446,17 @@ def test_post_sdpa(
         expected_shape = (M, output_size)
         assert received.shape == expected_shape, f"Expected shape {expected_shape}, got {received.shape}"
 
-        # Compare with all-reduced golden reference using PCC
-        # All devices should have the same result after all-reduce
-        passing, pcc_message = comp_pcc(torch_expected, received, pcc_threshold)
+        if ccl_enabled:
+            # All devices should have the same all-reduced result
+            golden = torch_expected
+        else:
+            # Each device has its own independent result
+            golden = torch_expected_per_device[device_idx]
+
+        passing, pcc_message = comp_pcc(golden, received, pcc_threshold)
         if not passing:
             logger.error(f"Device {device_idx}: PCC check FAILED - {pcc_message}")
-            logger.error(f"Expected: {torch_expected[:, :5]}")
+            logger.error(f"Expected: {golden[:, :5]}")
             logger.error(f"Received: {received[:, :5]}")
             all_passed = False
         else:
@@ -446,4 +467,4 @@ def test_post_sdpa(
     submesh.clear_loaded_sub_device_manager()
 
     assert all_passed, "Not all devices have the correct output"
-    logger.info("✓ Post SDPA full fused op with CCL all-reduce test passed!")
+    logger.info(f"✓ Post SDPA fused op test passed (ccl_enabled={ccl_enabled})!")

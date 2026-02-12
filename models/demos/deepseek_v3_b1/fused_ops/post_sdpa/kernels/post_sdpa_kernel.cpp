@@ -327,7 +327,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_BRISC)
     // Signal CCL sender that gather2 is complete (gather receiver only)
-    if constexpr (Core::is_gather_receiver_core) {
+    if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
         constexpr uint32_t gather2_completion_semaphore_id =
             get_named_compile_time_arg_val("gather2_completion_semaphore_id");
         constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
