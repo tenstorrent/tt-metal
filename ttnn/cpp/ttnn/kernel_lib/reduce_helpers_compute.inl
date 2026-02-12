@@ -4,67 +4,9 @@
 // Implementation file for reduce_helpers_compute.hpp
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+
 namespace compute_kernel_lib {
-
-// =============================================================================
-// CB Query Helpers
-// =============================================================================
-
-/**
- * @brief Get the number of pages in a circular buffer
- *
- * Derives page count from fifo_size / fifo_page_size, which works on both
- * read and write CB interfaces. (fifo_num_pages is only populated for write interfaces.)
- */
-ALWI uint32_t get_cb_num_pages(uint32_t cb_id) {
-    auto& cb = get_local_cb_interface(cb_id);
-    return cb.fifo_size / cb.fifo_page_size;
-}
-
-// =============================================================================
-// Tile Size and CB Page Size Validation
-// =============================================================================
-
-/**
- * @brief Get tile size in bytes for a data format
- *
- * Computes tile size using the same formulas as MUL_WITH_TILE_SIZE().
- * Assumes standard 32x32 tiles (1024 elements).
- * Only supports Float16, Float16_b, Float32, and Bfp8_b.
- *
- * @param format Data format
- * @return Tile size in bytes (0 for unsupported formats)
- */
-ALWI uint32_t get_tile_size_for_data_format(DataFormat format) {
-    ASSERT(
-        format == DataFormat::Float16 || format == DataFormat::Float16_b ||
-        format == DataFormat::Float32 || format == DataFormat::Bfp8_b);
-
-    constexpr uint32_t datum_shift = 10;  // 32x32 tiles = 1024 elements
-    constexpr uint32_t exp_shift = 6;     // 64 exponents
-
-    switch (format) {
-        case DataFormat::Float16:
-        case DataFormat::Float16_b: return (1 << (datum_shift + 1));            // 2048 bytes
-        case DataFormat::Float32: return (1 << (datum_shift + 2));               // 4096 bytes
-        case DataFormat::Bfp8_b: return (1 << datum_shift) + (1 << exp_shift);  // 1088 bytes
-        default: return 0;
-    }
-}
-
-/**
- * @brief Validate that a CB's page size equals the tile size for its data format
- *
- * Uses unpack_src_format to determine the data format (same as pack_dst_format on all TRISCs).
- * On compute kernels (TRISC), fifo_page_size is stored in 16-byte units, so we shift left
- * by CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT to convert back to bytes.
- */
-ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id, DataFormat format) {
-    uint32_t tile_size = get_tile_size_for_data_format(format);
-    uint32_t page_size_bytes = get_local_cb_interface(cb_id).fifo_page_size
-                               << CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
-    return tile_size > 0 && page_size_bytes == tile_size;
-}
 
 // =============================================================================
 // ReduceDataFormatReconfigMode Helper Functions
