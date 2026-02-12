@@ -482,7 +482,9 @@ class Attention1D(LightweightModule):
         # - Paged + Chunked: production vLLM serving (long prompts)
         # - Paged + Non-chunked: short prompts in vLLM
         # - Non-paged + Non-chunked: simple testing (uses else branch with contiguous KV)
-        # - Non-paged + Chunked: invalid (chunked_sdpa requires page_table)
+        # Invalid combinations (rejected at config time in _resolve_attention1d_config):
+        # - Non-paged + Chunked: chunked_sdpa requires page_table
+        # - sliding_window + Chunked: chunked_sdpa does not implement window masking
         if chunk_start_idx is not None:
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
                 input_tensor_q=q_heads_sdpa,
@@ -1440,6 +1442,14 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             f"Reduce max_batch_size or max_seq_len to fit in device DRAM."
         )
 
+    # Reject sliding_window + paged attention (chunked prefill doesn't support window masking)
+    if config.sliding_window is not None and config.paged_attention_config is not None:
+        raise ValueError(
+            "Chunked prefill with sliding_window attention is not supported. "
+            "chunked_scaled_dot_product_attention does not implement sliding window masking. "
+            "Set sliding_window=None or disable paged attention / chunked prefill."
+        )
+
     # --- Phase 2: Device and foundational fields ---
 
     # Derive mesh_device
@@ -1972,11 +1982,16 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
         else:
             kv_cache = config.kv_cache
 
-        # Resolve defaults for both keys and values LazyWeights
-        to_set["kv_cache"] = (
-            resolve_lazy_weight(kv_cache[0], **kv_cache_defaults),
-            resolve_lazy_weight(kv_cache[1], **kv_cache_defaults),
-        )
+        # Resolve defaults for LazyWeights; pass through pre-allocated tensors as-is
+        resolved = []
+        for i, entry in enumerate(kv_cache):
+            if isinstance(entry, LazyWeight):
+                resolved.append(resolve_lazy_weight(entry, **kv_cache_defaults))
+            elif isinstance(entry, ttnn.Tensor):
+                resolved.append(entry)
+            else:
+                raise TypeError(f"kv_cache[{i}] must be LazyWeight or ttnn.Tensor, got {type(entry).__name__}")
+        to_set["kv_cache"] = tuple(resolved)
 
     return replace(config, **to_set)
 

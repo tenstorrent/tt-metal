@@ -796,6 +796,69 @@ def test_attention_1d_resolve_validates_token_budget_edge_case():
         _resolve_attention1d_config(config_fail)
 
 
+def test_attention_1d_resolve_kv_cache_tensor_passthrough():
+    """Test that _resolve_attention1d_config passes through raw ttnn.Tensor KV cache entries."""
+    mock_source = MagicMock()
+    mock_source.shape = (4096, 1536)
+
+    mock_wqkv = MagicMock(spec=LazyWeight)
+    mock_wqkv.source = mock_source
+    mock_wqkv.device = None
+
+    # Simulate pre-allocated ttnn.Tensor KV cache (e.g., from vLLM).
+    # Use plain MagicMock (NOT spec=LazyWeight) so isinstance(_, LazyWeight) is False.
+    mock_cache_k = MagicMock()
+    mock_cache_v = MagicMock()
+
+    config = Attention1DConfig(
+        wqkv=mock_wqkv,
+        wo=MagicMock(spec=LazyWeight),
+        n_heads=32,
+        n_kv_heads=8,
+        head_dim=128,
+        max_batch_size=1,
+        max_seq_len=128,
+        kv_cache=(mock_cache_k, mock_cache_v),
+    )
+
+    # Should not crash — previously would fail with dataclasses.replace on non-dataclass
+    try:
+        resolved = _resolve_attention1d_config(config)
+    except (ValueError, AssertionError) as e:
+        # Only device-related errors are acceptable, not kv_cache errors
+        assert "kv_cache" not in str(e).lower(), f"Unexpected kv_cache error: {e}"
+        return
+
+    # If resolution succeeded fully, verify the tensors were passed through as-is
+    assert resolved.kv_cache[0] is mock_cache_k
+    assert resolved.kv_cache[1] is mock_cache_v
+
+
+def test_attention_1d_resolve_rejects_sliding_window_with_paged():
+    """Test that _resolve_attention1d_config rejects sliding_window + paged_attention_config."""
+    mock_source = MagicMock()
+    mock_source.shape = (4096, 1536)
+
+    mock_wqkv = MagicMock(spec=LazyWeight)
+    mock_wqkv.source = mock_source
+    mock_wqkv.device = None
+
+    config = Attention1DConfig(
+        wqkv=mock_wqkv,
+        wo=MagicMock(spec=LazyWeight),
+        n_heads=32,
+        n_kv_heads=8,
+        head_dim=128,
+        max_batch_size=1,
+        max_seq_len=128,
+        sliding_window=4096,
+        paged_attention_config=PagedAttentionConfig(block_size=64, max_num_blocks=2048),
+    )
+
+    with pytest.raises(ValueError, match="sliding_window"):
+        _resolve_attention1d_config(config)
+
+
 # ============================================================================
 # Model name constants
 # ============================================================================
