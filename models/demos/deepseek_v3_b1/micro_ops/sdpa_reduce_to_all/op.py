@@ -103,6 +103,8 @@ class SdpaReduceToAll:
         scale_fp32=1.0,
         cluster_axis=0,
         input_forwarder_cores=None,
+        scatter_dest_tensor_mesh=None,
+        scatter_dest_grid=None,
     ):
         mesh_device = input_tensor_l_mesh.device()
         mesh_shape = mesh_device.shape
@@ -121,6 +123,14 @@ class SdpaReduceToAll:
         r1_recv_per_device = ttnn.get_device_tensors(r1_recv_tensor_mesh)
         r2_recv_per_device = ttnn.get_device_tensors(r2_recv_tensor_mesh)
         fwd_scratch_per_device = ttnn.get_device_tensors(forwarder_scratch_mesh)
+
+        # Scatter destination setup (optional)
+        scatter_enabled = scatter_dest_tensor_mesh is not None and scatter_dest_grid is not None
+        scatter_dest_per_device = None
+        scatter_dest_cores_list = None
+        if scatter_enabled:
+            scatter_dest_per_device = ttnn.get_device_tensors(scatter_dest_tensor_mesh)
+            scatter_dest_cores_list = ttnn.corerange_to_cores(scatter_dest_grid, row_wise=True)
 
         r1_recv_sem_addr = ttnn.get_global_semaphore_address(semaphores[0])
         r2_recv_sem_addr = ttnn.get_global_semaphore_address(semaphores[1])
@@ -234,6 +244,26 @@ class SdpaReduceToAll:
                     tiles_per_l_chunk,
                 ]
 
+                # Scatter compile-time parameters
+                if scatter_enabled:
+                    dest_tile = scatter_dest_per_device[device_idx].tile
+                    dest_h, dest_w = dest_tile.tile_shape
+                    assert dest_w == tile_width, "Source and dest tile widths must match"
+                    assert tile_height % dest_h == 0, "Source tile height must be divisible by dest tile height"
+                    scatter_ct_num_rows = tile_height // dest_h
+                    scatter_ct_num_tiles = shard_spec.shape[1] // tile_width
+                    scatter_ct_src_tile_size = input_page_size_bytes
+                    scatter_ct_dst_tile_size = dest_h * dest_w * element_size_bytes
+                    scatter_ct_face_size = tile_height * (tile_width // 2) * element_size_bytes
+                    scatter_ct_row_face_size = dest_h * (tile_width // 2) * element_size_bytes
+                else:
+                    scatter_ct_num_rows = 0
+                    scatter_ct_num_tiles = 0
+                    scatter_ct_src_tile_size = 0
+                    scatter_ct_dst_tile_size = 0
+                    scatter_ct_face_size = 0
+                    scatter_ct_row_face_size = 0
+
                 writer_ct_args = [
                     cb_local_l,
                     cb_local_ms,
@@ -247,6 +277,14 @@ class SdpaReduceToAll:
                     l_chunk_size_bytes,
                     num_l_chunks,
                     tiles_per_l_chunk,
+                    # Scatter phase args (indices 12-18)
+                    cb_l_out,
+                    scatter_ct_num_tiles,
+                    scatter_ct_src_tile_size,
+                    scatter_ct_dst_tile_size,
+                    scatter_ct_face_size,
+                    scatter_ct_row_face_size,
+                    scatter_ct_num_rows,
                 ]
 
                 compute_ct_args = [
@@ -537,6 +575,17 @@ class SdpaReduceToAll:
                             r2_slot_idx,
                         ]
 
+                        # Append scatter runtime args (only when scatter is enabled)
+                        if scatter_enabled:
+                            global_worker_idx = link_idx * cores_per_link + worker_idx
+                            scatter_dest_l1_addr = scatter_dest_per_device[device_idx].buffer_address()
+                            scatter_rt = [scatter_dest_l1_addr]
+                            for row_j in range(scatter_ct_num_rows):
+                                dest_core = scatter_dest_cores_list[row_j * num_shard_cores + global_worker_idx]
+                                dest_core_noc = device.worker_core_from_logical_core(dest_core)
+                                scatter_rt.extend([dest_core_noc.x, dest_core_noc.y])
+                            writer_rt_args[core.x][core.y].extend(scatter_rt)
+
                     forwarder_brisc_rt_args[fwd_core.x][fwd_core.y] = [
                         forwarder_buffer_base,
                         0,
@@ -582,6 +631,8 @@ class SdpaReduceToAll:
             r2_recv_tensor_mesh,
             forwarder_scratch_mesh,
         ]
+        if scatter_enabled:
+            io_tensors.append(scatter_dest_tensor_mesh)
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
         return output_tensor_l_mesh

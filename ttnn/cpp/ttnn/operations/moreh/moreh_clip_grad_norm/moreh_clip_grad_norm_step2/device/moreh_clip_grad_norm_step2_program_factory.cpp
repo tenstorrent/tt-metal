@@ -15,13 +15,10 @@ namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2 {
 
 std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float ord) {
     auto p = std::floor(ord);
-    auto decimal = ord - p;
+    auto fractional_part = ord - p;
     const bool p_is_negative = p < 0.0f;
-    if (p_is_negative) {
-        p = -p;
-    }
-    // Pass p as float bits (IEEE 754 format) since power_tile expects float bits
-    return std::make_tuple(std::bit_cast<uint32_t>(p), decimal, p_is_negative);
+    uint32_t integer_part = static_cast<uint32_t>(std::abs(p));
+    return std::make_tuple(integer_part, fractional_part, p_is_negative);
 }
 
 MorehClipGradNormStep2Operation::ProgramFactory::cached_program_t
