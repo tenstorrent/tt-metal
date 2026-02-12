@@ -1863,5 +1863,426 @@ void kernel_main() {
         assert "phase4_reset_state" in result
 
 
+class TestStripStringsAndComments:
+    """Tests for _strip_strings_and_comments helper."""
+
+    def test_double_quoted_string(self):
+        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+
+        assert _strip_strings_and_comments('int x = "{ hello }";').count("{") == 0
+
+    def test_single_quoted_char(self):
+        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+
+        assert _strip_strings_and_comments("char c = '}';").count("}") == 0
+
+    def test_escaped_quotes(self):
+        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+
+        assert _strip_strings_and_comments(r'const char* s = "hello \"world\" {}";').count("{") == 0
+
+    def test_line_comment(self):
+        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+
+        result = _strip_strings_and_comments("int x = 1; // { brace in comment }")
+        assert "{" not in result
+
+    def test_inline_block_comment(self):
+        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+
+        result = _strip_strings_and_comments("int x = /* { } */ 1;")
+        assert "{" not in result
+
+    def test_raw_string_literal(self):
+        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+
+        result = _strip_strings_and_comments('auto s = R"({ json })";')
+        assert "{" not in result
+
+    def test_code_braces_preserved(self):
+        from models.experimental.ops.descriptors.sequential import _strip_strings_and_comments
+
+        result = _strip_strings_and_comments("if (x) { return; }")
+        assert result.count("{") == 1
+        assert result.count("}") == 1
+
+
+class TestCountBraces:
+    """Tests for _count_braces with string/comment awareness."""
+
+    def test_simple_braces(self):
+        from models.experimental.ops.descriptors.sequential import _count_braces
+
+        assert _count_braces("if (x) {") == 1
+        assert _count_braces("}") == -1
+        assert _count_braces("{ foo(); }") == 0
+
+    def test_braces_in_string_ignored(self):
+        from models.experimental.ops.descriptors.sequential import _count_braces
+
+        assert _count_braces('const char* s = "{ }";') == 0
+        assert _count_braces("char c = '{';") == 0
+
+    def test_braces_in_comment_ignored(self):
+        from models.experimental.ops.descriptors.sequential import _count_braces
+
+        assert _count_braces("int x = 1; // { brace }") == 0
+        assert _count_braces("int x = /* { } */ 1;") == 0
+
+
+class TestKernelMainDetection:
+    """Tests for robust kernel_main detection."""
+
+    def test_standard_void_kernel_main(self):
+        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
+
+        assert _is_kernel_main_line("void kernel_main() {")
+        assert _is_kernel_main_line("  void kernel_main() {")
+
+    def test_alwi_kernel_main(self):
+        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
+
+        assert _is_kernel_main_line("ALWI void kernel_main() {")
+
+    def test_force_inline_kernel_main(self):
+        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
+
+        assert _is_kernel_main_line("FORCE_INLINE void kernel_main() {")
+
+    def test_int_kernel_main(self):
+        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
+
+        assert _is_kernel_main_line("int kernel_main() {")
+
+    def test_kernel_main_macro(self):
+        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
+
+        assert _is_kernel_main_line("KERNEL_MAIN {")
+
+    def test_not_kernel_main(self):
+        from models.experimental.ops.descriptors.sequential import _is_kernel_main_line
+
+        assert not _is_kernel_main_line("void other_function() {")
+        assert not _is_kernel_main_line("int x = 1;")
+
+    def test_extract_body_with_alwi_kernel_main(self):
+        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
+
+        source = """
+ALWI void kernel_main() {
+    int x = 1;
+    compute(x);
+}
+"""
+        body = _extract_kernel_body_for_fusion(source)
+        assert "int x = 1" in body
+        assert "compute(x)" in body
+
+    def test_extract_body_with_string_braces(self):
+        """kernel_main body with string literal containing braces."""
+        from models.experimental.ops.descriptors.sequential import _extract_kernel_body_for_fusion
+
+        source = """
+void kernel_main() {
+    const char* msg = "{ json }";
+    int y = 2;
+}
+"""
+        body = _extract_kernel_body_for_fusion(source)
+        assert 'const char* msg = "{ json }"' in body
+        assert "int y = 2" in body
+
+
+class TestIfdefRobustness:
+    """Tests for extended #ifdef resolution patterns."""
+
+    def test_not_defined_c_style(self):
+        """Test C++ standard !defined(X) syntax."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+
+        source = """
+int a = 1;
+#if !defined(RMSNORM)
+int b = 2;
+#endif
+int c = 3;
+"""
+        result = _resolve_ifdef_directives(source, set())
+        assert "int b = 2" in result
+
+        result2 = _resolve_ifdef_directives(source, {"RMSNORM"})
+        assert "int b = 2" not in result2
+
+    def test_not_defined_no_parens(self):
+        """Test !defined X without parentheses."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+
+        source = """
+#if !defined FUSE_PRE_ADD
+int no_pre_add = 1;
+#endif
+"""
+        result = _resolve_ifdef_directives(source, set())
+        assert "int no_pre_add = 1" in result
+
+        result2 = _resolve_ifdef_directives(source, {"FUSE_PRE_ADD"})
+        assert "int no_pre_add = 1" not in result2
+
+    def test_if_0_if_1(self):
+        """Test #if 0 and #if 1 unconditional blocks."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+
+        source = """
+int a = 1;
+#if 0
+int dead_code = 999;
+#endif
+#if 1
+int always_here = 42;
+#endif
+int b = 2;
+"""
+        result = _resolve_ifdef_directives(source, set())
+        assert "int dead_code = 999" not in result
+        assert "int always_here = 42" in result
+        assert "int a = 1" in result
+        assert "int b = 2" in result
+
+    def test_line_continuation(self):
+        """Test backslash line continuation in #if directives."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+
+        source = """int a = 1;
+#if defined FUSE_GAMMA \\
+|| defined FUSE_BETA
+int gamma_or_beta = 1;
+#endif
+int b = 2;"""
+        result = _resolve_ifdef_directives(source, {"FUSE_GAMMA"})
+        assert "int gamma_or_beta = 1" in result
+
+    def test_mixed_defined_and_not_defined(self):
+        """Test #if defined(A) && !defined(B)."""
+        from models.experimental.ops.descriptors.sequential import _resolve_ifdef_directives
+
+        source = """
+#if defined(RMSNORM) && !defined(FUSE_PRE_ADD)
+int rms_no_preadd = 1;
+#endif
+"""
+        # RMSNORM defined, FUSE_PRE_ADD not defined -> true
+        result = _resolve_ifdef_directives(source, {"RMSNORM"})
+        assert "int rms_no_preadd = 1" in result
+
+        # Both defined -> false (because !defined(FUSE_PRE_ADD) is false)
+        result2 = _resolve_ifdef_directives(source, {"RMSNORM", "FUSE_PRE_ADD"})
+        assert "int rms_no_preadd = 1" not in result2
+
+
+class TestSplitBlocksStringAware:
+    """Tests for string-aware block splitting."""
+
+    def test_braces_in_string_dont_break_splitting(self):
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        pre_main = 'const char* fmt = "{ json }";'
+        blocks = _split_into_top_level_blocks(pre_main)
+        assert len(blocks) == 1
+        assert "{ json }" in blocks[0]
+
+    def test_braces_in_char_literal(self):
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        pre_main = "char open = '{';\nchar close = '}';"
+        blocks = _split_into_top_level_blocks(pre_main)
+        assert len(blocks) == 2
+
+    def test_normal_function_still_works(self):
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        pre_main = "void foo() {\n    int x = 1;\n}"
+        blocks = _split_into_top_level_blocks(pre_main)
+        assert len(blocks) == 1
+        assert "int x = 1" in blocks[0]
+
+
+class TestGlobalVarDetectionRobust:
+    """Tests for robust global variable detection."""
+
+    def test_pointer_types(self):
+        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+
+        assert _extract_global_var_names("uint32_t* ptr = nullptr;") == ["ptr"]
+        assert _extract_global_var_names("const float* data;") == ["data"]
+
+    def test_reference_types(self):
+        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+
+        assert _extract_global_var_names("const uint32_t& ref = global_var;") == ["ref"]
+
+    def test_user_defined_types(self):
+        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+
+        assert _extract_global_var_names("MyCustomType instance;") == ["instance"]
+        assert _extract_global_var_names("MyNs::MyType val = init;") == ["val"]
+
+    def test_thread_local(self):
+        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+
+        assert _extract_global_var_names("thread_local int counter = 0;") == ["counter"]
+
+    def test_extern(self):
+        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+
+        assert _extract_global_var_names("extern uint32_t global_x;") == ["global_x"]
+
+    def test_auto(self):
+        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+
+        assert _extract_global_var_names("auto val = compute_something();") == ["val"]
+
+    def test_still_excludes_functions(self):
+        from models.experimental.ops.descriptors.sequential import _extract_global_var_names
+
+        assert _extract_global_var_names("void foo();") == []
+        assert _extract_global_var_names("ALWI void bar() { }") == []
+
+    def test_is_global_var_block_pointers(self):
+        from models.experimental.ops.descriptors.sequential import _is_global_var_block
+
+        assert _is_global_var_block("uint32_t* ptr = nullptr;")
+        assert _is_global_var_block("const float& ref = x;")
+        assert _is_global_var_block("MyType instance;")
+
+
+class TestRuntimeArgsPattern:
+    """Tests for the runtime args variable offset pattern."""
+
+    def test_matches_arg_variables(self):
+        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+
+        source = "uint32_t rt_args_idx = 0;\nint x = get_arg_val<uint32_t>(0);"
+        result = _offset_runtime_args_in_source(source, 1)
+        assert "__phase1_rt_offset" in result
+        # rt_args_idx should be offset
+        assert "rt_args_idx = __phase1_rt_offset" in result
+
+    def test_does_not_match_unrelated_variables(self):
+        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+
+        source = "uint32_t counter = 0;\nuint32_t flags = 0;"
+        result = _offset_runtime_args_in_source(source, 1)
+        # counter and flags should NOT be offset (no "arg" or "rt" in name)
+        assert "counter = 0" in result
+        assert "flags = 0" in result
+
+
+class TestPrefixPhaseNamesSkipsStrings:
+    """Tests for _prefix_phase_names_in_source respecting strings/comments."""
+
+    def test_does_not_replace_in_string(self):
+        from models.experimental.ops.descriptors.sequential import _prefix_phase_names_in_source
+
+        source = 'const char* msg = "ACQ called";\nACQ();'
+        result = _prefix_phase_names_in_source(source, 0, ["ACQ"])
+        # ACQ in string should stay unchanged
+        assert '"ACQ called"' in result
+        # ACQ in code should be prefixed
+        assert "phase0_ACQ();" in result
+
+    def test_does_not_replace_in_comment(self):
+        from models.experimental.ops.descriptors.sequential import _prefix_phase_names_in_source
+
+        source = "// Call ACQ to acquire\nACQ();"
+        result = _prefix_phase_names_in_source(source, 0, ["ACQ"])
+        assert "// Call ACQ to acquire" in result
+        assert "phase0_ACQ();" in result
+
+    def test_does_not_replace_in_block_comment(self):
+        from models.experimental.ops.descriptors.sequential import _prefix_phase_names_in_source
+
+        source = "/* ACQ description */\nACQ();"
+        result = _prefix_phase_names_in_source(source, 0, ["ACQ"])
+        assert "/* ACQ description */" in result
+        assert "phase0_ACQ();" in result
+
+
+class TestFunctionDetectionRobust:
+    """Tests for improved function detection and name extraction."""
+
+    def test_operator_overload_detection(self):
+        from models.experimental.ops.descriptors.sequential import _is_phase_specific_function
+
+        assert _is_phase_specific_function("bool operator==(const Foo& a, const Foo& b) {\n    return a.x == b.x;\n}")
+
+    def test_operator_name_extraction(self):
+        from models.experimental.ops.descriptors.sequential import _extract_function_name_from_block
+
+        name = _extract_function_name_from_block(
+            "bool operator==(const Foo& a, const Foo& b) {\n    return a.x == b.x;\n}"
+        )
+        assert name == "operator=="
+
+    def test_scope_qualified_name(self):
+        from models.experimental.ops.descriptors.sequential import _extract_function_name_from_block
+
+        name = _extract_function_name_from_block("void MyClass::process() {\n    return;\n}")
+        assert name == "process"
+
+    def test_braces_in_string_dont_affect_function_check(self):
+        """Function check with string containing braces should still work."""
+        from models.experimental.ops.descriptors.sequential import _is_phase_specific_function
+
+        block = 'void foo() {\n    const char* s = "no { braces }";\n}'
+        assert _is_phase_specific_function(block)
+
+
+class TestInlineLocalIncludesRelative:
+    """Tests for relative path include inlining."""
+
+    def test_relative_path_inlined(self, tmp_path):
+        """Includes with relative paths are resolved and inlined."""
+        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+
+        # Create directory structure
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        header = subdir / "helper.h"
+        header.write_text("#pragma once\nint helper_val = 42;")
+
+        source = '#include "subdir/helper.h"\nvoid kernel_main() {}'
+        result = _inline_local_includes(source, str(tmp_path))
+        assert "int helper_val = 42" in result
+        assert "#pragma once" not in result
+
+    def test_local_include_still_works(self, tmp_path):
+        """Local includes (no path separator) still work."""
+        from models.experimental.ops.descriptors.sequential import _inline_local_includes
+
+        header = tmp_path / "local.h"
+        header.write_text("int local_val = 1;")
+
+        source = '#include "local.h"\nvoid kernel_main() {}'
+        result = _inline_local_includes(source, str(tmp_path))
+        assert "int local_val = 1" in result
+
+
+class TestCollectPreMainWithAttributeKernelMain:
+    """Test that pre-main collection stops at kernel_main with attributes."""
+
+    def test_stops_at_alwi_kernel_main(self):
+        from models.experimental.ops.descriptors.sequential import _collect_pre_main_code
+
+        source = """namespace g = norm;
+
+ALWI void kernel_main() {
+    int x = 1;
+}
+"""
+        result = _collect_pre_main_code(source)
+        assert "namespace g = norm;" in result
+        assert "int x = 1" not in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
