@@ -603,6 +603,7 @@ class RefinerModelOptimisations(ModelOptimisations):
                     fuse_batch=False,
                     fused_activation=None,
                 ),
+                # If stress test with 48 cores passes, change config to use 48 cores to avoid perf impact
                 "1D_RESNET_LINEAR_1536": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(3, 8),
                     in0_block_w=6,
