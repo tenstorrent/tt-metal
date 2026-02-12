@@ -701,7 +701,7 @@ def test_gpt_oss_demo(
             logger.info(f"First generated token (user 0): '{tokenizer.decode(prefilled_token[0])}'")
         else:
             # Batched prefill - process users in groups for faster execution
-            use_batched_prefill = users_row_sharded and not enable_prefill_trace
+            use_batched_prefill = users_row_sharded  # Always use batched prefill for row-sharded (4 passes vs 128)
             if use_batched_prefill:
                 logger.info("Starting batched prefill (compile)...")
                 profiler.start(f"compile_prefill", iteration=batch_idx)
