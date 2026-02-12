@@ -2,22 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
-import os
-
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-_img_mlp_collected = set()
-if os.path.exists("llama_image_mlp_1d_performance.csv"):
-    with open("llama_image_mlp_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _img_mlp_collected.add(",".join(row))
 
 
 class TtLlamaImageFeedForward(LightweightModule):
@@ -75,26 +63,6 @@ class TtLlamaImageFeedForward(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        _file_exists = os.path.exists("llama_image_mlp_1d_performance.csv")
-        with open("llama_image_mlp_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "x_dtype,x_shape_0,x_shape_1,x_shape_2,x_shape_3,"
-                    "c_fc_weight_shape_0,c_fc_weight_shape_1,c_fc_weight_dtype,"
-                    "c_proj_weight_shape_0,c_proj_weight_shape_1,c_proj_weight_dtype,"
-                    "device_shape_x,device_shape_y,model_name\n"
-                )
-            _dev_shape = list(self.mesh_device.shape) if hasattr(self.mesh_device, "shape") else [1, 1]
-            _entry = (
-                f"{x.dtype},{x.shape[0]},{x.shape[1]},{x.shape[2]},{x.shape[3]},"
-                f"{self.c_fc_weight.shape[0]},{self.c_fc_weight.shape[1]},{self.c_fc_weight.dtype},"
-                f"{self.c_proj_weight.shape[0]},{self.c_proj_weight.shape[1]},{self.c_proj_weight.dtype},"
-                f"{_dev_shape[0]},{_dev_shape[1]},{self.args.model_name}"
-            )
-            if _entry not in _img_mlp_collected:
-                _img_mlp_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         seq_len = x.shape[-2]
 
         # Depends on whether we are padding or not

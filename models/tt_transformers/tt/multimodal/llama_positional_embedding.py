@@ -2,23 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
 import itertools
-import os
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-_pos_emb_collected = set()
-if os.path.exists("llama_positional_embedding_1d_performance.csv"):
-    with open("llama_positional_embedding_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _pos_emb_collected.add(",".join(row))
 
 TILE_SIZE = 32
 
@@ -41,7 +30,6 @@ class TtLlamaPositionalEmbedding(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self._model_name = configuration.model_name if hasattr(configuration, "model_name") else "unknown"
 
         positional_embedding = state_dict[f"{state_dict_prefix}positional_embedding"]
         gated_positional_embedding = state_dict[f"{state_dict_prefix}gated_positional_embedding"]
@@ -109,30 +97,6 @@ class TtLlamaPositionalEmbedding(LightweightModule):
         return torch.cat(padded_embeds, dim=0), ar_mapping
 
     def forward(self, x: ttnn.Tensor, ar: torch.Tensor):
-        _file_exists = os.path.exists("llama_positional_embedding_1d_performance.csv")
-        with open("llama_positional_embedding_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "x_dtype,x_shape_0,x_shape_1,x_shape_2,x_shape_3,"
-                    "pos_emb_shape_0,pos_emb_shape_1,pos_emb_shape_2,"
-                    "padded_gated_emb_shape_0,padded_gated_emb_shape_1,padded_gated_emb_shape_2,padded_gated_emb_shape_3,"
-                    "device_shape_x,device_shape_y,ar_shape,ar_dtype,aspect_ratios,model_name\n"
-                )
-            _dev_shape = list(self.mesh_device.shape) if hasattr(self.mesh_device, "shape") else [1, 1]
-            _ar_shape = "x".join(str(d) for d in ar.shape)
-            _ar_str = ";".join(
-                f"{h.item() if hasattr(h, 'item') else h}x{w.item() if hasattr(w, 'item') else w}" for h, w in ar
-            )
-            _entry = (
-                f"{x.dtype},{x.shape[0]},{x.shape[1]},{x.shape[2]},{x.shape[3]},"
-                f"{self.positional_embedding.shape[0]},{self.positional_embedding.shape[1]},{self.positional_embedding.shape[2]},"
-                f"{self.padded_gated_positional_embedding.shape[0]},{self.padded_gated_positional_embedding.shape[1]},{self.padded_gated_positional_embedding.shape[2]},{self.padded_gated_positional_embedding.shape[3]},"
-                f"{_dev_shape[0]},{_dev_shape[1]},{_ar_shape},{ar.dtype},{_ar_str},{self._model_name}"
-            )
-            if _entry not in _pos_emb_collected:
-                _pos_emb_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         bsz, num_chunks, num_tokens, dim = x.shape
         x = ttnn.reshape(x, [bsz * num_chunks, num_tokens, dim])
 

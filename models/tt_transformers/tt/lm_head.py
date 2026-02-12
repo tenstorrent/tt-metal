@@ -2,24 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
 import math
-import os
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
-
-_lmhead_collected = set()
-if os.path.exists("lm_head_1d_performance.csv"):
-    with open("lm_head_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _lmhead_collected.add(",".join(row))
 
 
 class LMHead(LightweightModule):
@@ -159,24 +148,6 @@ class LMHead(LightweightModule):
             ]
 
     def forward(self, x: ttnn.Tensor):
-        _file_exists = os.path.exists("lm_head_1d_performance.csv")
-        with open("lm_head_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "cluster_shape_x,cluster_shape_y,x_dtype,"
-                    "x_shape,num_output_weights,output_weights_shapes,output_weights_dtype,"
-                    "model_name\n"
-                )
-            _w_shapes = ";".join("x".join(str(d) for d in w.shape) for w in self.output_weights)
-            _entry = (
-                f"{self.args.cluster_shape[0]},{self.args.cluster_shape[1]},{x.dtype},"
-                f"{'x'.join(str(d) for d in x.shape)},{len(self.output_weights)},{_w_shapes},{self.dtype},"
-                f"{self.args.model_name}"
-            )
-            if _entry not in _lmhead_collected:
-                _lmhead_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             output = ttnn.linear(

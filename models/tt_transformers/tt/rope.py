@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
 import math
-import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -16,15 +14,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
 from ttnn import replicate_tensor_to_mesh_mapper
-
-_rope_collected = set()
-if os.path.exists("rope_1d_performance.csv"):
-    with open("rope_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _rope_collected.add(",".join(row))
 
 
 # Copied from DeepseekV3RotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L114
@@ -402,28 +391,8 @@ class RotarySetup(LightweightModule):
         use_qk_fused: bool = False,
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,
-        model_name: str = "unknown",
     ) -> None:
         super().__init__()
-
-        is_mesh = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
-        device_shape = list(device.shape) if is_mesh else [1, 1]
-        rope_scaling_str = rope_scaling.rope_type.value if rope_scaling is not None else "none"
-        _file_exists = os.path.exists("rope_1d_performance.csv")
-        with open("rope_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "device_shape_x,device_shape_y,batch_size,head_dim,max_seq_len,"
-                    "rope_theta,rope_scaling,use_qk_fused,datatype,shard_batch_to_mesh_dim,model_name\n"
-                )
-            _entry = (
-                f"{device_shape[0]},{device_shape[1]},{batch_size},{head_dim},{max_seq_len},"
-                f"{rope_theta},{rope_scaling_str},{use_qk_fused},{datatype},{shard_batch_to_mesh_dim},{model_name}"
-            )
-            if _entry not in _rope_collected:
-                _rope_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         self.use_qk_fused = use_qk_fused
         self.model_name = model_name
         self.original_batch_size = batch_size
@@ -494,28 +463,12 @@ class RotarySetup(LightweightModule):
             mesh_mapper=replicate_tensor_to_mesh_mapper(device),
         )
 
-    def _log_api_call(self, api_name, extra=""):
-        _file_exists = os.path.exists("rope_1d_api_calls.csv")
-        with open("rope_1d_api_calls.csv", "a") as _f:
-            if not _file_exists:
-                _f.write("api,device_shape_x,device_shape_y,batch_size,head_dim,use_qk_fused,extra,model_name\n")
-            _device_shape = list(self.device.shape) if self.is_mesh_device else [1, 1]
-            _entry = (
-                f"{api_name},{_device_shape[0]},{_device_shape[1]},"
-                f"{self.original_batch_size},{self.head_dim},{self.use_qk_fused},{extra},{self.model_name}"
-            )
-            if _entry not in _rope_collected:
-                _rope_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
     def get_both_trans_mats(self) -> Dict[str, ttnn.Tensor]:
         assert self.transformation_mat is not None, "Transformation matrix not initialized"
         assert self.transformation_mat_prefill is not None, "Prefill Transformation matrix not initialized"
-        self._log_api_call("get_both_trans_mats")
         return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
 
     def get_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
-        self._log_api_call("get_rot_idxs", f"batch={position_idxs.shape[0]};on_host={on_host}")
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
@@ -558,8 +511,6 @@ class RotarySetup(LightweightModule):
     def get_rot_mats(
         self, position_idxs: Union[torch.Tensor, ttnn.Tensor], return_rot_idxs: bool = False
     ) -> List[ttnn.Tensor]:
-        _pos_batch = position_idxs.shape[0] if isinstance(position_idxs, torch.Tensor) else position_idxs.shape[-1]
-        self._log_api_call("get_rot_mats", f"pos_batch={_pos_batch};return_rot_idxs={return_rot_idxs}")
         device = self.device
 
         # If position_idxs is a torch tensor, get the TTNN version of it

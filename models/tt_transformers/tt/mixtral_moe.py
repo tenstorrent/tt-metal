@@ -2,24 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
-import os
-
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
-
-_moe_collected = set()
-if os.path.exists("mixtral_moe_1d_performance.csv"):
-    with open("mixtral_moe_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _moe_collected.add(",".join(row))
 
 
 class TtMoeLayer(LightweightModule):
@@ -109,29 +97,6 @@ class TtMoeLayer(LightweightModule):
         H : dim (4096)
         S : seq len
         """
-        _file_exists = os.path.exists("mixtral_moe_1d_performance.csv")
-        with open("mixtral_moe_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "cluster_shape_x,cluster_shape_y,inputs_dtype,"
-                    "inputs_shape_0,inputs_shape_1,inputs_shape_2,inputs_shape_3,"
-                    "gates_dtype,gates_shape_0,gates_shape_1,gates_shape_2,gates_shape_3,"
-                    "top8_mask_shape_0,top8_mask_shape_1,top8_mask_shape_2,top8_mask_shape_3,"
-                    "top2_mask_shape_0,top2_mask_shape_1,top2_mask_shape_2,top2_mask_shape_3,"
-                    "model_name,mode\n"
-                )
-            _entry = (
-                f"{self.args.cluster_shape[0]},{self.args.cluster_shape[1]},{inputs.dtype},"
-                f"{inputs.shape[0]},{inputs.shape[1]},{inputs.shape[2]},{inputs.shape[3]},"
-                f"{self.gates_H8.dtype},{self.gates_H8.shape[0]},{self.gates_H8.shape[1]},{self.gates_H8.shape[2]},{self.gates_H8.shape[3]},"
-                f"{self.top8_mask_11B_64.shape[0]},{self.top8_mask_11B_64.shape[1]},{self.top8_mask_11B_64.shape[2]},{self.top8_mask_11B_64.shape[3]},"
-                f"{self.top2_mask_11BB.shape[0]},{self.top2_mask_11BB.shape[1]},{self.top2_mask_11BB.shape[2]},{self.top2_mask_11BB.shape[3]},"
-                f"{self.args.model_name},{mode}"
-            )
-            if _entry not in _moe_collected:
-                _moe_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         input_i_1SBH = inputs
         expert_i_HH = self.experts
         # get logits for the experts
