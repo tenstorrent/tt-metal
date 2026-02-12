@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-
-// Note: SwiGLUAlgorithm enum has been removed. The kernel always uses the
-// ORIGINAL algorithm with dual-NOC architecture and dynamic W2 prefetching.
 
 class SwiGLUOpTest : public ::testing::Test {
 protected:
@@ -135,7 +132,6 @@ void CompareKernelVsReference(
  *   - S: sequence length (height for transformers)
  *   - C: feature dimension (width/embedding dimension)
  * @param hidden_dim Hidden dimension for the weight matrices
- * @param algorithm Algorithm to use (default: ORIGINAL for testing the optimized path)
  */
 static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input_shape, const uint32_t hidden_dim) {
     using namespace ttml;
@@ -282,7 +278,7 @@ TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_NanoLlama_64x1x256x384) {
     CompareKernelVsReferenceWithShape({64, 1, 256, 384}, 1024);
 }
 
-// 10. Edge case: Unbalanced workload where some cores get more rows than others
+// 9. Edge case: Unbalanced workload where some cores get more rows than others
 // This tests the padding synchronization mechanism in multicast.
 // 57 rows on a 56-core grid means 1 core gets 2 rows, 55 cores get 1 row.
 TEST_F(SwiGLUOpTest, SwiGLU_UnbalancedWorkload_57x1x32x32) {
@@ -297,7 +293,7 @@ TEST_F(SwiGLUOpTest, SwiGLU_UnbalancedWorkload_57x1x32x32) {
 // Using wrong layout (e.g., LinearLayer's [out, in]) should fail with clear error.
 // ============================================================================
 
-// 10. Shape mismatch: W1 has wrong layout [hidden, embed] instead of [embed, hidden]
+// 10. Shape validation: W1 has wrong layout [hidden, embed] instead of [embed, hidden]
 TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W1WrongLayout) {
     using namespace ttml;
 

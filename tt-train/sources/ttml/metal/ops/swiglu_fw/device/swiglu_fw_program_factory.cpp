@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -284,7 +284,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         hidden_num_inner,
         num_inner);
 
-    // Get the hidden dimension // 32
+    // Get hidden dimension in tiles (hidden_dim / TILE_WIDTH)
     uint32_t hidden_Wt = hidden_num_inner / tt::constants::TILE_WIDTH;
 
     // These parameters are used to determine if we need to mask tiles along input/hidden dimension, i.e. if the
