@@ -62,19 +62,14 @@ tt::tt_metal::Tensor ttml_create_owned_tensor(
 }
 
 std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
-    return std::visit(
-        [](auto&& storage) -> std::vector<tt::tt_metal::HostBuffer> {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
-                std::vector<tt::tt_metal::HostBuffer> buffers;
-                buffers.reserve(storage.buffer().shard_coords().size());
-                storage.buffer().apply([&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
-                return buffers;
-            } else {
-                throw std::runtime_error("Tensor must be on host");
-            }
-        },
-        tensor.storage());
+    if (is_device_tensor(tensor)) {
+        throw std::runtime_error("Tensor must be on host");
+    }
+    const auto& storage = tensor.host_storage();
+    std::vector<tt::tt_metal::HostBuffer> buffers;
+    buffers.reserve(storage.buffer().shard_coords().size());
+    storage.buffer().apply([&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
+    return buffers;
 }
 
 }  // namespace
