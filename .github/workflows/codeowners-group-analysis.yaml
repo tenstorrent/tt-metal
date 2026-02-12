@@ -1453,8 +1453,8 @@ jobs:
           fi
 
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
-          # Escape special characters for Slack link format (< > |)
-          PR_TITLE_SLACK=$(echo "$PR_TITLE" | sed 's/</\&lt;/g; s/>/\&gt;/g; s/|/\&#124;/g')
+          # Escape special characters for Slack link format (& < > |)
+          PR_TITLE_SLACK=$(printf '%s' "$PR_TITLE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/|/\&#124;/g')
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
 
@@ -1806,8 +1806,8 @@ jobs:
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
-          # Escape special characters for Slack link format (< > |)
-          PR_TITLE_SLACK=$(echo "$PR_TITLE" | sed 's/</\&lt;/g; s/>/\&gt;/g; s/|/\&#124;/g')
+          # Escape special characters for Slack link format (& < > |)
+          PR_TITLE_SLACK=$(printf '%s' "$PR_TITLE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/|/\&#124;/g')
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
 
@@ -2341,8 +2341,8 @@ jobs:
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
-          # Escape special characters for Slack link format (< > |)
-          PR_TITLE_SLACK=$(echo "$PR_TITLE" | sed 's/</\&lt;/g; s/>/\&gt;/g; s/|/\&#124;/g')
+          # Escape special characters for Slack link format (& < > |)
+          PR_TITLE_SLACK=$(printf '%s' "$PR_TITLE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/|/\&#124;/g')
 
           # Use #tt-metal-pr-review-requests Slack channel
           SLACK_CHANNEL="C07G47JMQHM"
@@ -2476,8 +2476,8 @@ jobs:
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
-          # Escape special characters for Slack link format (< > |)
-          PR_TITLE_SLACK=$(echo "$PR_TITLE" | sed 's/</\&lt;/g; s/>/\&gt;/g; s/|/\&#124;/g')
+          # Escape special characters for Slack link format (& < > |)
+          PR_TITLE_SLACK=$(printf '%s' "$PR_TITLE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/|/\&#124;/g')
 
           # Use #tt-metal-pr-review-requests Slack channel
           SLACK_CHANNEL="C07G47JMQHM"
