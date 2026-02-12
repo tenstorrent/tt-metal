@@ -67,81 +67,17 @@ jobs:
         skip-tt-train: false
         enable-lto: false
 
-  single-card-demo-tests:
+  release-demo-tests:
     needs: build-artifact
     if: ${{ inputs.tag-version != '' }}
     secrets: inherit
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    uses: ./.github/workflows/release-demo-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      arch: wormhole_b0
+      enabled-skus: "wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf,wh_galaxy,bh_p150,bh_p150_perf,bh_llmbox,bh_loudbox,bh_p300"
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-
-  t3000-demo-tests:
-    needs: build-artifact
-    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
-    secrets: inherit
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: "wh_llmbox_perf"
-      mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-      extra-tag: "in-release"
-
-  galaxy-demos:
-    needs: build-artifact
-    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
-    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: wh_galaxy
-      mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-
-  blackhole-demo-tests:
-    needs: build-artifact
-    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group:
-          - name: P150 Demo tests
-            runner-label: P150
-            extra-tag: pipeline-perf
-            num_devices: 1
-          - name: LLMBox Demo tests
-            runner-label: BH-LLMBox
-            extra-tag: pipeline-perf
-            num_devices: 4
-          - name: LoudBox Demo tests
-            runner-label: BH-LoudBox
-            extra-tag: pipeline-functional
-            num_devices: 8
-          - name: P300 Demo tests
-            runner-label: P300-viommu
-            extra-tag: pipeline-yyz2-lfc
-            num_devices: 2
-          # - name: QuietBox Global Edition tests
-          #   runner-label: BH-QB-GE
-          #   extra-tag: pipeline-perf
-          #   num_devices: 4
-    with:
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      extra-tag: ${{ matrix.test-group.extra-tag }}
-      num_devices: ${{ matrix.test-group.num_devices }}
-      regenerate-ttnn-cache: false
-      model: "all"
 
   # We need to tag the image used to reproduce the release later
   push-image-to-ghcr:

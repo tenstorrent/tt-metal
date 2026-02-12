@@ -53,3 +53,57 @@ skus:
   bh_p150b_civ2:
     runs_on:
       - tt-ubuntu-2204-P150b-stable
+
+  wh_n150:
+    runs_on:
+      - N150
+      - in-service
+      - cloud-virtual-machine
+
+  wh_n300:
+    runs_on:
+      - N300
+      - in-service
+      - cloud-virtual-machine
+
+  wh_n300_perf:
+    runs_on:
+      - N300
+      - in-service
+      - bare-metal
+      - pipeline-perf
+
+  bh_p150:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P150
+      - pipeline-functional
+
+  bh_p150_perf:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P150
+      - pipeline-perf
+
+  bh_llmbox:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LLMBox
+      - pipeline-perf
+
+  bh_loudbox:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LoudBox
+      - pipeline-functional
+
+  bh_p300:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P300-viommu
+      - pipeline-yyz2-lfc

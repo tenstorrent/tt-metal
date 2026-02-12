@@ -1,0 +1,201 @@
+name: "[internal] Release demo tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      enabled-skus:
+        required: true
+        type: string
+      model:
+        required: false
+        type: string
+        default: "all"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.apply-model-filter.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/release_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: |
+          pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "demo"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Apply model filter
+        id: apply-model-filter
+        run: |
+          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
+          if [ "${{ inputs.model }}" = "all" ]; then
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$MATRIX" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.["model-name"] == $m)]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::No tests found for model '${{ inputs.model }}'. Ensure the model is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              exit 1
+            fi
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+  release-demo-tests:
+    needs: load-test-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        HF_HUB_CACHE: ${{ (contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && '') || '/mnt/MLPerf/huggingface/hub' }}
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        HTTP_PROXY: ${{ (contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && env.HTTP_PROXY) || '' }}
+        HTTPS_PROXY: ${{ (contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && env.HTTPS_PROXY) || '' }}
+        NO_PROXY: ${{ (contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && env.NO_PROXY) || '' }}
+        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ (!contains(matrix.test-group.runs_on[0], 'viommu') && !contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+        - ${{ (!contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || '/no_mlperf' }}
+        - ${{ (contains(matrix.test-group.sku, 'bh_') && !contains(matrix.test-group.runs_on[0], 'yyz2-lfc') && format('{0}:/localdev/blackhole_demos/huggingface_data:ro', contains(matrix.test-group.runs_on[0], 'pipeline-functional') && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data')) || '/no_bh_cache' }}
+      options: >-
+        --device /dev/tenstorrent
+        ${{ contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && '-e TT_GH_CI_INFRA=1' || '' }}
+        ${{ !contains(matrix.test-group.runs_on[0], 'tt-ubuntu') && '--cap-add=ALL --security-opt seccomp=unconfined --ulimit nproc=65536:65536 --ulimit nofile=65536:65536 --privileged -v /sys:/sys' || '' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Enable Performance mode
+        if: ${{ contains(matrix.test-group.runs_on[0], 'pipeline-perf') || contains(matrix.test-group.runs_on[0], 'bare-metal') }}
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
+        with:
+          governor: performance
+      - name: Download model weights from LFC
+        if: ${{ contains(matrix.test-group.runs_on[0], 'yyz2-lfc') && contains(matrix.test-group.name, 'llama') }}
+        timeout-minutes: 15
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+      - name: Ensure BH links online
+        if: ${{ contains(matrix.test-group.sku, 'bh_') }}
+        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        timeout-minutes: 10
+        with:
+          runner-label: ${{ join(matrix.test-group.runs_on, ' ') }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          # For single-card wormhole tests, source the test functions
+          if [[ "${{ matrix.test-group.sku }}" =~ ^wh_n(150|300) ]]; then
+            source tests/scripts/single_card/run_single_card_demo_tests.sh
+          fi
+          # For T3000 tests, source the test functions
+          if [[ "${{ matrix.test-group.sku }}" == "wh_llmbox_perf" ]]; then
+            source tests/scripts/t3000/run_t3000_demo_tests.sh
+          fi
+          # Execute the command
+          ${{ matrix.test-group.cmd }}
+      - name: Print tt-smi data on failure
+        if: ${{ failure() && contains(matrix.test-group.sku, 'bh_') }}
+        run: |
+          tt-smi -s
+      - name: Save environment data
+        id: save-environment-data
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py ${{ matrix.test-group.sku }}
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload benchmark data
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: generated/test_reports/
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+      - name: Disable Performance mode
+        if: ${{ (contains(matrix.test-group.runs_on[0], 'pipeline-perf') || contains(matrix.test-group.runs_on[0], 'bare-metal')) && always() }}
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
+        with:
+          governor: ondemand
