@@ -9,6 +9,8 @@
 #include "sfpu/ckernel_sfpu_typecast.h"
 
 #include "sfpi.h"
+#include "ckernel_sfpu_conversions.h"
+
 
 using namespace sfpi;
 
@@ -142,8 +144,10 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = reinterpret<vUInt>(dst_reg[0]);
-        v_if(v > 255u) { v = 255u; }
+        vInt v = reinterpret<vInt>(dst_reg[0]);
+        // Clamping logic for UINT32 -> UINT8. Since v is reinterpreted as vInt,
+        // we handle both large positive values and potential negative bits (if vInt is signed).
+        v_if(v < 0 || v > 255) { v = 255; }
         v_endif;
         dst_reg[0] = reinterpret<vFloat>(v);
         dst_reg++;
@@ -165,10 +169,9 @@ inline void calculate_typecast_int32_to_uint8() {
     }
 }
 
-// FP32 -> UINT8: Clamp to [0, 255], convert to unsigned integer, store as INT32.
-// The packer (configured for UInt8 output) reads the low 8 bits from the dest register.
-// Cannot reuse the UINT16 SFPLOADMACRO pipeline directly because its init configures
-// the store format as LO16, which the UInt8 packer cannot read correctly (produces all zeros).
+// FP32 -> UINT8: Clamp to [0, 255] range, convert to integer using a robust rounding trick,
+// and store as INT8. The packer (configured for UInt8 output) expects the data
+// in the low 8 bits of the destination register.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_uint8() {
 #pragma GCC unroll 8
@@ -176,19 +179,19 @@ inline void calculate_typecast_fp32_to_uint8() {
         // Load FP32 value from dest register
         vFloat v = dst_reg[0];
 
-        // Clamp to [0, 255] range
+        // Clamp to [0, 255] range.
         v_if(v < 0.0f) { v = 0.0f; }
         v_endif;
         v_if(v > 255.0f) { v = 255.0f; }
         v_endif;
 
         // Convert the clamped positive float to a uint32 integer.
-        // vInt(vFloat) uses the SFPCAST hardware instruction for full-precision conversion.
-        vInt result = vInt(v);
+        // We use the 2**23 rounding trick: adding 2**23 to [0, 255] puts the integer
+        // value in the mantissa bits (0-22).
+        vFloat v_rounded = v + 8388608.0f;
+        vInt result = reinterpret<vInt>(v_rounded) & 0x7FFFFF;
 
-        // Store the integer result; use reinterpret to ensure bits are preserved
-        // without float conversion. The packer for UInt8 output will
-        // take the low 8 bits.
+        // Store the integer result.
         dst_reg[0] = reinterpret<vFloat>(result);
         dst_reg++;
     }
@@ -200,8 +203,8 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint8_to_fp32() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = reinterpret<vUInt>(dst_reg[0]);
-        dst_reg[0] = vFloat(v);
+        vInt v = reinterpret<vInt>(dst_reg[0]);
+        dst_reg[0] = int32_to_float(v, 0);
         dst_reg++;
     }
 }
@@ -213,8 +216,8 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint8_to_fp16b() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = reinterpret<vUInt>(dst_reg[0]);
-        dst_reg[0] = vFloat(v);
+        vInt v = reinterpret<vInt>(dst_reg[0]);
+        dst_reg[0] = int32_to_float(v, 0);
         dst_reg++;
     }
 }
@@ -228,12 +231,11 @@ inline void calculate_typecast_uint32_to_uint32() {
     }
 }
 
-// Init functions for UINT8 typecast operations
-// FP32 -> UINT8: Uses INT32 store format. The packer for UInt8 output
-// will take the low 8 bits from the dest register.
+// FP32 -> UINT8: Uses INT8 store format (spec value 5).
+// The packer for UInt8 output expects the data in the low 8 bits.
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT8, 8, 1);
 }
 
 template <bool APPROXIMATION_MODE>
