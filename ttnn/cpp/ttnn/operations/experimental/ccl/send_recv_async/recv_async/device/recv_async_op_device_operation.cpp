@@ -11,9 +11,6 @@
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 namespace ttnn::experimental::prim {
-
-}
-
 void RecvAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& mesh_socket = args.mesh_socket;

@@ -12,9 +12,6 @@
 using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceOperation;
 
 namespace ttnn::experimental::prim {
-
-}
-
 void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(

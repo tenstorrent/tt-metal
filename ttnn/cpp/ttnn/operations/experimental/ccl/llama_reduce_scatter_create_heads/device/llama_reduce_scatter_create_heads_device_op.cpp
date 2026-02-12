@@ -12,12 +12,8 @@
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
-
-LlamaReduceScatterCreateHeadsDeviceOperation::program_factory_t
-
-    void
-    LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_miss(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
 
     TT_FATAL(attributes.dim == 3, "dim must be 3, got {}", attributes.dim);

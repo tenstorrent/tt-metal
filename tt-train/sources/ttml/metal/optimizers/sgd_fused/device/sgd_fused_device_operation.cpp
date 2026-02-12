@@ -10,7 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::optimizers::sgd_fused::device {
-
 }
 
 void SGDFusedDeviceOperation::validate_on_program_cache_miss(

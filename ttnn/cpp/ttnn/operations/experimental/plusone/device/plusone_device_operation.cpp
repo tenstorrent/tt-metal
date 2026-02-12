@@ -6,9 +6,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
-
-}
-
 void PlusOneDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& input_tensor) {
     TT_FATAL(

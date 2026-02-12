@@ -9,9 +9,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::prim {
-
-}
-
 void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const Tensor& input) {
     const auto& input_tensor = input;

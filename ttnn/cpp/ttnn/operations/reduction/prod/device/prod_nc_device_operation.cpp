@@ -5,9 +5,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::prim {
-
-}
-
 void ProdNcDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL((args.dim >= 0 && args.dim <= 3), "dim should be 0 - 3");

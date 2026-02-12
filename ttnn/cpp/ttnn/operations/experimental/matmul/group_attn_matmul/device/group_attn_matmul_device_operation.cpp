@@ -11,9 +11,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-}
-
 void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // input_a: [q_len, q_heads, batch, head_dim]

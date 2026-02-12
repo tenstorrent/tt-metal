@@ -10,7 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::cross_entropy_bw::device {
-
 }
 
 void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(

@@ -14,12 +14,8 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-DeepseekMoEReduceScatterDeviceOperation::program_factory_t
-
-    void
-    DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_hit(
-        const operation_attributes_t&, const tensor_args_t& tensor_args) {
+void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // lightweight validation for cache hits
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
     for (const ttnn::Tensor& input_tensor : input_tensors) {

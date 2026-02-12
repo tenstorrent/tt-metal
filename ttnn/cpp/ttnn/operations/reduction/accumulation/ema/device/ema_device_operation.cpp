@@ -13,8 +13,6 @@ namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
-}
-
 void EmaDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;

@@ -20,9 +20,6 @@
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
-
-MatmulReduceScatterAsyncDeviceOperation::program_factory_t
-
 void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Matmul validate

@@ -13,7 +13,6 @@ namespace ttml::metal::ops::sdpa_bw::device {
 
 using namespace tt::tt_metal;
 using namespace ttnn;
-
 }
 
 void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(

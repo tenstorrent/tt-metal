@@ -11,9 +11,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
-
-FusedRMSNormPostAllGatherDeviceOperation::program_factory_t
-
 void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;

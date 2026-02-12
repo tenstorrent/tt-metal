@@ -10,7 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::profiler_no_op::device {
-
 }
 
 void ProfilerNoopOperation::validate_on_program_cache_miss(

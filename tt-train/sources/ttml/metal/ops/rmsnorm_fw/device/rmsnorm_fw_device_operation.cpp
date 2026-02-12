@@ -10,7 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
-
 }
 
 void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(

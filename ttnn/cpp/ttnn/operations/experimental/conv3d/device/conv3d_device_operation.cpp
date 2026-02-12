@@ -34,8 +34,6 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 }
 }  // namespace detail
 
-}
-
 void Conv3dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;

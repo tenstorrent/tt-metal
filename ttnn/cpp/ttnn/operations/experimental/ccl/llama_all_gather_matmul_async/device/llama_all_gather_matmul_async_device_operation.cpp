@@ -9,9 +9,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::experimental::prim {
-
-LlamaAllGatherMatmulAsyncDeviceOperation::program_factory_t
-
 void LlamaAllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input0 = tensor_args.input0;
