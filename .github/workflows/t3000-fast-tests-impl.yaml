@@ -45,6 +45,11 @@ on:
         type: string
         default: 'true'
         description: "Run t3k ttnn ccl tests"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
 
 jobs:
   t3000-fast-tests:
@@ -73,6 +78,7 @@ jobs:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job

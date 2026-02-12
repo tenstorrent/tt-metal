@@ -62,11 +62,6 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
     return UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
 }
 
-void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
-    validate_on_program_cache_miss(operation_attributes, input);
-}
-
 void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
     const auto& input_tensor_a = input;
