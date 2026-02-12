@@ -329,7 +329,7 @@ def run_test_linear(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(8192),
+                "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
             ttnn.Topology.Ring,
@@ -344,7 +344,7 @@ def run_test_linear(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(8192),
+                "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
             ttnn.Topology.Ring,
@@ -359,7 +359,7 @@ def run_test_linear(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(8192),
+                "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
             ttnn.Topology.Ring,
