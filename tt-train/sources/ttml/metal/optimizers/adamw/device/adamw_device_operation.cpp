@@ -10,7 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::optimizers::adamw::device {
-
 }
 
 void AdamWDeviceOperation::validate_on_program_cache_miss(

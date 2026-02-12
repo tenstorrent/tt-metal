@@ -216,9 +216,6 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::create_output_tensors(
         create_device_tensor(std::get<1>(output_specs), tensor_args.input_tensor.device()),
         create_device_tensor(std::get<2>(output_specs), tensor_args.input_tensor.device()));
 }
-
-CreateQKVHeadsSeparateTensorsDeviceOperation::program_factory_t
-
     tt::stl::hash::hash_t
     CreateQKVHeadsSeparateTensorsDeviceOperation::compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

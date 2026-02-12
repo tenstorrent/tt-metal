@@ -11,12 +11,8 @@
 #include <ttnn/operation.hpp>
 
 namespace ttnn::prim {
-
-InterleavedToShardedPartialDeviceOperation::program_factory_t
-
-    void
-    InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
-        const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
+void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     const auto& num_slices = operation_attributes.num_slices;
     const auto& slice_index = operation_attributes.slice_index;
     const auto& grid_size = operation_attributes.grid_size;

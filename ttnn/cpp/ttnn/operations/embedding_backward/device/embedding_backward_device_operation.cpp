@@ -12,9 +12,6 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-}
-
 void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& index_tensor = tensor_args.index_tensor;

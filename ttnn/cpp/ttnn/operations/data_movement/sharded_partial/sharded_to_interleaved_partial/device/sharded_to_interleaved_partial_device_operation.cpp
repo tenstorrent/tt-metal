@@ -9,12 +9,8 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-ShardedToInterleavedPartialDeviceOperation::program_factory_t
-
-    void
-    ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_miss(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+void ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& cache_tensor = tensor_args.cache_tensor;
     auto shard_spec = input_tensor.shard_spec().value();

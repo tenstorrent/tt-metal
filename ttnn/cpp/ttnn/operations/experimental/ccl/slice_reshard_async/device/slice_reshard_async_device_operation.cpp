@@ -15,9 +15,6 @@
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
-
-}
-
 void SliceReshardAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.dim == 0, "Error, neighbor pad currently only supports sharding dim 0, provided {}", args.dim);

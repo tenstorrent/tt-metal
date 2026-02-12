@@ -12,9 +12,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-}
-
 void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.dim < 3, "Error, neighbor pad currently only supports padding non last dim, provided {}", args.dim);

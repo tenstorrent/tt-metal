@@ -12,9 +12,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::experimental::prim {
-
-}
-
 void StridedAllGatherAsync::validate_on_program_cache_miss(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensors_args*/) {}
 

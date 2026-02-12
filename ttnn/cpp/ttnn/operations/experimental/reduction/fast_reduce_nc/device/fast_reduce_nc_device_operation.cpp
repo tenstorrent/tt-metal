@@ -10,9 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
-
-}
-
 void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;

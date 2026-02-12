@@ -11,9 +11,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-}
-
 void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& preallocated_input_grad = tensor_args.preallocated_input_grad;

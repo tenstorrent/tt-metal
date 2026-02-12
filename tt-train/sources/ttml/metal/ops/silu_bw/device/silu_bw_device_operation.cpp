@@ -10,7 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::silu_bw::device {
-
 }
 
 void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(

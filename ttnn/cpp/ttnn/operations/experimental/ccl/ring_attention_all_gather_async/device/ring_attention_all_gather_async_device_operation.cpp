@@ -13,9 +13,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::experimental::prim {
-
-RingAttentionAllGatherAsyncDeviceOperation::program_factory_t
-
 void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensors = tensor_args.input_tensor;

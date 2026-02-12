@@ -13,8 +13,6 @@ namespace ttnn::experimental::prim {
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-}
-
 void RotateHalfDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args;

@@ -10,7 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::layernorm_fw::device {
-
 }
 
 void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(

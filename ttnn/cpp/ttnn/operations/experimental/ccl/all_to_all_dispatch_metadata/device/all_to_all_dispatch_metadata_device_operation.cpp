@@ -12,12 +12,8 @@
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
-
-AllToAllDispatchMetadataDeviceOperation::program_factory_t
-
-    void
-    AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
     auto scores_tensor = tensor_args.expert_scores_tensor;
