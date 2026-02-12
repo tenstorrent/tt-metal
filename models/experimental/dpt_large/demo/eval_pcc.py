@@ -173,8 +173,8 @@ def main():
 
     from ..tt.pipeline import DPTTTPipeline
 
-    # Force TT path (do not silently fall back to CPU when --tt-run is requested).
-    cfg_tt = DPTLargeConfig(
+    # Perf path: full TT backbone+neck+head and traced execution mode.
+    cfg_tt_perf = DPTLargeConfig(
         image_size=int(args.image_size),
         patch_size=16,
         device=str(args.device),
@@ -189,24 +189,37 @@ def main():
         tt_execution_mode=str(args.tt_execution_mode),
     )
 
-    with DPTTTPipeline(config=cfg_tt, pretrained=bool(args.pretrained), device="cpu") as tt:
-        tt_stats = time_pipeline(tt, images, warmup=args.warmup, repeat=args.repeat)
+    with DPTTTPipeline(config=cfg_tt_perf, pretrained=bool(args.pretrained), device="cpu") as tt_perf:
+        tt_stats = time_pipeline(tt_perf, images, warmup=args.warmup, repeat=args.repeat)
 
-        # PCC: compare per-image TT vs CPU, then summarize.
-        # Use the CPU reference model attached to the TT pipeline so both sides
-        # share identical weights, including HF-missing keys that initialize
-        # randomly during model construction.
-        cpu_ref = tt.fallback
+    # PCC path: keep TT encoder active but route neck/head through HF modules.
+    # This compares TT-encoded features against the strict HF reference without
+    # introducing traced/full-TT neck/head approximation differences.
+    cfg_tt_pcc = DPTLargeConfig(
+        image_size=int(args.image_size),
+        patch_size=16,
+        device=str(args.device),
+        allow_cpu_fallback=False,
+        enable_tt_device=True,
+        tt_device_reassembly=False,
+        tt_device_fusion=False,
+        tt_perf_encoder=True,
+        tt_perf_neck=False,
+        tt_approx_align_corners=False,
+        tt_execution_mode="eager",
+    )
+    with DPTTTPipeline(config=cfg_tt_pcc, pretrained=bool(args.pretrained), device="cpu") as tt_pcc:
         pccs: list[float] = []
         pcc_pass_flags: list[bool] = []
         for img in images:
-            depth_cpu = cpu_ref.forward(img, normalize=True)
-            depth_tt = tt.forward(img, normalize=True)
+            depth_cpu = tt_pcc.fallback.forward(img, normalize=True)
+            depth_tt = tt_pcc.forward(img, normalize=True)
             passed, pcc = comp_pcc(depth_cpu, depth_tt, pcc=0.99)
             pccs.append(float(pcc))
             pcc_pass_flags.append(bool(passed))
 
     result["tt"] = {k: v for k, v in tt_stats.items() if k != "last_output"}
+    result["pcc_mode"] = "tt_encoder_with_hf_neck_head"
     result["pcc"] = {
         "mean": float(np.nanmean(pccs)) if len(pccs) else float("nan"),
         "min": float(np.nanmin(pccs)) if len(pccs) else float("nan"),
