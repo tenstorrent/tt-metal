@@ -322,9 +322,14 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
                               .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));
     experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_mem);
 
+    bool used_pinned_memory = false;
     for (auto _ : state) {
-        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/true);
+        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/false);
+        used_pinned_memory = pinned_mem->lock_may_block();
+        mesh_device->mesh_command_queue().finish();
     }
+
+    state.SetLabel(used_pinned_memory ? "PinnedMemory" : "NoPinnedMemory");
 
     state.SetBytesProcessed(actual_buf_size * state.iterations());
 }
