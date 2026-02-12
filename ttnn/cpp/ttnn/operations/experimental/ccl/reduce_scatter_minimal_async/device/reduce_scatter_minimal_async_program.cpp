@@ -719,7 +719,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
     // Extract compute kernel config parameters
-    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
+    // const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
+    constexpr bool fp32_dest_acc_en = true;
     const MathFidelity math_fidelity = compute_kernel_config.has_value()
         ? ttnn::get_math_fidelity(compute_kernel_config)
         : MathFidelity::HiFi4;
@@ -1294,7 +1295,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
     // Extract compute kernel config parameters
-    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
+    constexpr bool fp32_dest_acc_en = true;
     const MathFidelity math_fidelity = compute_kernel_config.has_value()
         ? ttnn::get_math_fidelity(compute_kernel_config)
         : MathFidelity::HiFi4;
