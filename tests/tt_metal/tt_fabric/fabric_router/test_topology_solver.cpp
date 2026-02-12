@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <gtest/gtest.h>
@@ -10,7 +11,6 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
 #include "tt_metal/fabric/topology_solver_internal.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt-metalium/experimental/mock_device.hpp>
@@ -29,8 +29,10 @@ protected:
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
     // Use 2x2 T3K multiprocess MGD (has 2 compute meshes: mesh_id 0 and 1)
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
     const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt_metal_home) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
 
     // Create mesh graph from descriptor
@@ -66,8 +68,10 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalWithSwitch) {
     // Use T3K 2x2 MGD with TT-Switch (has 1 compute mesh: mesh_id 0, and 1 switch: mesh_id 1)
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
     const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt_metal_home) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_ttswitch_mgd.textproto";
 
     // Create mesh graph from descriptor

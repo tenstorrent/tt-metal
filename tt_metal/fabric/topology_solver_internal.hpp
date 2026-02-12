@@ -49,7 +49,6 @@ struct GraphIndexData {
     std::vector<std::vector<size_t>> global_adj_idx;
 
     // Connection count maps (for strict mode / multi-edge support)
-    // conn_count[i][j] = number of channels from node i to node j
     std::vector<std::map<size_t, size_t>> target_conn_count;
     std::vector<std::map<size_t, size_t>> global_conn_count;
 

@@ -17,7 +17,8 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/fabric/topology_solver.hpp>
+// topology_solver.hpp is included in topology_solver.tpp before this file is included
+// so the types are already available via the include chain
 
 namespace tt::tt_fabric::detail {
 
