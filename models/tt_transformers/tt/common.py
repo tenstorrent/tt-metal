@@ -17,8 +17,6 @@ from pydantic import AliasChoices, BaseModel, Field
 import ttnn
 
 
-
-
 class URL(BaseModel):
     uri: str
 
@@ -47,7 +45,6 @@ InterleavedTextMedia = Union[
     ImageMedia,
     List[Union[str, ImageMedia]],
 ]
-
 
 
 class Mode(Enum):
