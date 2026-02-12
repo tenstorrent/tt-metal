@@ -24,6 +24,10 @@ def run_flash_mla_prefill_impl(
     q_dtype,
     dtype,
     v_head_dim,
+    q_chunk_first,
+    v_chunk_first,
+    q_chunk_second,
+    v_chunk_second,
 ):
     # Log the test parameters
     logger.debug(f"Running FlashMLA Prefill with parameters: ")
@@ -37,6 +41,10 @@ def run_flash_mla_prefill_impl(
     logger.debug(f"V Head Dim: {v_head_dim}")
     logger.debug(f"Query Data Type: {q_dtype}")
     logger.debug(f"Key-Value Data Type: {dtype}")
+    logger.debug(f"Query Chunk Size First: {q_chunk_first}")
+    logger.debug(f"Value Chunk Size First: {v_chunk_first}")
+    logger.debug(f"Query Chunk Size Second: {q_chunk_second}")
+    logger.debug(f"Value Chunk Size Second: {v_chunk_second}")
 
     ######################
     ### Torch Setup
@@ -50,8 +58,6 @@ def run_flash_mla_prefill_impl(
     #######################
 
     tt_k_torch = k
-    q_chunk_size = 32
-    k_chunk_size = 32
 
     # Workaround since regular SDPA doesnt allow causality if k and v have different seq_lengths.
     # Need to add this support as part of ring attention work somehow, but for now, pretend it isn't causal.
@@ -60,8 +66,15 @@ def run_flash_mla_prefill_impl(
     scale = (kv_lora_rank + d_rope) ** -0.5
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
+        q_chunk_size=q_chunk_first,
+        k_chunk_size=v_chunk_first,
+        exp_approx_mode=False,
+    )
+
+    sdpa_program_config_second = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_second,
+        k_chunk_size=v_chunk_second,
         exp_approx_mode=False,
     )
 
@@ -123,14 +136,14 @@ def run_flash_mla_prefill_impl(
     # Premultiply V by W_v
     # workaround for #37416
     tt_v_latent_post_repeat = ttnn.repeat(tt_v_latent, [1, nh, 1, 1])
-    tt_v_embedding = ttnn.linear(tt_v_latent_post_repeat, tt_v_out)
+    tt_v_embedding = ttnn.linear(tt_v_latent_post_repeat, tt_v_out, dtype=dtype)
 
     tt_new_sdpa_out = ttnn.transformer.flash_mla_prefill(
         tt_q,
         tt_k,
         tt_v_embedding,
         scale=scale,
-        program_config=sdpa_program_config,
+        program_config=sdpa_program_config_second,
         compute_kernel_config=compute_kernel_config,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         is_causal=is_causal,
@@ -146,21 +159,23 @@ def run_flash_mla_prefill_impl(
 
 
 @pytest.mark.parametrize(
-    "batch, seq_len_q, seq_len_kv, nh, nkv, kv_lora_rank, d_rope, v_head_dim",
+    "batch, seq_len_q, seq_len_kv, nh, nkv, kv_lora_rank, d_rope, v_head_dim, q_chunk_first, v_chunk_first, q_chunk_second, v_chunk_second",
     [
         # cases from deepseek
         # TP=8, SP=1, seq_len = 1k
-        (1, 1024, 1024, 16, 16, 512, 64, 128),
+        (1, 1024, 1024, 16, 16, 512, 64, 128, 32, 32, 32, 32),
         # TP=8, SP=1, seq_len = 4k
-        (1, 4096, 4096, 16, 16, 512, 64, 128),
+        (1, 4096, 4096, 16, 16, 512, 64, 128, 32, 32, 32, 32),
         # TP=4, SP=1, seq_len = 1k
-        (1, 1024, 1024, 32, 32, 512, 64, 128),
+        (1, 1024, 1024, 32, 32, 512, 64, 128, 32, 32, 32, 32),
         # TP=4, SP=1, seq_len = 4k
-        (1, 4096, 4096, 32, 32, 512, 64, 128),
+        (1, 4096, 4096, 32, 32, 512, 64, 128, 32, 32, 32, 32),
         # TP=4, SP=32, seq_len = 16k
-        (1, 512, 16384, 32, 32, 512, 64, 128),
+        (1, 512, 16384, 32, 32, 512, 64, 128, 32, 32, 32, 32),
         # TP=4, SP=32, seq_len = 32k
-        (1, 1024, 32768, 32, 32, 512, 64, 128),
+        (1, 1024, 32768, 32, 32, 512, 64, 128, 32, 32, 32, 32),
+        # TP=4, SP=32, seq_len = 128k
+        (1, 4096, 131072, 32, 32, 512, 64, 128, 128, 256, 128, 512),
     ],
 )
 @pytest.mark.parametrize(
@@ -181,9 +196,22 @@ def test_flash_mla_prefill(
     q_dtype,
     dtype,
     v_head_dim,
+    q_chunk_first,
+    v_chunk_first,
+    q_chunk_second,
+    v_chunk_second,
     function_level_defaults,
     reset_seeds,
 ):
+    if device.arch() == ttnn.device.Arch.WORMHOLE_B0:
+        if seq_len_kv == 131072:
+            pytest.skip("Skip WH test due to pcc failure. Should properly set k/v chunk sizes for this case.")
+        q_chunk_first = 32
+        v_chunk_first = 32
+        q_chunk_second = 32
+        v_chunk_second = 32
+        logger.info("Using wormhole device, setting chunk sizes to 32")
+
     run_flash_mla_prefill_impl(
         device,
         batch,
@@ -196,4 +224,8 @@ def test_flash_mla_prefill(
         q_dtype,
         dtype,
         v_head_dim,
+        q_chunk_first,
+        v_chunk_first,
+        q_chunk_second,
+        v_chunk_second,
     )

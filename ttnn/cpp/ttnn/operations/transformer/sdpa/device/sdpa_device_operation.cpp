@@ -408,7 +408,8 @@ SDPAOperation::create_op_performance_model(
     const SDPAParams& args, const SDPAInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
-    const auto& input_tensor_v = args.use_mla ? tensor_args.k : tensor_args.v.value();
+    const bool has_v = tensor_args.v.has_value();
+    const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
@@ -453,7 +454,7 @@ SDPAOperation::create_op_performance_model(
     const auto DH = q_shape[3];
 
     uint32_t Sv, DV;
-    if (args.use_mla) {
+    if (args.use_mla && !has_v) {
         Sv = k_shape[2];
         DV = k_shape[3];
     } else {
