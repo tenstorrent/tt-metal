@@ -106,7 +106,7 @@ void kernel_main() {
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
 #ifdef FUSE_MM_OP_SIGNALER
-    size_t mm_op_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t mm_op_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t mm_sem_target = 0;
 #endif
 
