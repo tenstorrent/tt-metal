@@ -61,11 +61,6 @@ void MorehNllLossStep2DeviceOperation::validate_on_program_cache_miss(
     validate_inputs(attributes, tensor_args);
 }
 
-void MorehNllLossStep2DeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
 MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (operation_attributes.reduction == NONE && tensor_args.output_tensor.has_value()) {
