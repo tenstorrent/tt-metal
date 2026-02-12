@@ -355,7 +355,7 @@ ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPRO
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The exponent as IEEE 754 float bits                                        | uint32_t | Must be a positive integer exponent                   | True     |
+ * | param0          | The integer exponent value                                                 | uint32_t | Must be a non-negative integer exponent               | True     |
  */
 // clang-format on
 ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
@@ -595,14 +595,12 @@ ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>()
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
- * Only a reduction of 9 rows is supported at this time.
- *
  * | Argument        | Description                                                                 | Type       | Valid Range                                           | Required |
  * |-----------------|-----------------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register containing the data to be reduced     | uint32_t   | Must be less than the size of the DST register buffer | True     |
  * | idst_idx        | The index of the tile in DST register containing the indices of the data    | uint32_t   | Must be less than the size of the DST register buffer | True     |
  * | chunk           | The index of the intra-kernel "chunk" of data for large kernel accumulation | uint32_t   | 0 to UINT_MAX                                         | False    |
- * | num_rows        | The number of rows to use for the MaxPool operation                         | uint32_t   | {9}                                                   | False    |
+ * | num_rows        | The number of rows to use for the MaxPool operation                         | uint32_t   | <= 32, but note either 9 or 32 rows will be reduced   | False    |
  * | layout          | The data layout of the data in DST                                          | DataLayout | TILE or ROW_MAJOR                                     | False    |
  * | accumulate      | Whether to accumulate results for large kernels                             | bool       | true, false                                           | False    |
  * | ITERATIONS      | The number of iterations to perform (unused)                                | int        | 1 to 8                                                | False    |

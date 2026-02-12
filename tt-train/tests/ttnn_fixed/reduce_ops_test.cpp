@@ -31,8 +31,6 @@ protected:
 };
 
 TEST_F(ReduceOpTest, TestMeanDim0) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
     ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
