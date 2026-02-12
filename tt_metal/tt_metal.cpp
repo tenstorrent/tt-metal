@@ -157,10 +157,10 @@ DataMovementConfigStatus CheckDataMovementConfig(
                             }
                             if (data_movement_config_status.noc_mode.has_value() &&
                                 new_noc_mode != data_movement_config_status.noc_mode.value()) {
-                                TT_THROW(
-                                    "Illegal NOC usage: data movement kernels on logical core {} cannot use different "
-                                    "NOC modes!",
-                                    CoreCoord(x, y).str());
+                                TT_FATAL(
+                                    false,
+                                    "Illegal NOC usage: data movement kernels across specified cores cannot use "
+                                    "different NOC modes!");
                             }
                             data_movement_config_status.noc_mode = new_noc_mode;
                         }
@@ -1123,7 +1123,7 @@ KernelHandle CreateDataMovementKernel(
         !data_movement_config_status.noc_mode.has_value() ||
             data_movement_config_status.noc_mode.value() == config.noc_mode,
         "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because "
-        "of a mismatch in NOC mode."
+        "of a mismatch in NOC mode. "
         "New NOC Mode: {}, Existing NOC Mode: {}",
         kernel_name,
         enchantum::to_string(config.noc_mode),
@@ -1131,10 +1131,10 @@ KernelHandle CreateDataMovementKernel(
 
     if (data_movement_config_status.noc_mode.has_value() &&
         data_movement_config_status.noc_mode.value() != NOC_MODE::DM_DYNAMIC_NOC) {
-        uint32_t current_noc_value = config.noc == NOC::NOC_0 ? data_movement_config_status.noc0_in_use
-                                                              : data_movement_config_status.noc1_in_use;
+        bool noc_already_in_use = config.noc == NOC::NOC_0 ? data_movement_config_status.noc0_in_use
+                                                           : data_movement_config_status.noc1_in_use;
         TT_FATAL(
-            !current_noc_value,
+            !noc_already_in_use,
             "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores "
             "because the NOC {} is in use!",
             kernel_name,
@@ -1212,10 +1212,10 @@ KernelHandle CreateEthernetKernel(
 
     if (data_movement_config_status.noc_mode.has_value() &&
         data_movement_config_status.noc_mode.value() != NOC_MODE::DM_DYNAMIC_NOC) {
-        uint32_t current_noc_value = config.noc == NOC::NOC_0 ? data_movement_config_status.noc0_in_use
-                                                              : data_movement_config_status.noc1_in_use;
+        bool current_noc_in_use = config.noc == NOC::NOC_0 ? data_movement_config_status.noc0_in_use
+                                                           : data_movement_config_status.noc1_in_use;
         TT_FATAL(
-            !current_noc_value,
+            !current_noc_in_use,
             "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores "
             "because the NOC {} is in use!",
             kernel->name(),
