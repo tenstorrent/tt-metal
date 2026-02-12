@@ -257,6 +257,8 @@ ENV_PASSTHROUGH_PREFIXES = (
     "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
     "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
     "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+    "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
+    "MESH_",  # Mesh config (e.g., MESH_DEVICE)
 )
 
 # Environment variables that should NOT be passed through even if they match ENV_PASSTHROUGH_PREFIXES.

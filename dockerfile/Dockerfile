@@ -17,6 +17,9 @@ ENV PATH="/usr/local/bin:$PATH"
 
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
+# For system installs of uv, UV_PYTHON_INSTALL_DIR ensures Python is in an accessible
+# shared path. When the venv is copied to NFS for multi-host use, the Python interpreter
+# must be reachable from all nodes. See scripts/install-uv.sh post-install message.
 ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 RUN umask 000 && uv python install "$PYTHON_VERSION"
 

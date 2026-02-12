@@ -51,6 +51,7 @@ awk -v venv_path="$VENV_ABS_PATH" -v sq="'" '
 }
 { print }
 ' "$ACTIVATE" > "${ACTIVATE}.tmp"
-chmod --reference="$ACTIVATE" "${ACTIVATE}.tmp" 2>/dev/null || chmod +x "${ACTIVATE}.tmp"
+chmod --reference="$ACTIVATE" "${ACTIVATE}.tmp" 2>/dev/null || true
+chmod +x "${ACTIVATE}.tmp"
 mv "${ACTIVATE}.tmp" "$ACTIVATE"
 echo "Patched for POSIX sh: $ACTIVATE"

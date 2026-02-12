@@ -1,9 +1,21 @@
 #!/bin/bash
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
+#
+# NOTE: If this script is moved, update tests/scripts/multihost/setup_shared_venv.sh
+# which references it via BUNDLE_SCRIPT="${SCRIPT_DIR}/../../../scripts/bundle_python_into_venv.sh"
+#
+# Target platforms: Linux (Docker, CI, SLURM multi-host). Uses readlink -f (Linux-specific).
+# Not tested on macOS or other Unix variants.
 
 set -eo pipefail
+
+# This script requires Linux: readlink -f and uv's Python layout are Linux-specific.
+# Targeted at Docker/CI and SLURM environments. On macOS, exit with a clear message.
+if [[ "$(uname -s)" != "Linux" ]]; then
+  echo "ERROR: $0 is designed for Linux (Docker, CI, SLURM). macOS is not supported." >&2
+  exit 1
+fi
 
 usage() {
     cat <<EOF
@@ -51,14 +63,15 @@ fi
 # Check if Python interpreter needs to be bundled by checking if any python executables are symlinks
 needs_bundling() {
     local venv_dir="$1"
-    for py_exec in "$venv_dir/bin/python" "$venv_dir/bin/python3" "$venv_dir/bin/python3".*; do
-        # Only consider paths that actually exist to avoid literal unmatched glob patterns
-        # (bash passes unmatched globs as literal strings when nullglob is not set)
-        if [[ -e "$py_exec" && -L "$py_exec" ]]; then
-            return 0  # true - needs bundling
-        fi
-    done
-    return 1  # false - already bundled
+    (
+        shopt -s nullglob
+        for py_exec in "$venv_dir/bin/python" "$venv_dir/bin/python3" "$venv_dir/bin/python3".*; do
+            if [[ -e "$py_exec" && -L "$py_exec" ]]; then
+                return 0  # true - needs bundling
+            fi
+        done
+        return 1  # false - already bundled
+    )
 }
 
 if [[ "$FORCE_BUNDLE" != "--force" ]] && ! needs_bundling "$VENV_DIR"; then

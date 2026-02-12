@@ -98,11 +98,17 @@ tmp_env_dir="${TARGET_VENV}.tmp.$$"
     # The script checks if bundling is needed and handles errors gracefully
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     BUNDLE_SCRIPT="${SCRIPT_DIR}/../../../scripts/bundle_python_into_venv.sh"
+    PATCH_SCRIPT="${SCRIPT_DIR}/../../../scripts/patch_activate_posix.sh"
     if [ -x "$BUNDLE_SCRIPT" ]; then
       "$BUNDLE_SCRIPT" "${TARGET_VENV}" >&2
     else
       log "WARNING: bundle_python_into_venv.sh not found at $BUNDLE_SCRIPT"
       log "Python interpreter may not be properly bundled for multi-host use."
+    fi
+    # Re-patch activate after copy: the copied venv's activate still has /opt/venv hardcoded.
+    # For POSIX sh sourcing of the copied venv, the fallback must use TARGET_VENV's path.
+    if [ -x "$PATCH_SCRIPT" ]; then
+      "$PATCH_SCRIPT" "${TARGET_VENV}" >&2 || true
     fi
   fi
 ) 9>"${lockfile}"
