@@ -517,7 +517,8 @@ void kernel_main() {
                                 pkt_hdr_sem_inc_backward,
                                 in0_tile_size,
                                 out_ready_sem_injector_noc_addr_forward_in_pkt,
-                                true);
+                                true,
+                                M_tiles);
                         } else if (in0_core_order_index >= (in0_core_order_size - real_in0_core_order_size * 2)) {
                             // If backward, send forward
                             forward_half_block_to_fabric_neighbor(
@@ -535,7 +536,8 @@ void kernel_main() {
                                 pkt_hdr_sem_inc_forward,
                                 in0_tile_size,
                                 out_ready_sem_injector_noc_addr_backward_in_pkt,
-                                false);
+                                false,
+                                M_tiles);
                         }
                     }
                 }

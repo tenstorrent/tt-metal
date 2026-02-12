@@ -114,7 +114,8 @@ void forward_half_block_to_fabric_neighbor(
     SemIncPacketHdrType pkt_hdr_sem_inc,
     uint16_t page_size,
     uint64_t out_ready_sem_noc_addr_in_pkt,
-    bool write_left_half) {
+    bool write_left_half,
+    uint32_t m_tile_end) {
     uint32_t half_k_block_tiles = k_block_tiles / 2;
     uint32_t tiles_to_read = m_block_tiles * half_k_block_tiles;
     uint32_t tiles_read = 0;
@@ -123,6 +124,9 @@ void forward_half_block_to_fabric_neighbor(
     uint32_t pages_read_in_row = 0;
     size_t l1_read_addr = in0_start_address + (write_left_half ? 0 : (half_k_block_tiles * page_size));
     while (tiles_read < tiles_to_read) {
+        if (m_tile_start >= m_tile_end) {
+            break;
+        }
         uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
         uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
         bool reached_half_block_end = false;
@@ -137,6 +141,7 @@ void forward_half_block_to_fabric_neighbor(
                 pages_read_in_row = 0;
                 reached_half_block_end = true;
                 tiles_to_put_in_current_packet = i + 1;  // break early because not contiguous in L1
+                m_tile_start++;
             }
             noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
         }
