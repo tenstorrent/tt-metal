@@ -72,7 +72,15 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     // lost due to device skew.
     std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
     auto mesh_buffer = buffer_.get_mesh_buffer();
-    distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
+    bool using_fast_dispatch = MetalContext::instance().rtoptions().get_fast_dispatch();
+    if (using_fast_dispatch) {
+        distributed::EnqueueWriteMeshBuffer(
+            mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
+    } else {
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer->device()->shape())) {
+            tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
+        }
+    }
 }
 
 }  // namespace tt::tt_metal
