@@ -410,7 +410,7 @@ int main(int argc, char** argv) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
         auto sharded_benchmark_args = {TRANSFER_SIZE_ARGS, CONTIGUITY_ARGS, BUFFER_TYPE_ARGS, {device_id}};
-        std::vector<std::string> benchmark_arg_names = {"size", "page_size", "type", "device"};
+        std::vector<std::string> benchmark_arg_names = {"page_size", "size", "type", "device"};
         std::vector<std::string> sharded_benchmark_arg_names = {"size", "contiguity", "type", "device"};
         auto compute_min = [](const std::vector<double>& v) -> double { return *std::min_element(v.begin(), v.end()); };
         auto compute_max = [](const std::vector<double>& v) -> double { return *std::max_element(v.begin(), v.end()); };
