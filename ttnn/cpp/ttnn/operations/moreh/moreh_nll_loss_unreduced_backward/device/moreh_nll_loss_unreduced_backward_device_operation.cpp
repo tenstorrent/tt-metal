@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_nll_loss_unreduced_backward_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
@@ -74,11 +75,6 @@ void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
 }
 
 void MorehNllLossUnreducedBackwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
-void MorehNllLossUnreducedBackwardDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }

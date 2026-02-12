@@ -4,16 +4,15 @@
 
 #include <cstdint>
 #include <cstring>
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/fill.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(1);
     const auto true_value = reinterpret_cast<const float*>(&packed_scalar1);
@@ -34,13 +33,13 @@ void MAIN {
 
             fill_tile_init();
             #if defined(INP_INT32) || defined(INP_UINT32)
-                fill_tile_int(1, packed_scalar1);
-                fill_tile_int(2, packed_scalar2);
-            #endif
-            #if defined(INP_FLOAT) || defined(INP_FLOAT32)
-                fill_tile(1, *true_value);
-                fill_tile(2, *false_value);
-            #endif
+            fill_tile_int<DataFormat::Int32>(1, packed_scalar1);
+            fill_tile_int<DataFormat::Int32>(2, packed_scalar2);
+#endif
+#if defined(INP_FLOAT) || defined(INP_FLOAT32)
+            fill_tile(1, *true_value);
+            fill_tile(2, *false_value);
+#endif
             SFPU_OP_CHAIN_0
             tile_regs_commit();
 
@@ -54,4 +53,3 @@ void MAIN {
         cb_push_back(cb_output, per_core_block_dim);
     }
 }
-}  // namespace NAMESPACE

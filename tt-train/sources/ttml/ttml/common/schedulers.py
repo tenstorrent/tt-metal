@@ -46,10 +46,10 @@ class SpeedrunScheduler:
 
 
 class OptimParamSetter:
+    """Helper to set optimizer parameters during training."""
+
     def __init__(self, optim):
         self.optim = optim
-        self._warned_lr = False
-        self._warned_beta1 = False
 
     def set_lr(self, lr: float):
         self.optim.set_lr(float(lr))

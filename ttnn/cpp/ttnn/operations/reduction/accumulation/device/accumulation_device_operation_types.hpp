@@ -11,11 +11,11 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn::prim {
 
 enum class AccumulationOp : uint8_t { CUMSUM, CUMPROD };
 
-struct operation_attributes_t {
+struct AccumulationParams {
     const int32_t dim;
     const DataType dtype;
     const MemoryConfig output_memory_config;
@@ -23,12 +23,9 @@ struct operation_attributes_t {
     const AccumulationOp op;
 };
 
-struct tensor_args_t {
+struct AccumulationInputs {
     const Tensor& input_tensor;
     std::optional<Tensor> opt_output;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::reduction::accumulation
+}  // namespace ttnn::prim

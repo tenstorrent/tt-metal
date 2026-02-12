@@ -12,6 +12,7 @@ from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
 
@@ -57,7 +58,7 @@ def test_rms_norm_inference(
     tt_ccl = TT_CCL(mesh_device)
     tt_inner_norm = RMSNorm(
         device=mesh_device,
-        dim=model_args.dim,
+        dim=model_args.vision_dim,
         eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
         state_dict=state_dict,
         state_dict_prefix="",
@@ -69,7 +70,7 @@ def test_rms_norm_inference(
     # Wrap it in DistributedNorm
     tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl, TG=model_args.is_galaxy)
 
-    input = torch.rand(1, 1, max_seq_len, model_args.dim)
+    input = torch.rand(1, 1, max_seq_len, model_args.vision_dim)
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
@@ -82,7 +83,7 @@ def test_rms_norm_inference(
         memory_config=(ttnn.DRAM_MEMORY_CONFIG),
     )
 
-    tt_output = tt_model(tt_input, mode="prefill")
+    tt_output = tt_model(tt_input, mode=Mode.PREFILL)
 
     # DistributedNorm outputs are replicated across devices
     tt_output_torch = ttnn.to_torch(

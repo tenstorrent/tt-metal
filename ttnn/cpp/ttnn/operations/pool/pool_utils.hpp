@@ -41,21 +41,21 @@ struct AvgPoolConfig {
 };
 
 struct FactoryParameters {
-    uint32_t multi_buffering_factor;
-    bool split_reader;
-    uint32_t nbytes;
-    uint32_t index_nbytes;
-    tt::DataFormat data_format;
-    tt::DataFormat index_format;
-    tt::DataFormat output_data_format;
-    uint32_t in_ntiles_c;
-    uint32_t out_ntiles_c;
-    bool is_avg_pool;
-    uint32_t max_rows_for_reduction;
-    bool is_large_kernel;
-    uint32_t MAX_TILES_PER_REDUCTION;
-    bool is_wide_reduction;
-    uint32_t num_tilized_rows;
+    uint32_t multi_buffering_factor{};
+    bool split_reader{};
+    uint32_t nbytes{};
+    uint32_t index_nbytes{};
+    tt::DataFormat data_format{};
+    tt::DataFormat index_format{};
+    tt::DataFormat output_data_format{};
+    uint32_t in_ntiles_c{};
+    uint32_t out_ntiles_c{};
+    bool is_avg_pool{};
+    uint32_t max_rows_for_reduction{};
+    bool is_large_kernel{};
+    uint32_t MAX_TILES_PER_REDUCTION{};
+    bool is_wide_reduction{};
+    uint32_t num_tilized_rows{};
 };
 
 uint32_t get_bf16_pool_scalar(
@@ -91,13 +91,15 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     const Layout& input_layout,
     CoreCoord compute_grid_size,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
-    uint32_t channels,
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
     const Layout& output_layout,
-    const DataType& output_dtype);
+    const DataType& output_dtype,
+    bool config_tensor_in_dram);
+
+DataType get_index_data_type(uint32_t in_h, uint32_t in_w);
 
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
@@ -108,10 +110,14 @@ FactoryParameters get_factory_parameters(
     uint32_t in_channels,
     Pool2DType pool_type,
     bool return_indices,
+    uint32_t in_h,
+    uint32_t in_w,
     const Layout& output_layout);
 
 uint32_t calculate_L1_usage(
     DataType input_dtype,
+    uint32_t in_h,
+    uint32_t in_w,
     uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
@@ -129,7 +135,39 @@ uint32_t calculate_L1_usage(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const Layout& output_layout,
-    const DataType& output_dtype);
+    const DataType& output_dtype,
+    bool config_tensor_in_dram);
+
+uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor);
+
+// Struct to hold complete L1 usage information for pool2d slice
+struct pool2d_slice_l1_usage {
+    uint32_t halo_input_size{};
+    uint32_t halo_output_size{};
+    uint32_t pool_cb_size{};
+    uint32_t output_tensor_size{};
+    uint32_t total_size{};
+};
+
+// Calculate complete L1 usage for a pool2d slice (for DRAM slicing auto-determination)
+pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
+    uint32_t slice_input_height,
+    uint32_t slice_input_width,
+    uint32_t slice_output_height,
+    uint32_t slice_output_width,
+    const std::array<uint32_t, 4>& slice_padding,
+    const std::array<uint32_t, 2>& slice_ceil_pad,
+    bool return_indices,
+    Pool2DType pool_type,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override,
+    DataType input_dtype,
+    DataType dtype,
+    Layout input_layout,
+    Layout output_layout,
+    const tt::tt_metal::MemoryConfig& input_memory_config,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
+    bool config_tensor_in_dram);
 
 // pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure
 // they are sensical to avoid problems in sliding window config, halo and other setup procedures

@@ -12,14 +12,17 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
-namespace ttnn::operations::unary::program {
+namespace ttnn::prim {
+
+using ttnn::operations::unary::UnaryOpType;
+namespace utils = ttnn::operations::unary::utils;
 
 static const std::string compute_root = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
 
 using namespace tt::constants;
 
 UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const UnaryParams& args, const UnaryInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -137,7 +140,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg_impl(value1, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg_impl(value2, input.dtype());
                 if (value1 > 0.5f) {
-                    unary_defines["WHERE"] = "where_tile";
+                    const char* data_format = (input.dtype() == DataType::FLOAT32) ? "Float32" : "Float16_b";
+                    unary_defines["WHERE"] = fmt::format("where_tile<DataFormat::{0}>", data_format);
                     unary_defines["CLAMP"] = "clamp_tile";
                 } else if (value1 >= 0.0f) {
                     unary_defines["CLAMP"] = "clamp_tile";
@@ -213,9 +217,9 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
 void UnaryProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const UnaryParams& /*operation_attributes*/,
+    const UnaryInputs& tensor_args,
+    Tensor& output) {
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     const uint32_t num_cores = cached_program.shared_variables.num_cores;
@@ -245,7 +249,7 @@ void UnaryProgramFactory::override_runtime_arguments(
 // Sub Core Grids : should be fused later with UnaryProgramFactory directing all_device_cores to use cores from
 // sub_core_grids and update the override args accordingly after adding cores as rtargs
 UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const UnaryParams& args, const UnaryInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -416,9 +420,9 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
 
 void UnarySubCoreGridProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const UnaryParams& /*operation_attributes*/,
+    const UnaryInputs& tensor_args,
+    Tensor& output) {
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cores_with_rtargs = cached_program.shared_variables.cores_with_rtargs;
@@ -446,4 +450,4 @@ void UnarySubCoreGridProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::unary::program
+}  // namespace ttnn::prim

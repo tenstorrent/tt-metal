@@ -11,7 +11,7 @@
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/repeat_device_operation.hpp"
 #include "repeat.hpp"
@@ -25,10 +25,6 @@ struct UpperRepeatDims {
     static constexpr uint32_t repeat = 1;
     static constexpr uint32_t collapsed_lower = 2;
     static constexpr uint32_t page_size = 3;
-};
-struct LastRepeatDims {
-    static constexpr uint32_t collapsed_upper = 0;
-    static constexpr uint32_t repeat = 1;
 };
 
 ttnn::Tensor repeat_upper_dims_rm(

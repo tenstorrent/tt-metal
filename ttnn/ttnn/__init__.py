@@ -158,7 +158,14 @@ from ttnn._ttnn.fabric import (
     FabricTensixConfig,
     FabricUDMMode,
     FabricManagerMode,
+    FabricRouterConfig,
     set_fabric_config,
+    get_tt_fabric_packet_header_size_bytes,
+    get_tt_fabric_max_payload_size_bytes,
+    MeshId,
+    FabricNodeId,
+    setup_fabric_connection,
+    setup_routing_plane_connection,
 )
 
 # Import cluster functions and types
@@ -224,7 +231,6 @@ from ttnn.types import (
     ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
-    GrayskullComputeKernelConfig,
     MeshShape,
     MeshCoordinate,
     MeshCoordinateRange,
@@ -250,6 +256,8 @@ from ttnn.types import (
     RuntimeArgsColProxy,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    MeshProgramDescriptor,
+    merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
     TensorAccessorArgs,
 )
@@ -381,6 +389,7 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
 )
 
 from ttnn.operations.normalization import (
@@ -389,12 +398,23 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
+    LayerNormType,
+    DistributedLayerNormStage,
+    LayerNormParams,
+    LayerNormInputs,
+    LayerNormDeviceOperation,
+    LayerNormMultiCoreProgramFactory,
+    LayerNormShardedProgramFactory,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
+    create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     dram_group_norm_params_from_torch,
+    layernorm_default_compute_config,
+    rmsnorm_default_compute_config,
+    create_layernorm_program_config,
 )
 
 from ttnn.operations.embedding import (
@@ -409,7 +429,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology
+from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,

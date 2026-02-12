@@ -13,18 +13,17 @@
 #include "fused_rmsnorm_post_all_gather_device_operation_types.hpp"
 #include "fused_rmsnorm_post_all_gather_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather {
+namespace ttnn::experimental::prim {
 
 struct FusedRMSNormPostAllGatherDeviceOperation {
-    using operation_attributes_t = fused_rmsnorm_post_all_gather::operation_attributes_t;
-    using tensor_args_t = fused_rmsnorm_post_all_gather::tensor_args_t;
-    using spec_return_value_t = fused_rmsnorm_post_all_gather::spec_return_value_t;
-    using tensor_return_value_t = fused_rmsnorm_post_all_gather::tensor_return_value_t;
-    using program_factory_t = std::variant<program::FusedRMSNormPostAllGatherProgramFactory>;
+    using operation_attributes_t = FusedRmsnormPostAllGatherParams;
+    using tensor_args_t = FusedRmsnormPostAllGatherInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<FusedRMSNormPostAllGatherProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -32,11 +31,10 @@ struct FusedRMSNormPostAllGatherDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::tensor_return_value_t
-fused_rmsnorm_post_all_gather(
+Tensor fused_rmsnorm_post_all_gather(
     const Tensor& input_tensor,
     const Tensor& stats_tensor,
     float eps,

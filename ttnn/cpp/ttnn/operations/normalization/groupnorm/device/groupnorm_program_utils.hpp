@@ -9,7 +9,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::normalization::group_norm {
+namespace ttnn::prim {
 
 enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
 
@@ -25,4 +25,4 @@ void split_and_form_rectangle_grids(
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size);
 
-}  // namespace ttnn::operations::normalization::group_norm
+}  // namespace ttnn::prim

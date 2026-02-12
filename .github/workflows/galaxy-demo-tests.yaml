@@ -27,6 +27,36 @@ on:
           - qwen3_32b
           - qwen3_32b_long_context
           - deepseek_v3
+          - qwenimage
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
   schedule:
     - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
 jobs:
@@ -36,7 +66,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 22.04
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
   galaxy-demo-tests:
     needs: build-artifact
@@ -47,4 +79,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.model || 'all' }}
-      topology: topology-6u
+      enabled-skus: wh_galaxy
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}

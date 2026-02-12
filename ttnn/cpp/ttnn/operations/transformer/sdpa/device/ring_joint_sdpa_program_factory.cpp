@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <optional>
 #include <cmath>
@@ -18,13 +19,13 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program {
+namespace ttnn::prim {
 
 RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory::create_mesh_workload(
-    const operation_attributes_t& args,
+    const RingJointSDPAParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const RingJointSDPAInputs& tensor_args,
+    RingJointSDPAResult& output_tensors) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
@@ -38,10 +39,10 @@ RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory:
 }
 
 RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::create_at(
-    const operation_attributes_t& args,
+    const RingJointSDPAParams& args,
     const ttnn::MeshCoordinate& coord,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const RingJointSDPAInputs& tensor_args,
+    RingJointSDPAResult& output_tensors) {
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
     The sequence length comes in padded such that it is divisible by `TILE_HEIGHT * ring_size`.
@@ -142,7 +143,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
     }
 
-    std::optional<detail::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = detail::RingSDPAFusedOpSignaler();
+    std::optional<ttnn::prim::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = ttnn::prim::RingSDPAFusedOpSignaler();
 
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
         args.all_gather_operation_attributes.ring_size, device_index, args.all_gather_operation_attributes.topology);
@@ -288,12 +289,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
     const uint32_t qk_in0_block_w = DHt;
-    // max of Sk_chunk_t and dst_size
-    const uint32_t qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
-    // If qk_out_subblock_w is full row of output, scale subblock_h so volume = dst_size. Otherwise it's 1 to maintain
-    // row-major intermediate buffer.
-    const uint32_t qk_out_subblock_h =
-        (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
+    auto [qk_out_subblock_h, qk_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
@@ -301,9 +298,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
-    const uint32_t out_out_subblock_w = std::min(DHt, dst_size);
-    const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == DHt) ? (std::min(Sq_chunk_t, dst_size / out_out_subblock_w)) : 1;
+
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
@@ -325,60 +321,19 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
-    const uint32_t stats_granularity = std::min(Sq_chunk_t, dst_size);
-    // Find log2 of stats_granularity using std
-    const uint32_t log2_stats_granularity = std::log2(stats_granularity);
-    // Assert that this is a power of 2
-    TT_FATAL(
-        stats_granularity == (1 << log2_stats_granularity),
-        "stats_granularity must be a power of 2. Got {}.",
-        stats_granularity);
-
-    const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
-    const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-    TT_FATAL(
-        sub_exp_granularity == (1 << log2_sub_exp_granularity),
-        "sub_exp_granularity must be a power of 2. Got {}.",
-        sub_exp_granularity);
-
-    const uint32_t mul_bcast_granularity = std::min(Sq_chunk_t * Sk_chunk_t, dst_size);
-    const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-    TT_FATAL(
-        mul_bcast_granularity == (1 << log2_mul_bcast_granularity),
-        "mul_bcast_granularity must be a power of 2. Got {}.",
-        mul_bcast_granularity);
-
-    uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = std::log2(dht_granularity);
-    // Sometimes DHt is not a power of 2, so granularity should be 1
-    if (dht_granularity != (1 << log2_dht_granularity)) {
-        dht_granularity = 1;
-        log2_dht_granularity = 0;
-    }
-    TT_FATAL(
-        dht_granularity == (1 << log2_dht_granularity),
-        "dht_granularity must be a power of 2. Got {}.",
-        dht_granularity);
-
-    // Reduce ops can use granularity of dst_size/2
-    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
-    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
-    TT_FATAL(
-        reduce_granularity == (1 << log2_reduce_granularity),
-        "reduce_granularity must be a power of 2. Got {}.",
-        reduce_granularity);
+    // Each granularity must evenly divide its tile count to avoid dropping tiles
+    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
+    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
+    const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
+    const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
+    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
     log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
     log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
-    log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
     log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
-    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -495,15 +450,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
     defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
     auto reader_kernels_id = CreateKernel(
@@ -948,9 +898,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
 void RingJointSDPAProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const RingJointSDPAParams& args,
+    const RingJointSDPAInputs& tensor_args,
+    RingJointSDPAResult& output_tensors) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
@@ -1015,4 +965,4 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program
+}  // namespace ttnn::prim

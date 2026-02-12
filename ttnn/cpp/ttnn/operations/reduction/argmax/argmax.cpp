@@ -18,7 +18,7 @@ namespace ttnn::operations::reduction {
 */
 static Tensor zero_volume_argmax(
     const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim, const MemoryConfig& memory_config) {
-    auto output_shape = argmax::get_output_shape(input_tensor, dim, keepdim);
+    auto output_shape = ttnn::prim::get_output_shape(input_tensor, dim, keepdim);
 
     return ttnn::full(
         ttnn::Shape(output_shape),

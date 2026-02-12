@@ -21,13 +21,13 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::recv_async {
+namespace ttnn::experimental::prim {
 
 RecvAsyncMeshWorkloadFactory::cached_mesh_workload_t RecvAsyncMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const RecvAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const Tensor& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     ttnn::MeshCoordinateRangeSet workload_coords =
@@ -43,15 +43,14 @@ RecvAsyncMeshWorkloadFactory::cached_mesh_workload_t RecvAsyncMeshWorkloadFactor
 
 ttnn::device_operation::CachedProgram<RecvAsyncMeshWorkloadFactory::shared_variables_t>
 RecvAsyncMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const RecvAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/) {
+    const Tensor& tensor_args,
+    std::vector<Tensor>& /*tensor_return_value*/) {
     auto mesh_socket = operation_attributes.mesh_socket;
-    const auto& output_tensor = tensor_args.output_tensor;
+    const auto& output_tensor = tensor_args;
     auto* mesh_device = output_tensor.device();
-    IDevice* target_device =
-        mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.output_tensor.device();
+    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.device();
 
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
@@ -340,9 +339,9 @@ RecvAsyncMeshWorkloadFactory::create_at(
 
 void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    [[maybe_unused]] tensor_return_value_t& tensor_return_value) {
+    const RecvAsyncParams& operation_attributes,
+    const Tensor& tensor_args,
+    [[maybe_unused]] std::vector<Tensor>& tensor_return_value) {
     // Update runtime arguments for each program in the mesh workload
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -353,7 +352,7 @@ void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
         const auto& socket_storage_in_dram = shared_vars.socket_storage_in_dram;
 
         const auto& mesh_socket = operation_attributes.mesh_socket;
-        const auto& output_tensor = tensor_args.output_tensor;
+        const auto& output_tensor = tensor_args;
 
         if (!socket_storage_in_dram) {
             for (const auto& receiver_core_coord : receiver_core_coords) {
@@ -374,4 +373,4 @@ void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::recv_async
+}  // namespace ttnn::experimental::prim

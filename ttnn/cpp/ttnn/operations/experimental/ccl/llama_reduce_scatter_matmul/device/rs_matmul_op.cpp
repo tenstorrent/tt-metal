@@ -23,7 +23,7 @@ Matmul_RS::program_factory_t Matmul_RS::select_program_factory(
 void Matmul_RS::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.second_weight_tensor.has_value()) {
-        operation_attributes_t::matmul_device_t::validate_on_program_cache_hit(
+        operation_attributes_t::matmul_device_t::validate_on_program_cache_miss(
             operation_attributes.matmul,
             {{tensor_args.matmul.input_tensor,
               tensor_args.matmul.weight_tensor,
@@ -31,7 +31,7 @@ void Matmul_RS::validate_on_program_cache_hit(
              {std::nullopt},
              {}});
     } else {
-        operation_attributes_t::matmul_device_t::validate_on_program_cache_hit(
+        operation_attributes_t::matmul_device_t::validate_on_program_cache_miss(
             operation_attributes.matmul,
             {{tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {std::nullopt}, {}});
     }
@@ -148,7 +148,7 @@ ttnn::operations::experimental::ccl::Matmul_RS::tensor_return_value_t llama_rs_m
     }
 
     bool user_run_batched = ttnn::operations::matmul::utilities::is_input_batched(weight_tensor.logical_shape());
-    auto matmul_struct = operations::matmul::create_matmul_attributes(
+    auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input_tensor,
         weight_tensor,
         /*parameters=*/

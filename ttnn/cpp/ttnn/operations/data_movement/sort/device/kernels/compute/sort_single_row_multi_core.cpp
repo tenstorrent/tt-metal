@@ -2,16 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
+#include "api/compute/eltwise_binary.h"
 
 #include "sort_common.hpp"
 
-namespace NAMESPACE {
 /*
 This kernel implements a parallel Bitonic Sort for a single row of tiles, distributing the work across multiple cores
 for efficiency.
@@ -47,7 +46,7 @@ direction (ascending or descending), and writes the results back to the output m
 - Synchronization between cores is handled using semaphores to guarantee correct ordering and data consistency.
 - The coordinator core orchestrates stage transitions and manages memory access.
 */
-void MAIN {
+void kernel_main() {
     // Compile time args
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(1);
@@ -258,4 +257,3 @@ void MAIN {
         }  // stage loop
     }  // h loop
 }
-}  // namespace NAMESPACE

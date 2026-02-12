@@ -758,7 +758,7 @@ def eltwise_div(
     y,
     *args,
     fast_and_approximate_mode,
-    round_mode,
+    rounding_mode,
     device,
     dtype,
     layout,
@@ -772,7 +772,7 @@ def eltwise_div(
         t0,
         t1,
         fast_and_approximate_mode=fast_and_approximate_mode,
-        round_mode=round_mode,
+        rounding_mode=rounding_mode,
         memory_config=output_mem_config,
     )
 
@@ -830,7 +830,7 @@ def eltwise_rfloor_div(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.rdiv(t0, value, round_mode="floor", memory_config=output_mem_config)
+    t1 = ttnn.rdiv(t0, value, rounding_mode="floor", memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -866,7 +866,7 @@ def eltwise_unary_rdiv_trunc(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.rdiv(t0, value, round_mode="trunc", memory_config=output_mem_config)
+    t1 = ttnn.rdiv(t0, value, rounding_mode="trunc", memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -1352,7 +1352,7 @@ def eltwise_unary_div(
     *args,
     scalar,
     fast_and_approximate_mode,
-    round_mode,
+    rounding_mode,
     device,
     dtype,
     layout,
@@ -1365,7 +1365,7 @@ def eltwise_unary_div(
         t0,
         scalar,
         fast_and_approximate_mode=fast_and_approximate_mode,
-        round_mode=round_mode,
+        rounding_mode=rounding_mode,
         memory_config=output_mem_config,
     )
 

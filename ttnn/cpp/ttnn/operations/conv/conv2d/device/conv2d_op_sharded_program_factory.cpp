@@ -26,7 +26,13 @@
 #include <utility>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-namespace ttnn::operations::conv::conv2d::program {
+namespace ttnn::prim {
+
+namespace unary = ttnn::operations::unary;
+using ttnn::operations::conv::conv_skip_mcast;
+using ttnn::operations::conv::get_num_cores_channels_from_parallel_config;
+using ttnn::operations::conv::is_1d_depthwise_conv;
+using ttnn::operations::conv::SkipMcast;
 
 // Compute kernel addressing mode divides addresses with 16
 constexpr uint32_t COMPUTE_KERNEL_ADDRESS_DIVISOR = 16;
@@ -164,9 +170,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
 }
 
 Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
@@ -1173,16 +1177,15 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         uint32_t core_index = 0;
         for (const CoreRange& core_range : input_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
-                std::vector<uint32_t> reader_rt_args{core_index};
+                uint32_t reader_remaining_tiles_to_push = 0;
                 if (enable_activation_reuse) {
-                    uint32_t reader_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         reader_remaining_tiles_to_push = activation_reuse_config.partial_core_reader_tiles_to_push;
                     } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                         reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
                     }
-                    reader_rt_args.push_back(reader_remaining_tiles_to_push);
                 }
+                std::vector<uint32_t> reader_rt_args{core_index, reader_remaining_tiles_to_push};
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
                 core_index++;
             }
@@ -1378,9 +1381,9 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
 
 void Conv2dShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const Conv2dParams& /*operation_attributes*/,
+    const Conv2dInputs& tensor_args,
+    Tensor& output_tensor) {
     auto* src_buffer_a = tensor_args.a.buffer();
     auto* src_buffer_b = tensor_args.b.buffer();
 
@@ -1409,4 +1412,4 @@ void Conv2dShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::conv::conv2d::program
+}  // namespace ttnn::prim

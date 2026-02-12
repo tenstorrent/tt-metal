@@ -106,7 +106,10 @@ static void RunTest(
                     }
                     break;
                 case HalProcessorClassType::COMPUTE:
-                    TT_ASSERT(0 <= processor_id && processor_id < 3);
+                    TT_FATAL(
+                        0 <= processor_id && processor_id < 3,
+                        "processor_id {} must be 0, 1, or 2 for COMPUTE",
+                        processor_id);
                     assert_kernel = CreateKernel(
                         program_,
                         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
@@ -157,7 +160,7 @@ static void RunTest(
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
     std::string expected;
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        const uint32_t line_num = 66;
+        const uint32_t line_num = 63;
         expected = fmt::format(
             "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
             "Note that file name reporting is not yet implemented, and the reported line number for the assert may be "

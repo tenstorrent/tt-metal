@@ -211,9 +211,10 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
     }
 
     // For each active routing plane, check which of the 4 directions (E, W, N, S) are missing
+    // Skip Z direction - it's for 3D routing and not relevant for missing directions on a chip
     std::set<std::pair<routing_plane_id_t, eth_chan_directions>> missing_plane_dirs;
     for (auto routing_plane_id : active_routing_planes) {
-        for (uint8_t dir_idx = 0; dir_idx < eth_chan_directions::COUNT; dir_idx++) {
+        for (uint8_t dir_idx = 0; dir_idx < eth_chan_directions::Z; dir_idx++) {
             auto dir = static_cast<eth_chan_directions>(dir_idx);
             if (!active_plane_directions.contains({routing_plane_id, dir})) {
                 missing_plane_dirs.insert({routing_plane_id, dir});

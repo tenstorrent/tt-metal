@@ -2,11 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr auto cb_param_in = tt::CBIndex::c_0;
     constexpr auto cb_grad = tt::CBIndex::c_1;
     constexpr auto cb_momentum_in = tt::CBIndex::c_2;
@@ -89,4 +87,3 @@ void MAIN {
         sub_tiles_to_cb(cb_param_in, cb_tmp3, cb_param_out, 0, 0, /*pop0=*/1, /*pop1=*/1);
     }
 }
-}  // namespace NAMESPACE

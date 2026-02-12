@@ -2,20 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/binary_max_min.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/binary_max_min.h"
 
 #include "sort_common.hpp"
 
 #include <cstdint>
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile time args
     constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(0);
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
@@ -267,5 +266,4 @@ void MAIN {
         // Indexes tensor
         transpose_and_pack(index_tensor_transposed_cb_index, index_tensor_output_cb_index, number_of_tiles_per_core);
     }  // h loop
-}  // MAIN
-}  // namespace NAMESPACE
+}  // void kernel_main()

@@ -161,11 +161,13 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
 }
 }  // namespace
 
-namespace slice::program {
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
 
 // Slice Tile Program Factory implementation
 SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
@@ -216,7 +218,7 @@ SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
-    set_slice_runtime_args_tile<true>(
+    ttnn::operations::data_movement::set_slice_runtime_args_tile<true>(
         input,
         output,
         args.slice_start,
@@ -240,10 +242,7 @@ SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
 }
 
 void SliceTileProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const Tensor& src_tensor = tensor_args.input;
     const Tensor& dst_tensor = output;
     const auto& slice_start = args.slice_start;
@@ -256,7 +255,7 @@ void SliceTileProgramFactory::override_runtime_arguments(
             ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    set_slice_runtime_args_tile<false>(
+    ttnn::operations::data_movement::set_slice_runtime_args_tile<false>(
         src_tensor,
         dst_tensor,
         slice_start,
@@ -271,6 +270,4 @@ void SliceTileProgramFactory::override_runtime_arguments(
         cached_program.shared_variables.accumulated_total_per_dim);
 }
 
-}  // namespace slice::program
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

@@ -39,8 +39,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
                const std::optional<bool> share_cache,
                const std::optional<const ttnn::Tensor>& page_table,
                const uint32_t batch_offset,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords) {
+               const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+               const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
                 return self(
                     cache_tensor,
                     input_tensor,
@@ -103,8 +103,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
                const std::optional<bool> share_cache,
                const std::optional<const ttnn::Tensor>& page_table,
                const uint32_t batch_offset,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords) {
+               const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+               const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
                 return self(
                     cache_tensor1,
                     input_tensor1,
@@ -154,10 +154,10 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
                const ttnn::Tensor& cache_tensor,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& page_table,
-               std::optional<const ttnn::Tensor> batch_idx_tensor,
+               const std::optional<const ttnn::Tensor>& batch_idx_tensor,
                const uint32_t batch_idx,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords) {
+               const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+               const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
                 return self(
                     cache_tensor,
                     input_tensor,

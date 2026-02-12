@@ -99,7 +99,8 @@ class TtTransformer2DModel(LightweightModule):
             **self.groupnorm_config,
         )
 
-        if C == 1280:
+        # C=1280 appears only in base, C=1536/768 appear only in refiner
+        if C == 1280 or C == 1536 or C == 768:
             # For 1280 channels shard layout will be over 64 cores, but MM runs on 40
             # To avoid assertion error we move data to L1 interleaved
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)

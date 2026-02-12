@@ -8,18 +8,16 @@
 #include "ttnn/operations/data_movement/split/device/split_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/split/device/split_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::split {
+namespace ttnn::prim {
 
 struct SplitDeviceOperation {
-    using operation_attributes_t = split::operation_attributes_t;
-    using tensor_args_t = split::tensor_args_t;
-    using spec_return_value_t = split::spec_return_value_t;
-    using tensor_return_value_t = split::tensor_return_value_t;
-    using program_factory_t = std::variant<program::SplitProgramFactory>;
+    using operation_attributes_t = SplitParams;
+    using tensor_args_t = SplitInputs;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+    using program_factory_t = std::variant<SplitProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -31,7 +29,7 @@ struct SplitDeviceOperation {
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
-}  // namespace ttnn::operations::data_movement::split
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 std::vector<ttnn::Tensor> split(

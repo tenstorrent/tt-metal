@@ -18,14 +18,12 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::untilize_with_unpadding::program {
+namespace ttnn::prim {
 
 UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    const auto& a = tensor_args.input_tensor;
+    const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
+    const auto& a = input;
     bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
@@ -110,8 +108,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         unpack_to_dest_mode[tt::CBIndex::c_0] =
             UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
@@ -209,15 +206,15 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
 
 void UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& tensor_return_value) {
+    const UntilizeWithUnpaddingParams& /*operation_attributes*/,
+    const Tensor& input,
+    const Tensor& output) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     const auto& ncores = shared_vars.ncores;
     const auto& cores = shared_vars.cores;
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
 
@@ -234,4 +231,4 @@ void UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::override_runtime_a
     }
 }
 
-}  // namespace ttnn::operations::data_movement::untilize_with_unpadding::program
+}  // namespace ttnn::prim

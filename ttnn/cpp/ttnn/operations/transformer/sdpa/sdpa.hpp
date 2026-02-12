@@ -27,13 +27,28 @@ struct ExecuteScaledDotProductAttention {
         const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
 };
 
+/// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
+/// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
 struct ExecuteChunkedScaledDotProductAttention {
+    /// Legacy: chunk start index as scalar.
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
         const ttnn::Tensor& page_table_tensor,
         int64_t chunk_start_idx,  // Must be a multiple of program_config.q_chunk_size
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+    /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        const ttnn::Tensor& input_tensor_v,
+        const ttnn::Tensor& page_table_tensor,
+        const ttnn::Tensor& chunk_start_idx_tensor,
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
@@ -116,7 +131,9 @@ struct ExecuteRingDistributedScaledDotProductAttention {
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<SDPAProgramConfig>& program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<ttnn::Tensor>& page_table = std::nullopt,
+        std::optional<int64_t> chunk_start_idx = std::nullopt);
 };
 
 }  // namespace operations::transformer

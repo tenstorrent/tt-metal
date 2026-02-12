@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/ema.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/ema.h"
 
 /*
  * -------------------------------------------------------------------------------------------------
@@ -63,8 +63,7 @@ inline void ema_sfpi_tile(
 // ------------------------------------------------------------------------------------------------
 */
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile time args
     // -----------------
     constexpr auto total_batches_per_core = get_compile_time_arg_val(0);
@@ -121,4 +120,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

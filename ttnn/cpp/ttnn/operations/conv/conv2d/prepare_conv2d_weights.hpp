@@ -16,6 +16,8 @@ struct ParallelConfig;
 
 namespace ttnn::operations::conv::conv2d {
 
+using ttnn::prim::Conv2dSliceConfig;
+
 // Device validation functions for conv2d tensors (after preparation/on device)
 bool is_valid_device_conv_weights(
     const ttnn::Tensor& weight_tensor,

@@ -59,6 +59,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <impl/debug/noc_debugging.hpp>
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -730,6 +731,8 @@ void InitDeviceProfiler(IDevice* device) {
         } else {
             profiler_state_manager->device_profiler_map.try_emplace(device_id, device, false);
         }
+    } else {
+        profiler_state_manager->device_profiler_map.at(device_id).clearStateForDeviceReinit();
     }
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
@@ -750,7 +753,7 @@ void InitDeviceProfiler(IDevice* device) {
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
 
-    if (MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled()) {
+    if (MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
         // Split into two buffers. Assign the active DRAM buffer address to all control buffer indices.
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
@@ -797,6 +800,7 @@ bool onlyProfileDispatchCores(const ProfilerReadState state) {
            state == ProfilerReadState::ONLY_DISPATCH_CORES;
 }
 
+#if defined(TRACY_ENABLE)
 // Shared implementation for reading device profiler results
 static void ReadDeviceProfilerResultsImpl(
     distributed::MeshDevice* mesh_device,
@@ -804,7 +808,6 @@ static void ReadDeviceProfilerResultsImpl(
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
-#if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState()) {
         return;
@@ -863,8 +866,8 @@ static void ReadDeviceProfilerResultsImpl(
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
-#endif
 }
+#endif
 
 void ReadDeviceProfilerResults(
     distributed::MeshDevice* mesh_device,
@@ -886,10 +889,31 @@ void ReadDeviceProfilerResultsInternal(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
-    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    const std::optional<ProfilerOptionalMetadata>& metadata,
+    bool include_l1) {
     // Note: This function bypasses the getDeviceDebugDumpEnabled() check
     // It is intended only for use by ProfilerStateManager during cleanup
-    ReadDeviceProfilerResultsImpl(mesh_device, device, virtual_cores, state, metadata);
+#if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
+
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+        MetalContext::instance().profiler_state_manager();
+    auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
+    TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
+    DeviceProfiler& profiler = profiler_it->second;
+
+    TT_FATAL(
+        !MetalContext::instance().dprint_server(), "Debug print server is running, cannot read device profiler data");
+
+    if (include_l1 || MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+        profiler.readResults(
+            mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else {
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+    }
+#endif
 }
 
 bool dumpDeviceProfilerDataMidRun(const ProfilerReadState state) {
@@ -1092,12 +1116,6 @@ void ReadMeshDeviceProfilerResults(
         return;
     }
 
-    // Manual reading of device profiler results is not supported when there is already another thread reading the
-    // results
-    if (getDeviceDebugDumpEnabled()) {
-        return;
-    }
-
     TT_ASSERT(mesh_device.is_initialized());
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
@@ -1121,6 +1139,20 @@ void ReadMeshDeviceProfilerResults(
         for (uint8_t cq_id = 0; cq_id < mesh_device.num_hw_cqs(); ++cq_id) {
             mesh_device.mesh_command_queue(cq_id).finish();
         }
+    }
+
+    // At this point the kernels are done executing
+    // Manual reading of device profiler results is not supported when there is already another thread reading the
+    // results. Signal the debug dump thread to do a read instead.
+    if (getDeviceDebugDumpEnabled()) {
+        if (auto& profiler_state_manager = MetalContext::instance().profiler_state_manager()) {
+            profiler_state_manager->signal_debug_dump_read();
+        }
+        if (auto& noc_debug_state = MetalContext::instance().noc_debug_state()) {
+            noc_debug_state->finish_cores();
+            noc_debug_state->print_aggregated_errors();
+        }
+        return;
     }
 
     for (IDevice* device : mesh_device.get_devices()) {

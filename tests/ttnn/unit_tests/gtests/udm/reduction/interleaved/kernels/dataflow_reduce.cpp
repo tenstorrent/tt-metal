@@ -27,13 +27,10 @@
 #include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
 #include "tests/ttnn/unit_tests/gtests/udm/nd_iter_args.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "api/debug/dprint.h"
 
 void kernel_main() {
-    // TODO(#34735): move fabric counter init to fw kernel init
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     // ==================== Create MeshTensorAccessor from Compile-Time Args ====================
     // Input tensor accessor: starts at offset 0
     auto input_args = MeshTensorAccessorArgs<0, 0>();
@@ -129,7 +126,4 @@ void kernel_main() {
             output_page_id -= iter_args.dim_pages[d] * output_strides[d];
         }
     }
-
-    // TODO(#34736): remove once we have persistent connection across programs
-    tt::tt_fabric::udm::close_fabric_connection();
 }

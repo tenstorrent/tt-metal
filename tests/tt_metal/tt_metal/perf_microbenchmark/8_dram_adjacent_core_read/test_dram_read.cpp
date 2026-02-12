@@ -280,15 +280,12 @@ bool validation(
 }
 
 uint32_t get_dram_bandwidth(tt::ARCH arch) {
-    constexpr uint32_t GS_DRAM_BANDWIDTH_GB_PER_SEC = 100;
     constexpr uint32_t WH_DRAM_BANDWIDTH_GB_PER_SEC = 384;
     constexpr uint32_t BH_DRAM_BANDWIDTH_GB_PER_SEC = 512;
 
     uint32_t dram_bandwidth_gb_per_sec = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         dram_bandwidth_gb_per_sec = WH_DRAM_BANDWIDTH_GB_PER_SEC;
-    } else if (arch == tt::ARCH::GRAYSKULL) {
-        dram_bandwidth_gb_per_sec = GS_DRAM_BANDWIDTH_GB_PER_SEC;
     } else if (arch == tt::ARCH::BLACKHOLE) {
         dram_bandwidth_gb_per_sec = BH_DRAM_BANDWIDTH_GB_PER_SEC;
     }
@@ -362,7 +359,7 @@ int main(int argc, char** argv) {
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception: {}", e.what());
         }
 
         if (use_device_profiler) {
@@ -414,7 +411,7 @@ int main(int argc, char** argv) {
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
-        TT_ASSERT(
+        TT_FATAL(
             device->arch() == ARCH::WORMHOLE_B0 or device->arch() == ARCH::BLACKHOLE, "device must be wh_b0 or bh");
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);

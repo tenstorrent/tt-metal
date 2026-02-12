@@ -12,12 +12,12 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace ttnn::operations::experimental::create_qkv_heads::program {
+namespace ttnn::experimental::prim {
 
 CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const CreateQKVHeadsParams& operation_attributes,
+    const CreateQKVHeadsInputs& tensor_args,
+    CreateQKVHeadsResult& output) {
     const auto& input_tensor = tensor_args.input;
     auto& [output_q, output_k, output_v] = output;
 
@@ -214,9 +214,9 @@ CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::cre
 
 void CreateQKVHeadsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const CreateQKVHeadsParams& /*operation_attributes*/,
+    const CreateQKVHeadsInputs& tensor_args,
+    CreateQKVHeadsResult& output) {
     const auto& input_tensor = tensor_args.input;
     auto& [output_q, output_k, output_v] = output;
 
@@ -237,4 +237,4 @@ void CreateQKVHeadsProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, cb_out2_id, *out2_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::create_qkv_heads::program
+}  // namespace ttnn::experimental::prim

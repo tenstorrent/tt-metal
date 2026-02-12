@@ -2,187 +2,98 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
-#include <cerrno>
-#include <fmt/base.h>
-#include <cstdlib>
-#include <sys/types.h>
+#include <cstdint>
+#include <vector>
+
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
-#include <cstdint>
-#include <cstring>
-#include <exception>
-#include <map>
-#include <memory>
-#include <utility>
-#include <variant>
-#include <vector>
-
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include <tt-metalium/device.hpp>
-#include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-//////////////////////////////////////////////////////////////////////////////////////////
-// TODO: explain what test does
-//////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
-namespace unary_datacopy {
-// #include "hlks/eltwise_copy.cpp"
-//  FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    std::int32_t per_core_tile_cnt;
-};
-}  // namespace unary_datacopy
+TEST_F(MeshDeviceSingleCardFixture, DatacopyOutputInL1) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    Program program = CreateProgram();
 
-int main() {
-    bool pass = true;
+    CoreCoord core = {0, 0};
 
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    uint32_t single_tile_size = 2 * 1024;
+    uint32_t num_tiles = 32;
+    uint32_t buffer_size = single_tile_size * num_tiles;
 
-    try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    InterleavedBufferConfig dram_config{
+        .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::DRAM};
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+    InterleavedBufferConfig l1_config{
+        .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::L1};
 
-        CoreCoord core = {0, 0};
+    auto src_dram_buffer = CreateBuffer(dram_config);
+    auto dst_l1_buffer = CreateBuffer(l1_config);
 
-        uint32_t single_tile_size = 2 * 1024;
-        uint32_t num_tiles = 32;
-        uint32_t buffer_size =
-            single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    auto l1_dst_noc_xy = dev->virtual_core_from_logical_core(
+        dst_l1_buffer->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
-        tt_metal::InterleavedBufferConfig dram_config{
-            .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    uint32_t num_input_tiles = 8;
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_src0_config);
 
-        tt_metal::InterleavedBufferConfig l1_config{
-            .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = tt_metal::BufferType::L1};
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t num_output_tiles = 1;
+    CircularBufferConfig cb_output_config =
+        CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(ouput_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_output_config);
 
-        auto src_dram_buffer = CreateBuffer(dram_config);
+    auto unary_reader_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        auto dst_l1_buffer = CreateBuffer(l1_config);
+    auto unary_writer_kernel = CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary_1.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        auto l1_dst_noc_xy = device->virtual_core_from_logical_core(
-            dst_l1_buffer->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
+    vector<uint32_t> compute_kernel_args = {uint(num_tiles)};
 
-        // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
-        // CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math
-        // kernel, input CB and reader
-        uint32_t src0_cb_index = tt::CBIndex::c_0;
-        uint32_t num_input_tiles = 8;
-        tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(
-                num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src0_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
+        core,
+        ComputeConfig{.compile_args = compute_kernel_args});
 
-        uint32_t ouput_cb_index = tt::CBIndex::c_16;
-        uint32_t num_output_tiles = 1;
-        tt_metal::CircularBufferConfig cb_output_config =
-            tt_metal::CircularBufferConfig(
-                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(ouput_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    // Execute
+    std::vector<uint32_t> src_vec =
+        create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-        auto unary_reader_kernel = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    SetRuntimeArgs(program, unary_reader_kernel, core, {src_dram_buffer->address(), 0, num_tiles});
+    SetRuntimeArgs(
+        program,
+        unary_writer_kernel,
+        core,
+        {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
 
-        auto unary_writer_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary_1.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    detail::LaunchProgram(dev, program);
 
-        vector<uint32_t> compute_kernel_args = {
-            uint(num_tiles)  // per_core_tile_cnt
-        };
+    std::vector<uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_l1_buffer, result_vec);
 
-        tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
-            core,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-            buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_reader_kernel,
-            core,
-            {src_dram_buffer->address(),
-            0,
-            num_tiles});
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel,
-            core,
-            {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
-
-        tt_metal::detail::LaunchProgram(device, program);
-
-        std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_l1_buffer, result_vec);
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Validation & Teardown
-        ////////////////////////////////////////////////////////////////////////////
-
-        pass &= (src_vec == result_vec);
-
-        pass &= tt_metal::CloseDevice(device);
-
-    } catch (const std::exception& e) {
-        pass = false;
-        // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
-    }
-
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Did not pass test");
-
-    return 0;
+    // Validation
+    EXPECT_EQ(src_vec, result_vec);
 }

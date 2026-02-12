@@ -6,12 +6,10 @@
 #include "embedding_program_factory_common.hpp"
 #include <tt-metalium/tt_align.hpp>
 
-namespace ttnn::operations::embedding::program {
+namespace ttnn::prim {
 
 EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
-    const embedding::operation_attributes_t& operation_attributes,
-    const embedding::tensor_args_t& tensor_args,
-    embedding::tensor_return_value_t& tensor_return_value) {
+    const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     auto& output = tensor_return_value;
@@ -62,20 +60,19 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
+    uint32_t num_blocks_per_core_group_1, num_blocks_per_core_group_2;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     bool row_major = false;
     if (output_sharded) {
         const auto& shard_spec = output.shard_spec().value();
         all_cores = shard_spec.grid;
         core_group_1 = all_cores;
-        num_cores = all_cores.num_cores();
         num_blocks_per_core_group_1 = shard_spec.shape[0];
         num_blocks_per_core_group_2 = 0;
         row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     } else {
         std::tie(
-            num_cores,
+            std::ignore,
             all_cores,
             core_group_1,
             core_group_2,
@@ -166,7 +163,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+            "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
@@ -224,9 +221,9 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
 void EmbeddingsRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const embedding::operation_attributes_t& /*operation_attributes*/,
-    const embedding::tensor_args_t& tensor_args,
-    embedding::tensor_return_value_t& tensor_return_value) {
+    const EmbeddingParams& /*operation_attributes*/,
+    const EmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;
@@ -260,4 +257,4 @@ void EmbeddingsRMProgramFactory::override_runtime_arguments(
         }
     }
 }
-}  // namespace ttnn::operations::embedding::program
+}  // namespace ttnn::prim

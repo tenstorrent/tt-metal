@@ -13,7 +13,7 @@
 #include <nanobind/stl/vector.h>  // split returns a vector
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "split.hpp"
 
@@ -39,36 +39,32 @@ void bind_split(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor
         )doc";
 
-    using OperationType = decltype(ttnn::split);
-    ttnn::bind_registered_operation(
+    // Bind the free functions directly - no struct!
+    ttnn::bind_function<"split">(
         mod,
-        ttnn::split,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int64_t split_size,
-               const int64_t dim,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, split_size, dim, memory_config);
-            },
+
+        // Overload 1: single split_size (int64_t)
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, int64_t, int64_t, const std::optional<ttnn::MemoryConfig>&>(
+                &ttnn::split),
             nb::arg("input_tensor"),
             nb::arg("split_size"),
             nb::arg("dim") = 0,
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()},
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int64_t>& split_sizes,
-               const int64_t dim,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, split_sizes, dim, memory_config);
-            },
+            nb::arg("memory_config") = nb::none()),
+
+        // Overload 2: list of split_sizes (SmallVector<int64_t>)
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::SmallVector<int64_t>&,
+                int64_t,
+                const std::optional<ttnn::MemoryConfig>&>(&ttnn::split),
             nb::arg("input_tensor"),
             nb::arg("split_size"),
             nb::arg("dim") = 0,
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 }  // namespace ttnn::operations::data_movement::detail

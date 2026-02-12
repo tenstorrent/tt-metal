@@ -1,0 +1,106 @@
+# This file defines the test matrix for the Galaxy perf tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   model: Model identifier for filtering (workflow_dispatch model selection).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+# Optional: arch, save-perf-data, tracy, model-type (for artifact naming).
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# Wormhole Galaxy model perf tests
+- name: Galaxy DiT SD3.5 model perf tests
+  cmd: pytest models/tt_dit/tests/models/sd35/test_performance_sd35.py -k "4x8cfg1sp0tp1" --timeout=480
+  model: sd35
+  skus:
+    wh_galaxy:
+      timeout: 50
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: SD3.5
+
+- name: Galaxy DiT Flux.1 model perf tests
+  cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "wh_4x8sp0tp1" --timeout=500
+  model: flux1-dev
+  skus:
+    wh_galaxy:
+      timeout: 50
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: Flux.1-Dev
+
+- name: Galaxy DiT Motif model perf tests
+  cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_performance_motif.py -k "4x8cfg1sp0tp1" --timeout=1000
+  model: motif
+  skus:
+    wh_galaxy:
+      timeout: 15
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: Motif
+
+- name: Galaxy DiT Wan2.2 model perf tests
+  cmd: |
+    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8sp1tp0 and resolution_720p and t2v" --timeout=1200
+  model: wan2-2
+  skus:
+    wh_galaxy:
+      timeout: 35
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: Wan2.2
+
+- name: Galaxy Mochi model perf tests
+  cmd: |
+    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    export NO_PROMPT=1
+    pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 " --timeout=1000
+  model: mochi
+  skus:
+    wh_galaxy:
+      timeout: 50
+  owner_id: U09ELB03XRU # Stephen Osborne
+  team: models
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: mochi
+
+- name: Galaxy DiT Qwen-Image model perf tests
+  cmd: |
+    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x8" --timeout=1000
+  model: qwenimage
+  skus:
+    wh_galaxy:
+      timeout: 20
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: QwenImage
+
+- name: Galaxy Sentence Bert tests
+  cmd: |
+    pytest --timeout 600 models/demos/tg/sentence_bert/tests/device_perf_test.py
+    python3 models/perf/merge_perf_results.py
+  model: sentence_bert
+  skus:
+    wh_galaxy:
+      timeout: 30
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  arch: wormhole_b0
+  save-perf-data: false
+  model-type: sentence_bert

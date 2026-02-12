@@ -12,18 +12,13 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::experimental::prim {
 
 RingAttentionAllGatherAsyncDeviceOperation::program_factory_t
 RingAttentionAllGatherAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // Only one program factory available
     return RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory{};
-}
-
-void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
@@ -160,18 +155,14 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "compute_program_hash is called");
-    const auto& input_tensors = tensor_args.input_tensor;
-    auto input_shape = input_tensors[0].padded_shape();
-    auto input_memory_layout = input_tensors[0].layout();
-    auto input_dtype = input_tensors[0].dtype();
-    auto input_memory_config = input_tensors[0].memory_config();
+    log_trace(tt::LogOp, "RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash is called");
 
-    bool has_sub_device_id = operation_attributes.sub_device_id.has_value();
-    auto worker_cores = has_sub_device_id ? input_tensors[0].device()->worker_cores(
-                                                tt::tt_metal::HalProgrammableCoreType::TENSIX,
-                                                operation_attributes.sub_device_id.value())
-                                          : CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    auto subdevice_id = operation_attributes.sub_device_id;
+    auto* mesh_device = tensor_args.input_tensor.at(0).device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsyncDeviceOperation>(
         operation_attributes.dim,
@@ -180,12 +171,9 @@ tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_progra
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
-        has_sub_device_id,
-        worker_cores,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
 std::tuple<
@@ -238,4 +226,4 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
         tensor_args_t{.input_tensor = input_tensors, .persistent_output_buffer = optional_output_tensors}};
 }
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::experimental::prim

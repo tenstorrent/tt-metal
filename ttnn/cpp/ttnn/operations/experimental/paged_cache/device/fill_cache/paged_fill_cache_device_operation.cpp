@@ -8,20 +8,15 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::fill {
+namespace ttnn::experimental::prim {
 
 PagedFillCacheDeviceOperation::program_factory_t PagedFillCacheDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
     if (args.mesh_coords.has_value()) {
-        return program::PagedFillCacheMeshWorkloadFactory{};
+        return PagedFillCacheMeshWorkloadFactory{};
     }
-    return program::PagedFillCacheProgramFactory{};
-}
-
-void PagedFillCacheDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    return PagedFillCacheProgramFactory{};
 }
 
 void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
@@ -61,13 +56,13 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t PagedFillCacheDeviceOperation::compute_output_specs(
+TensorSpec PagedFillCacheDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // In-place operation, return cache tensor's spec
     return tensor_args.cache_tensor.tensor_spec();
 }
 
-tensor_return_value_t PagedFillCacheDeviceOperation::create_output_tensors(
+Tensor PagedFillCacheDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // In-place operation, return the cache tensor
     return tensor_args.cache_tensor;
@@ -83,19 +78,18 @@ tt::stl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
         args.mesh_coords, tensor_args, program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::fill
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::paged_cache::fill::PagedFillCacheDeviceOperation::tensor_return_value_t
-paged_fill_cache(
+Tensor paged_fill_cache(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const Tensor& page_table,
     const std::optional<Tensor>& batch_idx_tensor,
     uint32_t batch_idx_fallback,
     const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords) {
-    using OperationType = ttnn::operations::experimental::paged_cache::fill::PagedFillCacheDeviceOperation;
+    using OperationType = ttnn::experimental::prim::PagedFillCacheDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .batch_idx_fallback = batch_idx_fallback,

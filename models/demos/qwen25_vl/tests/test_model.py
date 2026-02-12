@@ -92,7 +92,7 @@ def test_vision_model_inference(
     # reference_model.load_state_dict(model_args.reference_vision_model().state_dict(), strict=False)
     # FIXME: state_dict = model_args.load_state_dict()
     state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
-    state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
+    state_dict = convert_hf_to_meta(state_dict, model_args.vision_head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
@@ -108,7 +108,7 @@ def test_vision_model_inference(
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,
-        head_dim=model_args.head_dim,
+        head_dim=model_args.vision_head_dim,
         spatial_merge_size=model_args.hf_config.vision_config.spatial_merge_size,
         window_size=model_args.hf_config.vision_config.window_size,
         patch_size=model_args.hf_config.vision_config.patch_size,

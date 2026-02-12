@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -39,6 +40,7 @@ struct AllFromAllConfig {
     DataFormat l1_data_format = DataFormat::Invalid;
     NOC noc_id = NOC::NOC_1;
     uint32_t num_virtual_channels = 1;
+    bool use_2_0_api = false;
 
     // TODO: Add the following parameters
     //  1. Virtual Channel (only useful for unicast)
@@ -52,7 +54,7 @@ struct AllFromAllConfig {
 /// @return Status of the test execution (e.g., success or failure).
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFromAllConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     /* ================ SETUP ================ */
 
     // Program
@@ -128,10 +130,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
         (uint32_t)test_config.num_virtual_channels,
     };
 
+    std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/all_from_all/kernels/";
+    std::string requestor_kernel_filename = "requestor";
+    if (test_config.use_2_0_api) {
+        requestor_kernel_filename += "_2_0";
+    }
+    std::string requestor_kernel_path = kernels_dir + requestor_kernel_filename + ".cpp";
+
     // Create kernels
     auto requestor_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/all_from_all/kernels/requestor.cpp",
+        requestor_kernel_path,
         mst_logical_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -243,7 +252,8 @@ void packet_sizes_test(
     CoreCoord mst_start_coord,
     CoreCoord sub_start_coord,
     CoreCoord mst_grid_size,
-    CoreCoord sub_grid_size) {
+    CoreCoord sub_grid_size,
+    bool use_2_0_api = false) {
     NOC noc_id = NOC::NOC_1;
 
     auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
@@ -252,8 +262,9 @@ void packet_sizes_test(
     /* Running the Test */
 
     uint32_t max_transactions_per_subordinate = 256;
-    uint32_t max_reservable_pages_per_transaction =
-        mesh_device->get_device(0)->arch() == ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
+    uint32_t max_reservable_pages_per_transaction = mesh_device->impl().get_device(0)->arch() == ARCH::BLACKHOLE
+                                                        ? 1024
+                                                        : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_transactions_per_subordinate = 1;
          num_of_transactions_per_subordinate <= max_transactions_per_subordinate;
@@ -282,6 +293,7 @@ void packet_sizes_test(
 
                 .l1_data_format = DataFormat::Float16_b,
                 .noc_id = noc_id,
+                .use_2_0_api = use_2_0_api,
             };
 
             // Run
@@ -291,7 +303,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -394,7 +406,7 @@ TO-DO:
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     uint32_t test_case_id = 310;
 
     /* Parameters */
@@ -413,7 +425,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 311;
 
@@ -517,7 +529,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
     uint32_t test_case_id = 318;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     // Parameters
     CoreCoord mst_start_coord = {0, 0};
@@ -539,6 +551,23 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
         num_of_transactions_per_subordinate,
         pages_per_transaction,
         num_virtual_channels);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes2_0) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_device(0);
+
+    uint32_t test_case_id = 319;
+
+    /* Parameters */
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+
+    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+
+    unit_tests::dm::all_from_all::packet_sizes_test(
+        mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size, true);
 }
 
 }  // namespace tt::tt_metal

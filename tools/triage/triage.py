@@ -40,6 +40,7 @@ Owner:
 # Check if tt-exalens is installed
 import inspect
 import os
+import shutil
 import threading
 from time import time
 import traceback
@@ -74,7 +75,8 @@ except ImportError as e:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     requirements_path = os.path.join(script_dir, "requirements.txt")
     print(f"Module '{e}' not found. Please install requirements.txt:")
-    print(f"  {GREEN}pip install -r {requirements_path}{RST}")
+    pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+    print(f"  {GREEN}{pip_cmd} install -r {requirements_path}{RST}")
     exit(1)
 
 # Import necessary libraries
@@ -90,6 +92,7 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
 
@@ -223,6 +226,8 @@ class TriageScript:
                 else:
                     raise TTTriageError("Data provider script did not return any data.")
             return result
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception as e:
             if log_error:
                 self.failed = True
@@ -495,7 +500,7 @@ def log_check(success: bool, message: str) -> None:
 
 
 def log_check_device(device: Device, success: bool, message: str) -> None:
-    formatted_message = f"Device {device._id}: {message}"
+    formatted_message = f"Device {device.id}: {message}"
     log_check(success, formatted_message)
 
 

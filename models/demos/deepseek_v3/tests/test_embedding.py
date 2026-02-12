@@ -34,13 +34,40 @@ from models.demos.deepseek_v3.utils.test_utils import (
 @pytest.mark.parametrize(
     "EmbeddingClass,mode,batch_size_or_seq_len",
     [
-        (Embedding1D, "decode", 32),
-        (Embedding2D, "decode", 128),
+        pytest.param(Embedding1D, "decode", 32, marks=pytest.mark.requires_device(["TG"])),
+        pytest.param(Embedding2D, "decode", 128, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"])),
     ]
     + [
-        (EmbeddingClass, "prefill", seq_len)
+        pytest.param(Embedding1D, "prefill", seq_len, marks=pytest.mark.requires_device(["TG"]))
+        if seq_len == 128
+        else pytest.param(
+            Embedding1D,
+            "prefill",
+            seq_len,
+            marks=[
+                pytest.mark.requires_device(["TG"]),
+                pytest.mark.skip(
+                    f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+                ),
+            ],
+        )
         for seq_len in PREFILL_SEQ_LENS
-        for EmbeddingClass in (Embedding1D, Embedding2D)
+    ]
+    + [
+        pytest.param(Embedding2D, "prefill", seq_len, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]))
+        if seq_len == 128
+        else pytest.param(
+            Embedding2D,
+            "prefill",
+            seq_len,
+            marks=[
+                pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+                pytest.mark.skip(
+                    f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+                ),
+            ],
+        )
+        for seq_len in PREFILL_SEQ_LENS
     ],
 )
 @pytest.mark.parametrize(
@@ -61,11 +88,6 @@ def test_embedding_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and batch_size_or_seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={batch_size_or_seq_len} since this would cause us to exceed our available CI workload time"
-        )
     logger.info("Setting up reference IO")
     module_path = "model.embed_tokens"
 

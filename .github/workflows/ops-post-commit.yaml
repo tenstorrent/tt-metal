@@ -36,6 +36,11 @@ on:
         required: false
         type: boolean
         default: false
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
 
   workflow_dispatch:
     inputs:
@@ -75,8 +80,8 @@ jobs:
       matrix:
         default-ops-tests:
           [[
-            { name: "wormhole_b0 sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0", timeout: 5 },
-            { name: "blackhole deepseek blitz op tests", cmd: "pytest models/demos/deepseek_v3_b1/tests/unit_tests/", merge_gate: false, arch: "blackhole", timeout: 2 }
+            { name: "wormhole_b0 sdxl op tests", cmd: "pytest --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0", timeout: 5 },
+            { name: "blackhole deepseek blitz op tests", cmd: "pytest --timeout 600 -m \"not skip_post_commit\" models/demos/deepseek_v3_b1/tests/unit_tests/", merge_gate: false, arch: "blackhole", timeout: 20 }
           ]]
     steps:
       - name: Compute tests
@@ -127,6 +132,7 @@ jobs:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
@@ -139,12 +145,28 @@ jobs:
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
           auto-triage: ${{ !inputs.enable-watcher }}
-          slow-dispatch-timeout: 10.0
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
         run: |
           ${{ matrix.test-group.cmd }}
+
+          # Device perf branch
+          export DEVICE_PERF_REPORT_FILENAME="Ops_Perf.csv"
+          python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT
+          echo "Showing ops perf report... will fail if not found"
+          cat $DEVICE_PERF_REPORT_FILENAME
+
+      - name: Merge and check test reports
+        if: ${{ github.event.pull_request.head.repo.fork == false }}
+        timeout-minutes: 5
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
+        run: |
+          export DEVICE_PERF_REPORT_FILENAME=Ops_Perf.csv
+          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

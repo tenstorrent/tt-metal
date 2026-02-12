@@ -18,7 +18,7 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
     const std::optional<const ttnn::Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const LayerNormProgramConfig>& program_config,
+    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DataType>& dtype) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
@@ -32,17 +32,17 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
             bias,
             std::nullopt,  // residual_input_tensor
             memory_config.value_or(input_tensor.memory_config()),
-            program_config.value_or(LayerNormDefaultProgramConfig{}),
+            program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
             kernel_config_val,
             dtype,
-            LayerNormType::LAYERNORM,
-            DistributedLayerNormStage::POST_ALL_GATHER,
+            ttnn::prim::LayerNormType::LAYERNORM,
+            ttnn::prim::DistributedLayerNormStage::POST_ALL_GATHER,
             stats);
     }
     return ttnn::prim::layer_norm_post_all_gather(
         input_tensor,
         stats,
-        LayerNormDistributedType::LAYERNORM,
+        ttnn::prim::LayerNormDistributedType::LAYERNORM,
         epsilon,
         weight,
         bias,
@@ -50,7 +50,7 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
         kernel_config_val,
         dtype,
         std::nullopt,  // use_2d_core_grid - LayerNorm doesn't expose this parameter
-        program_config.value_or(LayerNormDefaultProgramConfig{}));
+        program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}));
 }
 
 }  // namespace ttnn::operations::normalization

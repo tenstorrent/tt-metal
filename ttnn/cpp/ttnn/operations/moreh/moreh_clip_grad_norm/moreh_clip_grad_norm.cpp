@@ -16,6 +16,24 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+namespace {
+
+template <typename OutputDataType, typename InputDataType>
+std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_convert) {
+    std::vector<OutputDataType> converted_data;
+    for (auto datum : data_to_convert) {
+        if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
+            converted_data.push_back(static_cast<float>(datum));
+        } else if constexpr (std::is_same_v<OutputDataType, uint32_t> and std::is_same_v<InputDataType, bfloat16>) {
+            converted_data.push_back((uint32_t)std::bit_cast<uint16_t>(datum));
+        } else {
+            converted_data.push_back(static_cast<OutputDataType>(datum));
+        }
+    }
+    return converted_data;
+}
+}  // namespace
+
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
 inline uint32_t get_num_device_cores(IDevice* device) {
@@ -90,9 +108,8 @@ Tensor MorehClipGradNorm::invoke(
         init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, MathFidelity::HiFi4));
 
     if (error_if_nonfinite) {
-        const auto fp32_total_norm = tt::tt_metal::tensor_impl::cast_vec<float>(
-                                         tt::tt_metal::host_buffer::get_as<bfloat16>(output_total_norm.cpu()))
-                                         .at(0);
+        const auto fp32_total_norm =
+            cast_vec<float>(tt::tt_metal::host_buffer::get_as<bfloat16>(output_total_norm.cpu())).at(0);
         TT_FATAL(
             std::isfinite(fp32_total_norm),
             "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "

@@ -51,10 +51,6 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::vector;
 
@@ -270,11 +266,9 @@ void EnqueueWriteMeshSubBuffer(
     const std::vector<uint32_t>& src,
     const BufferRegion& region,
     bool blocking) {
-    auto shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-        .shard_coord = distributed::MeshCoordinate(0, 0),
-        .host_data = static_cast<void*>(const_cast<uint32_t*>(src.data())),
-        .region = region,
-    };
+    auto shard_data_transfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}
+                                   .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
+                                   .region(region);
 
     cq.enqueue_write_shards(buffer, {shard_data_transfer}, blocking);
 }
@@ -285,11 +279,8 @@ void EnqueueReadMeshSubBuffer(
     const std::shared_ptr<distributed::MeshBuffer>& buffer,
     const BufferRegion& region,
     bool blocking) {
-    auto shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-        .shard_coord = distributed::MeshCoordinate(0, 0),
-        .host_data = dst.data(),
-        .region = region,
-    };
+    auto shard_data_transfer =
+        distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst.data()).region(region);
 
     cq.enqueue_read_shards({shard_data_transfer}, buffer, blocking);
 }

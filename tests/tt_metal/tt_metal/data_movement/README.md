@@ -35,7 +35,7 @@ Both API versions run the same test cases but use different underlying implement
 | One to One                  | 4, 50, 150-151, 158             | Write transactions between two Tensix cores.                                            |
 | One From One                | 5, 51, 152-153, 159             | Read transactions between two Tensix cores.                                             |
 | One to all                  | 6-8, 52, 154-155, 170-172       | Writes transaction from one core to all cores.                                          |
-| One to all Multicast        | 9-14, 53-54, 100-102, 173-180   | Writes transaction from one core to all cores using multicast.                          |
+| One to all Multicast        | 9-14, 24-26, 53-54, 56, 100-102, 173-180 | Writes transaction from one core to all cores using multicast.                   |
 | One From All                | 15, 30, 156-157                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
 | Loopback                    | 16, 55                          | Does a loopback operation where one cores writes to itself.                             |
 | Reshard Hardcoded           | 17-20                           | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
@@ -48,7 +48,8 @@ Both API versions run the same test cases but use different underlying implement
 | Deinterleave                | 200-201                         | Tests deinterleaving. **(Slow Dispatch)**                                               |
 | All to all                  | 300-308                         | Write transactions from multiple cores to multiple cores.                               |
 | All from all                | 310-318                         | Read transactions from multiple cores to multiple cores.                                |
-| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.  |
+| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.                          |
+| Multicast Atomic Semaphore  | 321-328                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
 | I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
 | Inline Direct Write         | 500-501                         | Inline DW transactions between two Tensix cores.                                        |
 | Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |

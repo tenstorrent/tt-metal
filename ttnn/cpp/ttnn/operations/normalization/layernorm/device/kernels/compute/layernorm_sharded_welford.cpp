@@ -8,12 +8,12 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/welford.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/welford.h"
+#include "api/compute/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
@@ -67,7 +67,6 @@
  *       receive the multicasted global results and perform
  *       the rest of layernorm for their row(s) width slices.
  */
-namespace NAMESPACE {
 namespace {
 // Get the set size of the next block in the Welford combine
 inline auto get_next_set_size(
@@ -95,7 +94,7 @@ inline auto get_next_set_size(
     return block == num_blocks_combine - 1 ? last_block_w : block_w;
 }
 }  // namespace
-void MAIN {
+void kernel_main() {
     // ============================================================================
     // Kernel setup
     // ============================================================================
@@ -499,5 +498,3 @@ void MAIN {
         cb_wait_front(cb_out, num_tiles_per_block);
     }
 }
-
-}  // namespace NAMESPACE

@@ -25,7 +25,6 @@
 #include "common/executor.hpp"
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
@@ -262,10 +261,7 @@ void Cluster::detect_arch_and_target() {
 // TODO: remove this when we deprecate TG
 bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == tt::tt_metal::ClusterType::TG; }
 
-bool Cluster::is_ubb_galaxy() const {
-    return this->cluster_type_ == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY ||
-           this->cluster_type_ == tt::tt_metal::ClusterType::GALAXY;
-}
+bool Cluster::is_ubb_galaxy() const { return Cluster::is_ubb_galaxy(this->cluster_type_); }
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
@@ -281,7 +277,7 @@ void Cluster::generate_cluster_descriptor() {
             this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
             "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
     }
-    if (this->target_type_ == TargetDevice::Simulator) {
+    if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock) {
         return;
     }
 
@@ -419,7 +415,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     } else if (this->target_type_ == TargetDevice::Mock) {
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
-        std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+        auto mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
@@ -1246,9 +1242,9 @@ void Cluster::release_ethernet_cores_for_fabric_routers() {
     this->initialize_ethernet_sockets();
 }
 
-std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(ChipId chip_id) const {
+std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(
+    const tt::tt_fabric::ControlPlane& control_plane, ChipId chip_id) const {
     std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& active_eth_cores = control_plane.get_active_ethernet_cores(chip_id, false);
     for (const auto& eth_core : active_eth_cores) {
         if (!this->is_ethernet_link_up(chip_id, eth_core)) {
@@ -1351,7 +1347,9 @@ CoreCoord Cluster::get_virtual_eth_core_from_channel(ChipId chip_id, int channel
 
 // TODO: ALLAN Can change to write one bit
 void Cluster::set_internal_routing_info_for_ethernet_cores(
-    bool enable_internal_routing, const std::vector<ChipId>& target_mmio_devices) const {
+    const tt::tt_fabric::ControlPlane& control_plane,
+    bool enable_internal_routing,
+    const std::vector<ChipId>& target_mmio_devices) const {
     log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
@@ -1367,7 +1365,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(
     for (auto chip_id : this->driver_->get_target_remote_device_ids()) {
         non_mmio_devices.emplace_back(chip_id);
     }
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
     auto dev_msgs_factory = hal_.get_dev_msgs_factory(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     if (enable_internal_routing) {
         auto routing_info_enabled = dev_msgs_factory.create<tt_metal::dev_msgs::routing_info_t>();

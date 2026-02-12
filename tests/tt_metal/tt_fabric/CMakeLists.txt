@@ -1,26 +1,5 @@
-set(UNIT_TESTS_FABRIC_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_mesh_graph_descriptor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_connection_registry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_channel_mapping.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_connections.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_connection_mapping.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_archetypes.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_builder_connection_mapping.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_connection_mapping_logic.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_fabric_builder_local_connections.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_integration.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_device_detection.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_fabric_topology_helpers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
-)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
 
@@ -46,10 +25,6 @@ set_target_properties(
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
-)
-
-set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/physical_discovery/test_physical_system_descriptor.cpp
 )
 
 add_executable(test_physical_discovery ${UNIT_TESTS_PHYSICAL_DISCOVERY_SRC})
@@ -81,11 +56,7 @@ set_target_properties(
 # Fabric Elastic Channels Test
 add_executable(fabric_elastic_channels_host_test)
 
-target_sources(
-    fabric_elastic_channels_host_test
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/feature_bringup/fabric_elastic_channels_host_test.cpp
-)
+target_sources(fabric_elastic_channels_host_test PRIVATE ${FABRIC_ELASTIC_CHANNELS_HOST_TEST_SOURCES})
 
 target_link_libraries(
     fabric_elastic_channels_host_test
@@ -114,7 +85,7 @@ set_target_properties(
 add_library(test_system_health_smoke OBJECT)
 add_library(TT::SystemHealth::Smoke ALIAS test_system_health_smoke)
 
-target_sources(test_system_health_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/system_health/test_system_health.cpp)
+target_sources(test_system_health_smoke PRIVATE ${TEST_SYSTEM_HEALTH_SMOKE_SOURCES})
 
 target_link_libraries(
     test_system_health_smoke
@@ -143,7 +114,7 @@ target_link_libraries(test_system_health PRIVATE TT::SystemHealth::Smoke)
 add_library(test_fabric_smoke OBJECT)
 add_library(TT::Metalium::Test::Fabric::Smoke ALIAS test_fabric_smoke)
 
-target_sources(test_fabric_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_smoke.cpp)
+target_sources(test_fabric_smoke PRIVATE ${TEST_FABRIC_SMOKE_SOURCES})
 
 target_include_directories(
     test_fabric_smoke

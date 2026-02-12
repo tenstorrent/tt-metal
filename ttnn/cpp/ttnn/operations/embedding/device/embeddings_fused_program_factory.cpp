@@ -5,12 +5,10 @@
 #include "embeddings_fused_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
 
-namespace ttnn::operations::embedding::program {
+namespace ttnn::prim {
 
 EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::create(
-    const embedding::operation_attributes_t& operation_attributes,
-    const embedding::tensor_args_t& tensor_args,
-    embedding::tensor_return_value_t& tensor_return_value) {
+    const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     auto& output = tensor_return_value;
@@ -51,14 +49,13 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     // Note: num_blocks is just blocks along height
     uint32_t num_blocks = num_output_rows / TILE_HEIGHT;
     uint32_t num_blocks_per_batch = num_output_rows_per_batch / TILE_HEIGHT;
-    uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2, num_tiles_per_block;
+    uint32_t num_blocks_per_core_group_1, num_blocks_per_core_group_2, num_tiles_per_block;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     bool row_major;
     if (output_sharded) {
         const auto& shard_spec = output.shard_spec().value();
         all_cores = shard_spec.grid;
         core_group_1 = all_cores;
-        num_cores = all_cores.num_cores();
         num_blocks_per_core_group_1 = shard_spec.shape[0] / TILE_HEIGHT;
         num_blocks_per_core_group_2 = 0;
         num_tiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
@@ -66,7 +63,7 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     } else {
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         std::tie(
-            num_cores,
+            std::ignore,
             all_cores,
             core_group_1,
             core_group_2,
@@ -300,9 +297,9 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
 
 void EmbeddingsFusedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const embedding::operation_attributes_t& /*operation_attributes*/,
-    const embedding::tensor_args_t& tensor_args,
-    embedding::tensor_return_value_t& tensor_return_value) {
+    const EmbeddingParams& /*operation_attributes*/,
+    const EmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;
@@ -336,4 +333,4 @@ void EmbeddingsFusedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::embedding::program
+}  // namespace ttnn::prim

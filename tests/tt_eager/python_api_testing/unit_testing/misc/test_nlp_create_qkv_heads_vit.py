@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 
 from models.common.utility_functions import tt2torch_tensor, comp_pcc
-from models.common.utility_functions import is_grayskull
 import torch
 import ttnn
 
@@ -99,8 +98,6 @@ def run_nlp_create_qkv_heads_vit_test(batch, seq_len, dtype, in0_mem_config, out
     ],
 )
 def test_nlp_create_qkv_heads_vit_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
     run_nlp_create_qkv_heads_vit_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
 
 

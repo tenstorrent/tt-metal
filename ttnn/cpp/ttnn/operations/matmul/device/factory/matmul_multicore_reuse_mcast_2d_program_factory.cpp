@@ -22,7 +22,7 @@
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 namespace reuse_mcast_optimized_helpers {
 
@@ -113,13 +113,13 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
     if (B * num_blocks > 1) {
-        in0_CB_tiles *= utilities::MCAST_INPUT_BUFFERING_DEPTH;
+        in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
-        in1_CB_tiles *= utilities::MCAST_INPUT_BUFFERING_DEPTH;
+        in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -1370,8 +1370,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
 void override_runtime_arguments_impl(
     const MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t& shared_variables,
     tt::tt_metal::Program& program,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& output_tensors) {
     auto mm_kernel_in0_sender_id = shared_variables.mm_kernel_in0_sender_id;
     auto in0_sender_interleaved_cores = shared_variables.in0_sender_interleaved_cores;
     auto mm_kernel_in1_sender_writer_id = shared_variables.mm_kernel_in1_sender_writer_id;
@@ -1455,12 +1455,12 @@ void override_runtime_arguments_impl(
 
 static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_2d_optimized_(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     using namespace tt;
-    using namespace matmul::utilities;
+    using namespace operations::matmul::utilities;
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
@@ -1473,8 +1473,8 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     bool transpose_a = operation_attributes.transpose_a;
     bool transpose_b = operation_attributes.transpose_b;
 
-    auto program_config =
-        std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(operation_attributes.program_config.value());
+    auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+        operation_attributes.program_config.value());
 
     auto fuse_batch = program_config.fuse_batch;
     auto in0_block_w = program_config.in0_block_w;
@@ -1658,9 +1658,9 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
 }
 
 MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t MatmulMultiCoreReuseMcast2DProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::Program program{};
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
 
@@ -1670,9 +1670,9 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t MatmulMultiCoreReuse
 
 void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& /*operation_attributes*/,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     reuse_mcast_optimized_helpers::override_runtime_arguments_impl(
         cached_program.shared_variables, cached_program.program, tensor_args, tensor_return_value);
 }
@@ -1680,19 +1680,19 @@ void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
 void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const shared_variables_t& shared_variables,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& /*operation_attributes*/,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     reuse_mcast_optimized_helpers::override_runtime_arguments_impl(
         shared_variables, program, tensor_args, tensor_return_value);
 }
 
 MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::cached_mesh_workload_t
 MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::create_mesh_workload(
-    const operation_attributes_t& attributes,
+    const ttnn::prim::MatmulParams& attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -1709,9 +1709,9 @@ MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::create_mesh_workload(
 
 void MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
         auto cached_program_proxy = MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t::proxy(
             program, cached_workload.shared_variables.at(mesh_coord_range));
@@ -1728,16 +1728,16 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_re
     Tensor& output_tensor,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
-    auto attributes = operation_attributes_t{.program_config = program_config, .bcast_batch = broadcast_batch};
+    auto attributes = ttnn::prim::MatmulParams{.program_config = program_config, .bcast_batch = broadcast_batch};
     attributes.compute_kernel_config = compute_kernel_config;
     attributes.untilize_out = untilize_out;
 
-    auto output_tensors = tensor_return_value_t{output_tensor};
+    auto output_tensors = std::vector<ttnn::Tensor>{output_tensor};
     return matmul_multi_core_reuse_mcast_2d_optimized_(
-        program, attributes, tensor_args_t{{a, b}, {bias}, {}}, output_tensors, fused_op_signaler);
+        program, attributes, ttnn::prim::MatmulInputs{{a, b}, {bias}, {}}, output_tensors, fused_op_signaler);
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

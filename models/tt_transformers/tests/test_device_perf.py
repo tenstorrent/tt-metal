@@ -29,7 +29,7 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
 @pytest.mark.parametrize("data_parallel", [1, 2, 4, 8])
 @pytest.mark.parametrize("num_layers", [2, 10])
 @pytest.mark.parametrize("num_runs", [2])
-@pytest.mark.parametrize("max_seq_len", [1024, 40960, 131072])
+@pytest.mark.parametrize("max_seq_len", [1024, 32768, 131072])
 @pytest.mark.parametrize("max_generated_tokens", [2])
 @pytest.mark.parametrize("model_name", ["llama3_70b", "llama3_8b", "qwen3_32b"])  # Add more models here as needed
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
@@ -44,7 +44,7 @@ def test_device_perf_one_iter(
     max_generated_tokens,
     export_measurements,
 ):
-    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k performance-device-perf --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode}"
+    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'device-perf and performance' --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode} --use_prefetcher True"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
     subdir = f"ttt-device-perf-{mode}"

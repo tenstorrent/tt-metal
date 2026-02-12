@@ -11,12 +11,12 @@
 using namespace tt;
 using namespace tt::constants;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     if (!tensor_args.optional_input_tensors.empty()) {
         TT_FATAL(!tensor_args.optional_input_tensors[0].has_value(), "Bias is not supported for matmul multi core");
     }
@@ -187,9 +187,9 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
 
 void MatmulMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& /*operation_attributes*/,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
     auto reader_kernel_id = shared_variables.reader_kernel_id;
@@ -220,10 +220,10 @@ void MatmulMultiCoreProgramFactory::override_runtime_arguments(
 ////////////////////////////////////////////////////////////////////////////
 
 MatmulMeshWorkloadMultiCoreFactory::cached_mesh_workload_t MatmulMeshWorkloadMultiCoreFactory::create_mesh_workload(
-    const operation_attributes_t& attributes,
+    const ttnn::prim::MatmulParams& attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -239,9 +239,9 @@ MatmulMeshWorkloadMultiCoreFactory::cached_mesh_workload_t MatmulMeshWorkloadMul
 
 void MatmulMeshWorkloadMultiCoreFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
         auto cached_program_proxy = MatmulMultiCoreProgramFactory::cached_program_t::proxy(
             program, cached_workload.shared_variables.at(mesh_coord_range));
@@ -250,4 +250,4 @@ void MatmulMeshWorkloadMultiCoreFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

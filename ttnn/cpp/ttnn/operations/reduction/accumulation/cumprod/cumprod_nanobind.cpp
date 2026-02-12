@@ -77,7 +77,7 @@ void bind_reduction_cumprod_operation(nb::module_& mod) {
                const int32_t dim,
                std::optional<DataType>& dtype,
                const bool& reverse_order,
-               std::optional<Tensor> optional_out,
+               const std::optional<Tensor>& optional_out,
                const std::optional<MemoryConfig>& memory_config) -> Tensor {
                 return self(input_tensor, dim, dtype, reverse_order, optional_out, memory_config);
             },

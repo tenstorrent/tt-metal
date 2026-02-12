@@ -4,8 +4,8 @@
 
 #pragma once
 
-namespace ttnn::operations::matmul {
+namespace ttnn::prim {
 
 enum class Matmul1DType { MCAST_IN0, GATHER_IN0, MCAST_IN1 };
 
-}  // namespace ttnn::operations::matmul
+}  // namespace ttnn::prim

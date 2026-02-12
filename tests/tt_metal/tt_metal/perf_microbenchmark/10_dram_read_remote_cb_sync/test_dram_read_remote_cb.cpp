@@ -687,7 +687,7 @@ int main(int argc, char** argv) {
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception");
         }
 
         log_info(tt::LogTest, "num_mixed_df_layers: {} ", num_mixed_df_layers);
@@ -740,12 +740,7 @@ int main(int argc, char** argv) {
         [[maybe_unused]] CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
         CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord}}};
-        CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
-        if (device->arch() == tt::ARCH::GRAYSKULL) {
-            l1_receiver_core_coord_range = CoreRange{CoreCoord{0, 1}, CoreCoord{0, num_receivers}};
-        } else {
-            l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
-        }
+        CoreRange l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
             { dram_reader_core_coord, l1_receiver_core }

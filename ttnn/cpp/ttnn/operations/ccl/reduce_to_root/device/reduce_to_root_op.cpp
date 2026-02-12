@@ -9,6 +9,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "reduce_to_root_op.hpp"
 

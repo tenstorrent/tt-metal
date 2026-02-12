@@ -5,10 +5,11 @@
 #include "ttnn/operations/data_movement/split/device/split_device_operation.hpp"
 #include "ttnn/operations/data_movement/split/device/split_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::split {
+namespace ttnn::prim {
 
 void SplitDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -32,11 +33,6 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
         args.dim <= input_tensor.padded_shape().rank() && args.dim >= 0, "Dim being split must be from 0 to rank - 1");
     TT_FATAL(input_tensor.padded_shape().rank() == 4, "Tensor needs to be rank 4");
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Tensor needs to be in TILE Layout");
-}
-
-void SplitDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 SplitDeviceOperation::spec_return_value_t SplitDeviceOperation::compute_output_specs(
@@ -66,7 +62,7 @@ SplitDeviceOperation::tensor_return_value_t SplitDeviceOperation::create_output_
 
 SplitDeviceOperation::program_factory_t SplitDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::SplitProgramFactory{};
+    return SplitProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SplitDeviceOperation::tensor_return_value_t>
@@ -76,20 +72,19 @@ SplitDeviceOperation::create_op_performance_model(
     std::vector<Tensor> input_tensors = {input_tensor};
 
     // Calculate ideal device clock cycles using the actual output tensor
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensors.at(0), false, 0, false, true);
+    int ideal_dev_clock_cycles =
+        operations::data_movement::common_tm_bw_model(input_tensor, output_tensors.at(0), false, 0, false, true);
 
     return tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>(
         input_tensors, output_tensors, ideal_dev_clock_cycles);
 }
 
-}  // namespace ttnn::operations::data_movement::split
-
-namespace ttnn::prim {
 std::vector<ttnn::Tensor> split(
     const Tensor& input_tensor, int num_splits, int dim, const tt::tt_metal::MemoryConfig& output_mem_config) {
-    using OperationType = ttnn::operations::data_movement::split::SplitDeviceOperation;
+    using OperationType = ttnn::prim::SplitDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{num_splits, dim, output_mem_config},
         OperationType::tensor_args_t{input_tensor});
 }
+
 }  // namespace ttnn::prim

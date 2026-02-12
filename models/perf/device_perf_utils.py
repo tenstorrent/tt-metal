@@ -68,7 +68,14 @@ def run_device_perf(
 
 # TODO: Move into process_model_log.py (#18698)
 def post_process_ops_log_detailed(
-    output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False, detailed=False, warmup_iters=0
+    output_logs_subdir,
+    columns,
+    sum_vals=True,
+    op_name="",
+    has_signposts=False,
+    detailed=False,
+    warmup_iters=0,
+    per_op=False,
 ):
     filename = get_latest_ops_log_filename(output_logs_subdir)
     df = pd.read_csv(filename)
@@ -80,7 +87,30 @@ def post_process_ops_log_detailed(
         stop = markers[markers == "stop"].index[0]
         df = df.iloc[start + 1 : stop]
     if op_name != "":
-        df = df[df["OP CODE"] == op_name]
+        df_filtered = df[df["OP CODE"] == op_name]
+        if df_filtered.empty:
+            # Try partial match (in case op_name is just the class name without namespace)
+            # First try exact suffix match
+            df_filtered = df[df["OP CODE"].str.endswith(f"::{op_name}", na=False)]
+            if df_filtered.empty:
+                # Try matching within template parameters (e.g., MeshDeviceOperationAdapter<...::GroupNormDeviceOperation>)
+                # This matches both "::GroupNormDeviceOperation" and "GroupNormDeviceOperation>" (end of template)
+                df_filtered = df[
+                    df["OP CODE"].str.contains(f"::{op_name}", na=False)
+                    | df["OP CODE"].str.contains(f"{op_name}>", na=False)
+                ]
+            if df_filtered.empty:
+                # Show what operation names are actually in the CSV
+                unique_op_codes = df["OP CODE"].unique() if not df.empty else []
+                error_msg = (
+                    f"No operations found matching op_name='{op_name}' in {filename}. "
+                    f"Found {len(unique_op_codes)} unique operation(s): {list(unique_op_codes)[:10]}"
+                )
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            else:
+                logger.info(f"Found {len(df_filtered)} operation(s) matching '{op_name}' (partial match)")
+        df = df_filtered
 
     # group by DEVICE ID
     df = df.groupby("DEVICE ID")
@@ -90,6 +120,26 @@ def post_process_ops_log_detailed(
     # Convert list of tuples to list of dataframes
     dfs = [group for _, group in df]
 
+    # Check if dfs is empty (no matching operations found)
+    if not dfs:
+        op_filter_msg = f" matching op_name='{op_name}'" if op_name else ""
+        error_msg = (
+            f"No device data found for operations{op_filter_msg} in {filename}. "
+            f"Operations were matched but no device data is available."
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+    # Check if the first dataframe is empty
+    if len(dfs[0]) == 0:
+        op_filter_msg = f" matching op_name='{op_name}'" if op_name else ""
+        error_msg = (
+            f"No device data found for operations{op_filter_msg} in {filename}. "
+            f"Operations were matched but the first device group is empty."
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
     # concatenate the list of df into a single df by interleaving the rows
     df = pd.concat([df.iloc[[i]] for i in range(len(dfs[0])) for df in dfs], ignore_index=True)
 
@@ -97,55 +147,91 @@ def post_process_ops_log_detailed(
         df = df.iloc[warmup_iters:]
 
     results = {}
-    for col in columns:
-        df_filtered = df[df[col] != "-"]
-        if sum_vals:
-            results[col] = df_filtered[col].astype(float).sum()
-        else:
-            results[col] = df_filtered[col].astype(float).to_numpy()
+    if not per_op:
+        for col in columns:
+            df_filtered = df[df[col] != "-"]
+            if sum_vals:
+                results[col] = df_filtered[col].astype(float).sum()
+            else:
+                results[col] = df_filtered[col].astype(float).to_numpy()
 
-        if detailed:
-            results[f"AVG {col}"] = df_filtered[col].astype(float).mean()
-            results[f"MIN {col}"] = df_filtered[col].astype(float).min()
-            results[f"MAX {col}"] = df_filtered[col].astype(float).max()
-            results[f"STD {col}"] = df_filtered[col].astype(float).std()
+            if detailed:
+                results[f"AVG {col}"] = df_filtered[col].astype(float).mean()
+                results[f"MIN {col}"] = df_filtered[col].astype(float).min()
+                results[f"MAX {col}"] = df_filtered[col].astype(float).max()
+                results[f"STD {col}"] = df_filtered[col].astype(float).std()
+    else:
+        for op in df["OP CODE"].unique():
+            df_op = df[df["OP CODE"] == op]
+            results[op] = {}
+            for col in columns:
+                df_filtered = df_op[df_op[col] != "-"]
+                if sum_vals:
+                    results[op][col] = df_filtered[col].astype(float).sum()
+                else:
+                    results[op][col] = df_filtered[col].astype(float).to_numpy()
+
+                if detailed:
+                    results[op][f"AVG {col}"] = df_filtered[col].astype(float).mean()
+                    results[op][f"MIN {col}"] = df_filtered[col].astype(float).min()
+                    results[op][f"MAX {col}"] = df_filtered[col].astype(float).max()
+                    results[op][f"STD {col}"] = df_filtered[col].astype(float).std()
 
     return results
 
 
 def run_device_perf_detailed(
-    command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0, device_analysis_types=None
+    command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0, device_analysis_types=None, per_op=False
 ):
     duration_cols = [col + " DURATION [ns]" for col in cols]
 
     clear_profiler_runtime_artifacts()
 
     results = {}
-    for d_col in duration_cols:
-        results[f"AVG {d_col}"] = 0
-        results[f"MIN {d_col}"] = float("inf")
-        results[f"MAX {d_col}"] = -float("inf")
-        results[f"STD {d_col}"] = 0
 
     if device_analysis_types is None:
         device_analysis_types = ["device_kernel_duration"]
 
     run_device_profiler(command, subdir, device_analysis_types=device_analysis_types)
     r = post_process_ops_log_detailed(
-        subdir, duration_cols, op_name=op_name, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
+        subdir,
+        duration_cols,
+        op_name=op_name,
+        has_signposts=has_signposts,
+        detailed=True,
+        warmup_iters=warmup_iters,
+        per_op=per_op,
     )
-    for d_col in duration_cols:
-        results[f"AVG {d_col}"] = r[f"AVG {d_col}"]
-        results[f"MIN {d_col}"] = r[f"MIN {d_col}"]
-        results[f"MAX {d_col}"] = r[f"MAX {d_col}"]
-        results[f"STD {d_col}"] = r[f"STD {d_col}"]
-
     post_processed_results = defaultdict(dict)
-    for col, d_col in zip(cols, duration_cols):
-        post_processed_results[col]["AVG"] = results[f"AVG {d_col}"]
-        post_processed_results[col]["MIN"] = results[f"MIN {d_col}"]
-        post_processed_results[col]["MAX"] = results[f"MAX {d_col}"]
-        post_processed_results[col]["STD"] = results[f"STD {d_col}"]
+
+    if not per_op:
+        for d_col in duration_cols:
+            results[f"AVG {d_col}"] = r[f"AVG {d_col}"]
+            results[f"MIN {d_col}"] = r[f"MIN {d_col}"]
+            results[f"MAX {d_col}"] = r[f"MAX {d_col}"]
+            results[f"STD {d_col}"] = r[f"STD {d_col}"]
+
+        for col, d_col in zip(cols, duration_cols):
+            post_processed_results[col]["AVG"] = results[f"AVG {d_col}"]
+            post_processed_results[col]["MIN"] = results[f"MIN {d_col}"]
+            post_processed_results[col]["MAX"] = results[f"MAX {d_col}"]
+            post_processed_results[col]["STD"] = results[f"STD {d_col}"]
+
+    else:
+        for op in r.keys():
+            results[op] = {}
+            for d_col in duration_cols:
+                results[op][f"AVG {d_col}"] = r[op][f"AVG {d_col}"]
+                results[op][f"MIN {d_col}"] = r[op][f"MIN {d_col}"]
+                results[op][f"MAX {d_col}"] = r[op][f"MAX {d_col}"]
+                results[op][f"STD {d_col}"] = r[op][f"STD {d_col}"]
+
+            for col, d_col in zip(cols, duration_cols):
+                post_processed_results[op][col] = {}
+                post_processed_results[op][col]["AVG"] = results[op][f"AVG {d_col}"]
+                post_processed_results[op][col]["MIN"] = results[op][f"MIN {d_col}"]
+                post_processed_results[op][col]["MAX"] = results[op][f"MAX {d_col}"]
+                post_processed_results[op][col]["STD"] = results[op][f"STD {d_col}"]
 
     logger.info(
         f"\nTest: {command}\nPerformance statistics for op: {op_name}\n{json.dumps(post_processed_results, indent=4)}"

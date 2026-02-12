@@ -60,6 +60,7 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = MEM_FABRIC_CONNECTION_LOCK_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
 
@@ -82,6 +83,7 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = MEM_FABRIC_CONNECTION_LOCK_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
@@ -179,16 +181,20 @@ HalCoreInfoType create_tensix_mem_map() {
             {"TR2", "TRISC2"},
         },
     };
+    std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1};
+
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
         true /*supports_cbs*/,
+        true /*supports_dfbs*/,
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory(),
         tensix_fabric_telemetry::create_factory()};

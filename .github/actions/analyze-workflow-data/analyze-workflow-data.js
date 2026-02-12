@@ -81,12 +81,26 @@ const {
   buildStayedFailingSection,
 } = reporting;
 
+// Import the update owners script
+const { updateOwnersJson } = require('./update-owners-from-pipeline');
+
 
 /**
  * Main function to run the action
  */
 async function run() {
   try {
+    // Update owners.json from pipeline_reorg files at the beginning
+    try {
+      const ownersPath = path.join(__dirname, 'owners.json');
+      const pipelineReorgDir = path.join(__dirname, '../../..', 'tests/pipeline_reorg');
+      updateOwnersJson(ownersPath, pipelineReorgDir);
+      core.info('Updated owners.json from pipeline_reorg files');
+    } catch (error) {
+      core.warning(`Failed to update owners.json: ${error.message}`);
+      // Continue execution even if update fails
+    }
+
     // Get inputs
     const cachePath = core.getInput('cache-path', { required: true }); // get the workflow data cache made by the fetch-workflow-data action
     const previousCachePath = core.getInput('previous-cache-path', { required: false }); // get the previous workflow data cache made by the fetch-workflow-data action from the most recent previous run on main branch

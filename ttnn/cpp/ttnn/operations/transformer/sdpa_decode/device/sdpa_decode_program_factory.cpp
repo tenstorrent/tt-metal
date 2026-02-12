@@ -18,19 +18,17 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa_decode::program {
+namespace ttnn::prim {
 
 SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SdpaDecodeParams& operation_attributes, const SdpaDecodeInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     bool use_mla = operation_attributes.use_mla.value_or(false);
     if (!use_mla) {
         TT_FATAL(tensor_args.v.has_value(), "V tensor must be provided when MLA is disabled.");
     }
-    const auto& input_tensor_v = use_mla ? input_tensor_k : tensor_args.v.value();
+    const auto& input_tensor_v = tensor_args.v.has_value() ? tensor_args.v.value() : input_tensor_k;
 
     const auto& cur_pos_tensor = tensor_args.cur_pos_tensor;
     const auto& page_table_tensor = tensor_args.page_table_tensor;
@@ -74,8 +72,13 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);  // round up for row major Q tensor.
     const auto& q_shape_unpadded = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.padded_shape();
+    const auto& v_shape = input_tensor_v.padded_shape();
+
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
+
+    // If MLA is enabled, vDH is overridded by head_dim_v. Otherwise, vDH is same as DH.
+    uint32_t vDH = use_mla ? head_dim_v : v_shape[3];
 
     uint32_t num_kv_heads = k_shape[1];
     uint32_t num_q_heads = q_shape_unpadded[2];
@@ -111,7 +114,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t Bkv = k_shape[0];
     uint32_t St = S / TILE_HEIGHT;
     uint32_t DHt = DH / TILE_WIDTH;
-    uint32_t vDHt = use_mla ? head_dim_v / TILE_WIDTH : DHt;
+    uint32_t vDHt = vDH / TILE_WIDTH;
     uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT;
 
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
@@ -731,6 +734,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const uint32_t q_chunk_size_bytes =
         q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
 
+    const uint32_t reuse_k = tensor_args.v.has_value() ? 0 : 1;
+
     std::vector<uint32_t> reader_compile_time_args_common = {
         B,
         PNHt,
@@ -756,7 +761,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         use_attention_sink,
         max_dynamic_chunk_size,
         tilize_q,
-        (uint32_t)use_mla,
+        reuse_k,
         use_half_tile,
         q_chunk_size_bytes,
         is_cur_pos_tensor_sharded,
@@ -1043,9 +1048,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
 void SdpaDecodeProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SdpaDecodeParams& operation_attributes,
+    const SdpaDecodeInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
 
     const auto& shared_variables = cached_program.shared_variables;
@@ -1067,11 +1072,14 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     const bool use_attention_sink = shared_variables.use_attention_sink;
     const bool is_paged_attention = shared_variables.is_paged_attention;
     const bool is_causal = shared_variables.is_causal;
-    const bool use_mla = shared_variables.use_mla;
 
     auto* q_buffer = tensor_args.q.buffer();
     auto* k_buffer = tensor_args.k.buffer();
-    auto* v_buffer = use_mla ? k_buffer : tensor_args.v.value().buffer();
+    auto* v_buffer = k_buffer;
+
+    if (tensor_args.v.has_value()) {
+        v_buffer = tensor_args.v.value().buffer();
+    }
 
     auto* out0_buffer = tensor_return_value.buffer();
 
@@ -1164,4 +1172,4 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::transformer::sdpa_decode::program
+}  // namespace ttnn::prim

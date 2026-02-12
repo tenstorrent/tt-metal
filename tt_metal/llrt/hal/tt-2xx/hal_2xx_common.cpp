@@ -128,4 +128,8 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
     }
 }
 
+std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuildQueryInterface::Params&) const {
+    return "dm0";
+}
+
 }  // namespace tt::tt_metal::hal_2xx

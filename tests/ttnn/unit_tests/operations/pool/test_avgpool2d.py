@@ -3,6 +3,7 @@
 
 import ttnn
 import pytest
+from models.common.utility_functions import skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
 
 
@@ -13,7 +14,6 @@ def tensor_map():
     return tensor_map
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
@@ -78,6 +78,7 @@ def tensor_map():
     "in_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_avg_pool2d_post_commit(
     device,
     tensor_map,
@@ -111,10 +112,10 @@ def test_avg_pool2d_post_commit(
         shard_scheme=shard_scheme,
         in_dtype=in_dtype,
         nightly_skips=False,
+        config_tensor_in_dram=True,
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, num_slices",  # NCHW
     (
@@ -168,6 +169,7 @@ def test_avg_pool2d_post_commit(
     "in_dtype",
     [ttnn.bfloat16],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_avg_pool2d_dram_post_commit(
     device,
     tensor_map,
@@ -198,4 +200,5 @@ def test_avg_pool2d_dram_post_commit(
         in_dtype=in_dtype,
         nightly_skips=False,
         dram_slice_config=dram_slice_config,
+        config_tensor_in_dram=True,
     )

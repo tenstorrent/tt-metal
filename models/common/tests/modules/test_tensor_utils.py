@@ -1,17 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Tests for tensor utility functions in models.common.modules.tensor_utils.
-"""
-
 import pytest
 import torch
+
+import ttnn
+from models.common.tensor_utils import pad_dim_to_size, pad_to_shape, parse_shard_dims_from_mesh_mapper_config
 
 
 def test_pad_dim_to_size():
     """Test the pad_dim_to_size utility function."""
-    from models.common.modules.tensor_utils import pad_dim_to_size
 
     # Test padding on last dimension
     x = torch.randn(1, 1, 32, 100)
@@ -41,7 +39,6 @@ def test_pad_dim_to_size():
 
 def test_pad_dim_to_size_positive_dim():
     """Test pad_dim_to_size with positive dimension index."""
-    from models.common.modules.tensor_utils import pad_dim_to_size
 
     x = torch.randn(2, 3, 4, 5)
 
@@ -58,7 +55,6 @@ def test_pad_dim_to_size_positive_dim():
 
 def test_pad_to_shape():
     """Test the pad_to_shape utility function."""
-    from models.common.modules.tensor_utils import pad_to_shape
 
     # Pad multiple dimensions at once
     x = torch.randn(1, 2, 24, 100)
@@ -76,7 +72,6 @@ def test_pad_to_shape():
 
 def test_pad_to_shape_no_op():
     """Test pad_to_shape returns same tensor when no padding needed."""
-    from models.common.modules.tensor_utils import pad_to_shape
 
     x = torch.randn(1, 2, 32, 128)
     padded = pad_to_shape(x, (1, 2, 32, 128))
@@ -85,7 +80,6 @@ def test_pad_to_shape_no_op():
 
 def test_pad_to_shape_single_dim():
     """Test pad_to_shape with only one dimension needing padding."""
-    from models.common.modules.tensor_utils import pad_to_shape
 
     x = torch.randn(2, 3, 4, 5)
     padded = pad_to_shape(x, (2, 3, 4, 8))
@@ -95,7 +89,6 @@ def test_pad_to_shape_single_dim():
 
 def test_pad_to_shape_error_on_smaller_target():
     """Test pad_to_shape raises error when target is smaller than source."""
-    from models.common.modules.tensor_utils import pad_to_shape
 
     x = torch.randn(2, 3, 4, 5)
     with pytest.raises(ValueError, match="smaller than current size"):
@@ -107,8 +100,6 @@ def test_parse_shard_dims_from_mesh_mapper_config():
 
     This test will fail if TTNN changes the repr format, alerting us to update the parser.
     """
-    import ttnn
-    from models.common.modules.tensor_utils import parse_shard_dims_from_mesh_mapper_config
 
     # Single shard dimension
     config1 = ttnn.MeshMapperConfig(

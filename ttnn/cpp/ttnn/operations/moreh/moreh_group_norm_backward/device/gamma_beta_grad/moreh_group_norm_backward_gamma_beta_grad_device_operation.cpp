@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -63,11 +64,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::select_program_factory(
 }
 
 void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-}
-
-void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 }

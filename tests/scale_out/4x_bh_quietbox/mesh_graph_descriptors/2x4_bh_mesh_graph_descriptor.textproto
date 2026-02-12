@@ -1,11 +1,10 @@
 # --- Mesh Descriptors ------------------------------------------------------
-# 2x4 Blackhole mesh spanning 2x2 hosts (P150 boards)
+# 2x4 Blackhole mesh spanning 1x2 hosts (P150 boards)
 
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 2, 4 ] }
-  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, RING ] }
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
   host_topology   { dims: [ 1, 2 ] }
   channels { count: 2 policy: STRICT }
 }

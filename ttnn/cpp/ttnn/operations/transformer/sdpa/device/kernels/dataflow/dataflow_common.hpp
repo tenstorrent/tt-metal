@@ -14,7 +14,6 @@ constexpr uint32_t get_barrier_read_threshold() {
 }
 
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     // Fill tile with zeros
     uint32_t bytes_left = tile_bytes;
@@ -29,28 +28,45 @@ void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     }
 }
 
-template <uint32_t tile_bytes>
+template <uint32_t tile_bytes, bool wait_for_barrier = true>
 void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
     static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
 
     uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
     fill_zeros_async(write_addr, tile_bytes);
-    noc_async_read_barrier();
+    if (wait_for_barrier) {
+        noc_async_read_barrier();
+    }
 }
 
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
+    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
     // Return the physical tile id for that tile row
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
     const uint32_t head_offset = cur_head * block_size_t * Wt;
 
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
-    const uint32_t physical_block = page_table_ptr[virtual_block];
+    const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     const uint32_t block_offset = block_row_offset * Wt;
     return physical_block * block_stride + head_offset + block_offset;
+}
+
+template <typename PageTableArgs>
+volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
+    uint32_t cb_id,
+    uint32_t batch_idx,
+    const PageTableArgs& page_table_args,
+    uint32_t page_table_addr,
+    uint32_t page_table_stick_size) {
+    uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id);
+    const auto page_table_reader = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
+    uint64_t page_table_noc_addr = page_table_reader.get_noc_addr(batch_idx);
+    noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
+    noc_async_read_barrier();
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 }
 
 class TensorTileShape {
@@ -77,8 +93,8 @@ public:
     }
 };
 
-template <uint32_t tile_bytes, typename ReaderType>
-void read_chunk_with_padding(
+template <uint32_t tile_bytes, typename ReaderType, bool push_num_tiles = true>
+uint32_t read_chunk_with_padding(
     const ReaderType& reader,
     const uint32_t cb_id,
     uint32_t start_tile_id,
@@ -90,14 +106,13 @@ void read_chunk_with_padding(
     const bool transpose = false,
     const uint32_t skip_src_cols = 0) {
     /*
-    Method always reads tiles from memory in row-major order.
-    It assumes that the block of rows x cols in stored in contiguous tile order.
-    That means, it won't work if the chunk to read is a slice of the last dimension.
+      Method always reads tiles from memory in row-major order.
+      It assumes that the block of rows x cols in stored in contiguous tile order.
+      That means, it won't work if the chunk to read is a slice of the last dimension.
 
-    This handles the case where the dst CB is larger than the src CB, with some padding on the
-    rows or cols of the DST CB.
+      This handles the case where the dst CB is larger than the src CB, with some padding on the
+      rows or cols of the DST CB.
     */
-    // Read Q chunk
     const uint32_t num_tiles = dst_rows * dst_cols;
     cb_reserve_back(cb_id, num_tiles);
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
@@ -117,7 +132,7 @@ void read_chunk_with_padding(
                 barrier_count = 0;
             }
         }
-        start_tile_id += skip_src_cols;  // Skip src cols if needed
+        start_tile_id += skip_src_cols;
     }
 
     // Zero out the padding
@@ -127,12 +142,17 @@ void read_chunk_with_padding(
                 continue;
             }
             uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+            fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
         }
     }
     noc_async_read_barrier();
 
-    cb_push_back(cb_id, num_tiles);
+    if constexpr (push_num_tiles) {
+        cb_push_back(cb_id, num_tiles);
+        return 0;
+    } else {
+        return num_tiles;
+    }
 }
 
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
@@ -162,7 +182,7 @@ void read_paged_chunk_with_padding(
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         uint32_t virtual_row_num = chunk_start_row + row;
-        uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(
+        uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
             virtual_row_num, cur_head, page_table_ptr);
 
         for (uint32_t col = 0; col < src_cols; ++col) {
@@ -187,30 +207,34 @@ void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t 
         noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
 }
 
+// Generic fill with -inf that works for all supported mask formats (bfp4, bfp8, bfloat16)
 template <uint32_t tile_bytes>
-void fill_neginf_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
+void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
-    constexpr uint32_t num_mantissas = tt::constants::TILE_HW / 2;
-    static_assert(
-        tile_bytes == num_exponents + num_mantissas, "tile_bytes must be equal to bfp4 num_exponents + num_mantissas");
+    constexpr uint32_t bfp4_size = num_exponents + tt::constants::TILE_HW / 2;
+    constexpr uint32_t bfp8_size = num_exponents + tt::constants::TILE_HW;
+    constexpr uint32_t bf16_size = tt::constants::TILE_HW * 2;
 
     uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    constexpr uint32_t total_words = tile_bytes / sizeof(uint32_t);
 
-    // Fill the first 64 bytes (16 uint32_t values) with 0xFFFFFFFF for exponents
-    constexpr uint32_t NEG_INF_EXP = 0xFFFFFFFF;
-    constexpr uint32_t exp_words = num_exponents / sizeof(uint32_t);  // 16 words
-
-    for (uint32_t i = 0; i < exp_words; i++) {
-        ptr[i] = NEG_INF_EXP;
-    }
-
-    // Fill the next 512 bytes (128 uint32_t values) with 0xCCCCCCCC for mantissas
-    constexpr uint32_t NEG_INF_MANT = 0xCCCCCCCC;
-    constexpr uint32_t mant_words = num_mantissas / sizeof(uint32_t);  // 128 words
-
-    for (uint32_t i = exp_words; i < exp_words + mant_words; i++) {
-        ptr[i] = NEG_INF_MANT;
+    if constexpr (tile_bytes == bf16_size) {
+        // BFLOAT16: fill with 0xFF80FF80 (-inf in bf16, two values per word)
+        for (uint32_t i = 0; i < total_words; i++) {
+            ptr[i] = 0xFF80FF80;
+        }
+    } else {
+        // BFP formats (bfp4, bfp8): first 64 bytes are exponents, rest are mantissas
+        constexpr uint32_t exp_words = num_exponents / sizeof(uint32_t);
+        for (uint32_t i = 0; i < exp_words; i++) {
+            ptr[i] = 0xFFFFFFFF;
+        }
+        // bfp4: 0xCC per nibble (sign + magnitude), bfp8: 0x80 per byte (sign bit set)
+        constexpr uint32_t mant_pattern = (tile_bytes == bfp4_size) ? 0xCCCCCCCC : 0x80808080;
+        for (uint32_t i = exp_words; i < total_words; i++) {
+            ptr[i] = mant_pattern;
+        }
     }
 }
 
@@ -441,7 +465,7 @@ void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
 enum class MaskType { FULLY_ALLOWED, FULLY_MASKED, PARTIAL_MASK };
 
 template <uint32_t cb_mask_in>
-void generate_mask(
+void generate_causal_sliding_window_mask(
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t q_chunk,
@@ -559,7 +583,7 @@ void generate_mask(
                     break;
                 case MaskType::FULLY_MASKED:
                     if (inf_tile_idx == -1) {
-                        fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                        fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                         inf_tile_idx = in_mask_tile_id;
                     } else {
                         copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
@@ -597,7 +621,7 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
             uint32_t in_mask_tile_id = q_tile * Sk_chunk_t + k_tile;
             const bool do_zero = k_tile < unpad_tile_col_in_chunk;
             const bool do_inf =
-                k_tile > unpad_tile_col_in_chunk || k_tile == unpad_tile_col_in_chunk && unpad_col_in_tile == 0;
+                (k_tile > unpad_tile_col_in_chunk) || (k_tile == unpad_tile_col_in_chunk && unpad_col_in_tile == 0);
 
             if (do_zero) {
                 if (zero_tile_idx == -1) {
@@ -608,7 +632,7 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
                 }
             } else if (do_inf) {
                 if (inf_tile_idx == -1) {
-                    fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                    fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     inf_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
@@ -672,12 +696,12 @@ struct CatAddrGenerator {
         uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t end_seq_tile, uint32_t src_addr) const {
         if (d2 < first_shape.shape[2]) {
             uint32_t tile_id = first_shape.id_of(d0, d1, d2, d3);
-            noc_async_write_tile(tile_id, first_reader, src_addr);
+            noc_async_write_page(tile_id, first_reader, src_addr);
             return 1;
         } else if (d2 >= first_seq_padded && (d2 - first_seq_padded) < second_shape.shape[2]) {
             uint32_t adjusted_seq = d2 - first_seq_padded;
             uint32_t tile_id = second_shape.id_of(d0, d1, adjusted_seq, d3);
-            noc_async_write_tile(tile_id, second_reader, src_addr);
+            noc_async_write_page(tile_id, second_reader, src_addr);
             return 1;
         }
         return 0;
@@ -798,6 +822,38 @@ void write_block(
     cb_pop_front(cb_id, num_tiles);
 }
 
+template <typename TensorAccessorType>
+void write_block(
+    const TensorAccessorType& out_writer,
+    const uint32_t cb_out,
+    const uint32_t out_chunk_tiles,
+    const uint32_t rows,
+    const uint32_t cols,
+    const uint32_t out_tile_id,
+    const uint32_t tile_bytes,
+    const uint32_t barrier_threshold) {
+    uint32_t barrier_count = 0;
+    uint32_t tile_id = out_tile_id;
+
+    cb_wait_front(cb_out, out_chunk_tiles);
+
+    uint32_t l1_read_addr = get_read_ptr(cb_out);
+    for (uint32_t row = 0; row < rows; ++row) {
+        for (uint32_t col = 0; col < cols; ++col) {
+            noc_async_write_tile(tile_id, out_writer, l1_read_addr);
+            ++tile_id;
+            l1_read_addr += tile_bytes;
+
+            if (++barrier_count == barrier_threshold) {
+                noc_async_writes_flushed();
+                barrier_count = 0;
+            }
+        }
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_out, out_chunk_tiles);
+}
+
 template <uint32_t tile_bytes>
 void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t source_tile_addr) {
     /*
@@ -806,31 +862,46 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
 
     The source_tile_addr should contain a tile with the attention sink value at position [0,0].
     Each output tile will have this value replicated in the first column (first element of every row).
+
+    IMPORTANT: All non-first-column positions are initialized to -infinity (0xFF80 in bfloat16)
+    to ensure they don't affect the reduce_c<MAX> operation. Without this, stale L1 values
+    could corrupt the max computation.
     */
 
     // Get the first element from the source tile (position [0,0])
     volatile tt_l1_ptr uint16_t* source_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(source_tile_addr);
     uint16_t sink_value = source_ptr[0];  // First element is at offset 0 in bfloat16 tile
 
+    // -infinity in bfloat16 format (sign=1, exp=0xFF, mantissa=0)
+    // This ensures stale L1 values don't affect the max computation
+    constexpr uint16_t neg_inf_bf16 = 0xFF80;
+
     uint32_t write_ptr = get_write_ptr(cb_id);
+
+    // Tile is 32x32 in row-major order within faces
+    // For bfloat16, each element is 2 bytes (uint16_t)
+    // Tile layout: Face0, Face1, Face2, Face3
+    // Face0: rows 0-15, cols 0-15 (top-left)
+    // Face1: rows 0-15, cols 16-31 (top-right)
+    // Face2: rows 16-31, cols 0-15 (bottom-left)
+    // Face3: rows 16-31, cols 16-31 (bottom-right)
+
+    constexpr uint32_t face_height = 16;
+    constexpr uint32_t face_width = 16;
+    constexpr uint32_t elements_per_face = face_height * face_width;
+    constexpr uint32_t elements_per_tile = 4 * elements_per_face;  // 1024 elements
 
     // Fill each tile in the CB
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
         volatile tt_l1_ptr uint16_t* tile_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_ptr);
 
-        // Tile is 32x32 in row-major order within faces
-        // For bfloat16, each element is 2 bytes (uint16_t)
-        // Tile layout: Face0, Face1, Face2, Face3
-        // Face0: rows 0-15, cols 0-15 (top-left)
-        // Face1: rows 0-15, cols 16-31 (top-right)
-        // Face2: rows 16-31, cols 0-15 (bottom-left)
-        // Face3: rows 16-31, cols 16-31 (bottom-right)
+        // First, initialize the ENTIRE tile to -infinity
+        // This prevents stale L1 values from corrupting the max computation
+        for (uint32_t i = 0; i < elements_per_tile; ++i) {
+            tile_ptr[i] = neg_inf_bf16;
+        }
 
-        constexpr uint32_t face_height = 16;
-        constexpr uint32_t face_width = 16;
-        constexpr uint32_t elements_per_face = face_height * face_width;
-
-        // Fill Face 0 and Face 2 (first column of tile is in these faces)
+        // Then fill Face 0 and Face 2 with sink values (first column of tile is in these faces)
         // Face 0: rows 0-15, Face 2: rows 16-31
         for (uint32_t face = 0; face < 4; face += 2) {  // Process Face 0 and Face 2
             uint32_t face_offset = face * elements_per_face;
@@ -843,5 +914,55 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
         }
 
         write_ptr += tile_bytes;
+    }
+}
+
+template <
+    bool is_causal,
+    bool is_chunked,
+    uint32_t sliding_window_size,
+    bool padded_or_joint_masks,
+    uint32_t cb_mask_in>
+void generate_mask(
+    const uint32_t Sq_chunk_t,
+    const uint32_t Sk_chunk_t,
+    const uint32_t q_chunk,
+    const uint32_t chunk_start_t_in_q_chunks,
+    const bool generate_mask_0,
+    const bool generate_mask_1,
+    const uint32_t unpadded_Sk_mask_0,
+    const uint32_t unpadded_Sk_mask_1) {
+    if constexpr (is_causal || sliding_window_size > 0) {
+        uint32_t offset_q_chunk = q_chunk;
+        if constexpr (is_chunked) {
+            // Bump it up to the chunk start
+            offset_q_chunk += chunk_start_t_in_q_chunks;
+        }
+        uint32_t q_low_idx = offset_q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
+        uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+
+        for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+            const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
+            const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
+            // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
+            // Q-range = [q_low, q_high)
+            // K-range = [k_low, k_high)
+            // does_overlap = not (q_low >= k_high or k_low >= q_high)
+            // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
+            // Read mask chunk
+            if (!(q_low_idx >= k_high_idx) || sliding_window_size > 0) {
+                // If no sliding window, only generate mask along diagonal
+                // Otherwise, generate mask for all chunks
+                generate_causal_sliding_window_mask<cb_mask_in>(
+                    Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
+            }
+        }
+    } else if constexpr (padded_or_joint_masks) {
+        if (generate_mask_0) {
+            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_0);
+        }
+        if (generate_mask_1) {
+            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_1);
+        }
     }
 }

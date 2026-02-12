@@ -133,6 +133,11 @@ __attribute__((noinline)) void init_profiler(
             for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
                 profiler_data_buffer[riscID].data[i] = 0;
             }
+#if !defined(COMPILE_FOR_IDLE_ERISC)
+            // Update every risc's trace ID
+            profiler_data_buffer[riscID].data[ID_LH] =
+                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
+#endif
         }
         profiler_control_buffer[NOC_X] = my_x[0];
         profiler_control_buffer[NOC_Y] = my_y[0];
@@ -142,13 +147,6 @@ __attribute__((noinline)) void init_profiler(
         for (uint32_t i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i++) {
             // TODO(MO): Clean up magic numbers
             profiler_data_buffer[riscID].data[i] = 0x80000000;
-        }
-        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
-#if !defined(COMPILE_FOR_IDLE_ERISC)
-            // Update every risc's trace ID
-            profiler_data_buffer[riscID].data[ID_LH] =
-                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
-#endif
         }
     }
 #endif
@@ -230,67 +228,27 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0))
 
-// Saves several NoC register states restores them
-// when the NocRegisterStateSave is destroyed
+// Saves several NoC register states and restores them when the NocRegisterStateSave is destroyed.
 struct NocRegisterStateSave {
-    uint32_t noc_ctrl_state;
-    uint32_t noc_ret_addr_coord_state;
-    uint32_t noc_targ_addr_lo_state;
-    uint32_t noc_ret_addr_lo_state;
-    uint32_t noc_at_len_be_state;
-    uint32_t noc_targ_addr_coordinate_state;
-    uint32_t noc_targ_addr_mid_state;
-    uint32_t noc_packet_tag_state;
-    uint32_t noc_at_data_state;
-
-#ifdef ARCH_BLACKHOLE
-    uint32_t noc_ret_addr_mid_state;
-#endif
+    NocCmdBufState state;
 
     inline __attribute__((always_inline)) NocRegisterStateSave() {
-        noc_ctrl_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
-
-        // https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/NoC/MemoryMap.md#noc_ctrl
-        constexpr uint32_t reserved_bit_mask = ((1u << 27) - (1u << 18)) | (1u << 31);
-        noc_ctrl_state &= ~reserved_bit_mask;
-
-        noc_ret_addr_coord_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE);
-        noc_targ_addr_lo_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_LO);
-        noc_ret_addr_lo_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_LO);
-        noc_at_len_be_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE);
-        noc_targ_addr_coordinate_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_COORDINATE);
-        noc_targ_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_MID);
-
-        noc_packet_tag_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_PACKET_TAG);
-        // reset the counter to zero before the push
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_PACKET_TAG, 0);
-
-        noc_at_data_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_DATA);
-#ifdef ARCH_BLACKHOLE
-        noc_ret_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID);
-#endif
+        noc_cmd_buf_save_state(noc_index, write_cmd_buf, &state);
+        // Clear packet tag to avoid using stale transaction IDs in profiler writes
+        noc_clear_packet_tag(noc_index, write_cmd_buf);
     }
 
     inline __attribute__((always_inline)) ~NocRegisterStateSave() {
-        while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CTRL, noc_ctrl_state);
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE, noc_ret_addr_coord_state);
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_LO, noc_targ_addr_lo_state);
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_LO, noc_ret_addr_lo_state);
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE, noc_at_len_be_state);
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_COORDINATE, noc_targ_addr_coordinate_state);
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_MID, noc_targ_addr_mid_state);
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_PACKET_TAG, noc_packet_tag_state);
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_DATA, noc_at_data_state);
-#ifdef ARCH_BLACKHOLE
-        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID, noc_ret_addr_mid_state);
-#endif
+        noc_cmd_buf_restore_state(noc_index, write_cmd_buf, &state);
     }
 };
 
 inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
+#if !defined(KERNEL_BUILD)
+    constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
+#endif
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
@@ -368,6 +326,10 @@ __attribute__((noinline)) void finish_profiler() {
                     // Host index is reset because we got a new DRAM buffer
                     profiler_control_buffer[hostIndex] = 0;
                     currEndIndexAll = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
+                    dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                                      PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                                  hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                                  profiler_control_buffer[hostIndex] * sizeof(uint32_t);
                 }
             }
 
@@ -437,10 +399,10 @@ __attribute__((noinline)) void quick_push() {
     profiler_data_buffer[myRiscID].data[ID_LH] =
         (profiler_data_buffer[myRiscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | myRiscID);
 
-    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
-
     mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+
+    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
 
     if constexpr (NON_DROPPING) {
         if (currEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
@@ -650,6 +612,13 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 inline __attribute__((always_inline)) void increment_trace_count() {
     if constexpr (!TRACE_ON_TENSIX) {
         traceCount++;
+        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+#if !defined(COMPILE_FOR_IDLE_ERISC)
+            // Update every risc's trace ID
+            profiler_data_buffer[riscID].data[ID_LH] =
+                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
+#endif
+        }
     }
 }
 
@@ -790,9 +759,9 @@ __attribute__((noinline)) void trace_only_init() {
 #define DeviceIncrementTraceCount()
 
 // null macros when noc tracing is disabled
-#define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
-#define RECORD_NOC_EVENT_WITH_ID(type, noc_id, addrgen, offset, num_bytes, vc)
-#define RECORD_NOC_EVENT(type)
+#define RECORD_NOC_EVENT_WITH_ADDR(type, local_addr, noc_addr, num_bytes, vc, posted, noc)
+#define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted, noc)
+#define RECORD_NOC_EVENT(type, posted, noc)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 // null macros when perf counters are disabled
