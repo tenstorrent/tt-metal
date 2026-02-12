@@ -88,6 +88,7 @@ class DPTTTPipeline:
         self.eval()
         # Last per-call perf breakdown (filled in forward).
         self.last_perf: Optional[dict] = None
+        self._fusion_head_tracer = None
 
     # ------------------------------------------------------------------ plumbing
     def to(self, device: str):
@@ -104,9 +105,42 @@ class DPTTTPipeline:
         return self
 
     def close(self):
+        if self._fusion_head_tracer is not None:
+            try:
+                self._fusion_head_tracer.release()
+            except Exception:
+                pass
+            self._fusion_head_tracer = None
         if hasattr(self.backbone, "close"):
             self.backbone.close()
         return None
+
+    def _forward_fusion_head(self, pyramid, execution_mode: str):
+        if execution_mode == "eager":
+            return self.fusion_head(pyramid)
+
+        if self._fusion_head_tracer is None:
+            from models.tt_dit.utils.tracing import Tracer
+
+            self._fusion_head_tracer = Tracer(self.fusion_head, device=self.backbone.tt_device)
+
+        trace_cq_id = 0
+        if execution_mode == "trace_2cq":
+            LOG.warning("trace_2cq requested; executing traced fusion head on cq=0 until explicit 2CQ wiring is added")
+        try:
+            return self._fusion_head_tracer(
+                pyramid,
+                tracer_cq_id=trace_cq_id,
+                tracer_blocking_execution=True,
+            )
+        except Exception:
+            # Shape/address changes can invalidate an existing trace; rebuild once.
+            self._fusion_head_tracer.release()
+            return self._fusion_head_tracer(
+                pyramid,
+                tracer_cq_id=trace_cq_id,
+                tracer_blocking_execution=True,
+            )
 
     def __enter__(self):
         return self
@@ -136,6 +170,7 @@ class DPTTTPipeline:
             total_ms = (time.perf_counter() - t_start) * 1000.0
             self.last_perf = {
                 "mode": "cpu_fallback",
+                "execution_mode": "cpu_fallback",
                 "total_ms": total_ms,
                 "num_images": len(paths),
             }
@@ -152,6 +187,10 @@ class DPTTTPipeline:
         normalize_ms = 0.0
         t_total = time.perf_counter()
         use_tt_neck_head = bool(self.config.tt_device_reassembly or self.config.tt_device_fusion)
+        requested_exec_mode = str(getattr(self.config, "tt_execution_mode", "eager")).lower()
+        if requested_exec_mode not in {"eager", "trace", "trace_2cq"}:
+            raise ValueError(f"Unsupported tt_execution_mode={requested_exec_mode!r}")
+        effective_exec_mode = requested_exec_mode
 
         with torch.no_grad():
             for pv in preprocessed:
@@ -173,7 +212,7 @@ class DPTTTPipeline:
                     reassembly_ms += (time.perf_counter() - t1) * 1000.0
 
                     t2 = time.perf_counter()
-                    depth = self.fusion_head(pyramid)
+                    depth = self._forward_fusion_head(pyramid, execution_mode=effective_exec_mode)
                     fusion_head_ms += (time.perf_counter() - t2) * 1000.0
                     # depth may be a TT tensor, torch tensor, or numpy array; ensure
                     # we normalize and return a float32 torch tensor.
@@ -199,6 +238,8 @@ class DPTTTPipeline:
         total_ms = (time.perf_counter() - t_total) * 1000.0
         self.last_perf = {
             "mode": "tt",
+            "execution_mode": effective_exec_mode,
+            "requested_execution_mode": requested_exec_mode,
             "num_images": len(paths),
             "preprocess_ms": preprocess_ms,
             "backbone_ms": backbone_ms,

@@ -11,53 +11,23 @@ import torch.nn.functional as F
 
 from .config import DPTLargeConfig
 from .tt_configs import TTLayerConfig
-from models.common.utility_functions import torch_to_tt_tensor_rm
+from .tt_cnn_ops import (
+    TTConv2dCached,
+    ensure_tt_device_tensor,
+    tt_relu,
+    tt_resize_to_nchw,
+    tt_upsample_nchw,
+)
 
 
 def _ensure_tt_device_tensor(x, tt_device, ttnn):
     """Ensure TT tensors are materialized in DEVICE storage for TT ops."""
-    if tt_device is None:
-        return x
-    if not isinstance(x, ttnn.Tensor):
-        if torch.is_tensor(x):
-            return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=tt_device)
-        return x
-    try:
-        if x.storage_type() == ttnn.StorageType.DEVICE:
-            return x
-    except Exception:
-        return x
-    try:
-        return x.to(tt_device)
-    except Exception:
-        x_host = x.cpu()
-        if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-            x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-        x_torch = x_host.to_torch()
-        return ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=tt_device)
+    return ensure_tt_device_tensor(x, tt_device)
 
 
 def _tt_relu_with_fallback(hidden_state, tt_device, ttnn):
-    """Apply ReLU on device if possible, fallback to host otherwise."""
-    try:
-        # Prefer in-place ReLU to reduce intermediate allocations in the hot path.
-        try:
-            return ttnn.relu(hidden_state, output_tensor=hidden_state)
-        except TypeError:
-            return ttnn.relu(hidden_state)
-    except Exception:
-        # Fallback to host relu if ttnn.relu is unavailable
-        x_host = hidden_state.cpu()
-        if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-            x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-        x_torch = x_host.to_torch()
-        x_torch = torch.relu(x_torch)
-        return ttnn.from_torch(
-            x_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=tt_device,
-        )
+    """Apply ReLU entirely on TT device in the TT fast path."""
+    return tt_relu(hidden_state)
 
 
 class DPTPreActResidualLayerTT(nn.Module):
@@ -114,9 +84,6 @@ class DPTPreActResidualLayerTT(nn.Module):
         return fused_w, fused_b
 
     def _tt_convolution(self, which: int, x):
-        import tt_lib.fallback_ops as fallback_ops  # type: ignore
-        import ttnn  # type: ignore
-
         conv = self.convolution1 if which == 1 else self.convolution2
         cache = self._tt_conv1 if which == 1 else self._tt_conv2
 
@@ -124,41 +91,28 @@ class DPTPreActResidualLayerTT(nn.Module):
             if self.use_batch_norm:
                 bn = self.batch_norm1 if which == 1 else self.batch_norm2
                 fused_w, fused_b = self._fuse_conv_bn(conv, bn)
-                wt = torch_to_tt_tensor_rm(fused_w, self.tt_device, put_on_device=True)
-                bs = torch_to_tt_tensor_rm(fused_b, self.tt_device, put_on_device=True)
-            else:
-                wt = torch_to_tt_tensor_rm(conv.weight.detach(), self.tt_device, put_on_device=True)
-                bs = (
-                    torch_to_tt_tensor_rm(conv.bias.detach(), self.tt_device, put_on_device=True)
-                    if conv.bias is not None
-                    else None
+                cache = TTConv2dCached.from_tensors(
+                    weight_torch=fused_w,
+                    bias_torch=fused_b,
+                    stride=(1, 1),
+                    padding=(1, 1),
                 )
-            cache = fallback_ops.Conv2d(
-                in_channels=conv.in_channels,
-                out_channels=conv.out_channels,
-                kernel_size=conv.kernel_size[0],
-                weights=wt,
-                biases=bs,
-                stride=1,
-                padding=1,
-            )
+            else:
+                cache = TTConv2dCached.from_conv(conv)
             if which == 1:
                 self._tt_conv1 = cache
             else:
                 self._tt_conv2 = cache
-        return cache(x)
+        return cache(x, device=self.tt_device)
 
     def forward(self, hidden_state: torch.Tensor):
         try:
-            import tt_lib.fallback_ops as fallback_ops  # type: ignore
             import ttnn  # type: ignore
         except Exception:
-            fallback_ops = None
             ttnn = None
 
         if (
-            fallback_ops is not None
-            and ttnn is not None
+            ttnn is not None
             and self.tt_device is not None
             and isinstance(hidden_state, ttnn.Tensor)
         ):
@@ -212,34 +166,18 @@ class DPTFeatureFusionLayerTT(nn.Module):
         self._tt_proj = None
 
     def _tt_projection(self, x):
-        import tt_lib.fallback_ops as fallback_ops  # type: ignore
-        import ttnn  # type: ignore
-
         if self._tt_proj is None:
-            wt = torch_to_tt_tensor_rm(self.projection.weight.detach(), self.tt_device, put_on_device=True)
-            bs = torch_to_tt_tensor_rm(self.projection.bias.detach(), self.tt_device, put_on_device=True)
-            self._tt_proj = fallback_ops.Conv2d(
-                in_channels=self.projection.in_channels,
-                out_channels=self.projection.out_channels,
-                kernel_size=self.projection.kernel_size[0],
-                weights=wt,
-                biases=bs,
-                stride=1,
-                padding=0,
-            )
-        return self._tt_proj(x)
+            self._tt_proj = TTConv2dCached.from_conv(self.projection)
+        return self._tt_proj(x, device=self.tt_device)
 
     def forward(self, hidden_state, residual=None):
         try:
-            import tt_lib.fallback_ops as fallback_ops  # type: ignore
             import ttnn  # type: ignore
         except Exception:
-            fallback_ops = None
             ttnn = None
 
         if (
-            fallback_ops is not None
-            and ttnn is not None
+            ttnn is not None
             and isinstance(hidden_state, ttnn.Tensor)
             and self.tt_device is not None
         ):
@@ -251,21 +189,19 @@ class DPTFeatureFusionLayerTT(nn.Module):
                 hs_shape = tuple(hidden_state.shape)
                 res_shape = tuple(residual.shape)
                 if hs_shape[-2] != res_shape[-2] or hs_shape[-1] != res_shape[-1]:
-                    residual = fallback_ops.interpolate(
+                    residual = tt_resize_to_nchw(
                         residual,
-                        size=(hs_shape[-2], hs_shape[-1]),
+                        target_hw=(hs_shape[-2], hs_shape[-1]),
                         mode="bilinear",
-                        align_corners=False,
                     )
                 residual_out = self.residual_layer1(residual)
                 hidden_state = ttnn.add(hidden_state, residual_out)
 
             hidden_state = self.residual_layer2(hidden_state)
-            hidden_state = fallback_ops.interpolate(
+            hidden_state = tt_upsample_nchw(
                 hidden_state,
                 scale_factor=2,
                 mode="bilinear",
-                align_corners=self.align_corners,
             )
             hidden_state = self._tt_projection(hidden_state)
             hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
@@ -386,22 +322,9 @@ class DPTDepthEstimationHeadTT(nn.Module):
         conv2.bias.data.copy_(state_dict["head.head.4.bias"])
 
     def _tt_conv_for(self, index: int, conv: nn.Conv2d):
-        import tt_lib.fallback_ops as fallback_ops  # type: ignore
-
         if index in self._tt_head_convs:
             return self._tt_head_convs[index]
-
-        wt = torch_to_tt_tensor_rm(conv.weight.detach(), self.tt_device, put_on_device=True)
-        bs = torch_to_tt_tensor_rm(conv.bias.detach(), self.tt_device, put_on_device=True)
-        tt_conv = fallback_ops.Conv2d(
-            in_channels=conv.in_channels,
-            out_channels=conv.out_channels,
-            kernel_size=conv.kernel_size[0],
-            weights=wt,
-            biases=bs,
-            stride=conv.stride[0],
-            padding=conv.padding[0],
-        )
+        tt_conv = TTConv2dCached.from_conv(conv)
         self._tt_head_convs[index] = tt_conv
         return tt_conv
 
@@ -416,50 +339,38 @@ class DPTDepthEstimationHeadTT(nn.Module):
         return predicted_depth
 
     def _forward_tt(self, hidden_states):
-        import tt_lib.fallback_ops as fallback_ops  # type: ignore
         import ttnn  # type: ignore
 
         hidden_state = hidden_states[self.config.head_in_index]
 
         if self.projection is not None:
             if self._tt_proj is None:
-                wt = torch_to_tt_tensor_rm(self.projection.weight.detach(), self.tt_device, put_on_device=True)
-                bs = torch_to_tt_tensor_rm(self.projection.bias.detach(), self.tt_device, put_on_device=True)
-                self._tt_proj = fallback_ops.Conv2d(
-                    in_channels=self.projection.in_channels,
-                    out_channels=self.projection.out_channels,
-                    kernel_size=self.projection.kernel_size[0],
-                    weights=wt,
-                    biases=bs,
-                    stride=1,
-                    padding=1,
-                )
-            hidden_state = self._tt_proj(hidden_state)
+                self._tt_proj = TTConv2dCached.from_conv(self.projection)
+            hidden_state = self._tt_proj(hidden_state, device=self.tt_device)
             hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
 
         # Head[0] conv
         conv0 = self.head[0]
         tt_conv0 = self._tt_conv_for(0, conv0)
-        hidden_state = tt_conv0(hidden_state)
+        hidden_state = tt_conv0(hidden_state, device=self.tt_device)
 
         # Upsample
-        hidden_state = fallback_ops.interpolate(
+        hidden_state = tt_upsample_nchw(
             hidden_state,
             scale_factor=2,
             mode="bilinear",
-            align_corners=True,
         )
 
         # Conv to 32 channels + device ReLU
         conv1 = self.head[2]
         tt_conv1 = self._tt_conv_for(2, conv1)
-        hidden_state = tt_conv1(hidden_state)
+        hidden_state = tt_conv1(hidden_state, device=self.tt_device)
         hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
 
         # Final 1x1 conv to depth + device ReLU
         conv2 = self.head[4]
         tt_conv2 = self._tt_conv_for(4, conv2)
-        hidden_state = tt_conv2(hidden_state)
+        hidden_state = tt_conv2(hidden_state, device=self.tt_device)
         hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
         hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
 
@@ -471,16 +382,13 @@ class DPTDepthEstimationHeadTT(nn.Module):
         type of the incoming feature maps and TT device availability.
         """
         try:
-            import tt_lib.fallback_ops as fallback_ops  # type: ignore
             import ttnn  # type: ignore
         except Exception:
-            fallback_ops = None
             ttnn = None
 
         # Optionally convert incoming torch tensors to TT tensors to keep fusion entirely on device
         if (
-            fallback_ops is not None
-            and ttnn is not None
+            ttnn is not None
             and self.tt_device is not None
             and (getattr(self.config, "tt_device_fusion", False) or getattr(self.config, "tt_perf_neck", False))
         ):
@@ -503,8 +411,7 @@ class DPTDepthEstimationHeadTT(nn.Module):
             hidden_states = new_states
 
         use_tt = (
-            fallback_ops is not None
-            and ttnn is not None
+            ttnn is not None
             and self.tt_device is not None
             and len(hidden_states) > self.config.head_in_index
             and isinstance(hidden_states[self.config.head_in_index], ttnn.Tensor)
@@ -518,7 +425,7 @@ class DPTDepthEstimationHeadTT(nn.Module):
 class DPTFusionHead(nn.Module):
     """
     Fusion + depth head that mirrors Hugging Face's DPT neck fusion stage and
-    `DPTDepthEstimationHead`, but with TT device support via fallback ops.
+    `DPTDepthEstimationHead`, with TT-native conv/upsample execution in TT mode.
     """
 
     def __init__(

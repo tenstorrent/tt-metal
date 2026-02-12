@@ -56,6 +56,13 @@ def main():
     parser.add_argument("--dump-perf", type=str, default=None)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--repeat", type=int, default=3)
+    parser.add_argument(
+        "--tt-execution-mode",
+        type=str,
+        default="eager",
+        choices=("eager", "trace", "trace_2cq"),
+        help="Execution mode for TT neck/head path.",
+    )
     args = parser.parse_args()
 
     images = _collect_images(args)
@@ -77,12 +84,12 @@ def main():
         device=args.device,
         allow_cpu_fallback=not use_tt,
         enable_tt_device=use_tt,
-        # Profiling on N300 shows host-side reassembly + TT fusion is
-        # currently the fastest parity-safe path.
-        tt_device_reassembly=False,
+        # Keep the full neck/head hot path on device in TT mode.
+        tt_device_reassembly=use_tt,
         tt_device_fusion=use_tt,
         tt_perf_encoder=use_tt,
-        tt_perf_neck=False,
+        tt_perf_neck=use_tt,
+        tt_execution_mode=str(args.tt_execution_mode),
     )
 
     tt_pipeline = None

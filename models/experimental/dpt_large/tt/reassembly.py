@@ -11,25 +11,11 @@ import torch.nn as nn
 from .config import DPTLargeConfig
 from .vit_backbone import ViTBackboneOutputs
 from .tt_configs import TTLayerConfig
-from models.common.utility_functions import torch_to_tt_tensor_rm
+from .tt_cnn_ops import TTConv2dCached, TTConvTranspose2dCached, ensure_tt_device_tensor
 
 
 def _ensure_tt_device_tensor(x, tt_device, ttnn):
-    if tt_device is None or not isinstance(x, ttnn.Tensor):
-        return x
-    try:
-        if x.storage_type() == ttnn.StorageType.DEVICE:
-            return x
-    except Exception:
-        return x
-    try:
-        return x.to(tt_device)
-    except Exception:
-        x_host = x.cpu()
-        if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-            x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-        x_torch = x_host.to_torch()
-        return ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=tt_device)
+    return ensure_tt_device_tensor(x, tt_device)
 
 
 class DPTReassembleLayerTT(nn.Module):
@@ -37,9 +23,8 @@ class DPTReassembleLayerTT(nn.Module):
     TT-aware variant of Hugging Face's `DPTReassembleLayer`.
 
     It projects from the ViT hidden size to a per-scale channel size, then
-    performs up/down sampling depending on the `factor`. On TT devices the
-    projection runs via `fallback_ops.Conv2d`; upsampling uses host
-    ConvTranspose2d parity and rematerializes outputs on TT.
+    performs up/down sampling depending on the `factor` using TT-native ops
+    when TT tensors are provided.
     """
 
     def __init__(self, hidden_size: int, channels: int, factor: float, tt_device=None, memcfg=None):
@@ -64,78 +49,44 @@ class DPTReassembleLayerTT(nn.Module):
         # TT conv caches
         self._tt_proj = None
         self._tt_resize_conv = None
+        self._tt_resize_conv_transpose = None
 
     def _tt_project(self, x):
-        import tt_lib.fallback_ops as fallback_ops  # type: ignore
-        import ttnn  # type: ignore
-
         if self._tt_proj is None:
-            wt = torch_to_tt_tensor_rm(self.projection.weight.detach(), self.tt_device, put_on_device=True)
-            bs = torch_to_tt_tensor_rm(self.projection.bias.detach(), self.tt_device, put_on_device=True)
-            self._tt_proj = fallback_ops.Conv2d(
-                weights=wt,
-                biases=bs,
-                in_channels=self.projection.in_channels,
-                out_channels=self.projection.out_channels,
-                kernel_size=self.projection.kernel_size[0],
-                stride=1,
-                padding=0,
-            )
-        return self._tt_proj(x)
+            self._tt_proj = TTConv2dCached.from_conv(self.projection)
+        return self._tt_proj(x, device=self.tt_device)
 
     def _tt_resize(self, x):
-        import tt_lib.fallback_ops as fallback_ops  # type: ignore
-        import ttnn  # type: ignore
-
-        # Preserve HF behavior for upsampling by using the learned ConvTranspose2d
-        # weights on host, then materializing the result back on TT device.
+        # Preserve HF behavior for upsampling with a learned ConvTranspose2d,
+        # but keep execution fully on TT device.
         if self.factor > 1:
-            x_host = x.cpu()
-            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-            x_torch = x_host.to_torch().to(dtype=self.resize.weight.dtype)
-            y_torch = self.resize(x_torch)
-            return ttnn.from_torch(
-                y_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.tt_device,
-            )
+            if self._tt_resize_conv_transpose is None:
+                self._tt_resize_conv_transpose = TTConvTranspose2dCached.from_conv_transpose(self.resize)
+            return self._tt_resize_conv_transpose(x, device=self.tt_device)
 
         if isinstance(self.resize, nn.Identity):
             return x
 
         if self._tt_resize_conv is None:
-            # Only downsampling path uses a real Conv2d kernel.
-            wt = torch_to_tt_tensor_rm(self.resize.weight.detach(), self.tt_device, put_on_device=True)
-            bs = torch_to_tt_tensor_rm(self.resize.bias.detach(), self.tt_device, put_on_device=True)
-            self._tt_resize_conv = fallback_ops.Conv2d(
-                weights=wt,
-                biases=bs,
-                in_channels=self.resize.in_channels,
-                out_channels=self.resize.out_channels,
-                kernel_size=self.resize.kernel_size[0],
-                stride=self.resize.stride[0],
-                padding=self.resize.padding[0],
+            self._tt_resize_conv = TTConv2dCached.from_tensors(
+                weight_torch=self.resize.weight.detach(),
+                bias_torch=self.resize.bias.detach(),
+                stride=(int(self.resize.stride[0]), int(self.resize.stride[1])),
+                padding=(int(self.resize.padding[0]), int(self.resize.padding[1])),
             )
-        return self._tt_resize_conv(x)
+        return self._tt_resize_conv(x, device=self.tt_device)
 
     def prefers_device_path(self) -> bool:
-        # Upsample stages currently rely on host ConvTranspose2d parity.
-        # Keep those stages on host until the fusion boundary to avoid
-        # redundant host<->device round-trips.
-        return self.factor <= 1
+        return True
 
     def forward(self, x):
         # x: torch.Tensor or ttnn.Tensor of shape [B, hidden_size, H, W] / TT layout.
         try:
-            import tt_lib.fallback_ops as fallback_ops  # type: ignore
             import ttnn  # type: ignore
         except Exception:
-            fallback_ops = None
             ttnn = None
 
-        if fallback_ops is not None and ttnn is not None and isinstance(x, ttnn.Tensor) and self.tt_device is not None:
+        if ttnn is not None and isinstance(x, ttnn.Tensor) and self.tt_device is not None:
             x = self._tt_project(x)
             x = self._tt_resize(x)
             return x
@@ -333,11 +284,9 @@ class DPTReassembly(nn.Module):
                 hidden_state = fmap
 
             # Optional: push into TT device path post-readout to keep conv/resize on device.
-            # Stages that rely on host ConvTranspose2d stay on host here and are
-            # materialized on device once at fusion ingress.
+            # For TT runs, all reassembly stages stay on device.
             try:
                 import ttnn  # type: ignore
-                from models.common.utility_functions import torch_to_tt_tensor_rm
 
                 if (
                     self.tt_device is not None
@@ -364,32 +313,19 @@ class DPTReassembly(nn.Module):
             conv = self.convs[stage_idx]
 
             try:
-                import tt_lib.fallback_ops as fallback_ops  # type: ignore
                 import ttnn  # type: ignore
             except Exception:
-                fallback_ops = None
                 ttnn = None
 
             if (
-                fallback_ops is not None
-                and ttnn is not None
+                ttnn is not None
                 and isinstance(x, ttnn.Tensor)
                 and self.tt_device is not None
             ):
                 # Lazily materialize TT conv for this stage.
                 if self._tt_convs[stage_idx] is None:
-                    wt = torch_to_tt_tensor_rm(conv.weight.detach(), self.tt_device, put_on_device=True)
-                    # No bias in HF convs.
-                    self._tt_convs[stage_idx] = fallback_ops.Conv2d(
-                        weights=wt,
-                        biases=None,
-                        in_channels=conv.in_channels,
-                        out_channels=conv.out_channels,
-                        kernel_size=conv.kernel_size[0],
-                        stride=1,
-                        padding=1,
-                    )
-                x = self._tt_convs[stage_idx](x)
+                    self._tt_convs[stage_idx] = TTConv2dCached.from_conv(conv)
+                x = self._tt_convs[stage_idx](x, device=self.tt_device)
                 x = _ensure_tt_device_tensor(x, self.tt_device, ttnn)
                 outputs.append(x)
             else:

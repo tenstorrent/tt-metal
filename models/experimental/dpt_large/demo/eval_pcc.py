@@ -74,6 +74,13 @@ def main():
     parser.add_argument("--image-size", type=int, default=384)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--repeat", type=int, default=3)
+    parser.add_argument(
+        "--tt-execution-mode",
+        type=str,
+        default="eager",
+        choices=("eager", "trace", "trace_2cq"),
+        help="Execution mode for TT neck/head path.",
+    )
     parser.add_argument("--dump-json", type=str, default=None, help="Write a JSON summary.")
     args = parser.parse_args()
 
@@ -126,11 +133,12 @@ def main():
         device=str(args.device),
         allow_cpu_fallback=False,
         enable_tt_device=True,
-        # Keep reassembly on host; run fusion/head on TT device.
-        tt_device_reassembly=False,
+        # Keep neck/head fully on TT device for practical hot path.
+        tt_device_reassembly=True,
         tt_device_fusion=True,
         tt_perf_encoder=True,
-        tt_perf_neck=False,
+        tt_perf_neck=True,
+        tt_execution_mode=str(args.tt_execution_mode),
     )
 
     with DPTTTPipeline(config=cfg_tt, pretrained=bool(args.pretrained), device="cpu") as tt:
