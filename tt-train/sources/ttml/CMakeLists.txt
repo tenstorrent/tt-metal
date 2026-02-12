@@ -166,8 +166,8 @@ if(NOT TARGET TT::Metalium)
             message(STATUS "Using TT_METAL_HOME from environment: ${TT_METAL_HOME}")
         else()
             # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
-            # From tt-train/sources/ttml/, go up THREE levels to reach the repository root
-            set(TT_METAL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
+            # From tt-train/, go up ONE level to reach the repository root
+            set(TT_METAL_HOME "${CMAKE_SOURCE_DIR}/..")
             if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
                 message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
             else()
@@ -190,9 +190,9 @@ if(NOT TARGET TT::Metalium)
             "${TT_METAL_HOME}/tt_metal/hw/inc"
             "${TT_METAL_HOME}/tt_stl"
             # TTNN
-            "$ENV{TT_METAL_HOME}/ttnn"
-            "$ENV{TT_METAL_HOME}/ttnn/api"
-            "$ENV{TT_METAL_HOME}/ttnn/cpp"
+            "${TT_METAL_HOME}/ttnn"
+            "${TT_METAL_HOME}/ttnn/api"
+            "${TT_METAL_HOME}/ttnn/cpp"
             "${reflect_SOURCE_DIR}"
         )
 
@@ -348,6 +348,40 @@ message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
+
+##################################################
+# Precompiled headers for ttml
+# The ttml library includes massive TTNN/Metalium headers across 100+ source files.
+# Precompiling them once dramatically reduces compile time.
+##################################################
+
+target_precompile_headers(
+    ttml
+    PRIVATE
+        # Standard library headers (widely used across tt-train)
+        <algorithm>
+        <cmath>
+        <cstdint>
+        <cstring>
+        <functional>
+        <memory>
+        <optional>
+        <span>
+        <stdexcept>
+        <string>
+        <tuple>
+        <unordered_map>
+        <variant>
+        <vector>
+        # Third-party headers
+        <fmt/core.h>
+        <fmt/format.h>
+        <nlohmann/json.hpp>
+        <enchantum/enchantum.hpp>
+        # Heavy TTNN/Metalium umbrella headers used across tt-train sources
+        "core/ttnn_all_includes.hpp"
+        "metal/ttnn_all_includes.hpp"
+)
 
 if(ENABLE_LIBCXX)
     target_link_libraries(

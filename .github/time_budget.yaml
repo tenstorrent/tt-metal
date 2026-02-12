@@ -85,7 +85,7 @@ fabric:
   e2e:
     wh_llmbox: 165
     wh_galaxy: 100
-    bh_galaxy: 50
+    bh_galaxy: 60
 
 scaleout:
   e2e:
@@ -103,8 +103,8 @@ models:
   integration:
     wh_llmbox: 422
   perf:
-    wh_llmbox: 685
+    wh_llmbox_perf: 685
     wh_galaxy: 260
   demo:
-    wh_llmbox: 1090
+    wh_llmbox_perf: 1090
     wh_galaxy: 270
