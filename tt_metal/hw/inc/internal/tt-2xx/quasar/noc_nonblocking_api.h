@@ -452,7 +452,17 @@ inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t
     return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN);
 }
 
-// Returns true if the command buffer has the NOC_CMD_VC_LINKED bit set in its control register.
+/**
+ * Checks whether the specified command buffer has the NOC_CMD_VC_LINKED bit set in its control register.
+ * When linked, the NOC virtual channel is held open between transactions to reduce latency.
+ *
+ * Return value: true if the linked bit is set, false otherwise
+ *
+ * | Argument | Description                                    | Data type | Valid range | Required |
+ * |----------|------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                      | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Command buffer index                           | uint32_t  | 0 - 3       | True     |
+ */
 inline __attribute__((always_inline)) bool noc_cmd_buf_is_linked(uint32_t noc, uint32_t cmd_buf) {
     return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CTRL) & NOC_CMD_VC_LINKED;
 }
