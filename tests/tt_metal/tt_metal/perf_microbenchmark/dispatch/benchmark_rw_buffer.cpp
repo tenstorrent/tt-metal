@@ -165,59 +165,62 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
-static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
+// Helper: create a WIDTH_SHARDED MeshBuffer with controlled contiguity.
+// Returns {device_buffer, actual_buf_size}, or {nullptr, 0} on skip.
+//
+// WIDTH_SHARDED: each core owns a vertical strip of width = contiguity pages.
+//
+// tensor2d = {rows, cols} where host_page = row * cols + col
+//   rows  = pages_per_core / c        (number of contiguous chunks per core)
+//   cols  = num_cores * c              (total width)
+//
+// shard_in_pages = shard_shape / page_shape = {rows, c}
+//   -> core k gets columns [k*c, (k+1)*c) across all rows
+//   -> each row contributes c contiguous host pages to that core
+//   -> c * page_size contiguous bytes per chunk
+//
+static std::pair<std::shared_ptr<MeshBuffer>, uint64_t> create_sharded_buffer(
+    benchmark::State& state,
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    int64_t transfer_size,
+    int64_t contiguity_factor,
+    BufferType buffer_type) {
     auto page_size = FIXED_PAGE_SIZE;
-    auto transfer_size = state.range(0);
-    auto contiguity_factor = state.range(1);  // Controls pages per contiguous chunk
-    auto buffer_type = BUFFER_TYPES[state.range(2)];
-    [[maybe_unused]] auto device_id = state.range(3);
 
-    log_debug(
-        LogTest,
-        "Running WriteSharded Benchmark for Page Size: {}, Transfer Size: {}, Contiguity: {}, Buffer Type: {}, Device ID: {}",
-        page_size,
-        transfer_size,
-        contiguity_factor,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
-        device_id);
-
-    // Compute sharding parameters based on buffer type
     CoreCoord core_grid_size = (buffer_type == BufferType::DRAM) ? mesh_device->dram_grid_size()
                                                                  : mesh_device->compute_with_storage_grid_size();
     uint64_t total_pages = transfer_size / page_size;
     uint64_t num_cores = core_grid_size.x * core_grid_size.y;
     uint64_t pages_per_core = total_pages / num_cores;
 
-    // Skip if transfer size is too small for the grid
     if (pages_per_core == 0) {
         state.SkipWithError("Transfer size too small for the core grid");
-        return;
+        return {nullptr, 0};
     }
 
-    // Validate contiguity_factor
     if (contiguity_factor <= 0) {
         state.SkipWithError("Contiguity factor must be positive");
-        return;
+        return {nullptr, 0};
     }
 
-    // Clamp contiguity_factor to pages_per_core to avoid invalid layouts
     uint64_t effective_contiguity = std::min(static_cast<uint64_t>(contiguity_factor), pages_per_core);
 
-    // Compute actual buffer size based on pages_per_core
+    // Round pages_per_core down so it's divisible by effective_contiguity
+    pages_per_core = (pages_per_core / effective_contiguity) * effective_contiguity;
+    if (pages_per_core == 0) {
+        state.SkipWithError("Contiguity factor too large for available pages per core");
+        return {nullptr, 0};
+    }
+
     uint64_t actual_buf_size = pages_per_core * num_cores * page_size;
 
-    // Create ShardSpecBuffer with controlled contiguity.
-    // effective_contiguity controls how many pages each core gets in each contiguous chunk.
-    // tensor2d layout: [height = ceil(pages_per_core / effective_contiguity), width = num_cores * effective_contiguity]
-    // This creates ceil(pages_per_core / effective_contiguity) separate ranges per core,
-    // each containing up to effective_contiguity contiguous pages (last chunk may be smaller).
-    CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
-    std::array<uint32_t, 2> shard_shape = {static_cast<uint32_t>(pages_per_core), static_cast<uint32_t>(page_size)};
-    std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
-    
-    uint32_t tensor_height = (pages_per_core + effective_contiguity - 1) / effective_contiguity;  // div_up
+    uint32_t shard_height = pages_per_core / effective_contiguity;
     uint32_t tensor_width = num_cores * effective_contiguity;
-    std::array<uint32_t, 2> tensor2d_shape_in_pages = {tensor_height, tensor_width};
+
+    CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
+    std::array<uint32_t, 2> shard_shape = {shard_height, static_cast<uint32_t>(effective_contiguity * page_size)};
+    std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
+    std::array<uint32_t, 2> tensor2d_shape_in_pages = {shard_height, tensor_width};
 
     ShardSpecBuffer shard_spec(
         core_sets, shard_shape, ShardOrientation::ROW_MAJOR, page_shape_array, tensor2d_shape_in_pages);
@@ -225,12 +228,25 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = page_size,
         .buffer_type = buffer_type,
-        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED),
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED),
         .bottom_up = false};
 
     ReplicatedBufferConfig global_buffer_config{.size = actual_buf_size};
 
     auto device_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
+    return {device_buffer, actual_buf_size};
+}
+
+static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
+    auto transfer_size = state.range(0);
+    auto contiguity_factor = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+
+    auto [device_buffer, actual_buf_size] =
+        create_sharded_buffer(state, mesh_device, transfer_size, contiguity_factor, buffer_type);
+    if (!device_buffer) {
+        return;
+    }
 
     std::vector<uint8_t> host_buffer(static_cast<std::size_t>(actual_buf_size));
 
@@ -246,77 +262,20 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
 }
 
 static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
-    auto page_size = FIXED_PAGE_SIZE;
     auto transfer_size = state.range(0);
-    auto contiguity_factor = state.range(1);  // Controls pages per contiguous chunk
+    auto contiguity_factor = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
-    [[maybe_unused]] auto device_id = state.range(3);
 
-    log_debug(
-        LogTest,
-        "Running WritePinnedMemorySharded Benchmark for Page Size: {}, Transfer Size: {}, Contiguity: {}, Buffer Type: {}, Device ID: {}",
-        page_size,
-        transfer_size,
-        contiguity_factor,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
-        device_id);
-
-    // Check if memory pinning with NOC mapping is supported
     if (!experimental::GetMemoryPinningParameters(*mesh_device).can_map_to_noc) {
         state.SkipWithError("Memory pinning with NOC mapping is not supported on this device");
         return;
     }
 
-    // Compute sharding parameters based on buffer type
-    CoreCoord core_grid_size = (buffer_type == BufferType::DRAM) ? mesh_device->dram_grid_size()
-                                                                 : mesh_device->compute_with_storage_grid_size();
-    uint64_t total_pages = transfer_size / page_size;
-    uint64_t num_cores = core_grid_size.x * core_grid_size.y;
-    uint64_t pages_per_core = total_pages / num_cores;
-
-    // Skip if transfer size is too small for the grid
-    if (pages_per_core == 0) {
-        state.SkipWithError("Transfer size too small for the core grid");
+    auto [device_buffer, actual_buf_size] =
+        create_sharded_buffer(state, mesh_device, transfer_size, contiguity_factor, buffer_type);
+    if (!device_buffer) {
         return;
     }
-
-    // Validate contiguity_factor
-    if (contiguity_factor <= 0) {
-        state.SkipWithError("Contiguity factor must be positive");
-        return;
-    }
-
-    // Clamp contiguity_factor to pages_per_core to avoid invalid layouts
-    uint64_t effective_contiguity = std::min(static_cast<uint64_t>(contiguity_factor), pages_per_core);
-
-    // Compute actual buffer size based on pages_per_core
-    uint64_t actual_buf_size = pages_per_core * num_cores * page_size;
-
-    // Create ShardSpecBuffer with controlled contiguity.
-    // effective_contiguity controls how many pages each core gets in each contiguous chunk.
-    // tensor2d layout: [height = ceil(pages_per_core / effective_contiguity), width = num_cores * effective_contiguity]
-    // This creates ceil(pages_per_core / effective_contiguity) separate ranges per core,
-    // each containing up to effective_contiguity contiguous pages (last chunk may be smaller).
-    CoreRangeSet core_sets({CoreRange(CoreCoord(0, 0), CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))});
-    std::array<uint32_t, 2> shard_shape = {static_cast<uint32_t>(pages_per_core), static_cast<uint32_t>(page_size)};
-    std::array<uint32_t, 2> page_shape_array = {1, static_cast<uint32_t>(page_size)};
-    
-    uint32_t tensor_height = (pages_per_core + effective_contiguity - 1) / effective_contiguity;  // div_up
-    uint32_t tensor_width = num_cores * effective_contiguity;
-    std::array<uint32_t, 2> tensor2d_shape_in_pages = {tensor_height, tensor_width};
-
-    ShardSpecBuffer shard_spec(
-        core_sets, shard_shape, ShardOrientation::ROW_MAJOR, page_shape_array, tensor2d_shape_in_pages);
-
-    DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = page_size,
-        .buffer_type = buffer_type,
-        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED),
-        .bottom_up = false};
-
-    ReplicatedBufferConfig global_buffer_config{.size = actual_buf_size};
-
-    auto device_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
 
     // Allocate source host buffer with 64-byte alignment
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -336,13 +295,12 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
         tt::stl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(actual_buf_size)),
         MemoryPin(src_storage));
 
-    // Pin the aligned host memory region for the shard
+    // Pin the aligned host memory region
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_mem =
         experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
 
-    // Prepare the write transfer using pinned memory
     auto write_transfer = distributed::ShardDataTransfer(coord)
                               .host_data(aligned_ptr)
                               .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));

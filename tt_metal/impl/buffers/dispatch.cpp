@@ -660,7 +660,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 dispatch_params.page_size_to_write * (range.device_page_offset - start_device_page_offset);
                 #if 0
             if (!logged_writes) {
-                fmt::println(stderr, "Writing pages to offset {} from offset {} size {} \n", dst_offset + cmd_region_offset, src_offset, range.num_pages * dispatch_params.page_size_to_write);
+                //fmt::println(stderr, "Writing pages to offset {} from offset {} size {} \n", dst_offset + cmd_region_offset, src_offset, range.num_pages * dispatch_params.page_size_to_write);
             }
             #endif
             command_sequence.update_cmd_sequence(
@@ -1261,7 +1261,7 @@ bool write_to_device_buffer(
             }
         }
         if (has_pinned_inputs) {
-            log_info(tt::LogMetal, "Sharded using pinned transfer: {}", use_pinned_transfer);
+          //  log_info(tt::LogMetal, "Sharded using pinned transfer: {}", use_pinned_transfer);
         }
 
         ShardedBufferWriteDispatchParams dispatch_params(
