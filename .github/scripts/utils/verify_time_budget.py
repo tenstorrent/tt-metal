@@ -30,7 +30,7 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name):
         test_name = test.get("name", "Unnamed Test")
 
         # Validate that all mandatory keys exist for this test
-        required_keys = ["timeout", "sku", "team"]
+        required_keys = ["skus", "team"]
         missing_keys = [key for key in required_keys if key not in test]
         if missing_keys:
             print(
@@ -39,14 +39,29 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name):
             errors_found = True
             continue  # Skip this invalid test
 
-        test_timeout = test["timeout"]
-        test_sku = test["sku"]
+        test_skus = test["skus"]
         test_team = test["team"]
 
-        # Use a tuple (team, sku) as the key for summation
-        budget_key = (test_team, test_sku)
-        budget_totals[budget_key] += test_timeout
-        print(f"  Test '{test_name}' (Team: {test_team}, SKU: {test_sku}) adds {test_timeout} min.")
+        if not isinstance(test_skus, dict) or not test_skus:
+            print(
+                f"  [ERROR] Validation FAILED! Test '{test_name}' has invalid 'skus' field. "
+                f"Expected a non-empty mapping of SKU names to their config."
+            )
+            errors_found = True
+            continue
+
+        for sku_name, sku_config in test_skus.items():
+            if not isinstance(sku_config, dict) or "timeout" not in sku_config:
+                print(f"  [ERROR] Validation FAILED! Test '{test_name}', SKU '{sku_name}' is missing 'timeout'.")
+                errors_found = True
+                continue
+
+            test_timeout = sku_config["timeout"]
+
+            # Use a tuple (team, sku) as the key for summation
+            budget_key = (test_team, sku_name)
+            budget_totals[budget_key] += test_timeout
+            print(f"  Test '{test_name}' (Team: {test_team}, SKU: {sku_name}) adds {test_timeout} min.")
 
     if errors_found:
         print(f"\nMissing keys in {tests_file}. Please fix the entries above.")

@@ -18,11 +18,6 @@ FusedRMSNormPostAllGatherDeviceOperation::select_program_factory(
     return FusedRMSNormPostAllGatherProgramFactory{};
 }
 
-void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;

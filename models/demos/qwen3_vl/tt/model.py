@@ -544,7 +544,8 @@ class Transformer(TTTransformer):
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
-        x = self.norm(x, mode=mode)
+        lm_head_norm_config = self.args.get_norm_config("lm_head", mode, None)
+        x = self.norm(x, mode=mode, norm_config=lm_head_norm_config)
 
         if mode == Mode.PREFILL and self.args.get_lm_head_input_mem_config(mode, None).is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.args.get_lm_head_input_mem_config(mode, None))
