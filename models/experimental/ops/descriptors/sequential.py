@@ -254,14 +254,20 @@ _SOURCE_LEVEL_DEFINES = {"RMSNORM", "FUSE_PRE_ADD", "FUSED_PRE_ADD", "FUSE_GAMMA
 
 
 def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
-    """Resolve preprocessor #ifdef/#ifndef/#if defined directives in source code.
+    """Resolve preprocessor #ifdef/#ifndef/#if defined/#elif directives in source code.
 
     Only resolves directives involving known source-level defines (RMSNORM,
     FUSE_PRE_ADD, FUSED_PRE_ADD). Other directives are left untouched.
+
+    Stack entries are (current_branch_included, known, any_branch_taken) tuples.
+    ``any_branch_taken`` tracks whether any prior branch in a #if/#elif/#else
+    chain was included, so that #elif and #else can skip when a prior branch
+    was already selected.
     """
     lines = source.split("\n")
     result = []
-    stack: List[Tuple[bool, bool]] = []
+    # Stack of (current_included, known_directive, any_prior_branch_taken)
+    stack: List[Tuple[bool, bool, bool]] = []
 
     for line in lines:
         stripped = line.strip()
@@ -272,31 +278,52 @@ def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
             involved = [n for n in names_found if n in _SOURCE_LEVEL_DEFINES]
             if involved:
                 result_val = _eval_ifdef_expression(stripped, active_defines)
-                stack.append((result_val, True))
+                stack.append((result_val, True, result_val))
                 directive_handled = True
             else:
-                stack.append((True, False))
+                stack.append((True, False, False))
 
         elif stripped.startswith("#ifdef "):
             name = stripped[7:].strip()
             if name in _SOURCE_LEVEL_DEFINES:
-                stack.append((name in active_defines, True))
+                result_val = name in active_defines
+                stack.append((result_val, True, result_val))
                 directive_handled = True
             else:
-                stack.append((True, False))
+                stack.append((True, False, False))
 
         elif stripped.startswith("#ifndef "):
             name = stripped[8:].strip()
             if name in _SOURCE_LEVEL_DEFINES:
-                stack.append((name not in active_defines, True))
+                result_val = name not in active_defines
+                stack.append((result_val, True, result_val))
                 directive_handled = True
             else:
-                stack.append((True, False))
+                stack.append((True, False, False))
+
+        elif stripped.startswith("#elif "):
+            if stack and stack[-1][1]:
+                _, known, any_taken = stack[-1]
+                if any_taken:
+                    # A prior branch was already taken — exclude this branch
+                    stack[-1] = (False, known, True)
+                else:
+                    # No prior branch taken — evaluate this condition
+                    names_found = re.findall(r"\bdefined\s+(\w+)", stripped)
+                    involved = [n for n in names_found if n in _SOURCE_LEVEL_DEFINES]
+                    if involved:
+                        result_val = _eval_ifdef_expression(stripped, active_defines)
+                        stack[-1] = (result_val, known, result_val)
+                    else:
+                        # Unknown define in #elif — conservatively include
+                        stack[-1] = (True, known, True)
+                directive_handled = True
 
         elif stripped == "#else" or stripped.startswith("#else ") or stripped.startswith("#else\t"):
             if stack and stack[-1][1]:
-                incl, known = stack[-1]
-                stack[-1] = (not incl, known)
+                _, known, any_taken = stack[-1]
+                # #else is included only if no prior branch was taken
+                stack[-1] = (not any_taken, known, True)
                 directive_handled = True
 
         elif (
@@ -307,7 +334,7 @@ def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
             or stripped.startswith("#endif /")
         ):
             if stack:
-                _, known = stack[-1]
+                _, known, _ = stack[-1]
                 stack.pop()
                 if known:
                     directive_handled = True
@@ -316,7 +343,7 @@ def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
             continue
 
         include = True
-        for incl, known in stack:
+        for incl, known, _ in stack:
             if known and not incl:
                 include = False
                 break
@@ -417,21 +444,286 @@ def _collect_defines(sources: List[str]) -> List[str]:
 
 
 def _collect_pre_main_code(source: str) -> str:
-    """Extract code before kernel_main (namespaces, macros, helpers)."""
+    """Extract code before kernel_main (namespaces, helpers, globals).
+
+    Strips all preprocessor directives (``#include``, ``#define``,
+    ``#pragma``, etc.), single-line comments (``//``), and block
+    comments (``/* ... */``).  Block comment stripping is important
+    for safe dedup across phases — without it, line-by-line dedup
+    can break a block comment by deduplicating the opening ``/*``
+    while keeping unique body lines (e.g. ``* @brief``), leaving
+    orphaned Doxygen lines as invalid C++.
+
+    Preprocessor directives are collected separately by
+    ``_collect_includes`` and ``_collect_defines``; any remaining
+    directives (``#pragma once``, resolved ``#if`` remnants) are
+    not needed in the generated fused kernel source.
+    """
     lines = source.split("\n")
     pre_main = []
+    in_block_comment = False
     for line in lines:
         if "void kernel_main()" in line or "KERNEL_MAIN" in line:
             break
         stripped = line.strip()
-        if (
-            stripped
-            and not stripped.startswith("#include")
-            and not stripped.startswith("#define")
-            and not stripped.startswith("//")
-        ):
+
+        # Track block comments (/* ... */)
+        if in_block_comment:
+            if "*/" in stripped:
+                in_block_comment = False
+            continue
+        if stripped.startswith("/*"):
+            if "*/" not in stripped:
+                in_block_comment = True
+            continue
+
+        if stripped and not stripped.startswith("#") and not stripped.startswith("//"):
             pre_main.append(line)
     return "\n".join(pre_main)
+
+
+# Regex pattern matching C/C++ global/static variable declarations.
+# Captures: optional 'static', type, variable name.
+# Excludes: functions (parens), namespaces, typedefs, using, ALWI/FORCE_INLINE.
+_GLOBAL_VAR_RE = re.compile(
+    r"^(?:static\s+)?"  # optional static
+    r"(?:volatile\s+)?"  # optional volatile
+    r"(?:constexpr\s+)?"  # optional constexpr
+    r"(?:const\s+)?"  # optional const
+    r"(?:(?:u?int(?:8|16|32|64)_t|float|double|bool|char|uint|size_t|"
+    r"tt_l1_ptr\s+\w+)\s+)"  # type (common C/C++ types)
+    r"(\w+)"  # variable name (capture group 1)
+    r"\s*(?:=|;|\[)"  # followed by = or ; or [
+)
+
+
+def _extract_global_var_names(pre_main: str) -> List[str]:
+    """Find global/static variable names in pre-main code.
+
+    Returns variable names that should be prefixed per phase to avoid
+    collisions in fused kernels. Namespace aliases, inline functions,
+    and type definitions are excluded.
+    """
+    names = []
+    for line in pre_main.split("\n"):
+        stripped = line.strip()
+        # Skip namespace aliases, function definitions, typedefs
+        if any(
+            kw in stripped
+            for kw in ["namespace ", "ALWI ", "FORCE_INLINE ", "inline ", "typedef ", "using ", "void ", "template"]
+        ):
+            continue
+        # Skip lines that look like function declarations (contain parens)
+        if "(" in stripped and "=" not in stripped.split("(")[0]:
+            continue
+        m = _GLOBAL_VAR_RE.match(stripped)
+        if m:
+            names.append(m.group(1))
+    return names
+
+
+def _prefix_globals_in_source(source: str, phase_idx: int, global_names: List[str]) -> str:
+    """Prefix global variable names with phase prefix in source code.
+
+    Applied to both pre-main declarations and phase body to ensure
+    consistent renaming of global/static variables per phase.
+    """
+    if phase_idx == 0 or not global_names:
+        return source
+    for name in global_names:
+        source = re.sub(rf"\b{re.escape(name)}\b", f"phase{phase_idx}_{name}", source)
+    return source
+
+
+def _split_into_top_level_blocks(pre_main: str) -> List[str]:
+    """Split pre-main code into top-level C++ declarations.
+
+    Uses brace counting to keep each top-level construct (function,
+    namespace, struct, class) as a single unit.  Single-line declarations
+    (namespace aliases, ``using``, ``typedef``) are individual blocks.
+
+    Block boundaries are detected when brace depth returns to 0 at a
+    statement boundary (line ending with ``;``, ``}``, or ``};``), or
+    when an empty line appears between depth-0 constructs.
+    """
+    blocks: List[str] = []
+    current_lines: List[str] = []
+    brace_depth = 0
+
+    for line in pre_main.split("\n"):
+        stripped = line.strip()
+
+        # Empty lines separate top-level blocks at depth 0
+        if not stripped:
+            if current_lines and brace_depth == 0:
+                blocks.append("\n".join(current_lines))
+                current_lines = []
+            continue
+
+        current_lines.append(line)
+        brace_depth += stripped.count("{") - stripped.count("}")
+        brace_depth = max(0, brace_depth)  # Defensive
+
+        # Emit block when brace depth returns to 0 at a statement boundary.
+        # Strip trailing C++ comments (// ...) before checking line ending,
+        # so that "} // namespace my_ns" is recognized as ending with '}'.
+        if brace_depth == 0 and current_lines:
+            check = stripped.split("//")[0].rstrip() if "//" in stripped else stripped
+            if check.endswith(";") or check.endswith("}") or check.endswith("};"):
+                blocks.append("\n".join(current_lines))
+                current_lines = []
+
+    # Flush any remaining lines
+    if current_lines:
+        blocks.append("\n".join(current_lines))
+
+    return blocks
+
+
+def _normalize_block(block: str) -> str:
+    """Normalize a code block for deduplication comparison.
+
+    Strips leading/trailing whitespace on each line, collapses
+    multiple spaces to single space, and removes empty lines.
+    """
+    lines = []
+    for line in block.split("\n"):
+        normalized = " ".join(line.split())
+        if normalized:
+            lines.append(normalized)
+    return "\n".join(lines)
+
+
+def _extract_block_signature(block: str) -> str:
+    """Extract the declaration signature of a top-level block.
+
+    For braced blocks (functions, namespaces, structs): returns the
+    declaration line(s) before the opening ``{``, normalized.
+    For single-line declarations: returns the full line, normalized.
+
+    Used for signature-based deduplication — blocks with the same
+    signature are considered the same declaration (first wins).
+    """
+    lines = block.strip().split("\n")
+    sig_parts: List[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if "{" in stripped:
+            before = stripped.split("{")[0].strip()
+            if before:
+                sig_parts.append(before)
+            break
+        sig_parts.append(stripped)
+
+    if not sig_parts:
+        return _normalize_block(block)
+
+    sig = " ".join(sig_parts)
+    return " ".join(sig.split())
+
+
+def _is_global_var_block(block: str) -> bool:
+    """Check if a top-level block is a global/static variable declaration."""
+    stripped = block.strip()
+    # Global variables are single-line declarations (no multi-line bodies)
+    if "\n" in stripped:
+        return False
+    # Exclude namespace aliases, function definitions, typedefs, etc.
+    if any(
+        kw in stripped
+        for kw in [
+            "namespace ",
+            "ALWI ",
+            "FORCE_INLINE ",
+            "inline ",
+            "typedef ",
+            "using ",
+            "void ",
+            "template",
+        ]
+    ):
+        return False
+    if "(" in stripped and "=" not in stripped.split("(")[0]:
+        return False
+    return bool(_GLOBAL_VAR_RE.match(stripped))
+
+
+def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> str:
+    """Merge pre-main code from all phases, deduplicating top-level declarations.
+
+    Extracts pre-main from each phase, splits into top-level C++ blocks
+    (brace-balanced), and merges using a two-tier dedup strategy:
+
+    1. **Braced blocks** (functions, namespaces, structs): dedup by
+       *signature* — the declaration part before ``{``.  First occurrence
+       wins.  This correctly handles the case where the same template
+       function appears in multiple phases with slightly different bodies
+       due to ``#ifdef`` resolution (e.g., LN vs RMS variants of the
+       same utility header).
+
+    2. **Single-line declarations** (namespace aliases, ``using``,
+       ``typedef``): dedup by exact normalized content.
+
+    3. **Global variables** from phase N>0: included with a
+       ``phaseN_`` prefix on the variable name to avoid collisions.
+       Phase 0's globals are included as-is.
+
+    This ensures:
+      - Same helper from same base kernel → deduped (first copy kept)
+      - Different helpers from different ops → both included
+      - Global variables → phase-prefixed for N>0
+    """
+    if not sources_with_indices:
+        return ""
+
+    all_blocks: List[str] = []
+    seen_signatures: Set[str] = set()
+    seen_content: Set[str] = set()
+
+    for phase_idx, source in sources_with_indices:
+        pre_main = _collect_pre_main_code(source)
+        blocks = _split_into_top_level_blocks(pre_main)
+
+        for block in blocks:
+            normalized = _normalize_block(block)
+            if not normalized:
+                continue
+
+            # Global variables: phase N>0 gets prefixed
+            if _is_global_var_block(block):
+                if phase_idx == 0:
+                    if normalized not in seen_content:
+                        seen_content.add(normalized)
+                        all_blocks.append(block)
+                else:
+                    names = _extract_global_var_names(block)
+                    prefixed = block
+                    for name in names:
+                        prefixed = re.sub(
+                            rf"\b{re.escape(name)}\b",
+                            f"phase{phase_idx}_{name}",
+                            prefixed,
+                        )
+                    prefixed_norm = _normalize_block(prefixed)
+                    if prefixed_norm not in seen_content:
+                        seen_content.add(prefixed_norm)
+                        all_blocks.append(prefixed)
+                continue
+
+            # Braced blocks: dedup by signature (first wins)
+            has_braces = "{" in normalized and "}" in normalized
+            if has_braces:
+                sig = _extract_block_signature(block)
+                if sig not in seen_signatures:
+                    seen_signatures.add(sig)
+                    all_blocks.append(block)
+            else:
+                # Single-line declarations: dedup by content
+                if normalized not in seen_content:
+                    seen_content.add(normalized)
+                    all_blocks.append(block)
+
+    return "\n\n".join(all_blocks)
 
 
 # =============================================================================
@@ -520,11 +812,18 @@ def _offset_runtime_args_in_source(source: str, phase_idx: int) -> str:
     return offset_decl + source
 
 
-def _transform_phase_source(source: str, phase_idx: int, ct_arg_offset: int = 0) -> str:
+def _transform_phase_source(
+    source: str,
+    phase_idx: int,
+    ct_arg_offset: int = 0,
+    global_names: Optional[List[str]] = None,
+) -> str:
     """Apply all transformations for a phase's kernel body."""
     source = _prefix_named_args_in_source(source, phase_idx)
     source = _offset_compile_time_args_in_source(source, phase_idx, ct_arg_offset)
     source = _offset_runtime_args_in_source(source, phase_idx)
+    if global_names:
+        source = _prefix_globals_in_source(source, phase_idx, global_names)
     return source
 
 
@@ -532,7 +831,37 @@ def _transform_phase_source(source: str, phase_idx: int, ct_arg_offset: int = 0)
 # CB Descriptor Merging
 # =============================================================================
 
-NUM_CIRCULAR_BUFFERS = 32
+
+def _validate_cb_page_sizes(phases: List[PhaseInfo]) -> None:
+    """Validate that shared CB indices have compatible page sizes across phases.
+
+    When two phases share the same CB index, the page_size must match because
+    BRISC/NCRISC use fifo_page_size to advance pointers (cb_push_back/cb_pop_front).
+    A mismatch would cause pointer arithmetic errors and data corruption.
+    """
+    # Collect page_size per (cb_index, phase_idx)
+    cb_page_sizes: Dict[int, List[Tuple[int, int]]] = {}  # cb_idx -> [(phase_idx, page_size), ...]
+    for phase_idx, phase in enumerate(phases):
+        desc = phase.op_descriptor.descriptor
+        for cb_desc in desc.cbs:
+            for fmt_desc in cb_desc.format_descriptors:
+                cb_idx = fmt_desc.buffer_index
+                if cb_idx not in cb_page_sizes:
+                    cb_page_sizes[cb_idx] = []
+                cb_page_sizes[cb_idx].append((phase_idx, fmt_desc.page_size))
+
+    for cb_idx, entries in cb_page_sizes.items():
+        if len(entries) <= 1:
+            continue
+        sizes = {ps for _, ps in entries}
+        if len(sizes) > 1:
+            detail = ", ".join(f"phase {pi}: {ps}" for pi, ps in entries)
+            raise ValueError(
+                f"CB[{cb_idx}] has mismatched page sizes across phases ({detail}). "
+                f"All phases sharing a CB must use the same page size. "
+                f"This typically indicates a data format mismatch (e.g., BF16 vs FP32). "
+                f"Ensure compute_kernel_config is consistent across fused ops."
+            )
 
 
 def _merge_cb_descriptors(phases: List[PhaseInfo]) -> list:
@@ -545,6 +874,7 @@ def _merge_cb_descriptors(phases: List[PhaseInfo]) -> list:
     always keeps phase 0's buffer. This guarantees phase 0 is correct without
     rebinding; only phases 1+ need mid-kernel CB address rebinding.
     """
+    _validate_cb_page_sizes(phases)
     cb_by_index: Dict[int, Any] = {}  # cb_index -> (largest_total_size, cb_desc, phase_idx)
 
     for phase_idx, phase in enumerate(phases):
@@ -692,6 +1022,7 @@ def _generate_fused_riscv0_source(
     sweep_cb_indices: List[int],
     barrier_config: Optional[BarrierConfig] = None,
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
+    op_semaphore_ids: Optional[List[int]] = None,
 ) -> Optional[str]:
     """Generate fused RISCV_0 (reader/BRISC) kernel source with two-level barrier sync.
 
@@ -724,7 +1055,17 @@ def _generate_fused_riscv0_source(
     all_sources = [s for _, s in reader_sources]
     includes = _collect_includes(all_sources)
     defines = _collect_defines(all_sources)
-    pre_main = _collect_pre_main_code(all_sources[0])
+    # Merge pre-main code from all phases (namespace aliases, helpers, globals).
+    # Block comments are stripped by _collect_pre_main_code so line-level dedup is safe.
+    pre_main = _collect_all_pre_main_code(reader_sources)
+
+    # Extract per-phase global variable names for body prefixing
+    phase_globals: Dict[int, List[str]] = {}
+    for phase_idx, source in reader_sources:
+        pm = _collect_pre_main_code(source)
+        names = _extract_global_var_names(pm)
+        if names:
+            phase_globals[phase_idx] = names
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -822,7 +1163,8 @@ def _generate_fused_riscv0_source(
     for phase_idx, resolved_source in reader_sources:
         body = _extract_kernel_body_for_fusion(resolved_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
-        transformed = _transform_phase_source(body, phase_idx, offset)
+        gnames = phase_globals.get(phase_idx, [])
+        transformed = _transform_phase_source(body, phase_idx, offset, global_names=gnames)
 
         lines.append(f"// Phase {phase_idx} reader")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_reader() {{")
@@ -863,6 +1205,10 @@ def _generate_fused_riscv0_source(
         if not first and is_multi_phase:
             lines.append("")
             lines.append(f"    // === Barrier: Phase {phase_idx - 1} -> Phase {phase_idx} ===")
+            lines.append("    // Invariant: BRISC (reader) coordinates all inter-phase cleanup.")
+            lines.append("    // Order: noc_barrier -> wait compute/writer done -> reset CBs ->")
+            lines.append("    //         reset semaphores -> rebind CB addrs -> global barrier.")
+            lines.append("    // Compute/writer must NOT touch CBs until global_release is set.")
             lines.append("    noc_async_full_barrier();")
             lines.append("")
             lines.append(f"    // Wait for local compute + writer to finish Phase {phase_idx - 1}")
@@ -872,6 +1218,12 @@ def _generate_fused_riscv0_source(
             lines.append("    // Reset residual tiles from ALL CBs")
             lines.append("    __cb_reset_to_empty();")
             lines.append("")
+            # Reset op semaphores to initial value (0) so next phase starts clean
+            if op_semaphore_ids:
+                lines.append("    // Reset op semaphores to 0 (as if each phase runs standalone)")
+                for sem_id in op_semaphore_ids:
+                    lines.append(f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = 0;")
+                lines.append("")
             # Rebind CB addresses before global barrier (so BRISC has correct state)
             rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=False)
             if rebind_lines:
@@ -924,7 +1276,15 @@ def _generate_fused_riscv1_source(
     all_sources = [s for _, s in writer_sources]
     includes = _collect_includes(all_sources)
     defines = _collect_defines(all_sources)
-    pre_main = _collect_pre_main_code(all_sources[0])
+    pre_main = _collect_all_pre_main_code(writer_sources)
+
+    # Extract per-phase global variable names for body prefixing
+    phase_globals: Dict[int, List[str]] = {}
+    for phase_idx, source in writer_sources:
+        pm = _collect_pre_main_code(source)
+        names = _extract_global_var_names(pm)
+        if names:
+            phase_globals[phase_idx] = names
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -966,7 +1326,8 @@ def _generate_fused_riscv1_source(
     for phase_idx, resolved_source in writer_sources:
         body = _extract_kernel_body_for_fusion(resolved_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
-        transformed = _transform_phase_source(body, phase_idx, offset)
+        gnames = phase_globals.get(phase_idx, [])
+        transformed = _transform_phase_source(body, phase_idx, offset, global_names=gnames)
 
         lines.append(f"// Phase {phase_idx} writer")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_writer() {{")
@@ -999,6 +1360,8 @@ def _generate_fused_riscv1_source(
         if count < num_writers - 1 and is_multi_phase:
             next_phase_idx = writer_sources[count + 1][0]
             lines.append("")
+            lines.append(f"    // Ensure all async NOC writes from Phase {phase_idx} are complete")
+            lines.append("    noc_async_write_barrier();")
             lines.append(f"    // Signal done for Phase {phase_idx}")
             lines.append(f"    *__writer_done = {phase_idx + 1};")
             lines.append("")
@@ -1064,7 +1427,15 @@ def _generate_fused_compute_source(
     all_sources = [s for _, s in compute_sources]
     includes = _collect_includes(all_sources)
     defines = _collect_defines(all_sources)
-    pre_main = _collect_pre_main_code(all_sources[0])
+    pre_main = _collect_all_pre_main_code(compute_sources)
+
+    # Extract per-phase global variable names for body prefixing
+    phase_globals: Dict[int, List[str]] = {}
+    for phase_idx, source in compute_sources:
+        pm = _collect_pre_main_code(source)
+        names = _extract_global_var_names(pm)
+        if names:
+            phase_globals[phase_idx] = names
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1129,7 +1500,8 @@ def _generate_fused_compute_source(
     for phase_idx, resolved_source in compute_sources:
         body = _extract_kernel_body_for_fusion(resolved_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
-        transformed = _transform_phase_source(body, phase_idx, offset)
+        gnames = phase_globals.get(phase_idx, [])
+        transformed = _transform_phase_source(body, phase_idx, offset, global_names=gnames)
 
         lines.append(f"// Phase {phase_idx} compute")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_compute() {{")
@@ -1448,7 +1820,14 @@ def _validate_and_get_compute_config(
 
         # Validate all fields match
         mismatches = []
-        for field in ("fp32_dest_acc_en", "math_approx_mode", "math_fidelity", "dst_full_sync_en", "bfp8_pack_precise"):
+        for field in (
+            "fp32_dest_acc_en",
+            "math_approx_mode",
+            "math_fidelity",
+            "dst_full_sync_en",
+            "bfp8_pack_precise",
+            "unpack_to_dest_mode",
+        ):
             base_val = getattr(base, field, None)
             this_val = getattr(config, field, None)
             if base_val != this_val:
@@ -1802,6 +2181,18 @@ class SequentialChainBuilder:
         sweep_cb_indices = sorted(valid_cb_indices)
 
         bc = self._barrier_config
+
+        # Collect all unique op semaphore IDs (0-15) used by any phase.
+        # These need to be reset to 0 between phases so each phase starts clean.
+        op_semaphore_ids: List[int] = []
+        seen_sem_ids_for_reset: Set[int] = set()
+        for phase in self.phases:
+            for sem in phase.op_descriptor.descriptor.semaphores:
+                if sem.id not in seen_sem_ids_for_reset:
+                    op_semaphore_ids.append(sem.id)
+                    seen_sem_ids_for_reset.add(sem.id)
+        op_semaphore_ids.sort()
+
         fused_kernels = []
 
         # For each discovered role: generate fused source, merge args, build descriptor
@@ -1837,6 +2228,7 @@ class SequentialChainBuilder:
                     sweep_cb_indices,
                     bc,
                     rebind_info,
+                    op_semaphore_ids=op_semaphore_ids,
                 )
                 barrier_addrs = [
                     bc.compute_done_addr,

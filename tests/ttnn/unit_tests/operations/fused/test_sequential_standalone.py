@@ -1010,5 +1010,266 @@ void kernel_main() {
         assert "#define" not in result
 
 
+class TestSplitIntoTopLevelBlocks:
+    """Tests for top-level block splitting."""
+
+    def test_single_line_declarations(self):
+        """Single-line declarations are individual blocks."""
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        pre_main = "namespace generic = norm::kernel_util::generic;\nnamespace kutil = norm::kernel_util;"
+        blocks = _split_into_top_level_blocks(pre_main)
+        assert len(blocks) == 2
+        assert "generic" in blocks[0]
+        assert "kutil" in blocks[1]
+
+    def test_braced_function(self):
+        """K&R style function is one block."""
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        pre_main = "ALWI void ACQ() { acquire_dst(); }\nALWI void REL() { release_dst(); }"
+        blocks = _split_into_top_level_blocks(pre_main)
+        assert len(blocks) == 2
+        assert "ACQ" in blocks[0]
+        assert "REL" in blocks[1]
+
+    def test_multiline_function(self):
+        """Multi-line function with braces is one block."""
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        pre_main = "template <typename T>\n" "inline void foo(T x) {\n" "    return;\n" "}"
+        blocks = _split_into_top_level_blocks(pre_main)
+        assert len(blocks) == 1
+        assert "template" in blocks[0]
+        assert "return" in blocks[0]
+
+    def test_namespace_block(self):
+        """Namespace block with nested functions is one block."""
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        pre_main = (
+            "namespace my_ns {\n"
+            "using T = uint32_t;\n"
+            "inline void f() {\n"
+            "    return;\n"
+            "}\n"
+            "}  // namespace my_ns"
+        )
+        blocks = _split_into_top_level_blocks(pre_main)
+        assert len(blocks) == 1
+        assert "namespace my_ns" in blocks[0]
+        assert "inline void f()" in blocks[0]
+        assert "}  // namespace my_ns" in blocks[0]
+
+    def test_empty_lines_separate_blocks(self):
+        """Empty lines between depth-0 constructs separate blocks."""
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        pre_main = "namespace g = norm;\n" "\n" "ALWI void ACQ() { acquire_dst(); }"
+        blocks = _split_into_top_level_blocks(pre_main)
+        assert len(blocks) == 2
+
+    def test_struct_with_semicolon(self):
+        """Struct definition ending with }; is one block."""
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        pre_main = "struct Foo {\n" "    int x;\n" "    int y;\n" "};"
+        blocks = _split_into_top_level_blocks(pre_main)
+        assert len(blocks) == 1
+        assert "struct Foo" in blocks[0]
+        assert "int y" in blocks[0]
+
+    def test_empty_input(self):
+        """Empty pre-main returns empty list."""
+        from models.experimental.ops.descriptors.sequential import _split_into_top_level_blocks
+
+        assert _split_into_top_level_blocks("") == []
+        assert _split_into_top_level_blocks("   \n   \n") == []
+
+
+class TestExtractBlockSignature:
+    """Tests for block signature extraction."""
+
+    def test_single_line_function(self):
+        """Single-line function signature extracts declaration."""
+        from models.experimental.ops.descriptors.sequential import _extract_block_signature
+
+        block = "ALWI void ACQ() { acquire_dst(); }"
+        sig = _extract_block_signature(block)
+        assert sig == "ALWI void ACQ()"
+
+    def test_multiline_function(self):
+        """Multi-line function extracts lines before {."""
+        from models.experimental.ops.descriptors.sequential import _extract_block_signature
+
+        block = "template <typename T>\n" "inline void foo(T x) {\n" "    return;\n" "}"
+        sig = _extract_block_signature(block)
+        assert "template" in sig
+        assert "inline void foo(T x)" in sig
+
+    def test_namespace(self):
+        """Namespace block signature is the namespace declaration."""
+        from models.experimental.ops.descriptors.sequential import _extract_block_signature
+
+        block = "namespace my_ns {\n" "using T = uint32_t;\n" "}"
+        sig = _extract_block_signature(block)
+        assert sig == "namespace my_ns"
+
+    def test_no_braces(self):
+        """Single-line without braces returns full normalized line."""
+        from models.experimental.ops.descriptors.sequential import _extract_block_signature
+
+        block = "namespace generic = norm::kernel_util::generic;"
+        sig = _extract_block_signature(block)
+        assert sig == "namespace generic = norm::kernel_util::generic;"
+
+
+class TestIsGlobalVarBlock:
+    """Tests for global variable detection."""
+
+    def test_simple_global(self):
+        from models.experimental.ops.descriptors.sequential import _is_global_var_block
+
+        assert _is_global_var_block("uint32_t counter = 0;")
+        assert _is_global_var_block("static uint32_t counter;")
+        assert _is_global_var_block("constexpr uint32_t val = 42;")
+
+    def test_not_global(self):
+        from models.experimental.ops.descriptors.sequential import _is_global_var_block
+
+        assert not _is_global_var_block("namespace generic = norm;")
+        assert not _is_global_var_block("ALWI void ACQ() { acquire_dst(); }")
+        assert not _is_global_var_block("using T = uint32_t;")
+        assert not _is_global_var_block("typedef uint32_t my_type;")
+        # Multi-line is not a global var
+        assert not _is_global_var_block("void foo() {\n    return;\n}")
+
+
+class TestCollectAllPreMainCode:
+    """Tests for robust pre-main merging across phases."""
+
+    def _make_source(self, pre_main_body: str) -> str:
+        """Wrap pre-main code in a minimal kernel source."""
+        return f"{pre_main_body}\n\nvoid kernel_main() {{\n    // body\n}}\n"
+
+    def test_single_phase(self):
+        """Single phase returns its pre-main."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source = self._make_source("namespace g = norm;")
+        result = _collect_all_pre_main_code([(0, source)])
+        assert "namespace g = norm;" in result
+
+    def test_identical_phases_dedup(self):
+        """Identical pre-main from two phases is deduped."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source = self._make_source("namespace g = norm;\n\nALWI void ACQ() { acquire_dst(); }")
+        result = _collect_all_pre_main_code([(0, source), (1, source)])
+        # Should appear only once
+        assert result.count("ACQ") == 1
+        assert result.count("namespace g = norm") == 1
+
+    def test_different_helpers_both_kept(self):
+        """Different helper functions from different ops are both kept."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source0 = self._make_source("ALWI void helper_a() { return; }")
+        source1 = self._make_source("ALWI void helper_b() { return; }")
+        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        assert "helper_a" in result
+        assert "helper_b" in result
+
+    def test_same_signature_different_body_deduped(self):
+        """Same function signature but different body: first wins."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source0 = self._make_source("inline void process() {\n    int x = 1;\n}")
+        source1 = self._make_source("inline void process() {\n    int x = 2;\n}")
+        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        # First wins
+        assert "int x = 1" in result
+        assert "int x = 2" not in result
+
+    def test_global_vars_phase_prefixed(self):
+        """Global variables from phase N>0 get phase-prefixed."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source0 = self._make_source("uint32_t counter = 0;")
+        source1 = self._make_source("uint32_t counter = 0;")
+        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        assert "uint32_t counter = 0;" in result
+        assert "uint32_t phase1_counter = 0;" in result
+
+    def test_namespace_blocks_deduped_by_signature(self):
+        """Namespace blocks with same name are deduped."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        ns_block = "namespace my_ns {\n" "using T = uint32_t;\n" "inline void f() { return; }\n" "}  // namespace my_ns"
+        source0 = self._make_source(ns_block)
+        source1 = self._make_source(ns_block)
+        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        # The opening "namespace my_ns {" should appear exactly once
+        assert result.count("namespace my_ns {") == 1
+
+    def test_different_namespaces_both_kept(self):
+        """Different namespace blocks are both kept."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source0 = self._make_source("namespace ns_a {\ninline void fa() { return; }\n}")
+        source1 = self._make_source("namespace ns_b {\ninline void fb() { return; }\n}")
+        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        assert "ns_a" in result
+        assert "ns_b" in result
+
+    def test_mixed_content(self):
+        """Mix of aliases, functions, and globals from multiple phases."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source0 = self._make_source(
+            "namespace g = norm;\n\n" "ALWI void ACQ() { acquire_dst(); }\n\n" "uint32_t state = 0;"
+        )
+        source1 = self._make_source(
+            "namespace g = norm;\n\n"
+            "ALWI void ACQ() { acquire_dst(); }\n\n"
+            "uint32_t state = 0;\n\n"
+            "ALWI void extra() { return; }"
+        )
+        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        # Alias: deduped
+        assert result.count("namespace g = norm") == 1
+        # Function: deduped
+        assert result.count("ACQ") == 1
+        # Global var: phase 0 + prefixed phase 1
+        assert "uint32_t state = 0;" in result
+        assert "uint32_t phase1_state = 0;" in result
+        # Extra function from phase 1: included
+        assert "extra" in result
+
+    def test_empty(self):
+        """Empty input returns empty string."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        assert _collect_all_pre_main_code([]) == ""
+
+    def test_block_comments_stripped(self):
+        """Block comments in pre-main are stripped before processing."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source = self._make_source("/**\n * @brief Helper\n */\n" "ALWI void helper() { return; }")
+        result = _collect_all_pre_main_code([(0, source)])
+        assert "@brief" not in result
+        assert "helper" in result
+
+    def test_pragma_stripped(self):
+        """#pragma directives are stripped from pre-main."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source = self._make_source("#pragma once\n\nnamespace g = norm;")
+        result = _collect_all_pre_main_code([(0, source)])
+        assert "#pragma" not in result
+        assert "namespace g = norm" in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
