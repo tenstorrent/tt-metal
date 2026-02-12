@@ -19,11 +19,6 @@ DropoutDeviceOperation::program_factory_t DropoutDeviceOperation::select_program
     return DropoutProgramFactory{};
 }
 
-void DropoutDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void DropoutDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
