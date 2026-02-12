@@ -75,6 +75,7 @@ void MAIN {
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
+    constexpr uint32_t cb_cum_seq_lens = tt::CBIndex::c_8;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
@@ -149,6 +150,7 @@ void MAIN {
                     cb_sum_A,
                     cb_sum_B,
                     cb_exp_max_diff,
+                    cb_cum_seq_lens,
                     cb_out);
             }
         }

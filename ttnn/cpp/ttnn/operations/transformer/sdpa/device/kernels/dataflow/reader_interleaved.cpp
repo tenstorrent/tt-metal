@@ -36,7 +36,8 @@ void kernel_main() {
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
-    constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+    constexpr auto cum_seq_lens_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+    constexpr auto attention_sink_args = TensorAccessorArgs<cum_seq_lens_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -44,6 +45,7 @@ void kernel_main() {
     const uint32_t v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t mask_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t page_table_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t cum_seq_lens_addr = get_arg_val<uint32_t>(16);
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t core_id = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
@@ -77,6 +79,7 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_id_page_table = tt::CBIndex::c_6;
+    constexpr uint32_t cb_cum_seq_lens = tt::CBIndex::c_8;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
@@ -84,6 +87,7 @@ void kernel_main() {
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
     constexpr uint32_t attention_sink_tile_bytes = use_attention_sink ? get_tile_size(cb_attention_sink) : 0;
+    constexpr uint32_t cum_seq_lens_tile_bytes = get_tile_size(cb_cum_seq_lens);
 
     constexpr uint32_t q_heads_per_kv = NQH / NKH;
 
@@ -95,6 +99,7 @@ void kernel_main() {
     const auto mask_reader = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
     const auto attention_sink_reader =
         TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
+    const auto cum_seq_lens_reader = TensorAccessor(cum_seq_lens_args, cum_seq_lens_addr, cum_seq_lens_tile_bytes);
 
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
@@ -160,6 +165,16 @@ void kernel_main() {
 
                     cb_push_back(cb_attention_sink, Sq_chunk_t);
                 }
+#if defined IS_PREPACKED
+                cb_reserve_back(cb_cum_seq_lens, 1);
+                uint32_t cum_seq_lens_write_ptr = get_write_ptr(cb_cum_seq_lens);
+
+                // Read the single tile containing cum_seq_lens data
+                noc_async_read_tile(0, cum_seq_lens_reader, cum_seq_lens_write_ptr);
+                noc_async_read_barrier();
+
+                cb_push_back(cb_cum_seq_lens, 1);
+#endif
                 for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                     /*
                     Read a chunk of Q. BALANCED_Q_PARALLEL evenly distributes Q chunks

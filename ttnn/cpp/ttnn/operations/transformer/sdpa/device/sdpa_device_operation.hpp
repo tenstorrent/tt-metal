@@ -43,6 +43,7 @@ Tensor sdpa(
     const std::optional<Tensor>& attn_mask,
     const std::optional<Tensor>& page_table_tensor,
     const std::optional<Tensor>& attention_sink,
+    const std::optional<Tensor>& cum_seq_lens,
     bool is_causal,
     std::optional<float> scale,
     std::optional<uint32_t> sliding_window_size,

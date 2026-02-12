@@ -29,6 +29,7 @@ struct SDPAInputs {
     std::optional<Tensor> v;
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> page_table;
+    std::optional<Tensor> cum_seq_lens;
     std::optional<Tensor> attention_sink;
 };
 

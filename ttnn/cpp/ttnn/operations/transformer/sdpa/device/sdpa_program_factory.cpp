@@ -26,6 +26,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const auto& output_tensor = tensor_return_value;
     const auto& attn_mask = tensor_args.attn_mask;
     const auto& page_table = tensor_args.page_table;
+    const auto& cum_seq_lens = tensor_args.cum_seq_lens;
     const auto& attention_sink = tensor_args.attention_sink;
     auto scale = operation_attributes.scale;
     if (not scale.has_value()) {
@@ -377,6 +378,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(attn_mask.has_value() ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args);
     TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(cum_seq_lens.has_value() ? cum_seq_lens->buffer() : nullptr).append_to(reader_compile_time_args);
     TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
@@ -443,6 +445,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
     std::map<std::string, std::string> defines;
+    defines["IS_PREPACKED"] = cum_seq_lens.has_value() ? "1" : "0";
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
@@ -535,6 +538,16 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
                             .set_page_size(tt::CBIndex::c_2, v_tile_size);
     CreateCircularBuffer(program, core_grid, c_in2_config);
+
+    // Cummulative Sequence Lengths input
+    if (cum_seq_lens.has_value()) {
+        auto cum_seq_lens_buffer = cum_seq_lens.value().buffer();
+        uint32_t cum_seq_lens_size = cum_seq_lens_buffer->aligned_page_size();
+        tt::DataFormat cum_seq_lens_df = tt::tt_metal::datatype_to_dataformat_converter(cum_seq_lens.value().dtype());
+        auto c_cum_seq_lens_config = CircularBufferConfig(cum_seq_lens_size, {{tt::CBIndex::c_8, cum_seq_lens_df}})
+                                         .set_page_size(tt::CBIndex::c_8, cum_seq_lens_size);
+        CreateCircularBuffer(program, core_grid, c_cum_seq_lens_config);
+    }
 
     // Only create mask buffer if it's going to be used
     if (use_provided_mask or is_causal or use_padded_mask) {
@@ -679,7 +692,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 local_q_end,
                 num_phases,
                 chunked_q_chunk_offset,
-                read_offset  // read_offset
+                read_offset,  // read_offset
+                cum_seq_lens.has_value() ? cum_seq_lens.value().buffer()->address() : 0,
             });
         SetRuntimeArgs(
             program,
@@ -744,13 +758,15 @@ void SDPAProgramFactory::override_runtime_arguments(
     auto *mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
     auto *attention_sink_buffer =
         tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;
-
+    auto* cum_seq_lens_buffer = tensor_args.cum_seq_lens.has_value() ? tensor_args.cum_seq_lens->buffer() : nullptr;
     auto *out0_buffer = tensor_return_value.buffer();
+
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();
     uint32_t mask_addr = mask_buffer != nullptr ? mask_buffer->address() : 0;
     uint32_t attention_sink_addr = attention_sink_buffer != nullptr ? attention_sink_buffer->address() : 0;
+    uint32_t cum_seq_lens_addr = cum_seq_lens_buffer != nullptr ? cum_seq_lens_buffer->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
     uint32_t page_table_addr = 0;
@@ -781,6 +797,7 @@ void SDPAProgramFactory::override_runtime_arguments(
         reader_args[3] = mask_addr;
         reader_args[4] = page_table_addr;
         reader_args[5] = attention_sink_addr;
+        reader_args[16] = cum_seq_lens_addr;
         reader_args[14] = chunked_q_chunk_offset;
 
         writer_args[0] = out_addr;

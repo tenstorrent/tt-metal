@@ -39,6 +39,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
         input_tensor_v,
         attn_mask,
         std::nullopt,  // page_table
+        std::nullopt,  // cum_seq_len
         attention_sink,
         is_causal,
         scale,
@@ -73,6 +74,7 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
         input_tensor_v,
         std::nullopt,        // attn_mask
         page_table_tensor,   // page_table
+        std::nullopt,        // cum_seq_len
         std::nullopt,        // attention_sink
         /*is_causal=*/true,  // Always causal for chunked version
         scale,
@@ -162,6 +164,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
     const std::optional<ttnn::Tensor>& attn_mask,
+    const std::optional<ttnn::Tensor>& cum_seq_lens,
     bool is_causal,
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
@@ -179,6 +182,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
         std::nullopt,  // V is implied by K in MLA mode
         attn_mask,
         std::nullopt,  // page_table
+        cum_seq_lens,  // cum_seq_len
         std::nullopt,  // attention_sink
         is_causal,
         scale,
@@ -213,7 +217,8 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
         std::nullopt,       // V is implied by K in MLA mode
         std::nullopt,       // attn_mask
         page_table_tensor,  // page_table
-        std::nullopt,       // attention_sink
+        std::nullopt,
+        std::nullopt,  // attention_sink
         /*is_causal=*/true,
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)

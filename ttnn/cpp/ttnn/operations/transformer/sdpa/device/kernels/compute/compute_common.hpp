@@ -1284,6 +1284,16 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     }
 }
 
+// Returns the index of the subsequence in prepacked input
+inline uint32_t find_subsequence_idx(uint32_t q_pos_elements, uint32_t* cum_seq_lens_data, uint32_t num_subseq) {
+    for (uint32_t i = 0; i < num_subseq; ++i) {
+        if (q_pos_elements == cum_seq_lens_data[i]) {
+            return i;
+        }
+    }
+    return num_subseq - 1;  // Shouldn't happen with valid input
+}
+
 enum SDPAType {
     STANDARD = 0,
     JOINT = 1,
@@ -1368,6 +1378,7 @@ enum SDPAType {
  * @param cb_lse_in - LSE input buffer
  * @param cb_lse_out - LSE output buffer
  * @param cb_prev_out - Previous output buffer
+ * @param cb_cum_seq_lens - Cummulative sequence lengths sum for prepacked input
  * @param cb_out - Output buffer
  */
 template <
@@ -1441,8 +1452,19 @@ void sdpa_inner_loop(
     const uint32_t cb_lse_in,
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
+    const uint32_t cb_cum_seq_lens,
     const uint32_t cb_out) {
     uint32_t KV_chunks_processed_in_iter = 0;
+    bool is_prepacked = false;
+    uint32_t current_subsequence = 0;
+    uint32_t cum_seq_lens_addr = 0;
+
+#if IS_PREPACKED
+    cb_wait_front(cb_cum_seq_lens, 1);
+    cum_seq_lens_addr = get_tile_address(cb_cum_seq_lens, 0);
+    is_prepacked = true;
+
+#endif
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_low_idx;
@@ -1537,15 +1559,42 @@ void sdpa_inner_loop(
                              (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
                              (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);
             } else if constexpr (is_causal || sliding_window_size > 0) {
-                // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-                // Q-range = [q_low, q_high)
-                // K-range = [k_low, k_high)
-                // does_overlap = not (q_low >= k_high or k_low >= q_high)
-                // Due to loop bounds, we should never have k_low >= q_high.
                 const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                 const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
-                // Apply mask if causal overlap or sliding window is active
-                apply_mask = (q_low_idx < k_high_idx) || (sliding_window_size > 0);
+                if (is_prepacked) {
+                    // Convert query range to elements
+                    const uint32_t q_low_elements = q_low_idx * TILE_HEIGHT;
+                    const uint32_t q_high_elements = q_high_idx * TILE_HEIGHT;
+
+                    // Find which subsequence this query chunk belongs to
+                    uint32_t subseq_idx = find_subsequence_idx(
+                        q_low_elements,
+                        reinterpret_cast<uint32_t*>(cum_seq_lens_addr),
+                        68);  // Max 68 elements
+                    if (subseq_idx != current_subsequence) {
+                        current_subsequence = subseq_idx;
+                        processed_k_chunks = 0;
+                    }
+                    // Get the end of this subsequence in elements
+                    uint32_t subseq_end_elements = reinterpret_cast<uint32_t*>(cum_seq_lens_addr)[subseq_idx];
+
+                    // Convert back to tiles for masking
+                    uint32_t subseq_end_tiles = (subseq_end_elements + TILE_HEIGHT - 1) / TILE_HEIGHT;
+
+                    // Apply mask if causal overlap within this subsequence or sliding window
+                    apply_mask = (q_low_idx < subseq_end_tiles) || (sliding_window_size > 0);
+
+                } else {
+                    // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
+                    // Q-range = [q_low, q_high)
+                    // K-range = [k_low, k_high)
+                    // does_overlap = not (q_low >= k_high or k_low >= q_high)
+                    // Due to loop bounds, we should never have k_low >= q_high.
+                    const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
+                    const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
+                    // Apply mask if causal overlap or sliding window is active
+                    apply_mask = (q_low_idx < k_high_idx) || (sliding_window_size > 0);
+                }
             } else if constexpr (use_provided_mask) {
                 apply_mask = true;
             } else if constexpr (use_padded_mask) {
@@ -1781,6 +1830,9 @@ void sdpa_inner_loop(
     if constexpr (use_attention_sink) {
         cb_pop_front(cb_attention_sink, Sq_chunk_t);
     }
+    if (is_prepacked) {
+        cb_pop_front(cb_cum_seq_lens, 1);
+    }
 }
 
 /******************************************************************************
@@ -1841,6 +1893,7 @@ void sdpa_standard(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
+    const uint32_t cb_cum_seq_lens,
     const uint32_t cb_out) {
     sdpa_inner_loop<
         STANDARD,
@@ -1912,6 +1965,7 @@ void sdpa_standard(
         0,  // cb_lse_in (not used)
         0,  // cb_lse_out (not used)
         0,  // cb_prev_out (not used)
+        cb_cum_seq_lens,
         cb_out);
 }
 

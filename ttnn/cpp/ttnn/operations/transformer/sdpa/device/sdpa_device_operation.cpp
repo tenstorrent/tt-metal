@@ -388,6 +388,7 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
         v,
         tensors.attn_mask,
         tensors.page_table,
+        tensors.cum_seq_lens,
         tensors.attention_sink);
     return hash;
 }
@@ -490,6 +491,7 @@ Tensor sdpa(
     const std::optional<Tensor>& input_tensor_v,
     const std::optional<Tensor>& attn_mask,
     const std::optional<Tensor>& page_table_tensor,
+    const std::optional<ttnn::Tensor>& cum_seq_lens,
     const std::optional<Tensor>& attention_sink,
     bool is_causal,
     std::optional<float> scale,
@@ -519,6 +521,7 @@ Tensor sdpa(
             .v = input_tensor_v,
             .attn_mask = attn_mask,
             .page_table = page_table_tensor,
+            .cum_seq_lens = cum_seq_lens,
             .attention_sink = attention_sink,
         });
 }
