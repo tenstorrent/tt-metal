@@ -90,6 +90,7 @@ class DPTTTPipeline:
         # Last per-call perf breakdown (filled in forward).
         self.last_perf: Optional[dict] = None
         self._fusion_head_tracer = None
+        self._fusion_trace_unavailable_reason: Optional[str] = None
         self._full_trace_id = None
         self._full_trace_input = None
         self._full_trace_output = None
@@ -136,6 +137,9 @@ class DPTTTPipeline:
         if execution_mode == "eager":
             return self.fusion_head(pyramid)
 
+        if self._fusion_trace_unavailable_reason is not None:
+            return self.fusion_head(pyramid)
+
         if self._fusion_head_tracer is None:
             from models.tt_dit.utils.tracing import Tracer
 
@@ -153,11 +157,19 @@ class DPTTTPipeline:
         except Exception:
             # Shape/address changes can invalidate an existing trace; rebuild once.
             self._fusion_head_tracer.release()
-            return self._fusion_head_tracer(
-                pyramid,
-                tracer_cq_id=trace_cq_id,
-                tracer_blocking_execution=True,
-            )
+            try:
+                return self._fusion_head_tracer(
+                    pyramid,
+                    tracer_cq_id=trace_cq_id,
+                    tracer_blocking_execution=True,
+                )
+            except Exception as exc:
+                self._fusion_trace_unavailable_reason = str(exc)
+                LOG.warning(
+                    "Fusion-head trace is unavailable (%s). Falling back to eager fusion head.",
+                    self._fusion_trace_unavailable_reason,
+                )
+                return self.fusion_head(pyramid)
 
     def _tt_forward_core(self, tt_pixel_values):
         # In perf-neck mode, request TT token maps/features so the neck can stay on device.
