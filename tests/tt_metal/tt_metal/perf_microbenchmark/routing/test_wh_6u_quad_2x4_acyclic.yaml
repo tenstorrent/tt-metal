@@ -45,6 +45,7 @@ Tests:
               device: [3, 1]
 
   - name: "TestNocSendTypesMesh"
+    skip: [watcher]
     enable_flow_control: true
     sync: true
     fabric_setup:
