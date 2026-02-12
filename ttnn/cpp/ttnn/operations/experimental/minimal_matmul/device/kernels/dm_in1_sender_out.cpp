@@ -303,14 +303,15 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
-#ifdef SRS_FUSE_OP_SIGNALER
-                    noc_async_write_barrier();
-                    srs_fuse_signaler.synchronize_workers_and_signal_op(0);
-#endif
                 }
             }
         }
     }
     noc_async_write_barrier();
+#ifdef SRS_FUSE_OP_SIGNALER
+    if constexpr (is_output_writer) {
+        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+    }
+#endif
     noc_async_atomic_barrier();
 }

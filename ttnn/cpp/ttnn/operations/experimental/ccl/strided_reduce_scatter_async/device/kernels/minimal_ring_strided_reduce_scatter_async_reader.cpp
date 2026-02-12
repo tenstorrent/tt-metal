@@ -153,6 +153,11 @@ void kernel_main() {
 
     uint32_t sem_target = 0;
 
+#ifdef FUSE_MM_OP_SIGNALER
+    // Wait for matmul to finish writing all output before starting reduce-scatter
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 1);
+#endif
+
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
         DPRINT << "================================================" << ENDL();
@@ -166,13 +171,6 @@ void kernel_main() {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
-#ifdef FUSE_MM_OP_SIGNALER
-                // Wait for matmul to produce this chunk of output before reading it
-                noc_semaphore_wait_min(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem),
-                    mm_sem_target + chunk_width_in_mm_blocks);
-                mm_sem_target += chunk_width_in_mm_blocks;
-#endif
                 for (uint32_t i = 0; i < ring_size; i++) {
                     DPRINT << "************************************************" << ENDL();
                     DPRINT << "ring iteration: " << i << " started" << ENDL();
