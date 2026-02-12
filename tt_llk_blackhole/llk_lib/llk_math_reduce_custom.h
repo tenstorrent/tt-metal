@@ -31,7 +31,7 @@ using namespace ckernel;
  */
 inline void reduce_max_row_configure_addrmod()
 {
-    // ADDR_MOD_0: Default mode used with pool operations (GMPOOL/GAPOOL)
+    // ADDR_MOD_6: Default mode used with pool operations (GMPOOL/GAPOOL)
     // No auto-increment on any counter - keeps all address pointers at their current positions
     // Used for initial pooling operations where we want explicit control over counter advancement
     addr_mod_t {
@@ -39,7 +39,7 @@ inline void reduce_max_row_configure_addrmod()
         .srcb     = {.incr = 0, .clr = 0, .cr = 0},
         .dest     = {.incr = 0, .clr = 0, .cr = 0},
         .fidelity = {.incr = 0, .clr = 1}}
-        .set(ADDR_MOD_0);
+        .set(ADDR_MOD_6);
 
     // ADDR_MOD_1: Face-to-face advancement mode used with GMPOOL operations
     // Increments SrcA by 16 rows to advance to the next face (F0->F1, F2->F3)
@@ -73,6 +73,31 @@ inline void reduce_max_row_configure_addrmod()
         .dest = {.incr = 20, .clr = 0, .cr = 1},
     }
         .set(ADDR_MOD_3);
+}
+
+inline void reduce_max_row_configure_addrmod_reinit()
+{
+    // ADDR_MOD_1: Face-to-face advancement mode used with GMPOOL operations
+    // Increments SrcA by 16 rows to advance to the next face (F0->F1, F2->F3)
+    // Clears SrcB counter to prepare for subsequent MOVD2B operations that write transposed results
+    // This allows processing pairs of faces (F0+F1, then F2+F3) efficiently
+    addr_mod_t {
+        .srca = {.incr = 16, .clr = 0, .cr = 1},
+        .srcb = {.incr = 0, .clr = 1, .cr = 0},
+        .dest = {.incr = 0, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_1);
+
+    // ADDR_MOD_2: Sequential 4-row write mode used with MOVB2D operations
+    // Increments DEST by 4 rows after each operation (writes to rows 0, 4, 8, 12 within a face)
+    // This distributes the transposed 1x16 reduction result across the first face (rows 0-15)
+    // by writing 4 rows to every 4th row, matching the tile face layout
+    addr_mod_t {
+        .srca = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb = {.incr = 0, .clr = 0, .cr = 0},
+        .dest = {.incr = 4, .clr = 0, .cr = 1},
+    }
+        .set(ADDR_MOD_2);
 }
 
 /**
@@ -111,17 +136,17 @@ inline void _llk_math_reduce_block_max_row_mop_config_()
 
         // The following instructions are repeated for F0&F1 reduced and F2&F3 reduced
         // Move high 16 bits from DEST row 0 to SrcB rows 16 - 31 and transpose
-        TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_6, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
 
         // Move high 16 bits back to Dest
-        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_6, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_6, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_6, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_6, p_movb2d::MOV_4_ROWS, 12);
 
         // Move low 16 bits to SrcB rows 16 - 31 and transpose
-        TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_6, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
 
         // Move low 16 bits from SrcB rows 16 - 31 to DEST rows 0, 4, 8, 12
@@ -139,7 +164,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_()
         // The following instructions are going to transpose the whole tile, unlike the FP32 mode.
 
         // Move row 0 from DEST to SrcB with offset of 16 rows and transpose
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_6, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
         // Move row 0 from SrcB to DEST in 4-row chunks
         // ADDR_MOD_2 increments CR_D and Dest counter val by 4, so that's why DEST location is '0', not '0, 4, 8, 12'.
@@ -150,13 +175,13 @@ inline void _llk_math_reduce_block_max_row_mop_config_()
         TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 0);
 
         // Move row 32 (F2R0) from DEST to SrcB with offset of 16 rows and transpose
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_6, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
         // Move row 32 from SrcB to DEST in 4-row chunks
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_6, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_6, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_6, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_6, p_movb2d::MOV_4_ROWS, 12);
 
         // Clear B valid bits at the end and all address counters
         TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
