@@ -340,7 +340,6 @@ public:
 
     void reset_params_for_core(const CoreCoord& core, const BufferCorePageMapping& core_page_mapping) {
         this->core = core;
-        //       fmt::println(stderr, "Host mapping count: {}", core_page_mapping.host_ranges.size());
         this->core_page_mapping_it = core_page_mapping.begin();
         this->address =
             this->buffer->address() + core_page_mapping.device_start_page * this->buffer->aligned_page_size();
@@ -749,9 +748,6 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         for (const auto& relay_sub_cmd : relay_sub_cmds) {
             total_relay_length += relay_sub_cmd.length;
         }
-
-        //       fmt::println(stderr, "Total relay length: {} write sub cmds: {} relay sub cmds: {} \n",
-        //       total_relay_length, write_sub_cmds.size(), relay_sub_cmds.size());
 
         // Use calculator to compute command sequence size
         DeviceCommandCalculator calculator;
