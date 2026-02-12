@@ -129,6 +129,8 @@ struct SdpaDecodeProgramFactory {
         uint32_t num_output_cores = 0;
         tt::tt_metal::CBHandle cb_in8_id{};
         tt::tt_metal::CBHandle cb_in9_id{};
+        tt::tt_metal::CBHandle cb_in0_id{};
+        bool is_q_sharded = false;
         bool is_output_sharded = false;
         tt::tt_metal::CBHandle cb_out4_id{};
         uint32_t B = 0;
