@@ -380,7 +380,6 @@ class T5Attention(Module):
         hidden_states: ttnn.Tensor,
         position_bias: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        batch_size, seq_length, _ = hidden_states.shape
         hidden_states_ = hidden_states
         hidden_states = self.layer_norm(hidden_states)
 
@@ -400,7 +399,7 @@ class T5Attention(Module):
         scores = ttnn.matmul(q, k)
 
         scores = scores + position_bias
-        attn_weights = ttnn.softmax(scores, dim=-1)
+        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.layer_norm.compute_kernel_config)
         attn_output = ttnn.matmul(attn_weights, v)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
@@ -495,19 +494,34 @@ class RelativePositionEmbeddings(Module):
             device=mesh_device,
         )
 
+        # If we are using max sequence length. We can just precompute. This seems to be the same for all subset of the max. We can also discard it if we want to save memory.
+        self.relative_bias_cache = None
+
     def forward(self, seq_length: int) -> ttnn.Tensor:
-        position_bias = _compute_relative_position_bias(
-            seq_length=seq_length,
-            device=self.mesh_device,
-            relative_attention_num_buckets=self.config.relative_attention_num_buckets,
-            relative_attention_max_distance=self.config.relative_attention_max_distance,
-            relative_attention_bias=self.weight.data,
-            parallel_config=self.parallel_config,
-        )
+        """
+        Get relative position bias for the given sequence length.
+        Curently, we compure and cache the relative position bias with the assumption that the sequence length is the same (max seq length) for all the tokens in the prompt.
+        If the sequence length is not in the same as cached, we recomopute and update the cache. We can also use slicing to adapt from max cache
+        Args:
+            seq_length: int
+                The sequence length
+        Returns:
+            ttnn.Tensor
+                The relative position bias
+        """
+        if self.relative_bias_cache is None or self.relative_bias_cache.shape[2] != seq_length:
+            self.relative_bias_cache = _compute_relative_position_bias(
+                seq_length=seq_length,
+                device=self.mesh_device,
+                relative_attention_num_buckets=self.config.relative_attention_num_buckets,
+                relative_attention_max_distance=self.config.relative_attention_max_distance,
+                relative_attention_bias=self.weight.data,
+                parallel_config=self.parallel_config,
+            )
+        return self.relative_bias_cache
 
-        return position_bias
 
-
+# TODO: Migrate to ttnn. Not an issue now as we use precomputed results.
 def _compute_relative_position_bias(
     seq_length: int,
     device: ttnn.Device,
