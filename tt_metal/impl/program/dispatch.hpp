@@ -73,18 +73,14 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
-    uint32_t crta_base_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes);
+    uint32_t crta_base_offset);
 
 uint32_t finalize_rt_args(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
     uint32_t programmable_core_type_index,
-    uint32_t& rta_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes);
+    uint32_t& rta_offset);
 
 uint32_t finalize_sems(
     uint32_t programmable_core_type_index,
