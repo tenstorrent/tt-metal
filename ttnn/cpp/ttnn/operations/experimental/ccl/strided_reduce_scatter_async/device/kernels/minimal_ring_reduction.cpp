@@ -80,6 +80,8 @@ void MAIN {
 
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
+                uint32_t effective_chunk_width_in_tiles =
+                    get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
 
                 for (uint32_t i = 1; i < ring_size; i++) {
                     DPRINT << "************************************************" << ENDL();
@@ -92,8 +94,6 @@ void MAIN {
                         uint32_t first_tile_row_in_mm_M_block = 0;
                         uint32_t first_chunk_col_in_tiles = 0;
                         uint32_t first_mm_core_idx = 0;
-                        uint32_t effective_chunk_width_in_tiles =
-                            get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
                         uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
                         get_next_tile_coordinates(
                             first_tile_row_in_mm_M_block,
