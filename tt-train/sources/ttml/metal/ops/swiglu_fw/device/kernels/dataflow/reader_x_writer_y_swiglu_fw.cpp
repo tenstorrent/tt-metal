@@ -52,24 +52,16 @@ void kernel_main() {
     for (uint32_t r = start_row; r < end_row_for_sync; ++r) {
         const bool is_padding_row = (r >= end_row);
 
-        // ---- Phase A: Read X[r, :] in p_blocks ----
+        // ---- Phase A: Read X[r, :] ----
         // For padding rows, read last valid row to keep compute fed
         const uint32_t x_row = is_padding_row ? (end_row - 1) : r;
-        for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
-            const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
-            const uint32_t x_tile_start = x_row * Wt + p_block_start;
-            read_tiles_by_row(cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes, block_size);
-        }
+        read_full_row_tiles(cb_input_idx, x_address_generator, Wt, block_size, tile_bytes, x_row * Wt);
 
         // ---- Phase B: Nothing (SiLU is compute-only, no dataflow needed) ----
 
-        // ---- Phase C: Write Y[r, :] in c_blocks (actual rows only) ----
+        // ---- Phase C: Write Y[r, :] (actual rows only) ----
         if (!is_padding_row) {
-            for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
-                const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : (Wt - c_block_start);
-                const uint32_t start_tile_idx = r * Wt + c_block_start;
-                write_tiles_by_row(cb_y_idx, y_address_generator, start_tile_idx, c_block_size, tile_bytes, block_size);
-            }
+            write_full_row_tiles(cb_y_idx, y_address_generator, Wt, block_size, tile_bytes, r * Wt);
         }
     }
 }

@@ -125,8 +125,8 @@ void assign_per_core_runtime_args(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        uint32_t max_rows_for_sync = use_multicast ? max_rows_across_all_cores : num_rows_per_core;
-        bool is_sender = (core.x == 0 && core.y == 0);
+        const uint32_t max_rows_for_sync = use_multicast ? max_rows_across_all_cores : num_rows_per_core;
+        const bool is_sender = (core.x == 0 && core.y == 0);
 
         // --- RISCV_1: X reader + Y writer (ALL cores, same args) ---
         SetRuntimeArgs(
@@ -290,8 +290,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // These parameters are used to determine if we need to mask tiles along input/hidden dimension, i.e. if the
     // operation applied over input/hidden dimension might produce incorrect results due to some random data in the
     // end of the last tile.
-    uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;
-    uint32_t mask_hw = hidden_num_inner % tt::constants::TILE_WIDTH;
+    const uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;
+    const uint32_t mask_hw = hidden_num_inner % tt::constants::TILE_WIDTH;
 
     // TODO(maciek): Consider adding masking. Now we assume that the N and C % 32 == 0.
     TT_FATAL(mask_w == 0, "Input inner dimension must be multiple of TILE_WIDTH");
@@ -387,7 +387,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     const uint32_t w2_num_buffers = std::max(2U, std::min(max_w2_buffers, 24U));
     const uint32_t w2_cb_tiles = w2_num_buffers * w2_batch;
 
-    auto data_format = input_data_format;  // tt::DataFormat::Float16_b
+    const auto data_format = input_data_format;
 
     // NOTE(maciek):
     // - fp32 input/output CBs are possible, but here both are always bf16 to match pipeline formats.
@@ -621,7 +621,6 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
          /* core_group_2                           = */ core_group_2,
          /* num_cores                              = */ num_cores,
          /* num_cores_x                            = */ num_cores_x,
-         /* num_cores_y                            = */ num_cores_y,
          /* use_multicast                          = */ use_multicast}};
 }
 
