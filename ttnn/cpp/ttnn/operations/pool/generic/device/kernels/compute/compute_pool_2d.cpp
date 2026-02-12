@@ -245,8 +245,7 @@ void kernel_main() {
                 if constexpr (is_output_tiled) {
                     // TILED output: accumulate sticks and perform tilization when needed
                     if (last_c_block) {
-                        pack_untilize_dest<partial_iter_output_tiles>(
-                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        pack_untilize_dest<partial_iter_output_tiles>(pre_tilize_cb_id, 1, 0, num_out_sticks);
                         cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
                         tilize_stick_counter++;
                         tilize_stick_total++;
@@ -304,11 +303,9 @@ void kernel_main() {
                 } else {
                     // ROW_MAJOR output: pack directly to output CB
                     if (last_c_block) {
-                        pack_untilize_dest<partial_iter_output_tiles>(
-                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        pack_untilize_dest<partial_iter_output_tiles>(out_cb_id, 1, 0, num_out_sticks);
                     } else {
-                        pack_untilize_dest<max_tiles_per_iter>(
-                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks);
                     }
                     cb_push_back(out_cb_id, output_faces);
                     tile_regs_release();
