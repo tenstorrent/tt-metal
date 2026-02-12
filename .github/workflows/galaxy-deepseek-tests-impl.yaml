@@ -24,6 +24,11 @@ on:
         required: false
         type: string
         default: "all"
+      enable-tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Whether Tracy profiling is enabled in the build"
 
 jobs:
   generate-matrix:
@@ -36,7 +41,8 @@ jobs:
         run: |
           all_tests=$(jq -n '[
             { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
-            { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" }
+            { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" },
+            { "name": "(Galaxy) DeepSeek final-op-unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "final-op-unit", "timeout": 150, "owner_id": "U03HY7MK4BT" }
           ]')
 
           # Filter matrix based on test-type selection
@@ -77,6 +83,11 @@ jobs:
         DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
         MESH_DEVICE: TG
+        # Required for BenchmarkData to save to Superset
+        CI: true
+        GITHUB_ACTIONS: true
+        # Indicate if Tracy profiling is available in this build
+        TT_METAL_TRACY_BUILD: ${{ inputs.enable-tracy && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -105,41 +116,249 @@ jobs:
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
       - name: Validate weight cache
-        if: ${{ matrix.test-group.test-type == 'module' }}
+        if: ${{ matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: 10
         run: |
           python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
+
       - name: Run DeepSeek module tests
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
+          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout 600  --durations=0
+
+      - name: Run DeepSeek op unit tests
+        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+
+          # ============================================
+          # DeepSeek Op Unit Tests
+          # ============================================
+          # For each op, we run 2 configurations:
+          #   - decode seq_len=1, batch=32, trace + program_cache
+          #   - prefill seq_len=128, batch=32, eager + program_cache
+          #
+          # All tests log to Superset:
+          #   - Accuracy: PCC, max_abs_error
+          #   - Host-level Performance: avg_us (end-to-end latency)
+          #   - Config: mode, seq_len, batch_size, trace_mode, program_cache
+          #   - Environment: mesh_shape (4x8), module name
+          # ============================================
+
+          echo "=============================================="
+          echo "EMBEDDING op tests"
+          echo "=============================================="
+          echo "Running EMBEDDING (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding.py::test_ds_embedding -k "decode and 1 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          echo "Running EMBEDDING (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding.py::test_ds_embedding -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "EMBEDDING ALL GATHER op tests"
+          echo "=============================================="
+          echo "Running EMBEDDING ALL GATHER (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_all_gather_embedding.py::test_ds_all_gather_embedding -k "decode and 1 and trace and program_cache and not no_program_cache" --timeout 600 --durations=0
+          echo "Running EMBEDDING ALL GATHER (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_all_gather_embedding.py::test_ds_all_gather_embedding -k "prefill and 128 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "LM HEAD op tests"
+          echo "=============================================="
+          echo "Running LM HEAD (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head.py::test_ds_lm_head -k "decode and 1 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          echo "Running LM HEAD (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head.py::test_ds_lm_head -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "RMS NORM op tests"
+          echo "=============================================="
+          echo "Running RMS NORM (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_rms_norm.py::test_ds_rms_norm -k "decode and 1 and kv_lora_rank_512 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          echo "Running RMS NORM (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_rms_norm.py::test_ds_rms_norm -k "prefill and 128 and kv_lora_rank_512 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "DISTRIBUTED NORM op tests"
+          echo "=============================================="
+          echo "Running DISTRIBUTED NORM (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_distributed_norm.py::test_ds_distributed_norm -k "decode and 1 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          echo "Running DISTRIBUTED NORM (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_distributed_norm.py::test_ds_distributed_norm -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "MLP FF1/3 op tests"
+          echo "=============================================="
+          echo "Running MLP FF1/3 (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff1_3.py::test_ds_ff1_3 -k "decode and 1 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          echo "Running MLP FF1/3 (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff1_3.py::test_ds_ff1_3 -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "MLP FF2 op tests"
+          echo "=============================================="
+          echo "Running MLP FF2 (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff2.py::test_ds_ff2 -k "decode and 1 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          echo "Running MLP FF2 (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff2.py::test_ds_ff2 -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "MLP MUL op tests"
+          echo "=============================================="
+          echo "Running MLP MUL (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_mul.py::test_ds_mul -k "decode and 1 and trace and program_cache and not no_program_cache" --timeout 600 --durations=0
+          echo "Running MLP MUL (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_mul.py::test_ds_mul -k "prefill and 128 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "MLP REDUCE SCATTER op tests"
+          echo "=============================================="
+          echo "Running MLP REDUCE SCATTER (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_reduce_scatter_post_ff2.py::test_ds_reduce_scatter_post_ff2 -k "decode and 1 and trace and program_cache and not no_program_cache" --timeout 600 --durations=0
+          echo "Running MLP REDUCE SCATTER (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_reduce_scatter_post_ff2.py::test_ds_reduce_scatter_post_ff2 -k "prefill and 128 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "MLP ALL GATHER op tests"
+          echo "=============================================="
+          echo "Running MLP ALL GATHER (decode seq_len=1, batch=32, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_all_gather_preff1_3.py::test_ds_all_gather_preff1_3 -k "decode and 1 and trace and program_cache and not no_program_cache" --timeout 600 --durations=0
+          echo "Running MLP ALL GATHER (prefill seq_len=128, batch=32, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_all_gather_preff1_3.py::test_ds_all_gather_preff1_3 -k "prefill and 128 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "All op functional tests completed!"
+          echo "=============================================="
+
+      # ============================================
+      # Device Performance Status Check
+      # ============================================
+      - name: Check device performance test availability
+        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
+        run: |
+          if [ "${{ inputs.enable-tracy }}" = "true" ]; then
+            echo "✓ Tracy profiling ENABLED - Device perf tests will run"
+            echo "  Build includes Tracy support for device-level metrics"
+          else
+            echo "⚠️  Tracy profiling DISABLED - Device perf tests skipped"
+            echo "  To enable: Set enable-tracy: true in workflow dispatch"
+            echo "  Note: Requires build with Tracy support (see build-artifact workflow)"
+          fi
+
+      # ============================================
+      # Device Performance Tests (Tracy-enabled builds only)
+      # ============================================
+      # Device perf tests require a Tracy-enabled build of tt-metal.
+      # Enable by setting enable-tracy: true in workflow dispatch.
+      #
+      # When enabled:
+      #   - Collects kernel duration and op-to-op latency metrics
+      #   - Runs 10 ops × 2 configs (decode trace, prefill eager)
+      #   - Logs device-level metrics to Superset
+      # ============================================
+      - name: Run DeepSeek op unit tests (Device Performance)
+        if: ${{ matrix.test-group.test-type == 'final-op-unit' && inputs.enable-tracy }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          # ============================================
+          # DeepSeek Op Device Performance Tests
+          # ============================================
+          # Collect device-level kernel and op-to-op latency metrics
+          # for all fused ops in the two target configurations:
+          #   - decode seq_len=1, trace + program_cache
+          #   - prefill seq_len=128, eager + program_cache
+          #
+          # Device perf metrics logged to Superset:
+          #   - Kernel Duration (us): time spent in Tensix cores
+          #   - Op-to-Op Latency (us): overhead between operations
+          #   - Config: mode, seq_len, trace_mode, program_cache
+          # ============================================
+
+          echo "=============================================="
+          echo "Device Performance Tests"
+          echo "=============================================="
+
+          echo "Running EMBEDDING device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding.py::test_ds_embedding_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running EMBEDDING device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding.py::test_ds_embedding_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "Running ALL GATHER EMBEDDING device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_all_gather_embedding.py::test_ds_all_gather_embedding_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running ALL GATHER EMBEDDING device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_all_gather_embedding.py::test_ds_all_gather_embedding_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "Running LM HEAD device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head.py::test_ds_lm_head_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running LM HEAD device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head.py::test_ds_lm_head_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "Running RMS NORM device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_rms_norm.py::test_ds_rms_norm_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running RMS NORM device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_rms_norm.py::test_ds_rms_norm_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "Running DISTRIBUTED NORM device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_distributed_norm.py::test_ds_distributed_norm_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running DISTRIBUTED NORM device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_distributed_norm.py::test_ds_distributed_norm_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "Running FF1_3 device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff1_3.py::test_ds_ff1_3_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running FF1_3 device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff1_3.py::test_ds_ff1_3_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "Running ALL GATHER PREFF1_3 device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_all_gather_preff1_3.py::test_ds_all_gather_preff1_3_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running ALL GATHER PREFF1_3 device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_all_gather_preff1_3.py::test_ds_all_gather_preff1_3_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "Running MUL device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_mul.py::test_ds_mul_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running MUL device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_mul.py::test_ds_mul_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "Running FF2 device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff2.py::test_ds_ff2_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running FF2 device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff2.py::test_ds_ff2_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "Running REDUCE SCATTER device perf (decode seq_len=1, trace + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_reduce_scatter_post_ff2.py::test_ds_reduce_scatter_post_ff2_device_perf -k "decode and 1" --timeout 600 --durations=0
+          echo "Running REDUCE SCATTER device perf (prefill seq_len=128, eager + program_cache)..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_reduce_scatter_post_ff2.py::test_ds_reduce_scatter_post_ff2_device_perf -k "prefill and 128" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "All device perf tests completed!"
+          echo "=============================================="
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
-      # - name: Save environment data
-      #   id: save-environment-data
-      #   if: ${{ !cancelled() }}
-      #   run: |
-      #     if [ -d "generated/benchmark_data" ]; then
-      #       echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-      #       python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
-      #     else
-      #       echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
-      #       echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
-      #     fi
-      # - name: Upload benchmark data
-      #   if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-      #   uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-      #   with:
-      #     ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-      #     sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
-      #     username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
-      #     hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-      #     path: /work
+      # ENABLED: Save and upload benchmark data to Superset
+      - name: Save environment data
+        id: save-environment-data
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload benchmark data
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

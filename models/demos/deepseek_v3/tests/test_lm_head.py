@@ -103,6 +103,7 @@ def test_forward_pass(
 
     # TTNN forward pass
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+
     tt_output = run_module_forward(LMHead, mode, tt_input, run_config)
 
     expected_output_memory_config = run_config["output_memory_config"]

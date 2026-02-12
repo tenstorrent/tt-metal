@@ -203,7 +203,6 @@ def test_forward_pass(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
-
     # TTNN forward pass
     tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
 
