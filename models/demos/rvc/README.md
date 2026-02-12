@@ -59,9 +59,6 @@ Expected layout after download:
 - `RVC_CONFIGS_DIR` contains `v1/` and `v2/` config folders plus `hubert_cfg.json`.
 - `RVC_ASSETS_DIR` contains `hubert.safetensors` and `pretrained/` weights.
 
-If you need the full-featured project (training, CLI, API), use the upstream repository:
-https://github.com/RVC-Project/Retrieval-based-Voice-Conversion
-
 
 ## Status
 Early and intentionally minimal. Expect missing features and breaking changes while the
