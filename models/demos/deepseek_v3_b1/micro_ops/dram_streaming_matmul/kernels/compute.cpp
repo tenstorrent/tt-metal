@@ -133,6 +133,8 @@ void kernel_main() {
     constexpr uint32_t num_subblocks_k = get_compile_time_arg_val(6);
     constexpr uint32_t tile_r_dim = get_compile_time_arg_val(7);
 
+    constexpr bool transpose = false;
+    constexpr bool split_acc = true;
     constexpr uint32_t num_subblocks_n = per_core_N / subblock_w;
     constexpr uint32_t num_tiles_k = subblock_k * num_subblocks_k;
 
@@ -141,7 +143,7 @@ void kernel_main() {
 #endif
 
     // Initialize custom matmul
-    custom_mm_block_init<false, true>(cb_id_in0, cb_id_in1, cb_id_out);
+    custom_mm_block_init<transpose, split_acc>(cb_id_in0, cb_id_in1, cb_id_out);
 
     // Wait for all in0 tiles (replicated, tensor-backed - always available)
     cb_wait_front(cb_id_in0, num_tiles_k);
