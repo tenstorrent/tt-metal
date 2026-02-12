@@ -397,7 +397,7 @@ class TTConv2dCached:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
 
-        out_nhwc, out_hw, _weights_bias = ttnn.conv2d(
+        out_nhwc, out_hw, weights_bias = ttnn.conv2d(
             input_tensor=x_nhwc,
             weight_tensor=self._weight,
             bias_tensor=self._bias,
@@ -416,6 +416,9 @@ class TTConv2dCached:
             return_weights_and_bias=True,
             dtype=ttnn.bfloat16,
         )
+
+        if isinstance(weights_bias, (tuple, list)) and len(weights_bias) == 2:
+            self._weight, self._bias = weights_bias[0], weights_bias[1]
 
         out_h, out_w = int(out_hw[0]), int(out_hw[1])
         return _nhwc_to_nchw(out_nhwc, batch_size, out_h, out_w, self.out_channels)
