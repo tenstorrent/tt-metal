@@ -593,7 +593,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     if (in1_is_sharded) {
         if (in1_is_dram) {
             if (in1_is_width_sharded) {
-                mm_kernel_in1_sender_writer_defines["IN1_DRAM_SHARDED"] = "1";
+                mm_kernel_in1_sender_writer_defines["IN1_DRAM_WIDTH_SHARDED"] = "1";
             } else {
                 mm_kernel_in1_sender_writer_defines["IN1_DRAM_HEIGHT_SHARDED"] = "1";
             }

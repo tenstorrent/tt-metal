@@ -990,14 +990,6 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
             out_subblock_h = sh
             break
 
-    logger.info(
-        f"batch={batch}, seq_len={seq_len}, K={k}, N={n}, "
-        f"grid_size={grid_size}, in0_block_w={in0_block_w}, "
-        f"per_core_M={per_core_M}, per_core_N={per_core_N}, "
-        f"out_block_h={actual_out_block_h}, out_block_w={out_block_w}, "
-        f"out_subblock_h={out_subblock_h}, out_subblock_w={out_subblock_w}"
-    )
-
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
@@ -1038,5 +1030,4 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         pt_out = torch.matmul(in0_orig, in1_orig)
 
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    logger.info(pcc_message)
     assert pcc_passed, f"PCC check failed: {pcc_message}"

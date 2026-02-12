@@ -139,7 +139,7 @@ void kernel_main() {
 #endif  // FUSE_BIAS
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
-#ifdef IN1_DRAM_SHARDED
+#ifdef IN1_DRAM_WIDTH_SHARDED
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t num_dram_shards_to_read = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t dram_tensor_start_offset = get_arg_val<uint32_t>(rt_args_idx++);
@@ -148,7 +148,7 @@ void kernel_main() {
 
     constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(after_bias_offset);
     constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(after_bias_offset + 1);
-#endif  // IN1_DRAM_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED
 
 #ifdef IN1_DRAM_HEIGHT_SHARDED
     constexpr uint32_t in1_KtNt_per_batch = get_compile_time_arg_val(after_bias_offset);        // K*N tiles per batch
@@ -216,10 +216,10 @@ void kernel_main() {
         l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
     }
 
-#ifdef IN1_DRAM_SHARDED
+#ifdef IN1_DRAM_WIDTH_SHARDED
     constexpr uint32_t in1_dram_block_size_bytes = in1_dram_block_num_tiles * in1_single_tile_size_bytes;
     uint32_t in1_block_w_bytes = in1_block_w * in1_single_tile_size_bytes;
-#endif  // IN1_DRAM_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED
 
 #ifdef IN1_DRAM_HEIGHT_SHARDED
     constexpr uint32_t in1_batch_stride_bytes = in1_KtNt_per_batch * in1_single_tile_size_bytes;
@@ -260,19 +260,19 @@ void kernel_main() {
 #endif  // FUSE_BIAS
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
-#ifdef IN1_DRAM_SHARDED
+#ifdef IN1_DRAM_WIDTH_SHARDED
                     // Reset DRAM read offset for each bh block — the inner dim loop
                     // advances through K, and each output row block re-reads the same
                     // in1 columns from K=0. (bw is always 1 for DRAM-sharded senders.)
                     uint32_t l1_read_addr_in1_offset = 0;
-#endif  // IN1_DRAM_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED
 
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                         if constexpr (fuse_op_all_gather) {
                             fused_op_receiver.update_current_block_start_tile_id(
                                 block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
                         }
-#if defined(IN1_DRAM_SHARDED)
+#if defined(IN1_DRAM_WIDTH_SHARDED)
                         // Operand 1 - DRAM width sharded
                         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
@@ -386,7 +386,7 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
-#endif  // IN1_DRAM_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
 #ifndef SKIP_MCAST
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
@@ -446,7 +446,7 @@ void kernel_main() {
                             l1_write_addr_in3;              // copy start address of block, to be used for mcasting
                         uint32_t in3_block_size_bytes = 0;  // can be optimized later, pass it to kernel
 
-#ifdef IN1_DRAM_SHARDED
+#ifdef IN1_DRAM_WIDTH_SHARDED
                         uint32_t l1_write_addr_in3_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
@@ -491,7 +491,7 @@ void kernel_main() {
                         }
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
-#endif  // IN1_DRAM_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED
 
 #ifndef SKIP_MCAST
 
