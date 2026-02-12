@@ -209,16 +209,20 @@ def _read_kernel_source(kernel_desc: "ttnn.KernelDescriptor") -> Tuple[str, Opti
 def _inline_local_includes(source: str, kernel_dir: Optional[str]) -> str:
     """Inline local includes (same-directory headers) into source.
 
-    For generated SOURCE_CODE kernels, local includes (no path separator)
-    won't resolve because the compiler doesn't know the original directory.
-    We inline them directly into the source.
+    For generated SOURCE_CODE kernels, local includes won't resolve because
+    the compiler doesn't know the original directory.  We inline them directly
+    into the source.
+
+    Supports both local-only includes (no path separator) and relative path
+    includes (e.g. ``"subdir/header.h"``), resolving them relative to
+    *kernel_dir*.
     """
     if kernel_dir is None:
         return source
 
     lines = source.split("\n")
     result = []
-    inlined = set()
+    inlined: Set[str] = set()
 
     for line in lines:
         stripped = line.strip()
@@ -226,21 +230,24 @@ def _inline_local_includes(source: str, kernel_dir: Optional[str]) -> str:
             match = re.match(r'#include\s+"([^"]+)"', stripped)
             if match:
                 inc_path = match.group(1)
-                # Local include = no path separators
-                if "/" not in inc_path and inc_path not in inlined:
-                    full_inc = os.path.join(kernel_dir, inc_path)
+                if inc_path not in inlined:
+                    full_inc = os.path.normpath(os.path.join(kernel_dir, inc_path))
                     if os.path.exists(full_inc):
                         with open(full_inc, "r") as f:
                             inc_content = f.read()
-                        # Remove include guards from inlined content
                         inc_lines = inc_content.split("\n")
                         for il in inc_lines:
                             ils = il.strip()
                             if ils.startswith("#pragma once"):
                                 continue
-                            # Skip the same local include if it re-includes itself
-                            if ils.startswith('#include "') and "/" not in ils:
-                                continue
+                            # Skip nested local includes (single-level inlining)
+                            if ils.startswith('#include "'):
+                                nested_match = re.match(r'#include\s+"([^"]+)"', ils)
+                                if nested_match:
+                                    nested = nested_match.group(1)
+                                    nested_full = os.path.normpath(os.path.join(os.path.dirname(full_inc), nested))
+                                    if os.path.exists(nested_full):
+                                        continue
                             result.append(il)
                         inlined.add(inc_path)
                         continue
@@ -257,13 +264,26 @@ def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
     """Resolve preprocessor #ifdef/#ifndef/#if defined/#elif directives in source code.
 
     Only resolves directives involving known source-level defines (RMSNORM,
-    FUSE_PRE_ADD, FUSED_PRE_ADD). Other directives are left untouched.
+    FUSE_PRE_ADD, FUSED_PRE_ADD, FUSE_GAMMA, FUSE_BETA). Other directives
+    are left untouched.
+
+    Supports:
+      - ``#ifdef NAME``, ``#ifndef NAME``
+      - ``#if defined(NAME)`` / ``#if defined NAME``
+      - ``#if !defined(NAME)`` / ``#if !defined NAME``
+      - ``#if defined A || defined B``, ``#if defined A && !defined B``
+      - ``#if 0``, ``#if 1`` (unconditional)
+      - ``#elif`` with any of the above
+      - Line continuation with backslash (``\\``)
+      - ``#else``, ``#endif``
 
     Stack entries are (current_branch_included, known, any_branch_taken) tuples.
     ``any_branch_taken`` tracks whether any prior branch in a #if/#elif/#else
     chain was included, so that #elif and #else can skip when a prior branch
     was already selected.
     """
+    # Join backslash-continued lines before processing
+    source = _join_continued_lines(source)
     lines = source.split("\n")
     result = []
     # Stack of (current_included, known_directive, any_prior_branch_taken)
@@ -273,11 +293,10 @@ def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
         stripped = line.strip()
         directive_handled = False
 
-        if stripped.startswith("#if defined"):
-            names_found = re.findall(r"\bdefined\s+(\w+)", stripped)
-            involved = [n for n in names_found if n in _SOURCE_LEVEL_DEFINES]
-            if involved:
-                result_val = _eval_ifdef_expression(stripped, active_defines)
+        if stripped.startswith("#if ") and not stripped.startswith("#ifdef") and not stripped.startswith("#ifndef"):
+            # Handles: #if defined(...), #if !defined(...), #if 0, #if 1
+            known, result_val = _eval_if_directive(stripped, active_defines)
+            if known:
                 stack.append((result_val, True, result_val))
                 directive_handled = True
             else:
@@ -301,28 +320,22 @@ def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
             else:
                 stack.append((True, False, False))
 
-        elif stripped.startswith("#elif "):
+        elif stripped.startswith("#elif"):
             if stack and stack[-1][1]:
                 _, known, any_taken = stack[-1]
                 if any_taken:
-                    # A prior branch was already taken — exclude this branch
                     stack[-1] = (False, known, True)
                 else:
-                    # No prior branch taken — evaluate this condition
-                    names_found = re.findall(r"\bdefined\s+(\w+)", stripped)
-                    involved = [n for n in names_found if n in _SOURCE_LEVEL_DEFINES]
-                    if involved:
-                        result_val = _eval_ifdef_expression(stripped, active_defines)
+                    known_elif, result_val = _eval_if_directive(stripped, active_defines)
+                    if known_elif:
                         stack[-1] = (result_val, known, result_val)
                     else:
-                        # Unknown define in #elif — conservatively include
                         stack[-1] = (True, known, True)
                 directive_handled = True
 
         elif stripped == "#else" or stripped.startswith("#else ") or stripped.startswith("#else\t"):
             if stack and stack[-1][1]:
                 _, known, any_taken = stack[-1]
-                # #else is included only if no prior branch was taken
                 stack[-1] = (not any_taken, known, True)
                 directive_handled = True
 
@@ -354,9 +367,33 @@ def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
     return "\n".join(result)
 
 
+def _join_continued_lines(source: str) -> str:
+    """Join lines ending with backslash continuation into single lines."""
+    lines = source.split("\n")
+    joined = []
+    buf = ""
+    for line in lines:
+        if line.rstrip().endswith("\\"):
+            buf += line.rstrip()[:-1]
+        else:
+            if buf:
+                buf += line
+                joined.append(buf)
+                buf = ""
+            else:
+                joined.append(line)
+    if buf:
+        joined.append(buf)
+    return "\n".join(joined)
+
+
 def _eval_ifdef_branch(branch: str, active_defines: set) -> bool:
-    """Evaluate a single AND-branch of a #if defined expression."""
-    clauses = re.findall(r"(not\s+)?defined\s+(\w+)", branch)
+    """Evaluate a single AND-branch of a #if defined expression.
+
+    Supports both ``not defined X`` and ``!defined(X)`` / ``!defined X``
+    negation syntax.
+    """
+    clauses = re.findall(r"(!|not\s+)?defined\s*\(?\s*(\w+)\s*\)?", branch)
     if not clauses:
         return True
     result = True
@@ -383,8 +420,130 @@ def _eval_ifdef_expression(directive: str, active_defines: set) -> bool:
     return False
 
 
+def _eval_if_directive(stripped: str, active_defines: set) -> Tuple[bool, bool]:
+    """Evaluate a ``#if`` or ``#elif`` directive.
+
+    Returns (known, result) where *known* is True if the directive was
+    fully resolved, and *result* is the boolean evaluation.
+
+    Handles:
+      - ``#if 0`` / ``#if 1``
+      - ``#if defined(X)`` / ``#if !defined(X)``
+      - ``#elif defined(X) || !defined(Y)``
+      - Mixed expressions involving known source-level defines
+    """
+    # Strip the #if or #elif prefix
+    expr = re.sub(r"^#(?:el)?if\s+", "", stripped).strip()
+
+    # Unconditional: #if 0 / #if 1
+    if expr == "0":
+        return True, False
+    if expr == "1":
+        return True, True
+
+    # Check if any source-level defines are referenced
+    names_found = re.findall(r"defined\s*\(?\s*(\w+)\s*\)?", expr)
+    involved = [n for n in names_found if n in _SOURCE_LEVEL_DEFINES]
+    if not involved:
+        return False, True  # Unknown — conservatively include
+
+    return True, _eval_ifdef_expression(expr, active_defines)
+
+
+def _strip_strings_and_comments(line: str) -> str:
+    """Remove string literals, char literals, and comments from a C++ line.
+
+    Replaces their content with spaces so that brace counting and regex
+    matching operate only on actual code.  Handles:
+      - Double-quoted strings with escape sequences: ``"hello \\"world\\""``
+      - Single-quoted char literals: ``'}'``, ``'\\n'``
+      - C-style inline comments: ``/* ... */``
+      - C++ line comments: ``// ...``
+      - Raw string literals: ``R"delim(...)delim"`` (simplified)
+    """
+    result = []
+    i = 0
+    n = len(line)
+    while i < n:
+        c = line[i]
+        # Raw string literal: R"delim(...)delim"
+        if c == "R" and i + 1 < n and line[i + 1] == '"':
+            end_paren = line.find("(", i + 2)
+            if end_paren != -1:
+                delim = line[i + 2 : end_paren]
+                end_marker = f'){delim}"'
+                end_pos = line.find(end_marker, end_paren + 1)
+                if end_pos != -1:
+                    i = end_pos + len(end_marker)
+                    result.append(" ")
+                    continue
+            # Not a valid raw string — treat R as normal char
+            result.append(c)
+            i += 1
+        elif c == '"':
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                elif line[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            result.append(" ")
+        elif c == "'":
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                elif line[i] == "'":
+                    i += 1
+                    break
+                else:
+                    i += 1
+            result.append(" ")
+        elif c == "/" and i + 1 < n and line[i + 1] == "/":
+            break  # Rest of line is comment
+        elif c == "/" and i + 1 < n and line[i + 1] == "*":
+            end = line.find("*/", i + 2)
+            if end != -1:
+                i = end + 2
+                result.append(" ")
+            else:
+                break  # Unclosed block comment spans to end of line
+        else:
+            result.append(c)
+            i += 1
+    return "".join(result)
+
+
+def _count_braces(line: str) -> int:
+    """Count net braces (open - close) in a C++ line, ignoring strings/comments."""
+    stripped = _strip_strings_and_comments(line)
+    return stripped.count("{") - stripped.count("}")
+
+
+# Regex for detecting kernel_main declarations, handling attributes (ALWI,
+# FORCE_INLINE, __attribute__), return types, and whitespace variants.
+_KERNEL_MAIN_RE = re.compile(
+    r"(?:ALWI|FORCE_INLINE|__attribute__\s*\(\(.*?\)\))?\s*" r"(?:void|int)\s+" r"kernel_main\s*\("
+)
+
+
+def _is_kernel_main_line(line: str) -> bool:
+    """Check if a source line contains a kernel_main declaration."""
+    stripped = line.strip()
+    if "KERNEL_MAIN" in stripped:
+        return True
+    return bool(_KERNEL_MAIN_RE.search(stripped))
+
+
 def _extract_kernel_body_for_fusion(source: str) -> str:
-    """Extract the body of kernel_main() for fusion."""
+    """Extract the body of kernel_main() for fusion.
+
+    Uses string-aware brace counting to handle braces inside string
+    literals, character literals, and comments.
+    """
     lines = source.split("\n")
     in_kernel_main = False
     brace_depth = 0
@@ -393,21 +552,18 @@ def _extract_kernel_body_for_fusion(source: str) -> str:
     for line in lines:
         stripped = line.strip()
 
-        if "void kernel_main()" in line or "KERNEL_MAIN" in line:
+        if not in_kernel_main and _is_kernel_main_line(line):
             in_kernel_main = True
-            brace_depth += stripped.count("{") - stripped.count("}")
+            brace_depth += _count_braces(stripped)
             continue
 
         if in_kernel_main:
-            open_braces = stripped.count("{")
-            close_braces = stripped.count("}")
-            new_brace_depth = brace_depth + open_braces - close_braces
+            delta = _count_braces(stripped)
+            new_brace_depth = brace_depth + delta
 
             if new_brace_depth > 0 or (brace_depth > 0 and new_brace_depth > 0):
                 body_lines.append(line)
             elif brace_depth > 0 and new_brace_depth == 0:
-                if stripped != "}":
-                    pass
                 break
 
             brace_depth = new_brace_depth
@@ -435,7 +591,7 @@ def _collect_defines(sources: List[str]) -> List[str]:
     for source in sources:
         for line in source.split("\n"):
             stripped = line.strip()
-            if "void kernel_main()" in line or "KERNEL_MAIN" in line:
+            if _is_kernel_main_line(line):
                 break
             if stripped.startswith("#define") and stripped not in seen:
                 defines.append(line)
@@ -463,7 +619,7 @@ def _collect_pre_main_code(source: str) -> str:
     pre_main = []
     in_block_comment = False
     for line in lines:
-        if "void kernel_main()" in line or "KERNEL_MAIN" in line:
+        if _is_kernel_main_line(line):
             break
         stripped = line.strip()
 
@@ -483,17 +639,31 @@ def _collect_pre_main_code(source: str) -> str:
 
 
 # Regex pattern matching C/C++ global/static variable declarations.
-# Captures: optional 'static', type, variable name.
-# Excludes: functions (parens), namespaces, typedefs, using, ALWI/FORCE_INLINE.
+# Captures variable name from declarations like:
+#   static constexpr uint32_t foo = 0;
+#   volatile float* bar;
+#   const MyType& baz = init;
+#   thread_local int qux;
+#   auto val = expr;
+# Excludes: functions (parens without prior =), namespaces, typedefs, using.
+_GLOBAL_VAR_QUALIFIERS = r"(?:(?:static|volatile|constexpr|const|thread_local|extern|inline)\s+)*"
+_GLOBAL_VAR_TYPE = (
+    r"(?:"
+    r"(?:unsigned\s+|signed\s+)?"  # optional sign
+    r"(?:long\s+long|long|short|int|char)\b"  # multi-word types
+    r"|u?int(?:8|16|32|64)_t\b"  # fixed-width types
+    r"|float\b|double\b|bool\b|uint\b|size_t\b|auto\b"  # common types
+    r"|tt_l1_ptr\s+\w+"  # TT-specific pointer type
+    r"|\w+(?:::\w+)*"  # user-defined types (possibly scoped)
+    r")"
+)
 _GLOBAL_VAR_RE = re.compile(
-    r"^(?:static\s+)?"  # optional static
-    r"(?:volatile\s+)?"  # optional volatile
-    r"(?:constexpr\s+)?"  # optional constexpr
-    r"(?:const\s+)?"  # optional const
-    r"(?:(?:u?int(?:8|16|32|64)_t|float|double|bool|char|uint|size_t|"
-    r"tt_l1_ptr\s+\w+)\s+)"  # type (common C/C++ types)
-    r"(\w+)"  # variable name (capture group 1)
-    r"\s*(?:=|;|\[)"  # followed by = or ; or [
+    r"^"
+    + _GLOBAL_VAR_QUALIFIERS
+    + _GLOBAL_VAR_TYPE
+    + r"(?:\s*[*&]+)?"  # optional pointer/reference
+    + r"\s+(\w+)"  # variable name (capture group 1)
+    + r"\s*(?:=|;|\[)"  # followed by = or ; or [
 )
 
 
@@ -501,7 +671,7 @@ def _extract_global_var_names(pre_main: str) -> List[str]:
     """Find global/static variable names in pre-main code.
 
     Returns variable names that should be prefixed per phase to avoid
-    collisions in fused kernels. Namespace aliases, inline functions,
+    collisions in fused kernels. Namespace aliases, functions,
     and type definitions are excluded.
     """
     names = []
@@ -510,10 +680,19 @@ def _extract_global_var_names(pre_main: str) -> List[str]:
         # Skip namespace aliases, function definitions, typedefs
         if any(
             kw in stripped
-            for kw in ["namespace ", "ALWI ", "FORCE_INLINE ", "inline ", "typedef ", "using ", "void ", "template"]
+            for kw in [
+                "namespace ",
+                "ALWI ",
+                "FORCE_INLINE ",
+                "typedef ",
+                "using ",
+                "void ",
+                "template",
+            ]
         ):
             continue
-        # Skip lines that look like function declarations (contain parens)
+        # Skip lines that look like function declarations (contain parens
+        # without a prior =, i.e. not variable initialization with constructor)
         if "(" in stripped and "=" not in stripped.split("(")[0]:
             continue
         m = _GLOBAL_VAR_RE.match(stripped)
@@ -529,21 +708,147 @@ def _prefix_phase_names_in_source(source: str, phase_idx: int, names: List[str])
     phase-specific functions and variables use the prefixed names
     that match the prefixed declarations in the merged pre-main.
 
-    Every phase (including phase 0) gets prefixed.
+    Every phase (including phase 0) gets prefixed.  Replacements are
+    scoped to code only — identifiers inside string literals and
+    comments are left unchanged.
     """
     if not names:
         return source
     for name in names:
-        source = re.sub(rf"\b{re.escape(name)}\b", f"phase{phase_idx}_{name}", source)
+        source = _replace_in_code_only(source, name, f"phase{phase_idx}_{name}")
     return source
+
+
+def _replace_in_code_only(source: str, old_name: str, new_name: str) -> str:
+    """Replace word-boundary occurrences of *old_name* only in code context.
+
+    Skips replacements inside string literals (``"..."``, ``'...'``),
+    C++ line comments (``// ...``), and C-style block comments (``/* ... */``).
+    Processes line-by-line for simplicity and correctness.
+    """
+    pattern = re.compile(rf"\b{re.escape(old_name)}\b")
+    lines = source.split("\n")
+    result = []
+    in_block_comment = False
+
+    for line in lines:
+        if in_block_comment:
+            if "*/" in line:
+                # End of block comment — only replace in code after */
+                end_idx = line.index("*/") + 2
+                comment_part = line[:end_idx]
+                code_part = line[end_idx:]
+                result.append(comment_part + _replace_in_code_line(pattern, code_part, new_name))
+                in_block_comment = False
+            else:
+                result.append(line)
+            continue
+
+        if "/*" in _strip_strings_and_comments(line):
+            # This shouldn't happen after stripping, but handle edge case
+            pass
+
+        # Check for block comment start (not inside a string)
+        stripped_line = _strip_strings_and_comments(line)
+        if "/*" in stripped_line and "*/" not in stripped_line:
+            # Block comment starts on this line and doesn't end
+            bc_start = line.index("/*")
+            code_part = line[:bc_start]
+            comment_part = line[bc_start:]
+            result.append(_replace_in_code_line(pattern, code_part, new_name) + comment_part)
+            in_block_comment = True
+            continue
+
+        result.append(_replace_in_code_line(pattern, line, new_name))
+
+    return "\n".join(result)
+
+
+def _replace_in_code_line(pattern: re.Pattern, line: str, new_name: str) -> str:
+    """Replace pattern matches in a single line, skipping strings and comments."""
+    # Build a map of "code" vs "non-code" segments
+    segments = []
+    i = 0
+    n = len(line)
+
+    while i < n:
+        c = line[i]
+        # Raw string literal
+        if c == "R" and i + 1 < n and line[i + 1] == '"':
+            end_paren = line.find("(", i + 2)
+            if end_paren != -1:
+                delim = line[i + 2 : end_paren]
+                end_marker = f'){delim}"'
+                end_pos = line.find(end_marker, end_paren + 1)
+                if end_pos != -1:
+                    segments.append(("skip", line[i : end_pos + len(end_marker)]))
+                    i = end_pos + len(end_marker)
+                    continue
+            segments.append(("code", c))
+            i += 1
+        elif c == '"':
+            start = i
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                elif line[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            segments.append(("skip", line[start:i]))
+        elif c == "'":
+            start = i
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                elif line[i] == "'":
+                    i += 1
+                    break
+                else:
+                    i += 1
+            segments.append(("skip", line[start:i]))
+        elif c == "/" and i + 1 < n and line[i + 1] == "/":
+            segments.append(("skip", line[i:]))
+            break
+        elif c == "/" and i + 1 < n and line[i + 1] == "*":
+            end = line.find("*/", i + 2)
+            if end != -1:
+                segments.append(("skip", line[i : end + 2]))
+                i = end + 2
+            else:
+                segments.append(("skip", line[i:]))
+                break
+        else:
+            # Accumulate code characters
+            start = i
+            while i < n:
+                if line[i] in ('"', "'") or (line[i] == "/" and i + 1 < n and line[i + 1] in ("/", "*")):
+                    break
+                if line[i] == "R" and i + 1 < n and line[i + 1] == '"':
+                    break
+                i += 1
+            segments.append(("code", line[start:i]))
+
+    # Apply replacements only in code segments
+    result = []
+    for kind, text in segments:
+        if kind == "code":
+            result.append(pattern.sub(new_name, text))
+        else:
+            result.append(text)
+    return "".join(result)
 
 
 def _split_into_top_level_blocks(pre_main: str) -> List[str]:
     """Split pre-main code into top-level C++ declarations.
 
-    Uses brace counting to keep each top-level construct (function,
-    namespace, struct, class) as a single unit.  Single-line declarations
-    (namespace aliases, ``using``, ``typedef``) are individual blocks.
+    Uses string-aware brace counting to keep each top-level construct
+    (function, namespace, struct, class) as a single unit.  Single-line
+    declarations (namespace aliases, ``using``, ``typedef``) are individual
+    blocks.
 
     Block boundaries are detected when brace depth returns to 0 at a
     statement boundary (line ending with ``;``, ``}``, or ``};``), or
@@ -564,14 +869,13 @@ def _split_into_top_level_blocks(pre_main: str) -> List[str]:
             continue
 
         current_lines.append(line)
-        brace_depth += stripped.count("{") - stripped.count("}")
+        brace_depth += _count_braces(stripped)
         brace_depth = max(0, brace_depth)  # Defensive
 
         # Emit block when brace depth returns to 0 at a statement boundary.
-        # Strip trailing C++ comments (// ...) before checking line ending,
-        # so that "} // namespace my_ns" is recognized as ending with '}'.
+        # Use string-stripped version for checking line ending.
         if brace_depth == 0 and current_lines:
-            check = stripped.split("//")[0].rstrip() if "//" in stripped else stripped
+            check = _strip_strings_and_comments(stripped).rstrip()
             if check.endswith(";") or check.endswith("}") or check.endswith("};"):
                 blocks.append("\n".join(current_lines))
                 current_lines = []
@@ -638,7 +942,6 @@ def _is_global_var_block(block: str) -> bool:
             "namespace ",
             "ALWI ",
             "FORCE_INLINE ",
-            "inline ",
             "typedef ",
             "using ",
             "void ",
@@ -655,33 +958,48 @@ def _is_phase_specific_function(block: str) -> bool:
     """Check if a top-level block is a free function definition.
 
     Returns True for file-scope function definitions (ALWI, FORCE_INLINE,
-    static, constexpr, inline, or plain return-type functions).
+    static, constexpr, inline, or plain return-type functions), including
+    operator overloads.
     Returns False for namespace blocks, struct/class/enum definitions,
     single-line declarations, and anything without braces.
     """
     stripped = block.strip()
     # Must have braces (function body)
-    if "{" not in stripped or "}" not in stripped:
+    code = _strip_strings_and_comments(stripped)
+    if "{" not in code or "}" not in code:
         return False
     first_line = stripped.split("\n")[0].strip()
     # Exclude namespace, struct, class, enum blocks
     for kw in ("namespace ", "struct ", "class ", "enum ", "typedef "):
         if first_line.startswith(kw):
             return False
-    # Look for function pattern: something followed by (
+    # Look for function pattern: identifier( or operator+( etc.
     sig = _extract_block_signature(block)
-    return bool(re.search(r"\w+\s*\(", sig))
+    return bool(re.search(r"(?:operator\s*\S+|\w+)\s*\(", sig))
 
 
 def _extract_function_name_from_block(block: str) -> Optional[str]:
     """Extract the function name from a function definition block.
 
     Finds the identifier immediately before the opening parenthesis in the
-    block's signature.  Returns None if no function name can be identified.
+    block's signature.  Handles operator overloads (``operator+``,
+    ``operator[]``, etc.) and scope-qualified names (``Ns::func``).
+    Returns None if no function name can be identified.
     """
     sig = _extract_block_signature(block)
-    m = re.search(r"(\w+)\s*\(", sig)
-    return m.group(1) if m else None
+    # Try operator overload first
+    m = re.search(r"(operator\s*\S+)\s*\(", sig)
+    if m:
+        return m.group(1).replace(" ", "")
+    # Regular function name (possibly scope-qualified: Ns::func)
+    m = re.search(r"(\w+(?:::\w+)*)\s*\(", sig)
+    if m:
+        # Return just the final name (not the scope qualifier)
+        name = m.group(1)
+        if "::" in name:
+            return name.split("::")[-1]
+        return name
+    return None
 
 
 def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> Tuple[str, Dict[int, List[str]]]:
@@ -862,8 +1180,10 @@ def _offset_runtime_args_in_source(source: str, phase_idx: int) -> str:
     )
 
     # Handle incrementing variable pattern: uint32_t rt_args_idx = 0;
+    # Requires "arg" or "rt" in the variable name to avoid false positives
+    # on unrelated uint32_t initializations.
     source = re.sub(
-        r"(uint32_t\s+\w*args?\w*\s*=\s*)0(\s*;)",
+        r"(uint32_t\s+\w*(?:arg|rt)\w*\s*=\s*)0(\s*;)",
         rf"\g<1>{offset_name}\2",
         source,
     )
