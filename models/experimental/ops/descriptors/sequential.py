@@ -9,8 +9,10 @@ Fuses multiple operations to run sequentially on the SAME cores within a
 single program.  All readers/writers run for every phase.  Data flows through
 DRAM between phases (Writer_N -> DRAM -> Reader_{N+1}).
 
-No CB remapping — each phase uses its native CB indices (0-31).
-CB descriptors are merged as max(total_size) per index across phases.
+CB pool allocation: CBs from all phases are assigned to hardware slots based
+on a compatibility key (data_format, page_size, unpack_to_dest_mode).  Phases
+with matching configs share a slot; mismatches get separate slots.  Errors if
+the total exceeds the device's CB slot limit.
 
 Two-level barrier synchronization between phases:
   - Local barrier (per core): L1 flags allocated via GlobalSemaphore.
@@ -33,6 +35,7 @@ import re
 import os
 
 import ttnn
+from ttnn._ttnn.program_descriptor import UnpackToDestMode
 
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors import cpp_parser
@@ -52,6 +55,8 @@ class CBInfo:
     data_format: Any  # tt::DataFormat
     page_size: int
     core_ranges: Any  # CoreRangeSet
+    has_buffer: bool = False  # True if backed by an L1 Buffer allocation
+    unpack_to_dest_mode: Any = None  # UnpackToDestMode enum (Default or UnpackToDestFp32)
 
 
 @dataclass
@@ -90,30 +95,298 @@ class BarrierConfig:
     _sem_refs: List[Any] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class CBPoolKey:
+    """Compatibility key for a CB slot. CBs with the same key can share a slot."""
+
+    data_format: Any  # tt::DataFormat
+    page_size: int
+    has_buffer: bool  # True if backed by an L1 Buffer (prevents sharing with non-buffer CBs)
+    unpack_to_dest_mode: Any  # UnpackToDestMode enum
+
+
+@dataclass
+class CBSlot:
+    """A slot in the CB pool."""
+
+    slot_index: int
+    config: CBPoolKey
+    cb_descriptor: Any  # Best CBDescriptor (largest total_size, phase 0 buffer preferred)
+    total_size: int  # Max total_size across all phases sharing this slot
+    source_phase: int  # Phase that provided the current cb_descriptor
+
+
+class CBPoolAllocator:
+    """Pool-allocates CB hardware slots based on compatibility keys.
+
+    CBs from different phases that share the same (data_format, page_size,
+    unpack_to_dest_mode) configuration are assigned to the same slot.
+    Different configs get separate slots.  Raises ValueError if the total
+    number of slots exceeds the device limit.
+    """
+
+    def __init__(self, max_slots: int = 32):
+        self.max_slots = max_slots
+        self._slots: Dict[int, CBSlot] = {}  # slot_index -> CBSlot
+        # Maps CBPoolKey -> list of slot indices with that config.
+        # Within a phase, each CB gets its own slot even if configs match;
+        # across phases, CBs with the same config can share a slot.
+        self._config_to_slots: Dict[CBPoolKey, List[int]] = {}
+        self._allocated_indices: Set[int] = set()
+        self.phase_remaps: List[Dict[int, int]] = []  # phase_idx -> {orig_cb -> slot_idx}
+        self._next_index = 0  # Next candidate index for allocation
+        # Maps slot_index -> original CB index that created it (for identity-preference)
+        self._slot_to_orig_index: Dict[int, int] = {}
+
+    def _alloc_index(self) -> int:
+        """Find the next free slot index."""
+        while self._next_index in self._allocated_indices:
+            self._next_index += 1
+        idx = self._next_index
+        self._next_index += 1
+        return idx
+
+    def allocate_phase(
+        self,
+        phase_idx: int,
+        cb_info: Dict[int, CBInfo],
+        phantom_cb_indices: Set[int],
+    ) -> None:
+        """Allocate slots for a phase's CBs.
+
+        Within a single phase, each CB gets its own slot even if multiple CBs
+        share the same config (they hold different data concurrently).  Across
+        phases, CBs with matching configs can share a slot because only one
+        phase runs at a time.
+
+        Args:
+            phase_idx: Phase index.
+            cb_info: Dict mapping original CB index -> CBInfo for this phase.
+            phantom_cb_indices: CB indices referenced in named compile-time args
+                but without a corresponding CBDescriptor.  These get identity-mapped
+                reservations to prevent collisions.
+        """
+        remap: Dict[int, int] = {}
+        # Track which slots are used by THIS phase (to avoid sharing within a phase)
+        slots_used_this_phase: Set[int] = set()
+
+        # Reserve phantom CB indices first (identity mapping)
+        for phantom_idx in phantom_cb_indices:
+            if phantom_idx not in self._allocated_indices:
+                self._allocated_indices.add(phantom_idx)
+            remap[phantom_idx] = phantom_idx
+
+        # Two-pass allocation: first claim identity-matching slots (CBs that
+        # existed in previous phases keep their slot), then allocate remaining
+        # CBs from the pool.  This prevents new CBs from stealing slots that
+        # belong to cross-phase shared CBs.
+        identity_cbs = []  # (orig_idx, info, key) with identity match
+        remaining_cbs = []  # (orig_idx, info, key) without identity match
+        for orig_idx, info in sorted(cb_info.items()):
+            key = CBPoolKey(
+                data_format=info.data_format,
+                page_size=info.page_size,
+                has_buffer=info.has_buffer,
+                unpack_to_dest_mode=info.unpack_to_dest_mode,
+            )
+            # Check if there's an existing slot from the same original index
+            has_identity = False
+            if key in self._config_to_slots:
+                for candidate_idx in self._config_to_slots[key]:
+                    if self._slot_to_orig_index.get(candidate_idx) == orig_idx:
+                        has_identity = True
+                        break
+            if has_identity:
+                identity_cbs.append((orig_idx, info, key))
+            else:
+                remaining_cbs.append((orig_idx, info, key))
+
+        # Process identity-matching CBs first, then remaining
+        for orig_idx, info, key in identity_cbs + remaining_cbs:
+            # Look for an existing slot with the same config that's NOT
+            # already used by this phase.  Prefer the slot created from
+            # the same original CB index (preserves identity mapping).
+            reused_slot = None
+            if key in self._config_to_slots:
+                # First: look for a slot from the same original index
+                for candidate_idx in self._config_to_slots[key]:
+                    if candidate_idx not in slots_used_this_phase:
+                        if self._slot_to_orig_index.get(candidate_idx) == orig_idx:
+                            reused_slot = candidate_idx
+                            break
+                # Second: any compatible slot
+                if reused_slot is None:
+                    for candidate_idx in self._config_to_slots[key]:
+                        if candidate_idx not in slots_used_this_phase:
+                            reused_slot = candidate_idx
+                            break
+
+            if reused_slot is not None:
+                # Reuse existing slot from a different phase
+                slot_idx = reused_slot
+                slot = self._slots[slot_idx]
+                # Update total_size to max
+                if info.total_size > slot.total_size:
+                    slot.total_size = info.total_size
+                    # Keep phase 0's descriptor for correct initial buffer setup
+                    if slot.source_phase != 0:
+                        slot.cb_descriptor = self._get_cb_descriptor(info, phase_idx)
+                        slot.source_phase = phase_idx
+            else:
+                # Allocate new slot
+                slot_idx = self._alloc_index()
+                if len(self._slots) + 1 > self.max_slots:
+                    breakdown = []
+                    for si, sl in sorted(self._slots.items()):
+                        breakdown.append(
+                            f"  slot {si}: fmt={sl.config.data_format}, "
+                            f"page_size={sl.config.page_size}, "
+                            f"unpack={sl.config.unpack_to_dest_mode}"
+                        )
+                    raise ValueError(
+                        f"CB pool overflow: need {len(self._slots) + 1} slots but "
+                        f"device limit is {self.max_slots}.\n"
+                        f"Allocated slots:\n" + "\n".join(breakdown)
+                    )
+                self._allocated_indices.add(slot_idx)
+                desc = self._get_cb_descriptor(info, phase_idx)
+                self._slots[slot_idx] = CBSlot(
+                    slot_index=slot_idx,
+                    config=key,
+                    cb_descriptor=desc,
+                    total_size=info.total_size,
+                    source_phase=phase_idx,
+                )
+                self._slot_to_orig_index[slot_idx] = orig_idx
+                if key not in self._config_to_slots:
+                    self._config_to_slots[key] = []
+                self._config_to_slots[key].append(slot_idx)
+
+            slots_used_this_phase.add(slot_idx)
+            remap[orig_idx] = slot_idx
+
+        self.phase_remaps.append(remap)
+
+    @staticmethod
+    def _get_cb_descriptor(info: CBInfo, phase_idx: int) -> Any:
+        """Get the CBDescriptor from a CBInfo's source descriptor.
+
+        We can't deepcopy CBDescriptors, so we store a reference.
+        The CBDescriptor is looked up later from the phase's ProgramDescriptor.
+        """
+        # Return a lightweight reference to reconstruct later
+        return {"phase_idx": phase_idx, "cb_idx": info.original_index, "info": info}
+
+    def get_remap(self, phase_idx: int) -> Dict[int, int]:
+        """Return {orig_cb_idx: slot_idx} for a phase."""
+        return self.phase_remaps[phase_idx]
+
+    def build_merged_cb_descriptors(
+        self,
+        phases: List["PhaseInfo"],
+    ) -> list:
+        """Build merged CB descriptors from the pool.
+
+        Returns one CBDescriptor per allocated slot, sorted by slot index.
+        Uses the largest total_size and prefers phase 0's buffer-backed descriptor.
+        """
+        merged = []
+        for slot_idx in sorted(self._slots.keys()):
+            slot = self._slots[slot_idx]
+            ref = slot.cb_descriptor
+            phase = phases[ref["phase_idx"]]
+            orig_idx = ref["cb_idx"]
+
+            # Find the actual CBDescriptor from the phase's ProgramDescriptor
+            best_desc = None
+            for cb_desc in phase.op_descriptor.descriptor.cbs:
+                for fmt_desc in cb_desc.format_descriptors:
+                    if fmt_desc.buffer_index == orig_idx:
+                        best_desc = cb_desc
+                        break
+                if best_desc is not None:
+                    break
+
+            if best_desc is not None:
+                # Update the format descriptor's buffer_index to the slot index
+                # We need to modify in-place since we can't deepcopy
+                for fmt_desc in best_desc.format_descriptors:
+                    if fmt_desc.buffer_index == orig_idx:
+                        fmt_desc.buffer_index = slot_idx
+                        break
+                # Update total_size to the max across phases
+                best_desc.total_size = slot.total_size
+                merged.append(best_desc)
+
+        return merged
+
+    def build_unpack_to_dest_mode(self) -> list:
+        """Build merged unpack_to_dest_mode vector indexed by slot index.
+
+        Returns a list of exactly max_slots entries (matching the device's
+        NUM_CIRCULAR_BUFFERS) with the correct mode at each slot's index,
+        Default elsewhere.  The C++ JIT compiler requires this size.
+        """
+        result = [UnpackToDestMode.Default] * self.max_slots
+        for slot_idx, slot in self._slots.items():
+            if slot.config.unpack_to_dest_mode is not None:
+                result[slot_idx] = slot.config.unpack_to_dest_mode
+        return result
+
+    def get_all_slot_indices(self) -> Set[int]:
+        """All allocated slot indices (for sweep/clear)."""
+        return set(self._slots.keys())
+
+
 # =============================================================================
 # Analysis Functions
 # =============================================================================
 
 
-def extract_cb_info(descriptor: "ttnn.ProgramDescriptor") -> Dict[int, CBInfo]:
+def extract_cb_info(
+    descriptor: "ttnn.ProgramDescriptor",
+    unpack_to_dest_modes: Optional[list] = None,
+) -> Dict[int, CBInfo]:
     """Extract CB information from a ProgramDescriptor.
+
+    Args:
+        descriptor: The ProgramDescriptor to extract CB info from.
+        unpack_to_dest_modes: Optional vector of UnpackToDestMode indexed by CB index,
+            typically from ComputeConfigDescriptor.unpack_to_dest_mode.
 
     Returns a dict mapping CB index -> CBInfo.
     """
     cb_info = {}
     for cb_desc in descriptor.cbs:
+        if cb_desc.has_global_circular_buffer():
+            raise ValueError(
+                "Sequential fusion does not support GlobalCircularBuffer CBs. "
+                "CB with global_circular_buffer detected in ProgramDescriptor."
+            )
         for fmt_desc in cb_desc.format_descriptors:
             cb_idx = fmt_desc.buffer_index
             try:
                 data_format = fmt_desc.data_format
             except (TypeError, AttributeError):
                 data_format = None
+            # Look up unpack_to_dest_mode for this CB
+            utd_mode = None
+            if unpack_to_dest_modes is not None:
+                try:
+                    if cb_idx < len(unpack_to_dest_modes):
+                        utd_mode = unpack_to_dest_modes[cb_idx]
+                except (TypeError, IndexError):
+                    pass
+            if utd_mode is None:
+                utd_mode = UnpackToDestMode.Default
             cb_info[cb_idx] = CBInfo(
                 original_index=cb_idx,
                 total_size=cb_desc.total_size,
                 data_format=data_format,
                 page_size=fmt_desc.page_size,
                 core_ranges=cb_desc.core_ranges,
+                has_buffer=cb_desc.has_buffer(),
+                unpack_to_dest_mode=utd_mode,
             )
     return cb_info
 
@@ -407,68 +680,34 @@ def _transform_phase_source(
 # =============================================================================
 
 
-def _validate_cb_page_sizes(phases: List[PhaseInfo]) -> None:
-    """Validate that shared CB indices have compatible page sizes across phases.
+def _get_compute_unpack_to_dest_modes(phase: PhaseInfo) -> Optional[list]:
+    """Get the unpack_to_dest_mode vector from a phase's compute kernel config."""
+    for kernel_desc in phase.op_descriptor.descriptor.kernels:
+        config = kernel_desc.config
+        if hasattr(config, "unpack_to_dest_mode"):
+            modes = config.unpack_to_dest_mode
+            if modes is not None and len(modes) > 0:
+                return modes
+    return None
 
-    When two phases share the same CB index, the page_size must match because
-    BRISC/NCRISC use fifo_page_size to advance pointers (cb_push_back/cb_pop_front).
-    A mismatch would cause pointer arithmetic errors and data corruption.
+
+def _get_phantom_cb_indices(phase: PhaseInfo) -> Set[int]:
+    """Get CB indices referenced in named compile-time args but without CBDescriptors.
+
+    These "phantom" CBs need identity-mapped reservations in the pool to prevent
+    real CBs from being allocated at conflicting indices.
     """
-    # Collect page_size per (cb_index, phase_idx)
-    cb_page_sizes: Dict[int, List[Tuple[int, int]]] = {}  # cb_idx -> [(phase_idx, page_size), ...]
-    for phase_idx, phase in enumerate(phases):
-        desc = phase.op_descriptor.descriptor
-        for cb_desc in desc.cbs:
-            for fmt_desc in cb_desc.format_descriptors:
-                cb_idx = fmt_desc.buffer_index
-                if cb_idx not in cb_page_sizes:
-                    cb_page_sizes[cb_idx] = []
-                cb_page_sizes[cb_idx].append((phase_idx, fmt_desc.page_size))
+    # Collect all CB indices that have actual descriptors
+    real_cb_indices = set(phase.cb_info.keys())
 
-    for cb_idx, entries in cb_page_sizes.items():
-        if len(entries) <= 1:
-            continue
-        sizes = {ps for _, ps in entries}
-        if len(sizes) > 1:
-            detail = ", ".join(f"phase {pi}: {ps}" for pi, ps in entries)
-            raise ValueError(
-                f"CB[{cb_idx}] has mismatched page sizes across phases ({detail}). "
-                f"All phases sharing a CB must use the same page size. "
-                f"This typically indicates a data format mismatch (e.g., BF16 vs FP32). "
-                f"Ensure compute_kernel_config is consistent across fused ops."
-            )
+    # Collect all CB indices referenced in named compile-time args
+    phantom = set()
+    for kernel_desc in phase.op_descriptor.descriptor.kernels:
+        for name, value in kernel_desc.named_compile_time_args:
+            if name.startswith("cb_") and isinstance(value, int) and value not in real_cb_indices:
+                phantom.add(value)
 
-
-def _merge_cb_descriptors(phases: List[PhaseInfo]) -> list:
-    """Merge CB descriptors from all phases.
-
-    For each CB index used by any phase, keeps the descriptor with the
-    largest total_size so the CB can accommodate any phase's data.
-
-    When multiple phases have buffer-backed CBs at the same index, the merge
-    always keeps phase 0's buffer. This guarantees phase 0 is correct without
-    rebinding; only phases 1+ need mid-kernel CB address rebinding.
-    """
-    _validate_cb_page_sizes(phases)
-    cb_by_index: Dict[int, Any] = {}  # cb_index -> (largest_total_size, cb_desc, phase_idx)
-
-    for phase_idx, phase in enumerate(phases):
-        desc = phase.op_descriptor.descriptor
-        for cb_desc in desc.cbs:
-            for fmt_desc in cb_desc.format_descriptors:
-                cb_idx = fmt_desc.buffer_index
-                if cb_idx not in cb_by_index:
-                    cb_by_index[cb_idx] = (cb_desc.total_size, cb_desc, phase_idx)
-                elif cb_desc.total_size > cb_by_index[cb_idx][0]:
-                    _, old_desc, old_phase = cb_by_index[cb_idx]
-                    if old_desc.has_buffer() and old_phase == 0:
-                        # Phase 0 had the buffer — keep its descriptor (for correct
-                        # initial setup) even though a later phase has larger total_size
-                        cb_by_index[cb_idx] = (cb_desc.total_size, old_desc, old_phase)
-                    else:
-                        cb_by_index[cb_idx] = (cb_desc.total_size, cb_desc, phase_idx)
-
-    return [cb_desc for _, (_, cb_desc, _) in sorted(cb_by_index.items())]
+    return phantom
 
 
 # =============================================================================
@@ -478,42 +717,50 @@ def _merge_cb_descriptors(phases: List[PhaseInfo]) -> list:
 
 def _compute_rebind_info(
     phases: List[PhaseInfo],
+    phase_remaps: List[Dict[int, int]],
 ) -> Dict[int, List[Tuple[int, int, int]]]:
-    """Compute which CBs need address rebinding at each phase transition.
+    """Compute which CB slots need address rebinding at each phase transition.
 
-    For each phase 1+, identifies CB indices where the buffer address differs
-    from what was set in the previous phase. Phase 0 never needs rebinding
-    because _merge_cb_descriptors always keeps phase 0's buffer.
+    For each phase 1+, identifies remapped slot indices where the buffer address
+    differs from what was set in the previous phase.  Phase 0 never needs
+    rebinding because build_merged_cb_descriptors prefers phase 0's buffer.
+
+    Args:
+        phases: All PhaseInfo objects.
+        phase_remaps: Per-phase {orig_cb_idx: slot_idx} from the pool allocator.
 
     Returns:
-        Dict mapping phase_idx -> list of (cb_idx, new_addr, new_size) tuples.
+        Dict mapping phase_idx -> list of (slot_idx, new_addr, new_size) tuples.
     """
-    # Collect per-phase buffer addresses
-    phase_buffer_addrs: List[Dict[int, Tuple[int, int]]] = []
-    for phase in phases:
+    # Collect per-phase buffer addresses, mapped to slot indices
+    phase_slot_addrs: List[Dict[int, Tuple[int, int]]] = []
+    for phase_idx, phase in enumerate(phases):
+        remap = phase_remaps[phase_idx] if phase_idx < len(phase_remaps) else {}
         addrs: Dict[int, Tuple[int, int]] = {}
         for cb_desc in phase.op_descriptor.descriptor.cbs:
             for fmt_desc in cb_desc.format_descriptors:
+                orig_idx = fmt_desc.buffer_index
+                slot_idx = remap.get(orig_idx, orig_idx)
                 if cb_desc.has_buffer():
                     addr = cb_desc.buffer_address()
                     if addr is not None:
-                        addrs[fmt_desc.buffer_index] = (addr, cb_desc.total_size)
-        phase_buffer_addrs.append(addrs)
+                        addrs[slot_idx] = (addr, cb_desc.total_size)
+        phase_slot_addrs.append(addrs)
 
-    if not phase_buffer_addrs:
+    if not phase_slot_addrs:
         return {}
 
     # Start with phase 0's addresses as baseline
     rebind_info: Dict[int, List[Tuple[int, int, int]]] = {}
-    current_addrs = dict(phase_buffer_addrs[0])
+    current_addrs = dict(phase_slot_addrs[0])
 
     for phase_idx in range(1, len(phases)):
         rebinds: List[Tuple[int, int, int]] = []
-        for cb_idx, (phase_addr, phase_size) in phase_buffer_addrs[phase_idx].items():
-            current = current_addrs.get(cb_idx)
+        for slot_idx, (phase_addr, phase_size) in phase_slot_addrs[phase_idx].items():
+            current = current_addrs.get(slot_idx)
             if current is None or current[0] != phase_addr:
-                rebinds.append((cb_idx, phase_addr, phase_size))
-                current_addrs[cb_idx] = (phase_addr, phase_size)
+                rebinds.append((slot_idx, phase_addr, phase_size))
+                current_addrs[slot_idx] = (phase_addr, phase_size)
         rebind_info[phase_idx] = rebinds
 
     return rebind_info
@@ -527,7 +774,7 @@ def _generate_rebind_code(
     """Generate C++ code to rebind CB addresses for a phase.
 
     Args:
-        rebinds: List of (cb_idx, addr, size) tuples for this phase.
+        rebinds: List of (slot_idx, addr, size) tuples for this phase.
         phase_idx: Which phase these rebinds are for.
         for_compute: If True, shift addresses by >> 4 for TRISC and guard
             with #ifndef TRISC_MATH (TRISC1 has no cb_interface).
@@ -542,8 +789,8 @@ def _generate_rebind_code(
     if for_compute:
         # TRISC1 (math) doesn't have cb_interface linked in — skip it
         lines.append("#ifndef TRISC_MATH")
-    for cb_idx, _, _ in rebinds:
-        prefix = f"phase{phase_idx}_cb{cb_idx}"
+    for slot_idx, _, _ in rebinds:
+        prefix = f"phase{phase_idx}_cb{slot_idx}"
         lines.append(f"    {{")
         lines.append(
             f'        constexpr uint32_t new_addr = get_named_compile_time_arg_val("{prefix}_rebind_addr"){shift};'
@@ -551,10 +798,10 @@ def _generate_rebind_code(
         lines.append(
             f'        constexpr uint32_t new_size = get_named_compile_time_arg_val("{prefix}_rebind_size"){shift};'
         )
-        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_rd_ptr = new_addr;")
-        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_wr_ptr = new_addr;")
-        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_size = new_size;")
-        lines.append(f"        get_local_cb_interface({cb_idx}).fifo_limit = new_addr + new_size;")
+        lines.append(f"        get_local_cb_interface({slot_idx}).fifo_rd_ptr = new_addr;")
+        lines.append(f"        get_local_cb_interface({slot_idx}).fifo_wr_ptr = new_addr;")
+        lines.append(f"        get_local_cb_interface({slot_idx}).fifo_size = new_size;")
+        lines.append(f"        get_local_cb_interface({slot_idx}).fifo_limit = new_addr + new_size;")
         lines.append(f"    }}")
     if for_compute:
         lines.append("#endif")
@@ -564,16 +811,6 @@ def _generate_rebind_code(
 # =============================================================================
 # Fused Kernel Source Generation
 # =============================================================================
-
-
-def _get_all_cb_descriptor_indices(phases: List[PhaseInfo]) -> Set[int]:
-    """Get the union of all CB indices that have CBDescriptors across all phases."""
-    indices: Set[int] = set()
-    for phase in phases:
-        for cb_desc in phase.op_descriptor.descriptor.cbs:
-            for fmt_desc in cb_desc.format_descriptors:
-                indices.add(fmt_desc.buffer_index)
-    return indices
 
 
 def _generate_fused_riscv0_source(
@@ -1233,11 +1470,13 @@ def _merge_named_compile_time_args(
     rt_arg_offsets: Optional[Dict[int, int]] = None,
     barrier_rt_offset: Optional[int] = None,
     barrier_config: Optional[BarrierConfig] = None,
+    phase_remaps: Optional[List[Dict[int, int]]] = None,
 ) -> List[Tuple[str, int]]:
     """Merge named compile-time args from all phases with phase prefixes.
 
     Phase 0 keeps original names. Phase N>0 gets "phaseN_" prefix.
     Runtime arg offsets and barrier config are added as named args.
+    CB-reference args (names starting with "cb_") are remapped to pool slot indices.
     """
     merged = []
 
@@ -1246,11 +1485,18 @@ def _merge_named_compile_time_args(
         if kernel is None:
             continue
 
+        remap = phase_remaps[i] if phase_remaps else None
+
         for name, value in kernel.named_compile_time_args:
+            actual_value = value
+            # Remap CB-reference named args to pool slot indices
+            if remap is not None and name.startswith("cb_") and isinstance(value, int):
+                actual_value = remap.get(value, value)
+
             if i == 0:
-                merged.append((name, value))
+                merged.append((name, actual_value))
             else:
-                merged.append((f"phase{i}_{name}", value))
+                merged.append((f"phase{i}_{name}", actual_value))
 
         # Add runtime arg offset for phase 1+
         if i > 0 and rt_arg_offsets is not None and i in rt_arg_offsets:
@@ -1363,7 +1609,6 @@ def _validate_and_get_compute_config(
             "math_fidelity",
             "dst_full_sync_en",
             "bfp8_pack_precise",
-            "unpack_to_dest_mode",
         ):
             base_val = getattr(base, field, None)
             this_val = getattr(config, field, None)
@@ -1633,7 +1878,16 @@ class SequentialChainBuilder:
             self for method chaining
         """
         phase_idx = len(self.phases)
-        cb_info = extract_cb_info(op_descriptor.descriptor)
+        # Get unpack_to_dest_mode vector from compute kernel config
+        utd_modes = None
+        for kd in op_descriptor.descriptor.kernels:
+            config = kd.config
+            if hasattr(config, "unpack_to_dest_mode"):
+                modes = config.unpack_to_dest_mode
+                if modes is not None and len(modes) > 0:
+                    utd_modes = modes
+                    break
+        cb_info = extract_cb_info(op_descriptor.descriptor, utd_modes)
         phase = PhaseInfo(
             phase_idx=phase_idx,
             op_descriptor=op_descriptor,
@@ -1693,19 +1947,26 @@ class SequentialChainBuilder:
                 role_map[rk] = kernel_desc
             phase_kernels.append(role_map)
 
-        # Merge CB descriptors (max size per index, phase 0's buffer preferred)
-        merged_cbs = _merge_cb_descriptors(self.phases)
+        # Pool-allocate CB slots based on compatibility keys
+        pool = CBPoolAllocator(max_slots=32)
+        for phase_idx, phase in enumerate(self.phases):
+            phantom_indices = _get_phantom_cb_indices(phase)
+            pool.allocate_phase(phase_idx, phase.cb_info, phantom_indices)
 
-        # Compute CB address rebinding info for buffer-backed CBs
-        rebind_info = _compute_rebind_info(self.phases)
+        # Compute CB address rebinding info using remapped slot indices.
+        # Must be computed BEFORE build_merged_cb_descriptors, which
+        # modifies buffer_index in-place on the original CBDescriptors.
+        rebind_info = _compute_rebind_info(self.phases, pool.phase_remaps)
+
+        # Build merged CB descriptors from pool (modifies buffer_index in-place)
+        merged_cbs = pool.build_merged_cb_descriptors(self.phases)
 
         # Create barrier config with GlobalSemaphores on union of all core ranges
         union_core_ranges = _compute_union_core_ranges(self.phases)
         self._barrier_config = _create_barrier_config(device, union_core_ranges)
 
-        # Compute sweep CB indices: ALL CBs with descriptors across phases (generic).
-        valid_cb_indices = _get_all_cb_descriptor_indices(self.phases)
-        sweep_cb_indices = sorted(valid_cb_indices)
+        # Sweep indices = all allocated CB pool slots
+        sweep_cb_indices = sorted(pool.get_all_slot_indices())
 
         bc = self._barrier_config
 
@@ -1804,12 +2065,13 @@ class SequentialChainBuilder:
                 rt_offsets,
                 barrier_rt_offset=barrier_offset,
                 barrier_config=barrier_cfg_for_named,
+                phase_remaps=pool.phase_remaps,
             )
 
             # Add rebind named compile-time args (addr + size for each CB that changes)
             for phase_idx, rebinds in rebind_info.items():
-                for cb_idx, addr, size in rebinds:
-                    prefix = f"phase{phase_idx}_cb{cb_idx}"
+                for slot_idx, addr, size in rebinds:
+                    prefix = f"phase{phase_idx}_cb{slot_idx}"
                     named_ct_args.append((f"{prefix}_rebind_addr", addr))
                     named_ct_args.append((f"{prefix}_rebind_size", size))
 
@@ -1821,9 +2083,11 @@ class SequentialChainBuilder:
                     role_config = kernel.config
                     break
 
-            # For compute roles, validate configs match across phases
+            # For compute roles, validate configs match across phases and
+            # rebuild unpack_to_dest_mode from pool-allocated slot indices
             if risc_type == "compute":
                 role_config = _validate_and_get_compute_config_for_role(phase_kernels, role_key)
+                role_config.unpack_to_dest_mode = pool.build_unpack_to_dest_mode()
 
             # Build fused kernel descriptor
             desc = ttnn.KernelDescriptor()
