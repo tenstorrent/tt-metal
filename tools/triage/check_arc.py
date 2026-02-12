@@ -40,13 +40,13 @@ class HeartbeatSample:
 @dataclass
 class ArcCheckData:
     location: OnChipCoordinate = triage_field("Loc")
-    postcode: int = triage_field("Postcode", hex_serializer)
+    postcode: int | None = triage_field("Postcode", hex_serializer)
     uptime: timedelta = triage_field("Up time")
     clock_mhz: int = triage_field("Clock MHz")
     heartbeats_per_second: float = triage_field("Heartbeats/s")
 
 
-def check_arc_block(arc: NocBlock, postcode: int, heartbeat_sample: HeartbeatSample) -> ArcCheckData:
+def check_arc_block(arc: NocBlock, postcode: int | None, heartbeat_sample: HeartbeatSample) -> ArcCheckData:
     device = arc.location.device
     device_id = arc.location.device_id
     # Heartbeat must be increasing
@@ -102,12 +102,16 @@ def get_heartbeat_sample(device: Device) -> HeartbeatSample:
 
 def check_arc(device: Device, heartbeat_sample: HeartbeatSample):
     arc = device.arc_block
-    postcode = arc.get_register_store().read_register("ARC_RESET_SCRATCH0")
-    log_check_device(
-        device,
-        (postcode & 0xFFFF0000) == 0xC0DE0000,
-        f"ARC postcode: [error]0x{postcode:08x}[/]. Expected [info]0xc0de____[/]",
-    )
+    # We skip postcode check for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/535
+    if device.is_blackhole():
+        postcode = None
+    else:
+        postcode = arc.get_register_store().read_register("ARC_RESET_SCRATCH0")
+        log_check_device(
+            device,
+            (postcode & 0xFFFF0000) == 0xC0DE0000,
+            f"ARC postcode: [error]0x{postcode:08x}[/]. Expected [info]0xc0de____[/]",
+        )
     if device.is_wormhole() or device.is_blackhole():
         return check_arc_block(arc, postcode, heartbeat_sample)
     else:

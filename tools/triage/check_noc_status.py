@@ -111,8 +111,9 @@ def check_noc_status(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
-    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "erisc1"]
+    # We skip eth on blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/900
+    BLOCK_TYPES_TO_CHECK = ["tensix"] if context.devices[0].is_blackhole() else ["tensix", "idle_eth"]
+    RISC_CORES_TO_CHECK = ["brisc"] if context.devices[0].is_blackhole() else ["brisc", "erisc", "erisc0", "erisc1"]
     NOC_IDS = [0, 1]
     # Dictionary of corresponding variables and registers to check
     VAR_TO_REG_MAP = {
