@@ -90,6 +90,7 @@ def main():
         tt_device_fusion=use_tt,
         tt_perf_encoder=use_tt,
         tt_perf_neck=use_tt,
+        tt_approx_align_corners=use_tt,
         tt_execution_mode=str(args.tt_execution_mode),
     )
 
@@ -199,6 +200,8 @@ def main():
             counts = perf["fallback_counts"]
             if int(counts.get("vit_backbone_fallback_count", 0)) != 0 or int(
                 counts.get("reassembly_readout_fallback_count", 0)
+            ) != 0 or int(
+                counts.get("upsample_host_fallback_count", 0)
             ) != 0:
                 raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
 

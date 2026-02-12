@@ -96,6 +96,8 @@ def time_pipeline(pipeline, images: list[str], warmup: int, repeat: int):
         counts = stats["fallback_counts"]
         if int(counts.get("vit_backbone_fallback_count", 0)) != 0 or int(
             counts.get("reassembly_readout_fallback_count", 0)
+        ) != 0 or int(
+            counts.get("upsample_host_fallback_count", 0)
         ) != 0:
             raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
     return stats
@@ -183,6 +185,7 @@ def main():
         tt_device_fusion=True,
         tt_perf_encoder=True,
         tt_perf_neck=True,
+        tt_approx_align_corners=True,
         tt_execution_mode=str(args.tt_execution_mode),
     )
 

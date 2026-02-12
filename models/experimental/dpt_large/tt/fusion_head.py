@@ -160,11 +160,20 @@ class DPTFeatureFusionLayerTT(nn.Module):
     TT-aware variant of Hugging Face's `DPTFeatureFusionLayer`.
     """
 
-    def __init__(self, channels: int, use_batch_norm: bool, tt_device=None, memcfg=None, align_corners: bool = True):
+    def __init__(
+        self,
+        channels: int,
+        use_batch_norm: bool,
+        tt_device=None,
+        memcfg=None,
+        align_corners: bool = True,
+        approx_align_corners: bool = False,
+    ):
         super().__init__()
         self.tt_device = tt_device
         self.memcfg = memcfg
         self.align_corners = align_corners
+        self.approx_align_corners = approx_align_corners
 
         self.projection = nn.Conv2d(channels, channels, kernel_size=1, bias=True)
 
@@ -231,6 +240,7 @@ class DPTFeatureFusionLayerTT(nn.Module):
                 scale_factor=2,
                 mode="bilinear",
                 align_corners=self.align_corners,
+                approx_align_corners=self.approx_align_corners,
                 expected_input_hw=(in_h, in_w),
                 op_name="dpt_fusion.hidden_state.upsample",
             )
@@ -274,6 +284,7 @@ class DPTFeatureFusionStageTT(nn.Module):
         super().__init__()
         channels = config.fusion_hidden_size
         use_bn = config.use_batch_norm_in_fusion_residual
+        approx_align_corners = bool(getattr(config, "tt_approx_align_corners", False))
         self.layers = nn.ModuleList(
             [
                 DPTFeatureFusionLayerTT(
@@ -281,6 +292,7 @@ class DPTFeatureFusionStageTT(nn.Module):
                     use_batch_norm=use_bn,
                     tt_device=tt_device,
                     memcfg=memcfg,
+                    approx_align_corners=approx_align_corners,
                 )
                 for _ in range(len(config.neck_hidden_sizes))
             ]
@@ -333,6 +345,7 @@ class DPTDepthEstimationHeadTT(nn.Module):
         self.config = config
         self.tt_device = tt_device
         self.memcfg = memcfg
+        self.tt_approx_align_corners = bool(getattr(config, "tt_approx_align_corners", False))
 
         self.projection: Optional[nn.Conv2d] = None
         if config.add_projection:
@@ -419,6 +432,7 @@ class DPTDepthEstimationHeadTT(nn.Module):
             scale_factor=2,
             mode="bilinear",
             align_corners=True,
+            approx_align_corners=self.tt_approx_align_corners,
             expected_input_hw=_shape4_hw(hidden_state),
             op_name="dpt_depth_head.upsample",
         )

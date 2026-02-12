@@ -8,6 +8,8 @@ from typing import Optional, Sequence, Tuple
 
 import torch
 
+from .perf_counters import inc_upsample_host_fallback
+
 try:
     import ttnn  # type: ignore
 except Exception:  # pragma: no cover
@@ -156,6 +158,7 @@ def tt_upsample_nchw(
     scale_factor: int | Sequence[int] = 2,
     mode: str = "bilinear",
     align_corners: Optional[bool] = None,
+    approx_align_corners: bool = False,
     memory_config=None,
     expected_input_hw: Optional[Tuple[int, int]] = None,
     op_name: str = "tt_upsample_nchw",
@@ -182,7 +185,8 @@ def tt_upsample_nchw(
     # TTNN bilinear interpolation follows align_corners=False semantics. For
     # DPT paths that require align_corners=True, execute an exact host
     # interpolation and convert back to TT tensor to preserve numerical parity.
-    if mode == "bilinear" and align_corners is True:
+    if mode == "bilinear" and align_corners is True and not approx_align_corners:
+        inc_upsample_host_fallback()
         x_torch = ttnn.to_torch(x).to(dtype=torch.float32)
         y_torch = torch.nn.functional.interpolate(
             x_torch,
@@ -251,6 +255,7 @@ def tt_resize_to_nchw(
     target_hw: Tuple[int, int],
     mode: str = "bilinear",
     align_corners: Optional[bool] = None,
+    approx_align_corners: bool = False,
     memory_config=None,
     op_name: str = "tt_resize_to_nchw",
 ):
@@ -272,6 +277,7 @@ def tt_resize_to_nchw(
         scale_factor=(target_h // h, target_w // w),
         mode=mode,
         align_corners=align_corners,
+        approx_align_corners=approx_align_corners,
         memory_config=memory_config,
         expected_input_hw=(h, w),
         op_name=op_name,

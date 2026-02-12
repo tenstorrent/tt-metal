@@ -52,6 +52,9 @@ class DPTLargeConfig:
     tt_perf_encoder: bool = False
     # Fast/perf neck+head flag (device-first convs/upsample)
     tt_perf_neck: bool = False
+    # In perf mode, allow TT upsample to approximate align_corners=True semantics
+    # so the hot path remains trace-capturable (no device->host readback).
+    tt_approx_align_corners: bool = False
     # Execution mode for TT path: eager, trace, or trace_2cq.
     tt_execution_mode: str = "eager"
 
