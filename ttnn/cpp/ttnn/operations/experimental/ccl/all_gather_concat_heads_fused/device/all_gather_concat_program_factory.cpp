@@ -117,9 +117,15 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         is_last_chip);
 
     // Get OP Config, topology config
-    std::vector<Tensor> input_tensors = {input_tensor};
-    std::vector<Tensor> output_tensors = {output_tensor};
-    std::vector<Tensor> temp_tensors = {temp_tensor};
+    std::vector<Tensor> input_tensors;
+    input_tensors.reserve(1);
+    input_tensors.emplace_back(input_tensor);
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(1);
+    output_tensors.emplace_back(output_tensor);
+    std::vector<Tensor> temp_tensors;
+    temp_tensors.reserve(1);
+    temp_tensors.emplace_back(temp_tensor);
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, temp_tensors, operation_attributes.topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ::ttnn::ccl::get_forward_backward_configuration(

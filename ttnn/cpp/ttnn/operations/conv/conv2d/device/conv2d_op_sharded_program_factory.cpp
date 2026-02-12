@@ -1056,7 +1056,11 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         compute_kernel_args.push_back(
             activation_reuse_config.tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
     } else {
-        std::vector<uint32_t> activation_reuse_dummy_args = {0, 0, 0, 0};
+        std::vector<uint32_t> activation_reuse_dummy_args;
+        activation_reuse_dummy_args.reserve(4);
+        for (int i = 0; i < 4; ++i) {
+            activation_reuse_dummy_args.emplace_back(0);
+        }
         compute_kernel_args.insert(
             compute_kernel_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }

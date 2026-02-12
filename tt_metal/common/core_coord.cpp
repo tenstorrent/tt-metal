@@ -425,7 +425,9 @@ CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
     result_ranges.reserve(this_merged.ranges_.size() * 2);
 
     for (const auto& current_range : this_merged.ranges_) {
-        std::vector<CoreRange> current_remaining = {current_range};
+        std::vector<CoreRange> current_remaining;
+        current_remaining.reserve(1);
+        current_remaining.emplace_back(current_range);
 
         for (const auto& subtract_range : other_merged.ranges_) {
             std::vector<CoreRange> new_remaining;

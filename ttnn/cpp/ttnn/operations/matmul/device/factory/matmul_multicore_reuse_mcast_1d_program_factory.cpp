@@ -2489,7 +2489,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         mm_kernel_args.push_back((std::uint32_t)core_type);
         tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_args);
     }
-    std::vector<tt::tt_metal::CBHandle> shared_cbs = {cb_src0, cb_src1};
+    std::vector<tt::tt_metal::CBHandle> shared_cbs;
+    shared_cbs.reserve(2 + cb_outputs.size());
+    shared_cbs.emplace_back(cb_src0);
+    shared_cbs.emplace_back(cb_src1);
     shared_cbs.insert(shared_cbs.end(), cb_outputs.begin(), cb_outputs.end());
 
     return MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
