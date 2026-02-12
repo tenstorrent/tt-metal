@@ -315,6 +315,7 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
     {
+        SDPA_DeviceZoneScopedN_2("S_SUB");
         tile_regs_acquire();
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t tile_index = global_row_base + i;
@@ -324,23 +325,22 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     }
 
     {
+        SDPA_DeviceZoneScopedN_2("S_EXP_AND_PACK");
         tile_regs_wait();
         for (uint32_t dst_index = 0; dst_index < tiles_per_row; dst_index++) {
             PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(dst_index)));
         }
         PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
-    }
 
-    cb_reserve_back(out_cb, tiles_per_row);
-    {
+        cb_reserve_back(out_cb, tiles_per_row);
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t tile_index = global_row_base + i;
             pack_tile<true>(i /*dst_index*/, out_cb, tile_index);
         }
-    }
-    cb_push_back(out_cb, tiles_per_row);
+        cb_push_back(out_cb, tiles_per_row);
 
-    tile_regs_release();
+        tile_regs_release();
+    }
 }
 
 /**
@@ -445,7 +445,6 @@ void sub_exp_block_bcast_cols_inplace(
 
     // Initialize operation
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    // exp_packthread_tile_init<true, true, scale_fp32>();  // todo: move outside.
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
     // Wait for tiles:
@@ -459,8 +458,8 @@ void sub_exp_block_bcast_cols_inplace(
     // }
 
     {
-        SDPA_DeviceZoneScopedN_1("SUB");
         tile_regs_acquire();
+        SDPA_DeviceZoneScopedN_1("SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
@@ -473,8 +472,8 @@ void sub_exp_block_bcast_cols_inplace(
     }
 
     {
-        SDPA_DeviceZoneScopedN_1("EXP");
         tile_regs_wait();
+        SDPA_DeviceZoneScopedN_1("EXP");
         uint32_t dst_index = 0;
         // Use fast exp with InputClamping::None and 32 iterations for 1.3x speedup
         // When vector_mode is RC, use 32 iterations with VectorMode::None
@@ -817,15 +816,14 @@ void sdpa_inner_loop(
             MATH(DPRINT << "Reserving alias_cur_out: " << qktv_output_num_tiles << " tiles" << ENDL());
             cb_reserve_back(alias_cur_out, qktv_output_num_tiles);
 
-            for (uint32_t q_subblock = 0; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
-                MATH(DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ENDL());
+            // ===== q_subblock 0: drain overlap + matmul, NO SALAD, NO push =====
+            {
+                MATH(DPRINT << "QKT@V: Processing Q_subblock 0" << ENDL());
                 DeviceZoneScopedN("Softmax(Q@KT)@V");
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
 #ifdef OVERLAP_DRAIN_WITH_MATMUL
-                // Interleaved path: overlap drain EXP (SFPU) with split matmul (FPU)
-                // for q_subblock==0 only. EXP runs on pack thread while matmul runs on math thread.
-                if (q_subblock == 0) {
+                {
                     constexpr uint32_t half_inner = qktv_in0_block_w / 2;
                     static_assert(kt_num_subblocks == 2, "Overlap drain requires kt_num_subblocks==2");
 
@@ -834,7 +832,7 @@ void sdpa_inner_loop(
                     sub_exp_block_bcast_cols_inplace<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
                         alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 0);
 
-                    // 2. matmul first half (inner 0..half_inner-1) — FPU overlaps with EXP(kt=0) on SFPU
+                    // 2. matmul first half — FPU overlaps with EXP(kt=0) on SFPU
                     {
                         uint32_t v_index_offset = 0;
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -863,8 +861,7 @@ void sdpa_inner_loop(
                         alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 1);
                     cb_push_back(alias_cur_sum, Sq_chunk_t);
 
-                    // 4. matmul second half (inner half_inner..block_w-1) with L1 accumulate
-                    //    FPU overlaps with EXP(kt=1) on SFPU
+                    // 4. matmul second half with L1 accumulate — FPU overlaps with EXP(kt=1) on SFPU
                     PACK((llk_pack_reconfig_l1_acc(1)));
                     {
                         uint32_t v_index_offset = 0;
@@ -888,81 +885,125 @@ void sdpa_inner_loop(
                         }
                     }
                     PACK((llk_pack_reconfig_l1_acc(0)));
-                } else
-#endif
+                }
+#else
                 {
-                    // Original path: drain (if q==0) + full matmul (all q)
-#ifndef OVERLAP_DRAIN_WITH_MATMUL
-                    if (q_subblock == 0) {
-                        MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << ENDL());
-                        for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-                            sub_exp_block_bcast_cols_inplace<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
-                                alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
-                        }
-                        cb_push_back(alias_cur_sum, Sq_chunk_t);
+                    // Non-overlap path: drain + full matmul
+                    MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << ENDL());
+                    for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                        sub_exp_block_bcast_cols_inplace<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                            alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
                     }
-#endif
+                    cb_push_back(alias_cur_sum, Sq_chunk_t);
 
                     uint32_t v_index_offset = 0;
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        {
-                            SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
-                            blocked_matmul_and_pack<
-                                false,
-                                qktv_subblock_w,
-                                qktv_subblock_h,
-                                qktv_in0_block_w,
-                                head_dim_t,
-                                head_dim_t>(
-                                cb_qkt_im,
-                                cb_v_in,
-                                alias_cur_out,
-                                qktv_in0_index_offset,
-                                v_index_offset,
-                                q_subblock,
-                                v_subblock * qktv_subblock_w);
-                        }
+                        SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
+                        blocked_matmul_and_pack<
+                            false,
+                            qktv_subblock_w,
+                            qktv_subblock_h,
+                            qktv_in0_block_w,
+                            head_dim_t,
+                            head_dim_t>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            alias_cur_out,
+                            qktv_in0_index_offset,
+                            v_index_offset,
+                            0,
+                            v_subblock * qktv_subblock_w);
+                        v_index_offset += qktv_subblock_w;
+                    }
+                }
+#endif
+                // No SALAD, no push for q_subblock 0 — deferred to next iteration
+                qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
+                qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
+            }
+
+            // ===== q_subblock 1..3: SALAD(prev) overlapped with matmul(cur) =====
+            for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
+                uint32_t salad_row = q_subblock - 1;
+                MATH(
+                    DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ", SALAD for row " << salad_row
+                           << ENDL());
+                DeviceZoneScopedN("Softmax(Q@KT)@V");
+                cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
+
+                // 1. Compute exp_max_diff for PREVIOUS row — SFPU EXP will overlap with matmul
+                {
+                    MATH(DPRINT << "SUB_EXP_m for Q[" << salad_row << "]" << ENDL());
+                    sub_exp_first_col_blocks<scale_fp32, sbh>(
+                        alias_prev_max, alias_cur_max, cb_exp_max_diff, salad_row);
+                }
+
+                // 2. Full matmul for CURRENT row — FPU overlaps with SFPU EXP above
+                {
+                    uint32_t v_index_offset = 0;
+                    for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                        SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
+                        blocked_matmul_and_pack<
+                            false,
+                            qktv_subblock_w,
+                            qktv_subblock_h,
+                            qktv_in0_block_w,
+                            head_dim_t,
+                            head_dim_t>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            alias_cur_out,
+                            qktv_in0_index_offset,
+                            v_index_offset,
+                            q_subblock,
+                            v_subblock * qktv_subblock_w);
                         v_index_offset += qktv_subblock_w;
                     }
                 }
 
+                // 3. Rest of SALAD for PREVIOUS row
                 {
-                    // SALAD: cb_exp_max_diff = slowexp((cb_prev_max - cb_cur_max) * scale)
-                    MATH(DPRINT << "SUB_EXP_m for Q[" << q_subblock << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_SUB_EXP");
-                    sub_exp_first_col_blocks<scale_fp32, sbh>(
-                        alias_prev_max, alias_cur_max, cb_exp_max_diff, q_subblock);
-                    // todo: don't need these rows of prev_max anymore, so pop to free up buffer space now.
-                }
-
-                {
-                    // SALAD: cb_prev_sum *= cb_exp_max_diff
-                    MATH(DPRINT << "Mul tiles bcast cols for Q[" << q_subblock << "]" << ENDL());
+                    MATH(DPRINT << "Mul tiles bcast cols for Q[" << salad_row << "]" << ENDL());
                     SDPA_DeviceZoneScopedN_2("S_MUL_TILES");
-                    mul_tiles_bcast_cols_inplace<sbh>(alias_prev_sum, cb_exp_max_diff, q_subblock);
+                    mul_tiles_bcast_cols_inplace<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
                 }
-
                 {
-                    // SALAD: cb_prev_sum += cb_cur_sum
-                    MATH(DPRINT << "Add tiles inplace for Q[" << q_subblock << "]" << ENDL());
+                    MATH(DPRINT << "Add tiles inplace for Q[" << salad_row << "]" << ENDL());
                     SDPA_DeviceZoneScopedN_2("S_ADD_TILES");
-                    add_block_inplace<sbh>(alias_cur_sum, alias_prev_sum, q_subblock);
+                    add_block_inplace<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
                 }
                 {
-                    // SALAD: alias_cur_out += alias_prev_out * cb_exp_max_diff
-                    MATH(DPRINT << "Element-wise mul of Q[" << q_subblock << "]" << ENDL());
+                    MATH(DPRINT << "Element-wise mul of Q[" << salad_row << "]" << ENDL());
                     SDPA_DeviceZoneScopedN_2("S_MUL_BLOCK");
                     mul_block_bcast_cols_acc<sbh, head_dim_t>(
-                        alias_prev_out, cb_exp_max_diff, alias_cur_out, q_subblock);
+                        alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
                 }
 
+                // 4. Push completed row for PREVIOUS subblock
                 MATH(
                     DPRINT << "Pushing " << qktv_subblock_h * head_dim_t << " tiles to alias_cur_out for Q_subblock "
-                           << q_subblock << ENDL());
+                           << salad_row << ENDL());
                 cb_push_back(alias_cur_out, qktv_subblock_h * head_dim_t);
 
                 qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
                 qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
+            }
+
+            // ===== Pipeline drain: SALAD for last row =====
+            {
+                constexpr uint32_t salad_row = qktv_q_num_subblocks - 1;
+                MATH(DPRINT << "Pipeline drain: SALAD for row " << salad_row << ENDL());
+                DeviceZoneScopedN("SALAD drain");
+
+                sub_exp_first_col_blocks<scale_fp32, sbh>(alias_prev_max, alias_cur_max, cb_exp_max_diff, salad_row);
+                mul_tiles_bcast_cols_inplace<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
+                add_block_inplace<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
+                mul_block_bcast_cols_acc<sbh, head_dim_t>(alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
+
+                MATH(
+                    DPRINT << "Pushing " << qktv_subblock_h * head_dim_t << " tiles to alias_cur_out for Q_subblock "
+                           << salad_row << ENDL());
+                cb_push_back(alias_cur_out, qktv_subblock_h * head_dim_t);
             }
 
             MATH(DPRINT << "Popping cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
