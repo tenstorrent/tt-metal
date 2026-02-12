@@ -13,7 +13,14 @@ target_sources(mobilenetv2_cpp
         helper_funcs.cpp
         inference/mobilenetv2_infra.cpp
 )
-target_link_libraries(mobilenetv2_cpp PRIVATE ttnn_mobilenetv2)
+target_include_directories(mobilenetv2_cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(mobilenetv2_cpp
+    PRIVATE
+        ttnn_mobilenetv2
+        torch::torch
+        TTNN::CPP
+        TT::Metalium
+)
 
 add_executable(mobilenetv2_e2e)
 target_sources(mobilenetv2_e2e
@@ -23,4 +30,11 @@ target_sources(mobilenetv2_e2e
         inference/mobilenetv2_infra.cpp
         inference/mobilenetv2_e2e_performance.cpp
 )
-target_link_libraries(mobilenetv2_e2e PRIVATE ttnn_mobilenetv2)
+target_include_directories(mobilenetv2_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(mobilenetv2_e2e
+    PRIVATE
+        ttnn_mobilenetv2
+        torch::torch
+        TTNN::CPP
+        TT::Metalium
+)
