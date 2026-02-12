@@ -255,9 +255,9 @@ void multicast_tensor_tensix(
 
     ////////// TENSIX CORE SETUP //////////
     // Define logical sender core and receiver core range (for kernel creation on the host).
-    CoreRange all_cores_logical = CoreRange({0, 0}, {3, 0});
+    CoreRange all_cores_logical = CoreRange({0, 0}, {num_receivers - 1, 0});
     CoreCoord sender_core_logical = {0, 0};
-    CoreRange receiver_cores_logical = CoreRange({1, 0}, {3, 0});
+    CoreRange receiver_cores_logical = CoreRange({1, 0}, {num_receivers - 1, 0});
 
     // Convert logical coordinates to device coordinates (necessary for device-side multicasting).
     CoreCoord sender_core_device = prog_state.mesh_device->worker_core_from_logical_core(sender_core_logical);
@@ -273,7 +273,7 @@ void multicast_tensor_tensix(
     // receivers_ready_semaphore: receivers signal when they're ready to receive a tile
     // tile_sent_semaphore: coordinator signals when a tile has been multicast
     uint32_t receivers_ready_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
-    uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
+    uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, INVALID);
 
     ////////// CIRCULAR BUFFER SETUP //////////
     // Create circular buffers with 2 tiles for double-buffering.
