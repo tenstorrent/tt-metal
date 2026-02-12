@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Union
 
 import torch
 from PIL import Image
+from pydantic import BaseModel, validator
 from transformers import AutoModelForVision2Seq, AutoProcessor, pipeline
 
 
@@ -34,6 +36,45 @@ class TokenResult:
 class CompletionMessage:
     content: str
     role: Role = Role.assistant.value
+
+
+class BuiltinTool(Enum):
+    brave_search = "brave_search"
+    wolfram_alpha = "wolfram_alpha"
+    photogen = "photogen"
+    code_interpreter = "code_interpreter"
+
+
+Primitive = Union[str, int, float, bool, None]
+RecursiveType = Union[Primitive, List[Primitive], Dict[str, Primitive]]
+
+
+class ToolCall(BaseModel):
+    call_id: str
+    tool_name: Union[BuiltinTool, str]
+    arguments: Dict[str, RecursiveType]
+
+    @validator("tool_name", pre=True)
+    @classmethod
+    def validate_field(cls, v):
+        if isinstance(v, str):
+            try:
+                return BuiltinTool(v)
+            except ValueError:
+                return v
+        return v
+
+
+class ChatPrediction:
+    generation: CompletionMessage
+    decoded_tokens: Optional[List[str]] = None
+    logprobs: Optional[List[List[float]]] = None
+
+
+class CompletionPrediction:
+    generation: str
+    decoded_tokens: Optional[List[str]] = None
+    logprobs: Optional[List[List[float]]] = None
 
 
 def sample_top_p(probs, p):

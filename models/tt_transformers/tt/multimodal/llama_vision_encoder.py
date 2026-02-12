@@ -4,11 +4,11 @@
 
 import collections
 
-import llama_models.llama3.reference_impl.multimodal.encoder_utils as encoder_utils
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.common import build_encoder_attention_mask
 from models.tt_transformers.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
 from models.tt_transformers.tt.multimodal.llama_conv2d_patch import TtLlamaConv2dPatch
 from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
@@ -227,7 +227,7 @@ class TtLlamaVisionEncoder(LightweightModule):
         x, npad = pad_seq_one_tile(x, self.mesh_device)
 
         fake_x = torch.zeros(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
-        attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, max_actual_num_chunks, 1)
+        attn_mask = build_encoder_attention_mask(fake_x, ar, ntok, max_actual_num_chunks, 1)
         # Mask stripes for the extra padding required on TT hardware
         attn_mask = mask_tile_padding(attn_mask, ntok, npad, max_actual_num_chunks)
         attn_mask = ttnn.from_torch(
