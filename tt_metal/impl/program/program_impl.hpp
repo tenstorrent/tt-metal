@@ -52,19 +52,6 @@ class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
 
-enum dispatch_core_processor_classes {
-    // Tensix processor classes
-    DISPATCH_CLASS_TENSIX_DM0 = 0,
-    DISPATCH_CLASS_TENSIX_DM1 = 1,
-    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
-
-    // Ethernet processor classes
-    DISPATCH_CLASS_ETH_DM0 = 0,
-    DISPATCH_CLASS_ETH_DM1 = 1,
-
-    DISPATCH_CLASS_MAX = 3,
-};
-
 namespace experimental {
 class GlobalCircularBuffer;
 }
@@ -82,9 +69,12 @@ void assemble_device_commands(
 struct KernelGroup {
     uint32_t programmable_core_type_index{};
     CoreRangeSet core_ranges;
-    // kernel_ids are ordered by dispatch class
+    // kernel_ids are ordered by processor index
     std::vector<KernelHandle> kernel_ids;
-    uint32_t rta_sizes[DISPATCH_CLASS_MAX]{};
+    // RTA/CRTA layout for each kernel
+    std::vector<uint32_t> rta_sizes;
+    std::vector<uint32_t> crta_offsets;
+    std::vector<uint32_t> crta_sizes;
     uint32_t total_rta_size{};
     // kernel_text_offsets is indexed by processor index within core.
     std::vector<uint32_t> kernel_text_offsets;
@@ -106,8 +96,6 @@ struct KernelGroup {
 // Contains the program's worker memory map
 struct ProgramConfig {
     uint32_t rta_offset;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
     uint32_t sem_offset;
     uint32_t sem_size;
     uint32_t cb_offset;
@@ -136,9 +124,6 @@ struct ProgramOffsetsState {
     uint32_t offset = 0;
     // Unique RTA offset.
     uint32_t rta_offset = 0;
-    // Common RTA offsets and sizes.
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets{};
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes{};
     // Semaphore offsets and sizes.
     uint32_t sem_offset = 0;
     uint32_t sem_size = 0;
