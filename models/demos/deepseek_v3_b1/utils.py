@@ -67,54 +67,6 @@ def shuffle_weights_for_interleaved_qnope_qrope(
     return torch.cat(shuffled_cols, dim=1)  # [K, 12288]
 
 
-def unshuffle_output_from_interleaved_qnope_qrope(
-    output: torch.Tensor,
-    num_qnope_heads: int = 64,
-    num_qrope_heads: int = 64,
-    qnope_head_dim: int = 128,
-    qrope_head_dim: int = 64,
-    heads_per_row: int = 8,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Unshuffle interleaved Qnope/Qrope output back to separate contiguous tensors.
-
-    Inverse of shuffle_weights_for_interleaved_qnope_qrope for the output.
-
-    Args:
-        output: Interleaved output [1, N] where N = num_qnope_heads*qnope_head_dim + num_qrope_heads*qrope_head_dim
-        num_qnope_heads: Number of Qnope heads (default 64)
-        num_qrope_heads: Number of Qrope heads (default 64)
-        qnope_head_dim: Dimension per Qnope head (default 128)
-        qrope_head_dim: Dimension per Qrope head (default 64)
-        heads_per_row: Number of heads per grid row (default 8)
-
-    Returns:
-        Tuple of (qnope_output, qrope_output):
-        - qnope_output: [num_qnope_heads, 1, qnope_head_dim] = [64, 1, 128]
-        - qrope_output: [num_qrope_heads, 1, qrope_head_dim] = [64, 1, 64]
-    """
-    num_rows = num_qnope_heads // heads_per_row  # 8 rows
-    qnope_per_row = heads_per_row * qnope_head_dim  # 8 * 128 = 1024
-    qrope_per_row = heads_per_row * qrope_head_dim  # 8 * 64 = 512
-    row_size = qnope_per_row + qrope_per_row  # 1536
-
-    qnope_chunks = []
-    qrope_chunks = []
-
-    for row in range(num_rows):
-        row_start = row * row_size
-        qnope_chunk = output[:, row_start : row_start + qnope_per_row]
-        qrope_chunk = output[:, row_start + qnope_per_row : row_start + row_size]
-        qnope_chunks.append(qnope_chunk)
-        qrope_chunks.append(qrope_chunk)
-
-    # Concatenate and reshape to [num_heads, 1, head_dim]
-    qnope_output = torch.cat(qnope_chunks, dim=1).reshape(num_qnope_heads, 1, qnope_head_dim)
-    qrope_output = torch.cat(qrope_chunks, dim=1).reshape(num_qrope_heads, 1, qrope_head_dim)
-
-    return qnope_output, qrope_output
-
-
 def float_to_bfloat16_packed(value):
     """Convert float to packed bfloat16 (two copies in uint32)"""
     # Convert float32 to bytes
