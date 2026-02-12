@@ -117,6 +117,11 @@ def tt_upsample_nchw(
     else:
         sf = int(sf)
 
+    if memory_config is None:
+        # Keep upsample outputs interleaved by default to avoid width-sharded
+        # transpose constraints and large L1 halo allocations on N300.
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     y_nhwc = ttnn.upsample(
         input_tensor=x_nhwc,
         scale_factor=sf,
