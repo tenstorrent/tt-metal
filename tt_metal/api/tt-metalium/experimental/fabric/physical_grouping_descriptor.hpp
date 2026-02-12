@@ -151,6 +151,13 @@ public:
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
+    // Validate and populate predefined groupings (TRAYS and HOSTS) from PhysicalSystemDescriptor
+    // If groupings already exist, validates they match the physical system
+    // If groupings don't exist, automatically creates TRAY groupings with ASIC locations and HOST groupings with tray
+    // references
+    void validate_and_populate_preformed_groups_from_physical_system(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
+
 private:
     // Data members
     std::shared_ptr<const proto::PhysicalGroupings> proto_;

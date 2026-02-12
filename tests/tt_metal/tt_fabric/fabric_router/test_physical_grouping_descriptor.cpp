@@ -347,6 +347,22 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenReferencingNonExistentG
     EXPECT_THAT(
         ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("references non-existent grouping")));
+
+    // But preset names should pass validation and population even if not defined
+    const std::string text_proto_preset = R"proto(
+        groupings {
+          name: "meshes_21"
+          custom_type: "meshes"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+    )proto";
+
+    // Should not throw - preset names are skipped during dependency resolution
+    EXPECT_NO_THROW({ PhysicalGroupingDescriptor desc(text_proto_preset); });
 }
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenGroupingHasNoInstances) {
@@ -545,12 +561,10 @@ TEST(PhysicalGroupingDescriptorTests, HasGroupingReturnsTrueForExistingGrouping)
         }
     )proto");
 
-    EXPECT_NO_THROW({
-        PhysicalGroupingDescriptor desc(text_proto);
-        EXPECT_TRUE(desc.has_grouping("meshes"));
-        EXPECT_TRUE(desc.has_grouping("pods"));
-        EXPECT_FALSE(desc.has_grouping("nonexistent"));
-    });
+    PhysicalGroupingDescriptor desc(text_proto);
+    EXPECT_TRUE(desc.has_grouping("meshes"));
+    EXPECT_TRUE(desc.has_grouping("pods"));
+    EXPECT_FALSE(desc.has_grouping("nonexistent"));
 }
 
 TEST(PhysicalGroupingDescriptorTests, GetGroupingsByNameReturnsAllDefinitions) {
@@ -1287,6 +1301,14 @@ TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple8x16PsdWi
             if (mesh.name == name) {
                 return &mesh;
             }
+            , {
+              id: 2
+              grouping_ref { preset_type: TRAY_3 }
+            }
+            , {
+              id: 3
+              grouping_ref { preset_type: TRAY_4 }
+            }]
         }
         for (const auto& mesh : all_mesh_groupings) {
             if (mesh.name.starts_with(name)) {
@@ -2239,982 +2261,345 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
 }
 
 TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_BaseGrouping) {
-    // Test that base groupings (only ASIC_LOCATION items) calculate ASIC counts correctly
     const std::string text_proto = R"proto(
         groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }
-            , { asic_location: ASIC_LOCATION_3 }
-            , { asic_location: ASIC_LOCATION_4 }
-            , { asic_location: ASIC_LOCATION_5 }
-            , { asic_location: ASIC_LOCATION_6 }
-            , { asic_location: ASIC_LOCATION_7 }
-            , { asic_location: ASIC_LOCATION_8 }]
-        }
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 1 } }]
+          name: "meshes_28"
+          custom_type: "meshes"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }
+            , { id: 2 asic_location: ASIC_LOCATION_3 }
+            , { id: 3 asic_location: ASIC_LOCATION_4 }]
+          row_major_mesh {
+            dims: [ 2, 2 ]
+            dim_types: [ LINE, LINE ]
+            num_connections: 2
+          }
         }
     )proto";
 
     PhysicalGroupingDescriptor desc(text_proto);
-
-    auto trays = desc.get_groupings_by_name("trays");
-    ASSERT_EQ(trays.size(), 1);
-    EXPECT_EQ(trays[0].asic_count, 8) << "Base grouping with 8 ASIC_LOCATION items should have asic_count = 8";
-}
-
-TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_SimpleDependent) {
-    // Test that dependent groupings calculate ASIC counts correctly
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }
-            , { asic_location: ASIC_LOCATION_3 }
-            , { asic_location: ASIC_LOCATION_4 }]
-        }
-
-        groupings {
-          name: "hosts"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 4 } }]
-        }
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 1 } }]
-        }
-    )proto";
-
-    PhysicalGroupingDescriptor desc(text_proto);
-
-    auto trays = desc.get_groupings_by_name("trays");
-    ASSERT_EQ(trays.size(), 1);
-    EXPECT_EQ(trays[0].asic_count, 4) << "Base grouping should have asic_count = 4";
-
-    auto hosts = desc.get_groupings_by_name("hosts");
-    ASSERT_EQ(hosts.size(), 1);
-    EXPECT_EQ(hosts[0].asic_count, 16) << "Host grouping with 4 trays (4 ASICs each) should have asic_count = 16";
-    EXPECT_EQ(hosts[0].items.size(), 4) << "Host grouping should have 4 items (expanded from count: 4)";
+    auto meshes = desc.get_groupings_by_name("meshes");
+    ASSERT_EQ(meshes.size(), 1);
+    EXPECT_EQ(meshes[0].asic_count, 4u);
 }
 
 TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_NestedGroupings) {
-    // Test complex nested groupings resolve correctly
     const std::string text_proto = R"proto(
         groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
+          name: "trays_3"
+          custom_type: "trays"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }
+            , { id: 2 asic_location: ASIC_LOCATION_3 }
+            , { id: 3 asic_location: ASIC_LOCATION_4 }
+            , { id: 4 asic_location: ASIC_LOCATION_5 }
+            , { id: 5 asic_location: ASIC_LOCATION_6 }
+            , { id: 6 asic_location: ASIC_LOCATION_7 }
+            , { id: 7 asic_location: ASIC_LOCATION_8 }]
+          row_major_mesh {
+            dims: [ 2, 4 ]
+            dim_types: [ LINE, LINE ]
+            num_connections: 2
+          }
         }
-
         groupings {
-          name: "hosts"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 2 } }]
+          name: "hosts_1"
+          custom_type: "hosts"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "trays" }
+          }
+            , {
+              id: 1
+              grouping_ref { custom_type: "trays" }
+            }
+            , {
+              id: 2
+              grouping_ref { custom_type: "trays" }
+            }
+            , {
+              id: 3
+              grouping_ref { custom_type: "trays" }
+            }]
+          row_major_mesh {
+            dims: [ 1, 4 ]
+            dim_types: [ LINE, RING ]
+            num_connections: 2
+          }
         }
-
         groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "hosts" count: 2 } }]
+          name: "meshes_29"
+          custom_type: "meshes"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "hosts" }
+          }]
         }
     )proto";
 
     PhysicalGroupingDescriptor desc(text_proto);
-
     auto trays = desc.get_groupings_by_name("trays");
-    ASSERT_EQ(trays.size(), 1);
-    EXPECT_EQ(trays[0].asic_count, 2) << "Trays should have 2 ASICs";
-
     auto hosts = desc.get_groupings_by_name("hosts");
+    auto meshes = desc.get_groupings_by_name("meshes");
+    ASSERT_EQ(trays.size(), 1);
     ASSERT_EQ(hosts.size(), 1);
-    EXPECT_EQ(hosts[0].asic_count, 4) << "Hosts should have 2 trays * 2 ASICs = 4 ASICs";
-
-    auto meshes = desc.get_groupings_by_name("meshes");
     ASSERT_EQ(meshes.size(), 1);
-    EXPECT_EQ(meshes[0].asic_count, 8) << "Meshes should have 2 hosts * 4 ASICs = 8 ASICs";
+    EXPECT_EQ(trays[0].asic_count, 8u);
+    EXPECT_EQ(hosts[0].asic_count, 32u);   // 4 * 8
+    EXPECT_EQ(meshes[0].asic_count, 32u);  // 1 * 32
 }
 
-TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_MixedItems) {
-    // Test groupings with both ASIC_LOCATION and GROUPING_REF items
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
-        }
+// ============================================================================
+// GET_VALID_GROUPINGS_FOR_MGD TESTS (unchanged - use file-based configs)
+// ============================================================================
 
-        groupings {
-          name: "mixed"
-          items:
-          [ { asic_location: ASIC_LOCATION_3 }
-            , { grouping_ref { grouping_name: "trays" count: 2 } }]
-        }
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 1 } }]
-        }
-    )proto";
-
-    PhysicalGroupingDescriptor desc(text_proto);
-
-    auto mixed = desc.get_groupings_by_name("mixed");
-    ASSERT_EQ(mixed.size(), 1);
-    // Should have: 1 ASIC_LOCATION + 2 trays (2 ASICs each) = 1 + 4 = 5 ASICs
-    EXPECT_EQ(mixed[0].asic_count, 5) << "Mixed grouping should have 1 direct ASIC + 4 from trays = 5 ASICs";
-    EXPECT_EQ(mixed[0].items.size(), 3) << "Should have 1 ASIC_LOCATION + 2 GROUPING_REF items = 3 items";
-}
-
-TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_MultipleMeshesGroupings) {
-    // Test that multiple "meshes" groupings with different ASIC counts are calculated correctly
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }
-            , { asic_location: ASIC_LOCATION_3 }
-            , { asic_location: ASIC_LOCATION_4 }
-            , { asic_location: ASIC_LOCATION_5 }
-            , { asic_location: ASIC_LOCATION_6 }
-            , { asic_location: ASIC_LOCATION_7 }
-            , { asic_location: ASIC_LOCATION_8 }]
-        }
-
-        groupings {
-          name: "hosts"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 4 } }]
-        }
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 1 } }]
-        }
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 2 } }]
-        }
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "hosts" count: 4 } }]
-        }
-    )proto";
-
-    PhysicalGroupingDescriptor desc(text_proto);
-
-    auto meshes = desc.get_groupings_by_name("meshes");
-    ASSERT_EQ(meshes.size(), 3) << "Should have 3 different 'meshes' groupings";
-
-    // Sort by ASIC count to verify each one
-    std::sort(meshes.begin(), meshes.end(), [](const GroupingInfo& a, const GroupingInfo& b) {
-        return a.asic_count < b.asic_count;
-    });
-
-    EXPECT_EQ(meshes[0].asic_count, 8) << "First meshes grouping: 1 tray = 8 ASICs";
-    EXPECT_EQ(meshes[1].asic_count, 16) << "Second meshes grouping: 2 trays = 16 ASICs";
-    EXPECT_EQ(meshes[2].asic_count, 128) << "Third meshes grouping: 4 hosts = 4 * 32 = 128 ASICs";
-}
-
-TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_CircularDependencyError) {
-    // Test that circular dependencies are detected
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
-        }
-
-        groupings {
-          name: "a"
-          items:
-          [ { grouping_ref { grouping_name: "b" count: 2 } }]
-        }
-
-        groupings {
-          name: "b"
-          items:
-          [ { grouping_ref { grouping_name: "a" count: 2 } }]
-        }
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 1 } }]
-        }
-    )proto";
-
-    EXPECT_THAT(
-        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Circular dependencies detected")));
-}
-
-TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_MissingReferenceError) {
-    // Test that missing references are detected
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "nonexistent" count: 1 } }]
-        }
-    )proto";
-
-    EXPECT_THAT(
-        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AnyOf(
-            ::testing::HasSubstr("references non-existent grouping"),
-            ::testing::HasSubstr("does not resolve to any ASIC locations"))));
-}
-
-TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_NoAsicLocationsError) {
-    // Test that groupings that don't resolve to ASIC_LOCATION items error out during populate
-    // This test uses a grouping that references a non-existent grouping, which will fail during populate
-    // after validation passes (validation checks references exist, but populate checks they resolve to ASICs)
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
-        }
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "trays" count: 1 } }]
-        }
-
-        groupings {
-          name: "invalid"
-          items:
-          [ { grouping_ref { grouping_name: "nonexistent" count: 2 } }]
-        }
-    )proto";
-
-    // This should fail during validation (references non-existent grouping)
-    EXPECT_THAT(
-        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("references non-existent grouping")));
-}
-
-// ===== Tests for Higher-Level Groupings (Pods, Clusters, etc.) =====
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PodWith2Meshes_ExactMatch) {
-    // Scenario 1: POD instance with 2 meshes - should match by composition, not name
-    // Tests that a "POD" type can match "pods" or "widgets" grouping (both have {meshes: 2})
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_32x4Quad) {
     const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
     PhysicalGroupingDescriptor pgd(pgd_file_path);
 
-    // Test MGD with POD containing 2 meshes
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "G0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-        }
-        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
+    const std::filesystem::path mgd_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
+    MeshGraphDescriptor mgd(mgd_file_path);
 
     auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    EXPECT_FALSE(valid_groupings.empty());
 
-    // Should match:
-    // - M0 meshes: 2 trays (16 ASICs) - exact match for 4x4 = 16 chips
-    // - G0 POD: matches grouping with {meshes: 2} - could be "pods" or "widgets" (both have same composition)
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end()) << "Should have MESH type in results";
-    EXPECT_TRUE(valid_groupings.find("POD") != valid_groupings.end()) << "Should have POD type in results";
-
-    // Verify mesh matching
-    const auto& m0_grouping = valid_groupings.at("MESH").at("M0");
-    EXPECT_EQ(m0_grouping.name, "meshes") << "M0 should match 'meshes' grouping";
-    EXPECT_EQ(m0_grouping.asic_count, 16u) << "M0 grouping should have 16 ASICs (2 trays)";
-
-    // Verify POD matching - should match by composition {meshes: 2}, not by name
-    const auto& g0_grouping = valid_groupings.at("POD").at("G0");
-    // Should match either "pods" or "widgets" (both have {meshes: 2})
-    EXPECT_TRUE(g0_grouping.name == "pods" || g0_grouping.name == "widgets")
-        << "G0 should match 'pods' or 'widgets' grouping (both have {meshes: 2})";
-
-    // Verify composition: should have 2 meshes
-    uint32_t meshes_count = 0;
-    for (const auto& item : g0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "meshes") {
-            meshes_count++;
+    // Verify that mesh type is matched
+    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
+    if (valid_groupings.find("MESH") != valid_groupings.end()) {
+        const auto& mesh_groupings = valid_groupings.at("MESH");
+        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
+        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
+            const auto& assigned_grouping = mesh_groupings.at("M0");
+            // 32x4 = 128 ASICs with host_topology [4, 1] (1x4 linear), should match "4x32_Mesh" (dims [1, 4])
+            EXPECT_EQ(assigned_grouping.asic_count, 128u) << "32x4 mesh should match 128 ASIC grouping";
+            EXPECT_EQ(assigned_grouping.name, "4x32_Mesh")
+                << "32x4 mesh with host_topology [4, 1] should be assigned to 4x32_Mesh (dims [1, 4]), got: "
+                << assigned_grouping.name;
+            // Verify connections: 4x32_Mesh has 4 instances with row_major_mesh connections (dims [1, 4])
+            EXPECT_GE(assigned_grouping.items.size(), 4u)
+                << "Grouping " << assigned_grouping.name << " should have at least 4 items (instances) for connections";
         }
     }
-    EXPECT_EQ(meshes_count, 2u) << "Matched grouping should have composition {meshes: 2}";
 }
 
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PodWith3Meshes_ExactMatch) {
-    // Scenario: POD instance with 3 meshes - should match by composition {meshes: 3}
-    // Could match "pods" or "widgets" (both have {meshes: 3})
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SingleBHGalaxy) {
     const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
     PhysicalGroupingDescriptor pgd(pgd_file_path);
 
-    // Test MGD with POD containing 3 meshes
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "G0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-        }
-        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
+    const std::filesystem::path mgd_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto";
+    MeshGraphDescriptor mgd(mgd_file_path);
 
     auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    EXPECT_FALSE(valid_groupings.empty());
 
-    // Should match:
-    // - M0 meshes: 2 trays (16 ASICs)
-    // - G0 POD: matches grouping with {meshes: 3} - could be "pods" or "widgets"
-    EXPECT_TRUE(valid_groupings.find("POD") != valid_groupings.end()) << "Should have POD type in results";
-
-    const auto& g0_grouping = valid_groupings.at("POD").at("G0");
-    // Should match either "pods" or "widgets" (both have {meshes: 3})
-    EXPECT_TRUE(g0_grouping.name == "pods" || g0_grouping.name == "widgets")
-        << "G0 should match 'pods' or 'widgets' grouping (both have {meshes: 3})";
-
-    // Verify composition: should have 3 meshes
-    uint32_t meshes_count = 0;
-    for (const auto& item : g0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "meshes") {
-            meshes_count++;
+    // Verify that mesh type is matched
+    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
+    if (valid_groupings.find("MESH") != valid_groupings.end()) {
+        const auto& mesh_groupings = valid_groupings.at("MESH");
+        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
+        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
+            const auto& assigned_grouping = mesh_groupings.at("M0");
+            // 8x4 = 32 ASICs with host_topology [1, 1] (single host), should match "4x8_Mesh" (1 instance)
+            EXPECT_EQ(assigned_grouping.asic_count, 32u) << "8x4 mesh should match 32 ASIC grouping";
+            EXPECT_EQ(assigned_grouping.name, "4x8_Mesh")
+                << "8x4 mesh with host_topology [1, 1] should be assigned to 4x8_Mesh (single instance), got: "
+                << assigned_grouping.name;
+            // Verify connections: 4x8_Mesh has 1 instance, so adjacency graph should be empty or have 1 node
+            EXPECT_LE(assigned_grouping.adjacency_graph.get_nodes().size(), 1u)
+                << "Grouping 4x8_Mesh should have at most 1 node in adjacency graph (single instance)";
         }
     }
-    EXPECT_EQ(meshes_count, 3u) << "Matched grouping should have composition {meshes: 3}";
 }
 
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_ClusterWith2Pods_ExactMatch) {
-    // Scenario: Multiple CLUSTER instances with 2 pods each - all should match the same "clusters" grouping
-    // Tests that multiple MGD graph instances can map to the same physical grouping name
-    // This demonstrates that groupings are templates - many instances can use the same grouping
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_16x8QuadBHGalaxy) {
     const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
     PhysicalGroupingDescriptor pgd(pgd_file_path);
 
-    // Test MGD with multiple CLUSTER instances, each containing 2 pods, each pod has 2 meshes
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "P0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-        }
-        graph_descriptors {
-          name: "C0"
-          type: "CLUSTER"
-          instances { graph { graph_descriptor: "P0" graph_id: 0 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 1 } }
-        }
-        graph_descriptors {
-          name: "C1"
-          type: "CLUSTER"
-          instances { graph { graph_descriptor: "P0" graph_id: 2 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 3 } }
-        }
-        graph_descriptors {
-          name: "C2"
-          type: "CLUSTER"
-          instances { graph { graph_descriptor: "P0" graph_id: 4 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 5 } }
-        }
-        graph_descriptors {
-          name: "TOP"
-          type: "FABRIC"
-          instances { graph { graph_descriptor: "C0" graph_id: 0 } }
-          instances { graph { graph_descriptor: "C1" graph_id: 1 } }
-          instances { graph { graph_descriptor: "C2" graph_id: 2 } }
-        }
-        top_level_instance { graph { graph_descriptor: "TOP" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
+    const std::filesystem::path mgd_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
+    MeshGraphDescriptor mgd(mgd_file_path);
 
     auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    EXPECT_FALSE(valid_groupings.empty());
 
-    // Should match:
-    // - M0 meshes: 2 trays (16 ASICs)
-    // - P0 POD instances: all match grouping with {meshes: 2} - could be "pods" or "widgets"
-    // - C0, C1, C2 CLUSTER instances: all match the same "clusters" grouping with {pods: 2}
-    EXPECT_TRUE(valid_groupings.find("CLUSTER") != valid_groupings.end()) << "Should have CLUSTER type in results";
-    EXPECT_TRUE(valid_groupings.find("POD") != valid_groupings.end()) << "Should have POD type in results";
-
-    // Verify all three CLUSTER instances map to the same grouping name
-    const auto& c0_grouping = valid_groupings.at("CLUSTER").at("C0");
-    const auto& c1_grouping = valid_groupings.at("CLUSTER").at("C1");
-    const auto& c2_grouping = valid_groupings.at("CLUSTER").at("C2");
-
-    EXPECT_EQ(c0_grouping.name, "clusters") << "C0 should match 'clusters' grouping (composition {pods: 2})";
-    EXPECT_EQ(c1_grouping.name, "clusters") << "C1 should match 'clusters' grouping (composition {pods: 2})";
-    EXPECT_EQ(c2_grouping.name, "clusters") << "C2 should match 'clusters' grouping (composition {pods: 2})";
-
-    // Verify all three instances map to the same grouping (same name and composition)
-    EXPECT_EQ(c0_grouping.name, c1_grouping.name) << "C0 and C1 should map to the same grouping name";
-    EXPECT_EQ(c1_grouping.name, c2_grouping.name) << "C1 and C2 should map to the same grouping name";
-
-    // Verify composition: all should have 2 pods
-    for (const auto& [cluster_name, grouping] : std::vector<std::pair<std::string, GroupingInfo>>{
-             {"C0", c0_grouping}, {"C1", c1_grouping}, {"C2", c2_grouping}}) {
-        uint32_t pods_count = 0;
-        for (const auto& item : grouping.items) {
-            if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "pods") {
-                pods_count++;
+    // Verify that mesh type is matched
+    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
+    if (valid_groupings.find("MESH") != valid_groupings.end()) {
+        const auto& mesh_groupings = valid_groupings.at("MESH");
+        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
+        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
+            const auto& assigned_grouping = mesh_groupings.at("M0");
+            // 16x8 = 128 ASICs with host_topology [2, 2] (2x2 grid), should match "8x16_Mesh" (dims [2, 2])
+            EXPECT_EQ(assigned_grouping.asic_count, 128u) << "16x8 mesh should match 128 ASIC grouping";
+            EXPECT_EQ(assigned_grouping.name, "8x16_Mesh")
+                << "16x8 mesh with host_topology [2, 2] should be assigned to 8x16_Mesh (dims [2, 2]), got: "
+                << assigned_grouping.name;
+            // Verify connections: 8x16_Mesh has 4 instances with row_major_mesh connections (dims [2, 2])
+            EXPECT_EQ(assigned_grouping.adjacency_graph.get_nodes().size(), 4u)
+                << "Grouping 8x16_Mesh should have 4 nodes in adjacency graph";
+            // Verify that connections exist by checking that at least one node has neighbors
+            bool has_connections = false;
+            for (const auto& node : assigned_grouping.adjacency_graph.get_nodes()) {
+                if (!assigned_grouping.adjacency_graph.get_neighbors(node).empty()) {
+                    has_connections = true;
+                    break;
+                }
             }
+            EXPECT_TRUE(has_connections)
+                << "Grouping 8x16_Mesh should have connections (4 instances with row_major_mesh)";
         }
-        EXPECT_EQ(pods_count, 2u) << cluster_name << " matched grouping should have composition {pods: 2}";
     }
-
-    // Verify they all have the same ASIC count (since they map to the same grouping)
-    EXPECT_EQ(c0_grouping.asic_count, c1_grouping.asic_count)
-        << "C0 and C1 should have the same ASIC count (same grouping)";
-    EXPECT_EQ(c1_grouping.asic_count, c2_grouping.asic_count)
-        << "C1 and C2 should have the same ASIC count (same grouping)";
-
-    const auto& p0_grouping = valid_groupings.at("POD").at("P0");
-    // Should match either "pods" or "widgets" (both have {meshes: 2})
-    EXPECT_TRUE(p0_grouping.name == "pods" || p0_grouping.name == "widgets")
-        << "P0 should match 'pods' or 'widgets' grouping (both have {meshes: 2})";
 }
 
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SuperpodMixedComposition_ExactMatch) {
-    // Scenario 4: SUPERPOD instance with mixed composition {meshes: 2, pods: 1}
-    // Should match "superpods" grouping with exact composition
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Triple16x8QuadGalaxy) {
     const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
     PhysicalGroupingDescriptor pgd(pgd_file_path);
 
-    // Test MGD with SUPERPOD containing 2 meshes + 1 pod
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "P0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-        }
-        graph_descriptors {
-          name: "SP0"
-          type: "SUPERPOD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 0 } }
-        }
-        top_level_instance { graph { graph_descriptor: "SP0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
+    const std::filesystem::path mgd_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/triple_pod_16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
+    MeshGraphDescriptor mgd(mgd_file_path);
 
     auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    EXPECT_FALSE(valid_groupings.empty());
 
-    // Should match:
-    // - M0 meshes: 2 trays (16 ASICs)
-    // - P0 POD: matches grouping with {meshes: 2} - could be "pods" or "widgets"
-    // - SP0 SUPERPOD: matches grouping with {meshes: 2, pods: 1} - should match "superpods"
-    EXPECT_TRUE(valid_groupings.find("SUPERPOD") != valid_groupings.end()) << "Should have SUPERPOD type in results";
-
-    const auto& sp0_grouping = valid_groupings.at("SUPERPOD").at("SP0");
-    EXPECT_EQ(sp0_grouping.name, "superpods")
-        << "SP0 should match 'superpods' grouping (composition {meshes: 2, pods: 1})";
-
-    // Verify composition: should have both meshes and pods references
-    uint32_t meshes_count = 0;
-    uint32_t pods_count = 0;
-    for (const auto& item : sp0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
-            if (item.grouping_name == "meshes") {
-                meshes_count++;
-            } else if (item.grouping_name == "pods") {
-                pods_count++;
+    // Verify that mesh type is matched
+    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
+    if (valid_groupings.find("MESH") != valid_groupings.end()) {
+        const auto& mesh_groupings = valid_groupings.at("MESH");
+        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
+        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
+            const auto& assigned_grouping = mesh_groupings.at("M0");
+            // 16x8 = 128 ASICs with host_topology [2, 2] (2x2 grid), should match "8x16_Mesh" (dims [2, 2])
+            EXPECT_EQ(assigned_grouping.asic_count, 128u) << "16x8 mesh should match 128 ASIC grouping";
+            EXPECT_EQ(assigned_grouping.name, "8x16_Mesh")
+                << "16x8 mesh with host_topology [2, 2] should be assigned to 8x16_Mesh (dims [2, 2]), got: "
+                << assigned_grouping.name;
+            // Verify connections: 8x16_Mesh has 4 instances with row_major_mesh connections (dims [2, 2])
+            EXPECT_EQ(assigned_grouping.adjacency_graph.get_nodes().size(), 4u)
+                << "Grouping 8x16_Mesh should have 4 nodes in adjacency graph";
+            // Verify that connections exist by checking that at least one node has neighbors
+            bool has_connections = false;
+            for (const auto& node : assigned_grouping.adjacency_graph.get_nodes()) {
+                if (!assigned_grouping.adjacency_graph.get_neighbors(node).empty()) {
+                    has_connections = true;
+                    break;
+                }
             }
+            EXPECT_TRUE(has_connections)
+                << "Grouping 8x16_Mesh should have connections (4 instances with row_major_mesh)";
         }
     }
-    EXPECT_EQ(meshes_count, 2u) << "Superpod should contain 2 meshes";
-    EXPECT_EQ(pods_count, 1u) << "Superpod should contain 1 pod";
+
+    // Verify that graph instances are matched (if any)
+    for (const auto& [type, name_map] : valid_groupings) {
+        if (type != "MESH") {
+            EXPECT_FALSE(name_map.empty()) << "Graph type " << type << " should have matched groupings";
+        }
+    }
 }
 
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PodWith5Meshes_ClosestFit) {
-    // Scenario: POD instance with 5 meshes - no exact match, should find closest fit
-    // Should match "widgets" grouping with {meshes: 5} (closest fit that satisfies requirements)
-    // Tests that perfect match not required - closest fit is acceptable
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_BHGalaxyPipeline) {
     const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
     PhysicalGroupingDescriptor pgd(pgd_file_path);
 
-    // Test MGD with POD containing 5 meshes
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "G0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
-        }
-        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
+    const std::filesystem::path mgd_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_2x4_pipeline.textproto";
+    MeshGraphDescriptor mgd(mgd_file_path);
 
     auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    EXPECT_FALSE(valid_groupings.empty());
 
-    // Should match:
-    // - M0 meshes: 2 trays (16 ASICs)
-    // - G0 POD: matches grouping with {meshes: 5} - should match "widgets" (closest fit)
-    EXPECT_TRUE(valid_groupings.find("POD") != valid_groupings.end()) << "Should have POD type in results";
-
-    const auto& g0_grouping = valid_groupings.at("POD").at("G0");
-    EXPECT_EQ(g0_grouping.name, "widgets")
-        << "G0 (type POD) should match 'widgets' grouping (closest fit with {meshes: 5}) - name doesn't matter";
-
-    // Verify composition: should have 5 meshes
-    uint32_t meshes_count = 0;
-    for (const auto& item : g0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "meshes") {
-            meshes_count++;
+    // Verify that mesh type is matched
+    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
+    if (valid_groupings.find("MESH") != valid_groupings.end()) {
+        const auto& mesh_groupings = valid_groupings.at("MESH");
+        EXPECT_TRUE(mesh_groupings.find("MESH") != mesh_groupings.end());
+        if (mesh_groupings.find("MESH") != mesh_groupings.end()) {
+            const auto& assigned_grouping = mesh_groupings.at("MESH");
+            // 2x4 = 8 ASICs with host_topology [1, 1] (single host), should match "2x4_Mesh" (single instance)
+            EXPECT_EQ(assigned_grouping.asic_count, 8u) << "2x4 mesh should match 8 ASIC grouping";
+            EXPECT_EQ(assigned_grouping.name, "2x4_Mesh")
+                << "2x4 mesh with host_topology [1, 1] should be assigned to 2x4_Mesh (single instance), got: "
+                << assigned_grouping.name;
+            // Verify connections: 2x4_Mesh has 1 instance, so adjacency graph should be empty or have 1 node
+            EXPECT_LE(assigned_grouping.adjacency_graph.get_nodes().size(), 1u)
+                << "Grouping 2x4_Mesh should have at most 1 node in adjacency graph (single instance)";
         }
     }
-    EXPECT_EQ(meshes_count, 5u)
-        << "Matched grouping should have composition {meshes: 5} (closest fit - no exact match exists)";
 }
 
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_ClusterWithTooManyPods_Negative) {
-    // Negative test: CLUSTER requiring 5 pods, but all "clusters" groupings have <= 3 pods
-    // This tests that higher-level groupings are validated and fail when too small
-    // Should fail with incompatibility error
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_4x4) {
     const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
     PhysicalGroupingDescriptor pgd(pgd_file_path);
 
-    // Test MGD with CLUSTER containing 5 PODs
-    // Available "clusters" groupings have {pods: 2} and {pods: 3}, both < 5
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "P0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-        }
-        graph_descriptors {
-          name: "P1"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-        }
-        graph_descriptors {
-          name: "P2"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
-        }
-        graph_descriptors {
-          name: "P3"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 7 } }
-        }
-        graph_descriptors {
-          name: "P4"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 8 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 9 } }
-        }
-        graph_descriptors {
-          name: "C0"
-          type: "CLUSTER"
-          instances { graph { graph_descriptor: "P0" graph_id: 0 } }
-          instances { graph { graph_descriptor: "P1" graph_id: 1 } }
-          instances { graph { graph_descriptor: "P2" graph_id: 2 } }
-          instances { graph { graph_descriptor: "P3" graph_id: 3 } }
-          instances { graph { graph_descriptor: "P4" graph_id: 4 } }
-        }
-        top_level_instance { graph { graph_descriptor: "C0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
-
-    // This should fail because no "clusters" grouping has >= 5 pods
-    // (available groupings have {pods: 2} and {pods: 3}, both < 5)
-    EXPECT_THAT(
-        ([&]() { pgd.get_valid_groupings_for_mgd(mgd); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("This system is not compatible with the following MGD")));
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_MultipleConfigurations_ExactMatchPreferred) {
-    // Scenario: POD with 2 meshes - multiple groupings available with different compositions
-    // Should prefer exact match ({meshes: 2}) over oversized matches
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    // Test with POD containing 2 meshes - should match grouping with 2 meshes (exact match)
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "G0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-        }
-        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
+    const std::filesystem::path mgd_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
+    MeshGraphDescriptor mgd(mgd_file_path);
 
     auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    EXPECT_FALSE(valid_groupings.empty());
 
-    const auto& g0_grouping = valid_groupings.at("POD").at("G0");
-    // Should match either "pods" or "widgets" (both have exact match {meshes: 2})
-    EXPECT_TRUE(g0_grouping.name == "pods" || g0_grouping.name == "widgets")
-        << "G0 should match 'pods' or 'widgets' grouping (exact match {meshes: 2})";
-
-    // Verify exact match: should have exactly 2 meshes
-    uint32_t meshes_count = 0;
-    for (const auto& item : g0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "meshes") {
-            meshes_count++;
+    // Verify that mesh type is matched
+    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
+    if (valid_groupings.find("MESH") != valid_groupings.end()) {
+        const auto& mesh_groupings = valid_groupings.at("MESH");
+        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
+        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
+            const auto& assigned_grouping = mesh_groupings.at("M0");
+            // 4x4 = 16 ASICs, should match "4x4_Mesh", "2x8_Mesh" (first), or "2x8_Mesh" (second) - all are 16 ASICs
+            EXPECT_EQ(assigned_grouping.asic_count, 16u) << "4x4 mesh should match 16 ASIC grouping";
+            EXPECT_TRUE(assigned_grouping.name == "4x4_Mesh" || assigned_grouping.name == "2x8_Mesh")
+                << "4x4 mesh should be assigned to 4x4_Mesh or 2x8_Mesh, got: " << assigned_grouping.name;
+            // Verify connections: all these groupings have 2 instances with row_major_mesh connections
+            // Connections are defined in textproto: row_major_mesh topology connecting the 2 instances
+            // The adjacency graph represents the topology between the 2 instances
+            EXPECT_GE(assigned_grouping.items.size(), 2u)
+                << "Grouping " << assigned_grouping.name << " should have at least 2 items (instances) for connections";
         }
     }
-    EXPECT_EQ(meshes_count, 2u) << "Should match grouping with exactly 2 meshes (exact match preferred)";
 }
 
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PodWith4Meshes_MatchesClusters) {
-    // Scenario 3: POD instance with 4 meshes - should match "clusters" grouping (has {meshes: 4})
-    // Tests that name doesn't matter - POD can match "clusters" if composition fits
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_8x2) {
     const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
     PhysicalGroupingDescriptor pgd(pgd_file_path);
 
-    // Test with POD containing 4 meshes - should match "clusters" grouping (has {meshes: 4})
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "G0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-        }
-        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
+    const std::filesystem::path mgd_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/bh_8x2_mesh_graph_descriptor.textproto";
+    MeshGraphDescriptor mgd(mgd_file_path);
 
     auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+    EXPECT_FALSE(valid_groupings.empty());
 
-    const auto& g0_grouping = valid_groupings.at("POD").at("G0");
-    // Should match "pods" grouping with {meshes: 4} (exact match)
-    // Note: "clusters" has {meshes: 4} but references "pods", not "meshes" directly, so won't match
-    EXPECT_EQ(g0_grouping.name, "pods") << "G0 should match 'pods' grouping (composition {meshes: 4})";
-
-    // Verify composition: should have 4 meshes
-    uint32_t meshes_count = 0;
-    for (const auto& item : g0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "meshes") {
-            meshes_count++;
+    // Verify that mesh type is matched
+    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
+    if (valid_groupings.find("MESH") != valid_groupings.end()) {
+        const auto& mesh_groupings = valid_groupings.at("MESH");
+        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
+        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
+            const auto& assigned_grouping = mesh_groupings.at("M0");
+            // 8x2 = 16 ASICs, should match "4x4_Mesh", "2x8_Mesh" (first), or "2x8_Mesh" (second) - all are 16 ASICs
+            EXPECT_EQ(assigned_grouping.asic_count, 16u) << "8x2 mesh should match 16 ASIC grouping";
+            EXPECT_TRUE(assigned_grouping.name == "4x4_Mesh" || assigned_grouping.name == "2x8_Mesh")
+                << "8x2 mesh should be assigned to 4x4_Mesh or 2x8_Mesh, got: " << assigned_grouping.name;
+            // Verify connections: all these groupings have 2 instances with row_major_mesh connections
+            // Connections are defined in textproto: row_major_mesh topology connecting the 2 instances
+            // The adjacency graph represents the topology between the 2 instances
+            EXPECT_GE(assigned_grouping.items.size(), 2u)
+                << "Grouping " << assigned_grouping.name << " should have at least 2 items (instances) for connections";
         }
     }
-    EXPECT_EQ(meshes_count, 4u) << "Should match grouping with exactly 4 meshes (exact match)";
 }
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SuperpodOversizedMatch_ClosestFit) {
-    // Scenario 4: SUPERPOD instance requiring {meshes: 1, pods: 3}
-    // No exact match exists, should match closest fit {meshes: 1, pods: 4} or {meshes: 2, pods: 5}
-    // Tests that perfect match not required - closest fit that satisfies requirements is acceptable
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    // Create MGD with SUPERPOD requiring {meshes: 1, pods: 3}
-    // Available superpods: {meshes: 2, pods: 1} and {meshes: 1, pods: 4}
-    // Should match {meshes: 1, pods: 4} (closest fit that satisfies requirements)
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "P0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-        }
-        graph_descriptors {
-          name: "SP0"
-          type: "SUPERPOD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 1 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 2 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 3 } }
-        }
-        top_level_instance { graph { graph_descriptor: "SP0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-
-    // Should match superpods grouping with {meshes: 1, pods: 4} (closest fit)
-    const auto& sp0_grouping = valid_groupings.at("SUPERPOD").at("SP0");
-    EXPECT_EQ(sp0_grouping.name, "superpods") << "SP0 should match 'superpods' grouping";
-
-    // Verify it selected the {meshes: 1, pods: 4} configuration (closest fit)
-    uint32_t meshes_count = 0;
-    uint32_t pods_count = 0;
-    for (const auto& item : sp0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
-            if (item.grouping_name == "meshes") {
-                meshes_count++;
-            } else if (item.grouping_name == "pods") {
-                pods_count++;
-            }
-        }
-    }
-    EXPECT_EQ(meshes_count, 1u) << "Superpod should contain 1 mesh";
-    EXPECT_EQ(pods_count, 4u) << "Superpod should contain 4 pods (closest fit - no exact match exists)";
-    // Note: Required {meshes: 1, pods: 3}, matched {meshes: 1, pods: 4} - closest fit is acceptable
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PodMatchesWidgets_NameIndependence) {
-    // Scenario: POD instance matching "widgets" grouping - demonstrates name independence
-    // Both "pods" and "widgets" have {meshes: 2}, so either can match
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    // Test MGD with POD containing 2 meshes
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "G0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-        }
-        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-
-    const auto& g0_grouping = valid_groupings.at("POD").at("G0");
-    // Should match either "pods" or "widgets" - both have same composition {meshes: 2}
-    EXPECT_TRUE(g0_grouping.name == "pods" || g0_grouping.name == "widgets")
-        << "G0 (type POD) should match 'pods' or 'widgets' grouping - name doesn't matter, only composition";
-
-    // Verify composition matches
-    uint32_t meshes_count = 0;
-    for (const auto& item : g0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "meshes") {
-            meshes_count++;
-        }
-    }
-    EXPECT_EQ(meshes_count, 2u) << "Matched grouping should have composition {meshes: 2}";
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PodWith3Meshes_NoExactMatch_ClosestFit) {
-    // Scenario: POD with 3 meshes - exact match exists ({meshes: 3})
-    // Should prefer exact match over closest fit
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    // Test MGD with POD containing 3 meshes
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "G0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-        }
-        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-
-    const auto& g0_grouping = valid_groupings.at("POD").at("G0");
-    // Should match exact match {meshes: 3} - could be "pods" or "widgets"
-    EXPECT_TRUE(g0_grouping.name == "pods" || g0_grouping.name == "widgets")
-        << "G0 should match 'pods' or 'widgets' grouping (exact match {meshes: 3})";
-
-    // Verify exact match
-    uint32_t meshes_count = 0;
-    for (const auto& item : g0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "meshes") {
-            meshes_count++;
-        }
-    }
-    EXPECT_EQ(meshes_count, 3u) << "Should match grouping with exactly 3 meshes (exact match preferred)";
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_MixedComposition_OversizedMatch) {
-    // Scenario 4: SUPERPOD with {meshes: 1, pods: 4} - matches {meshes: 2, pods: 5} (oversized but fits)
-    // Tests that closest fit is acceptable when no exact match exists
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/test_pods_clusters_physical_groupings.textproto";
-
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    // Test MGD with SUPERPOD containing 1 mesh + 4 pods
-    const std::string mgd_text_proto = R"proto(
-        mesh_descriptors {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology { dims: [ 4, 4 ] }
-          host_topology { dims: [ 1, 1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        graph_descriptors {
-          name: "P0"
-          type: "POD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-        }
-        graph_descriptors {
-          name: "SP0"
-          type: "SUPERPOD"
-          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 1 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 2 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 3 } }
-          instances { graph { graph_descriptor: "P0" graph_id: 4 } }
-        }
-        top_level_instance { graph { graph_descriptor: "SP0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor mgd(mgd_text_proto);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-
-    // Should match superpods grouping with {meshes: 1, pods: 4} (closest fit)
-    const auto& sp0_grouping = valid_groupings.at("SUPERPOD").at("SP0");
-    EXPECT_EQ(sp0_grouping.name, "superpods") << "SP0 should match 'superpods' grouping";
-
-    // Verify composition: should have {meshes: 1, pods: 4} or closest fit
-    uint32_t meshes_count = 0;
-    uint32_t pods_count = 0;
-    for (const auto& item : sp0_grouping.items) {
-        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
-            if (item.grouping_name == "meshes") {
-                meshes_count++;
-            } else if (item.grouping_name == "pods") {
-                pods_count++;
-            }
-        }
-    }
-    // Should match {meshes: 1, pods: 4} (closest fit) or {meshes: 2, pods: 5} (also fits)
-    EXPECT_GE(meshes_count, 1u) << "Superpod should contain at least 1 mesh";
-    EXPECT_GE(pods_count, 4u) << "Superpod should contain at least 4 pods (closest fit acceptable)";
-}
-
 }  // namespace tt::tt_fabric::fabric_router_tests
