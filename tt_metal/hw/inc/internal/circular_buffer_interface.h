@@ -82,9 +82,11 @@ struct LocalCBInterface {
     // used by packer for in-order packing
     uint32_t fifo_wr_tile_ptr;
 
+#ifdef ARCH_QUASAR
     // Quasar only: Tile indices tracking how many tiles from CB base the rd/wr pointers are
     uint32_t fifo_rd_tile_idx;
     uint32_t fifo_wr_tile_idx;
+#endif
 };
 
 struct CBInterface {

@@ -66,13 +66,14 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
             if (init_wr_tile_ptr) {
                 local_interface.fifo_wr_tile_ptr = 0;
             }
-            // Initialize tile indices to 0 (at start of CB)
+#ifdef ARCH_QUASAR
             if (read) {
                 local_interface.fifo_rd_tile_idx = 0;
             }
             if (write) {
                 local_interface.fifo_wr_tile_idx = 0;
             }
+#endif
             cb_id++;
         } else {
             circular_buffer_config_addr += UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
@@ -105,14 +106,14 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
         ".if %[init_wr_tile_ptr]\n\t"
         "    sw zero, %[off_fifo_tile_wr_ptr](%[liptr])\n\t"  // local_interface.fifo_wr_tile_ptr = 0;
         ".endif\n\t"
-        // Initialize tile indices to 0 (at start of CB)
+#ifdef ARCH_QUASAR
         ".if %[read]\n\t"
         "    sw zero, %[off_fifo_rd_tile_idx](%[liptr])\n\t"  // local_interface.fifo_rd_tile_idx = 0;
         ".endif\n\t"
         ".if %[write]\n\t"
         "    sw zero, %[off_fifo_wr_tile_idx](%[liptr])\n\t"  // local_interface.fifo_wr_tile_idx = 0;
         ".endif\n\t"
-
+#endif
         // Advance to next cb config.
         "    addi %[cbconfig], %[cbconfig], %[circular_buffer_byte_size]\n\t"
 
@@ -170,8 +171,10 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
           [off_fifo_wr_ptr] "i"(offsetof(LocalCBInterface, fifo_wr_ptr)),
           [off_tiles_acked] "i"(offsetof(LocalCBInterface, tiles_acked_received_init)),
           [off_fifo_tile_wr_ptr] "i"(offsetof(LocalCBInterface, fifo_wr_tile_ptr)),
+#ifdef ARCH_QUASAR
           [off_fifo_rd_tile_idx] "i"(offsetof(LocalCBInterface, fifo_rd_tile_idx)),
           [off_fifo_wr_tile_idx] "i"(offsetof(LocalCBInterface, fifo_wr_tile_idx)),
+#endif
           [local_cb_interface_size] "i"(sizeof(CBInterface)),
           [circular_buffer_byte_size] "i"(UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t)),
           [read] "i"(read ? 1 : 0),
