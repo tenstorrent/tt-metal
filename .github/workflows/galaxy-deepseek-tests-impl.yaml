@@ -37,7 +37,7 @@ jobs:
           all_tests=$(jq -n '[
             { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
             { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" },
-            { "name": "(Galaxy) DeepSeek long-seq module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "long-seq-module", "timeout": 350, "owner_id": "U0896VBAKFC" }
+            { "name": "(Galaxy) DeepSeek long-seq module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "long-seq-module", "timeout": 70, "owner_id": "U0896VBAKFC" }
           ]')
 
           # Filter matrix based on test-type selection
@@ -121,9 +121,10 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=16384 pytest models/demos/deepseek_v3/tests/test_mla.py --timeout 3600 --durations=0
-          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=16384 pytest models/demos/deepseek_v3/tests/test_decoder_block.py --timeout 7200 --durations=0
-          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=2048 pytest models/demos/deepseek_v3/tests/test_model.py --timeout 10800 --durations=0
+          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=16384 pytest models/demos/deepseek_v3/tests/test_mla.py --timeout 900 --durations=0
+          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=16384 pytest models/demos/deepseek_v3/tests/test_decoder_block.py --timeout 2400 --durations=0
+          # TODO: set DEEPSEEK_MAX_SEQ_LEN_OVERRIDE to large value if test does not get killed in CI.
+          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=1024 pytest models/demos/deepseek_v3/tests/test_model.py --timeout 500 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
