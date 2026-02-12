@@ -622,7 +622,7 @@ Perform the following steps to complete the exercise:
    You should see that the program now hangs, running indefinitely without printing a final result or explicit error.
    This kind of hang is typical for incorrect NoC addressing or synchronization errors.
 
-#. Terminate the program (using ``Ctrl + C``) and execute the ``tt-smi -r`` command to reset the device.
+#. Terminate the program (using ``Ctrl + C``) and execute the ``tt-smi -r`` command from command line to reset the device.
    It is always a good idea to reset the device after a hang to ensure that the device is in a known good state.
 
 #. Rerun the program with Watcher enabled with a period of 10 seconds:
@@ -747,132 +747,41 @@ Perform the following steps to complete the exercise:
    then build and run the new program to confirm that it works as expected.
 
 #. Update the host program to include the sender core in the core range when creating the compute and writer kernels.
+   Don't forget to also pass runtime arguments for all cores where the kernels are created, including the sender core.
    Observe that the compute and writer kernels themselves do not need to change at all.
 
-#. Update the host program to pass runtime arguments to the writer kernel for all cores in the core range,
-   including the sender core.
-
 #. Update ``output_data`` and related variables to account for the additional copy from the sender core.
+   After the change, output of the program should be a tensor that contains four copies of the input tensor;
+   one from the sender core and three from the receiver cores.
    Make sure that each core writes to a unique region of the output tensor.
 
+#. Update the ``mcast_sender`` kernel code.
+   The sender acting as a "local receiver" for compute does **not** require introduction of
+   any additional semaphores. This is because the sender already knows when a tile is in its
+   local CB immediately after the DRAM read completes. However, there is one change that needs
+   to be made to the sender kernel: it should not perform any ``cb_wait_front`` or ``cb_pop_front``
+   operations, because the compute kernel will be doing this work.
+   This also means that the sender kernel should not call ``get_read_ptr``, since the read pointer
+   is valid only between ``cb_wait_front`` and ``cb_pop_front`` calls.
+   Instead, the source address for multicast should be the same address that was used for
+   writing the tile to the CB, and multicast should be performed **after** the data has been
+   read from DRAM (i.e., after the first ``noc_async_read_barrier``).
+   Similarly, the CB write address can be used to determine destination address for multicast,
+   because all receiver cores use the same CB write address.
 
-#. Make sure the output indicates correct number of receiver cores and output tiles.
+#. Ensure that result verification code on the host now also verifies the sender's output.
 
-Step 2: Have the sender core also compute on the data
-=====================================================
+#. Build and run your program and verify that it completes successfully.
+   Make sure that the output indicates correct number of receiver cores and output tiles.
 
-Currently the sender core:
+In case you encounter any hangs, don't forget to use the ``tt-smi -r`` command to reset the device
+before running the program again.
 
-* Reads tiles from DRAM into input CB ``c_in0``.
-* Multicasts tiles to receivers.
-* Does not pass these tiles to the compute kernel on the sender core.
-
-Your goal is to modify the program so that:
-
-* The sender core also runs the **same compute and writer kernels** as receivers (copying tiles and writing them to its own region in the output tensor).
-* After the change, output of the program will be a tensor that contains four copies of the input tensor; one from the sender core and three from the receiver cores.
-
-The simplest way to achieve this is for the sender core to run the same compute kernel as the receivers.
-This means that it will use the same CB that all other cores use for input tiles, which is ``c_0``.
-Observe that this is the same CB that is used by the sender as a source of data for multicast.
-The ``mcast_sender`` kernel code can stay largely the same, with one key difference: it should not
-perform any ``cb_wait_front`` or ``cb_pop_front`` operations, because the compute kernel will be doing this work.
-
-
- already configured to multicast tiles from ``c_0`` to the receiver cores.
-
-TODO: A figure would come handy here!!!
-
-The main required change to achieve the objective of this exercise is to update the host program to include the sender
-core in the core range when creating the compute and writer kernels and pass the appropriate runtime arguments.
-The writer kernel itslef does not need to change at all.
-Circular buffers are already created on all cores, so there is no change required to the circular buffer setup.
-The existing semaphore protocol already supports sending tiles from sender to receivers.
-The sender acting as a "local receiver" for compute does **not** require introduction of additional semaphores.
-This is because the sender already knows when a tile is in its local CB (right after the DRAM read completes).
-     * The compute kernel on the sender simply waits for tiles in ``c_in0`` in the same way as receivers.
+In this exercise you have extended the multicast example program to include the sender core in the computation.
+This is a common pattern in real applications, where we wish to maximize the utilization of the sender core.
 
 
 
-
-Follow these steps to complete the exercise:
-
-#. Update the host program to:
-   * Include the sender core in the core range when creating the compute and writer kernels.
-   * Include the sender core in the core range when setting up the runtime arguments for the writer kernel.
-   * Update ``output_data`` and related variables to account for the additional copy from the sender core.
-     Make sure that each core writes to a unique region of the output tensor.
-   * If you created a new folder for this exercise, make sure to update ``CreateKernel`` with paths to kernels in the new folder.
-
-#. Update the ``mcast_sender`` kernel code to not perform any ``cb_wait_front`` or ``cb_pop_front`` operations.
-   Since the code won't perform ``cb_wait_front``, this also means that it cannot call ``get_read_ptr``.
-   Instead, the source address for multicast should be the same address that was used for writing the tile to the CB.
-
-#. Ensure that the sender core's CB usage matches receivers:
-   * The sender already uses ``c_in0`` to hold input tiles.
-   * For the compute and writer kernels, ensure they are created to run on:
-     * All cores that should produce output (including the sender).
-   * Make sure the CB used for output tiles exists and has the same size on the sender as on receivers.
-
-High level pseudocode for host side changes:
-
-.. code-block:: text
-
-   define logical cores:
-       sender_logical = (0, 0)
-       receiver_cores_logical = (1,0) .. (3,0)
-       all_compute_cores = (0,0) .. (3,0)   # now includes sender
-
-   create CBs (input/output) on all_compute_cores
-
-   create mcast_sender kernel on sender_logical
-   create mcast_receiver kernel on receiver_cores_logical
-
-   create tiles_copy compute kernel on all_compute_cores
-   create write_tiles kernel on all_compute_cores
-
-   for each core in all_compute_cores:
-       assign a unique receiver_idx (0..3) for write_tiles runtime args
-
-#. Adjust semaphores:
-   * The existing semaphore protocol already supports sending tiles from sender to receivers.
-   * The sender acting as a "local receiver" for compute does **not** need additional semaphores:
-     * The sender already knows when a tile is in its local CB (right after the DRAM read completes).
-     * The compute kernel on the sender simply waits for tiles in ``c_in0`` in the same way as receivers.
-   * Ensure CB sizes are sufficient for:
-     * Overlapping DRAM reads and NoC transfers.
-     * Overlapping NoC transfers and compute on all participating cores.
-
-Step 3: Update verification to include the sender's output
-==========================================================
-
-The host currently verifies only the receiver outputs. Modify verification so that:
-
-1. The sender's output data is included in the DRAM tensor that you read back.
-2. The reference comparison checks **all 4 copies**:
-
-   * If you use a layout where each core writes ``n_tiles`` tiles to a consecutive region:
-     * Core index ``0`` writes tiles ``0..n_tiles-1``.
-     * Core index ``1`` writes tiles ``n_tiles..2*n_tiles-1``.
-     * And so on.
-
-3. The verification logic should report whether:
-
-   * The sender's copy matches the reference.
-   * Each receiver's copy matches the reference.
-
-At the end of Exercise 1, you should have:
-
-* A working multicast example where:
-  * One core reads from DRAM.
-  * All four cores (including the sender) receive the same tiles and perform identical computation.
-* A clear understanding of how:
-  * NoC multicast distributes data across cores.
-  * Semaphores synchronize sender and receivers.
-  * CBs and double buffering fit into the pipeline.
-
-
-Remind students to use ``tt-smi -r`` to reset the device after encountering hangs/issues.
 
 
 Applying Multicast to Multi Core Matmul
@@ -1197,7 +1106,7 @@ To maintain correctness:
 
 As long as these two conditions are enforced, double buffering and multicast coexist correctly with slab-based processing.
 
-Exercise 2: Multi Core Matrix Multiplication with Multicast and Slabs
+Exercise 4: Multi Core Matrix Multiplication with Multicast and Slabs
 *********************************************************************
 
 In this exercise, you will start from your **Exercise 2 solution from Lab 2** (multi core matrix multiplication with blocked data reuse using slabs) and extend it to:
