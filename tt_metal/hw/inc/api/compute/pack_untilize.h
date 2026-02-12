@@ -205,7 +205,7 @@ ALWI void pack_untilize_dest(
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-        block_rt_dim, ocb, face_r_dim, 4, block_c_index, tile_dst_rt_offset)));
+        block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
 }
 
 // clang-format off
