@@ -9,11 +9,18 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
 
 namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
 
 namespace ttnn {
+
+DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch) {
+    bool approx_mode = true;
+    bool fp32_acc = false;
+    return init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc);
+}
 
 Tensor rms_norm(
     const Tensor& input_tensor,
@@ -48,8 +55,7 @@ Tensor rms_norm(
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+    auto kernel_config_val = compute_kernel_config.value_or(rmsnorm_default_compute_config(arch));
     return ttnn::prim::layer_norm(
         input_tensor,
         epsilon,
@@ -57,7 +63,7 @@ Tensor rms_norm(
         bias,
         residual_input_tensor,
         output_memory_config,
-        program_config.value_or(ttnn::prim::create_program_config(input_tensor.shard_spec())),
+        program_config.value_or(ttnn::prim::create_layernorm_program_config(input_tensor.shard_spec())),
         kernel_config_val,
         std::nullopt,  // dtype
         prim::LayerNormType::RMSNORM);

@@ -159,6 +159,17 @@ target_sources(
         core/tensor/to_string.cpp
         core/tensor/py_to_tt_tensor.cpp
 )
+
+# graph_argument_serializer.cpp takes ~142s to compile due to combinatorial template
+# explosion (~48 types × ~60 specializations each). Exclude it from unity builds so it
+# compiles as its own TU in parallel, rather than blocking the entire unity batch.
+set_source_files_properties(
+    core/graph/graph_argument_serializer.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+
 target_include_directories(
     ttnn_core
     PUBLIC

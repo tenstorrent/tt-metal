@@ -202,6 +202,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:
+      enabled-skus: "wh_llmbox"
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -213,6 +214,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
+      enabled-skus: "wh_llmbox_perf"
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -224,6 +226,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-perf-tests-impl.yaml
     with:
+      enabled-skus: "wh_llmbox_perf"
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -235,6 +238,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:
+      enabled-skus: "wh_llmbox"
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -246,6 +250,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-e2e-tests-impl.yaml
     with:
+      enabled-skus: "wh_llmbox"
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

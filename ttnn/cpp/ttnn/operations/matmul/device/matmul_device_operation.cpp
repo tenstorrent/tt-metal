@@ -972,11 +972,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         chosen_program_config);
 }
 
-void MatmulDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& args) {
-    validate_on_program_cache_miss(attributes, args);
-}
-
 MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     using namespace tt::tt_metal;

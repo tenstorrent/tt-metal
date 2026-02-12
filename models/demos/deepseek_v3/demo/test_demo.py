@@ -13,7 +13,8 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
 
 
 @pytest.mark.parametrize("repeat_batches", [2])
-def test_demo(repeat_batches):
+@pytest.mark.timeout(900)
+def test_demo(repeat_batches, force_recalculate_weight_config):
     """
     Stress test the DeepSeek v3 demo with prompts loaded from JSON file, 2x runs.
     Uses only 5 layers (override_num_layers=5) for faster CI execution.
@@ -33,6 +34,7 @@ def test_demo(repeat_batches):
         max_new_tokens=128,
         override_num_layers=5,
         repeat_batches=repeat_batches,
+        force_recalculate=force_recalculate_weight_config,
     )
 
     # Check output

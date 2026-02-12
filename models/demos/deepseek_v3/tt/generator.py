@@ -87,6 +87,7 @@ class DeepseekGenerator:
         enable_mem_profile: bool = False,
         signpost: bool = False,
         prefill_max_tokens: int | None = None,
+        force_recalculate: bool = False,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -153,6 +154,7 @@ class DeepseekGenerator:
         self.enable_mem_profile = enable_mem_profile
         self.signpost = signpost
         self.prefill_max_tokens = prefill_max_tokens
+        self.force_recalculate = force_recalculate
         logger.info(f"Enable trace: {self.enable_trace}")
 
         # Initialize rope_setup once
@@ -193,7 +195,7 @@ class DeepseekGenerator:
             hf_config=self.hf_config,
             weight_cache_path=weight_cache_path,
             mesh_device=self.mesh_device,
-            force_recalculate=False,
+            force_recalculate=self.force_recalculate,
             random_weights=self.random_weights,
             model_path=self.model_path,
             single_layer=self.single_layer,

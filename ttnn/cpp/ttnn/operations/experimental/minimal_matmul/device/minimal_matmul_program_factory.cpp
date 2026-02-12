@@ -523,6 +523,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             output_tensors[0].dtype());
     }
     compute_defines.merge(compute_activation_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
     auto compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",

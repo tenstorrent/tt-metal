@@ -24,11 +24,6 @@ LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_pro
     return LayerNormMultiCoreProgramFactory{};
 }
 
-void LayerNormDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input;
@@ -418,7 +413,8 @@ Tensor layer_norm(
     const std::optional<DataType>& dtype,
     LayerNormType norm_type,
     DistributedLayerNormStage distributed_norm_stage,
-    const std::optional<const Tensor>& stats) {
+    const std::optional<const Tensor>& stats,
+    const std::optional<const Tensor>& recip_tensor) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -434,6 +430,7 @@ Tensor layer_norm(
         .weight = weight,
         .bias = bias,
         .stats = stats,
+        .recip_tensor = recip_tensor,
     };
 
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);

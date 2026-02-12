@@ -488,23 +488,27 @@ class TestMemoryEfficientRunner:
     def test_no_intermediate_backward_functions(self):
         """Test that intermediate backward functions are not recorded."""
         input = ttml.autograd.Tensor.from_numpy(
-            np.random.randn(1, 1, 1, 8).astype(ml_dtypes.bfloat16),
+            np.random.randn(1, 1, 32, 32).astype(ml_dtypes.bfloat16),
+            layout=ttnn.Layout.TILE,
+        )
+        mask = ttml.autograd.Tensor.from_numpy(
+            np.random.randn(1, 1, 32, 32).astype(ml_dtypes.bfloat16),
             layout=ttnn.Layout.TILE,
         )
 
         captured = {}
 
-        def forward_fn(input):
+        def forward_fn(input, m):
             inter = ttml.ops.binary.mul(input, np.random.rand())
             captured["inter"] = inter
             return ttml.ops.unary.relu(inter)
 
         # Baseline
-        _ = forward_fn(input)
+        _ = forward_fn(input, mask)
         captured["inter"].backward(retain_graph=False)
 
         # Memory-efficient runner
-        _ = memory_efficient_runner(forward_fn, input)
+        _ = memory_efficient_runner(forward_fn, input, mask)
 
         with pytest.raises(RuntimeError):
             captured["inter"].backward(retain_graph=False)
