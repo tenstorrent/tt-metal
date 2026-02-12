@@ -254,8 +254,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
 
     std::vector<std::vector<CoreCoord>> mcast_groups;
     std::vector<std::vector<CoreCoord>> mcast_virtual_groups;
-    mcast_groups.reserve(mcast_sender_core_ranges_all.ranges().size());
-    mcast_virtual_groups.reserve(mcast_sender_core_ranges_all.ranges().size());
+    mcast_groups.reserve(mcast_sender_core_ranges_all.size());
+    mcast_virtual_groups.reserve(mcast_sender_core_ranges_all.size());
     int group_index = -1;
     for (size_t i = 0; i < core_coords.size(); ++i) {
         if (mcast_sender_core_ranges_all.contains(CoreRange(core_coords[i]))) {
