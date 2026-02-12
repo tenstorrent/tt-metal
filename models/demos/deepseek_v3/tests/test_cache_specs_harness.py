@@ -21,12 +21,10 @@ import ttnn
 from models.demos.deepseek_v3.utils import config_helpers
 
 SPECS_JSONL_ENV_VAR = "DEEPSEEK_V3_CACHE_SPECS_JSONL"
+LEGACY_SPECS_JSONL_ENV_VAR = "DEEPSEEK_V3_DUMP_CACHE_SPECS"
 REPORT_JSON_ENV_VAR = "DEEPSEEK_V3_CACHE_SPECS_REPORT_JSON"
 
-DEFAULT_SPECS_GLOB = "deepseek_v3_cache_specs*.jsonl"
 DEFAULT_REPORT_NAME = "deepseek_v3_cache_specs_report.json"
-
-HARNESS_PATH = Path("./models/demos/deepseek_v3/tmp/deepseek-cache-specs-harness")
 
 
 def product(xs: Iterable[int]) -> int:
@@ -88,35 +86,6 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def find_repo_root(start: Path) -> Path:
-    p = start.resolve()
-    for candidate in (p, *p.parents):
-        if (candidate / "pyproject.toml").exists():
-            return candidate
-    try:
-        return p.parents[4]
-    except Exception:
-        return p.parent
-
-
-def auto_find_specs_jsonl() -> Path | None:
-    repo_root = find_repo_root(Path(__file__))
-    candidates: list[Path] = []
-    for d in (repo_root / "tmp", repo_root / "generated"):
-        if d.exists():
-            candidates.extend(sorted(d.glob(DEFAULT_SPECS_GLOB)))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
-
-
-def explicitly_selected(pytestconfig) -> bool:
-    args = getattr(pytestconfig, "args", []) or []
-    return any("test_cache_specs_harness.py" in str(a) for a in args) or any(
-        "test_replay_cache_tensor_specs" in str(a) for a in args
-    )
-
-
 def signature_for_record(record: dict[str, Any]) -> str:
     signature_obj = {
         "requested_dtype": record.get("requested_dtype"),
@@ -147,20 +116,14 @@ class ReplayResult:
     ],
     indirect=True,
 )
-def test_replay_cache_tensor_specs(mesh_device, device_params, pytestconfig) -> None:
-    specs_path_str = os.getenv(SPECS_JSONL_ENV_VAR)
-    if specs_path_str:
-        specs_path = Path(specs_path_str)
-    else:
-        if not explicitly_selected(pytestconfig):
-            pytest.skip(
-                f"Cache specs harness is opt-in. Re-run selecting this file explicitly, or set ${SPECS_JSONL_ENV_VAR}."
-            )
-        specs_path = auto_find_specs_jsonl()
-        if specs_path is None:
-            pytest.skip(
-                f"No specs JSONL found (looked for '{DEFAULT_SPECS_GLOB}' under <repo>/tmp and <repo>/generated)."
-            )
+@pytest.mark.timeout(1800)
+def test_replay_cache_tensor_specs(mesh_device, device_params) -> None:
+    specs_path_str = os.getenv(SPECS_JSONL_ENV_VAR) or os.getenv(LEGACY_SPECS_JSONL_ENV_VAR)
+    if not specs_path_str:
+        pytest.skip(
+            f"Cache specs harness is opt-in. Set ${SPECS_JSONL_ENV_VAR} (or legacy ${LEGACY_SPECS_JSONL_ENV_VAR})."
+        )
+    specs_path = Path(specs_path_str)
 
     if not specs_path.exists():
         pytest.skip(f"Specs JSONL does not exist: {specs_path}")
@@ -179,6 +142,8 @@ def test_replay_cache_tensor_specs(mesh_device, device_params, pytestconfig) -> 
 
     replay_results: list[ReplayResult] = []
     current_mesh_shape = list(mesh_device.shape)
+
+    harness_path = specs_path.parent / "deepseek-cache-specs-harness.tensorbin"
 
     for sig, record in selected:
         if record.get("mesh_shape") != current_mesh_shape:
@@ -208,7 +173,7 @@ def test_replay_cache_tensor_specs(mesh_device, device_params, pytestconfig) -> 
         try:
             if record.get("torch_impl"):
                 tt_tensor = config_helpers._shard_torch_impl(
-                    path=HARNESS_PATH,
+                    path=harness_path,
                     tensor=torch_tensor,
                     shard_dims=shard_dims,
                     mesh_device=mesh_device,
@@ -219,7 +184,7 @@ def test_replay_cache_tensor_specs(mesh_device, device_params, pytestconfig) -> 
                 )
             else:
                 tt_tensor = config_helpers._shard_device_impl(
-                    path=HARNESS_PATH,
+                    path=harness_path,
                     tensor=torch_tensor,
                     shard_dims=shard_dims,
                     mesh_device=mesh_device,
@@ -254,15 +219,18 @@ def test_replay_cache_tensor_specs(mesh_device, device_params, pytestconfig) -> 
                     status=f"error({type(e).__name__}: {e})",
                 )
             )
-        finally:
-            if tt_tensor is not None:
-                try:
-                    ttnn.deallocate(tt_tensor)
-                except Exception:
-                    pass
+        if tt_tensor is not None:
+            try:
+                ttnn.deallocate(tt_tensor)
+            except Exception as dealloc_err:
+                print(
+                    "[deepseek_v3 cache specs] warning: failed to deallocate tt_tensor: "
+                    f"{type(dealloc_err).__name__}: {dealloc_err}",
+                    file=sys.stderr,
+                )
 
-            del torch_tensor
-            gc.collect()
+        del torch_tensor
+        gc.collect()
 
     report_path_str = os.getenv(REPORT_JSON_ENV_VAR)
     report_path = Path(report_path_str) if report_path_str else (specs_path.parent / DEFAULT_REPORT_NAME)

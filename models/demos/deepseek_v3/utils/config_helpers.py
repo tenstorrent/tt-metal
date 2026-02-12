@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import fcntl
 import itertools
 import json
 import math
@@ -575,7 +574,8 @@ def sub_state_dicts(
 TENSOR_CACHE_EXTENSION = ".tensorbin"
 
 # Cache specs dumping for conversion optimization
-_CACHE_SPECS_DUMP_ENV_VAR = "DEEPSEEK_V3_DUMP_CACHE_SPECS"
+_CACHE_SPECS_DUMP_ENV_VAR = "DEEPSEEK_V3_CACHE_SPECS_JSONL"
+_CACHE_SPECS_DUMP_ENV_VAR_LEGACY = "DEEPSEEK_V3_DUMP_CACHE_SPECS"
 
 
 def _enum_name_or_str(obj: Any) -> str | None:
@@ -649,23 +649,38 @@ def _get_relative_cache_path(path: Path) -> str | None:
 
 def _append_cache_specs_record(record: dict[str, Any]) -> None:
     """Append a cache specs record to the JSONL file specified by the environment variable."""
-    dump_path_str = os.getenv(_CACHE_SPECS_DUMP_ENV_VAR)
+    dump_path_str = os.getenv(_CACHE_SPECS_DUMP_ENV_VAR) or os.getenv(_CACHE_SPECS_DUMP_ENV_VAR_LEGACY)
     if not dump_path_str:
         return
 
     dump_path = Path(dump_path_str)
     try:
         dump_path.parent.mkdir(parents=True, exist_ok=True)
-        with dump_path.open("a") as f:
+        data = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
+        fd = os.open(dump_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        try:
+            fcntl_module = None
             try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                import fcntl as fcntl_module
             except Exception:
-                pass
-            f.write(json.dumps(record, sort_keys=True) + "\n")
-            try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
+                fcntl_module = None
+            if fcntl_module is not None:
+                try:
+                    fcntl_module.flock(fd, fcntl_module.LOCK_EX)
+                except Exception as e:
+                    # Best-effort locking: ignore failures but log for diagnostics.
+                    logger.debug(f"Failed to acquire file lock on {dump_path}: {e}")
+            bytes_written = os.write(fd, data)
+            if bytes_written != len(data):
+                raise OSError(f"Short write while appending cache specs to {dump_path}")
+            if fcntl_module is not None:
+                try:
+                    fcntl_module.flock(fd, fcntl_module.LOCK_UN)
+                except Exception as e:
+                    # Best-effort unlocking: ignore failures but log for diagnostics.
+                    logger.debug(f"Failed to release file lock on {dump_path}: {e}")
+        finally:
+            os.close(fd)
     except Exception as e:
         logger.warning(f"Failed to append cache specs record to {dump_path}: {e}")
 
@@ -746,35 +761,39 @@ def shard_and_save(
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    _append_cache_specs_record(
-        {
-            "event": "deepseek_v3.cache_tensor_spec",
-            "pid": os.getpid(),
-            "cache_file_path": str(path),
-            "cache_file_relpath": _get_relative_cache_path(path),
-            "torch_shape": list(tensor.shape),
-            "torch_dtype": str(tensor.dtype),
-            "requested_dtype": _enum_name_or_str(dtype),
-            "requested_layout": _enum_name_or_str(layout),
-            "requested_memory_config": _memory_config_to_dict(memory_config),
-            "shard_dims": list(shard_dims),
-            "remove_dims": list(remove_dims),
-            "mesh_shape": list(mesh_device.shape),
-            "mesh_num_devices": mesh_device.get_num_devices(),
-            "dtype_is_tilized": dtype in {ttnn.bfloat4_b, ttnn.bfloat8_b},
-            "shard_device_impl_uses_dram_interleaved_workaround": memory_config == ttnn.DRAM_MEMORY_CONFIG,
-            "torch_impl": _torch_impl,
-            "status": "ok",
-            "result_shape": list(ttnn_tensor.shape),
-            "result_dtype": _enum_name_or_str(ttnn_tensor.dtype),
-            "result_layout": _enum_name_or_str(ttnn_tensor.layout),
-            "result_memory_config": _memory_config_to_dict(ttnn_tensor.memory_config()),
-        }
-    )
-
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
-    ttnn.dump_tensor(path, ttnn_tensor)
+    record = {
+        "event": "deepseek_v3.cache_tensor_spec",
+        "pid": os.getpid(),
+        "cache_file_path": str(path),
+        "cache_file_relpath": _get_relative_cache_path(path),
+        "torch_shape": list(tensor.shape),
+        "torch_dtype": str(tensor.dtype),
+        "requested_dtype": _enum_name_or_str(dtype),
+        "requested_layout": _enum_name_or_str(layout),
+        "requested_memory_config": _memory_config_to_dict(memory_config),
+        "shard_dims": list(shard_dims),
+        "remove_dims": list(remove_dims),
+        "mesh_shape": list(mesh_device.shape),
+        "mesh_num_devices": mesh_device.get_num_devices(),
+        "dtype_is_tilized": dtype in {ttnn.bfloat4_b, ttnn.bfloat8_b},
+        "shard_device_impl_uses_dram_interleaved_workaround": memory_config == ttnn.DRAM_MEMORY_CONFIG,
+        "torch_impl": _torch_impl,
+        "status": "ok",
+        "result_shape": list(ttnn_tensor.shape),
+        "result_dtype": _enum_name_or_str(ttnn_tensor.dtype),
+        "result_layout": _enum_name_or_str(ttnn_tensor.layout),
+        "result_memory_config": _memory_config_to_dict(ttnn_tensor.memory_config()),
+    }
+    try:
+        ttnn.dump_tensor(path, ttnn_tensor)
+    except Exception as e:
+        record["status"] = f"error({type(e).__name__}: {e})"
+        _append_cache_specs_record(record)
+        raise
+    else:
+        _append_cache_specs_record(record)
 
     # Always convert absolute paths to relative paths for portability
     # This ensures SavedWeight objects always have relative paths
