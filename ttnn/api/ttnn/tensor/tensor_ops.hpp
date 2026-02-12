@@ -52,7 +52,7 @@ void copy_to_host(
 
 Tensor to_layout(const Tensor& input_tensor, tt::tt_metal::Layout target_layout);
 
-Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id);
+Tensor cpu(const Tensor& input_tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 
 Tensor pad(
     const Tensor& input_tensor,
