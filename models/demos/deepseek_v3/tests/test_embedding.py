@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -10,7 +12,7 @@ from loguru import logger
 from torch.nn import Embedding as EmbeddingReference
 
 import ttnn
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -23,52 +25,27 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
+
+@pytest.mark.parametrize(
+    "EmbeddingClass,mode,batch_size_or_seq_len",
+    [
+        pytest.param(Embedding1D, "decode", 32, marks=pytest.mark.requires_device(["TG"])),
+        pytest.param(Embedding2D, "decode", 128, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"])),
+        pytest.param(Embedding1D, "prefill", _prefill_seq_len, marks=pytest.mark.requires_device(["TG"])),
+        pytest.param(
+            Embedding2D, "prefill", _prefill_seq_len, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+        ),
+    ],
+)
 @pytest.mark.parametrize(
     "device_params",
     [
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
     ],
     indirect=True,
-)
-@pytest.mark.parametrize(
-    "EmbeddingClass,mode,batch_size_or_seq_len",
-    [
-        pytest.param(Embedding1D, "decode", 32, marks=pytest.mark.requires_device(["TG"])),
-        pytest.param(Embedding2D, "decode", 128, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"])),
-    ]
-    + [
-        pytest.param(Embedding1D, "prefill", seq_len, marks=pytest.mark.requires_device(["TG"]))
-        if seq_len == 128
-        else pytest.param(
-            Embedding1D,
-            "prefill",
-            seq_len,
-            marks=[
-                pytest.mark.requires_device(["TG"]),
-                pytest.mark.skip(
-                    f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-                ),
-            ],
-        )
-        for seq_len in PREFILL_SEQ_LENS
-    ]
-    + [
-        pytest.param(Embedding2D, "prefill", seq_len, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]))
-        if seq_len == 128
-        else pytest.param(
-            Embedding2D,
-            "prefill",
-            seq_len,
-            marks=[
-                pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
-                pytest.mark.skip(
-                    f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-                ),
-            ],
-        )
-        for seq_len in PREFILL_SEQ_LENS
-    ],
 )
 @pytest.mark.parametrize(
     "generate_reference_io",
