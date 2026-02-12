@@ -344,7 +344,6 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                 return Tensor(view_storage, new_spec, tensor.tensor_topology());
             }
 
-            TT_FATAL(is_cpu_tensor(tensor), "Unsupported storage type");
             return Tensor(tensor.host_storage(), new_spec, tensor.tensor_topology());
         });
     output = tt::tt_metal::set_tensor_id(output);

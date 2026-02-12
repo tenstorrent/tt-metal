@@ -105,10 +105,14 @@ AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::crea
 
 tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_ASSERT(
-        is_device_tensor(tensor_args.input_tensor_a), "Unexpected type {}", tensor_args.input_tensor_a.storage_type());
-    TT_ASSERT(
-        is_device_tensor(tensor_args.input_tensor_b), "Unexpected type {}", tensor_args.input_tensor_b.storage_type());
+    TT_FATAL(
+        is_device_tensor(tensor_args.input_tensor_a),
+        "Unexpected Tensor type {}",
+        tensor_args.input_tensor_a.storage_type());
+    TT_FATAL(
+        is_device_tensor(tensor_args.input_tensor_b),
+        "Unexpected Tensor type {}",
+        tensor_args.input_tensor_b.storage_type());
     return operation::hash_operation<AttnMatmulDeviceOperation>(
         args,
         args.transpose_hw,
