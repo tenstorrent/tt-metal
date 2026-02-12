@@ -218,7 +218,8 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t N_block_wt,
     const uint32_t chunk_width_in_tiles,
     const uint32_t chunks_per_mm_N_block,
-    const uint32_t chunk_width_in_mm_blocks) {
+    const uint32_t chunk_width_in_mm_blocks,
+    const uint32_t mm_block_wt) {
     // Strided reader compile args - include MM blocking parameters
     return {
         ring_index,                // my_chip_id
@@ -245,6 +246,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         chunk_width_in_tiles,      // chunk_width_in_tiles
         chunks_per_mm_N_block,     // chunks_per_mm_N_block
         chunk_width_in_mm_blocks,  // chunk_width_in_mm_blocks
+        mm_block_wt,               // mm_block_wt
     };
 }
 
@@ -683,7 +685,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_N_block_wt_val,
             chunk_width_in_tiles_val,
             chunks_per_mm_N_block_val,
-            chunk_width_in_mm_blocks_val);
+            chunk_width_in_mm_blocks_val,
+            mm_block_wt_val);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);

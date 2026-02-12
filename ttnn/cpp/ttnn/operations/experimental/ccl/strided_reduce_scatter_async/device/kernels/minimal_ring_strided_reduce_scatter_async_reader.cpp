@@ -43,6 +43,7 @@ constexpr uint32_t N_block_wt = get_compile_time_arg_val(20);
 constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(21);
 constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(22);
 constexpr uint32_t chunk_width_in_mm_blocks = get_compile_time_arg_val(23);
+constexpr uint32_t mm_block_wt = get_compile_time_arg_val(24);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -63,7 +64,7 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 24;
+    constexpr uint32_t ct_idx = 25;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -164,11 +165,13 @@ void kernel_main() {
 
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
+                uint32_t effective_chunk_width_in_tiles =
+                    get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
 #ifdef FUSE_MM_OP_SIGNALER
-                // Wait for matmul to finish writing the next chunk_width_in_mm_blocks output blocks
-                DPRINT << "Waiting for matmul to finish writing the next chunk_width_in_mm_blocks output blocks"
-                       << ENDL();
-                mm_sem_target += chunk_width_in_mm_blocks;
+                // Wait for matmul to finish writing the output blocks for this chunk.
+                // The last chunk may be narrower, so compute the effective width in mm blocks.
+                uint32_t effective_chunk_width_in_mm_blocks = effective_chunk_width_in_tiles / mm_block_wt;
+                mm_sem_target += effective_chunk_width_in_mm_blocks;
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
 #endif
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
@@ -205,8 +208,6 @@ void kernel_main() {
                         uint32_t first_tile_row_in_mm_M_block = 0;
                         uint32_t first_chunk_col_in_tiles = 0;
                         uint32_t first_mm_core_idx = 0;
-                        uint32_t effective_chunk_width_in_tiles =
-                            get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
                         uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
                         get_next_tile_coordinates(
                             first_tile_row_in_mm_M_block,
