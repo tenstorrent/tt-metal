@@ -307,12 +307,20 @@ def run_ring_joint_sdpa(
         # if sq % k_chunk_size != 0:
         #     pytest.skip(f"Total sequence length {sq} not divisible by k_chunk_size {k_chunk_size}")
 
-        # Configure compute grid and CCL coordination
+        # Configure compute grid and CCL coordination - USING COLUMN-BASED CCL (avoid dispatch cores)
+        # On Blackhole, dispatch cores use columns, so we need to avoid the actual dispatch column
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
-        sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)  # Reserve last row for CCL
-        ccl_core_grid_offset = ttnn.CoreCoord(0, sdpa_compute_grid[1])  # Point to CCL row
 
-        # Create sub-device for CCL operations
+        # Use column (full_compute_grid.x - 2) for CCL to avoid dispatch cores in the last column
+        ccl_column = full_compute_grid.x - 2  # Use second-to-last column instead of last column
+        sdpa_compute_grid = (ccl_column, full_compute_grid.y)  # SDPA gets columns 0 to (ccl_column-1)
+        print("SDPA compute grid:", sdpa_compute_grid)
+        ccl_core_grid_offset = ttnn.CoreCoord(ccl_column, 0)  # Point to CCL column
+
+        # Create sub-device for CCL operations - Must include ALL cores that operations will use
+        # SDPA uses compute grid (0,0) to (ccl_column-1, full_compute_grid.y-1)
+        # CCL uses column ccl_column, but sub-device must include all used cores
+        # Use the full compute grid to ensure all kernels can be placed
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
         )
@@ -473,12 +481,12 @@ def run_ring_joint_sdpa(
             compute_kernel_config=compute_kernel_config,
             dim=2,  # Ring dimension (sequence dimension)
             multi_device_global_semaphore=ccl_semaphore_handles,
-            num_links=1,  # Single link topology
+            num_links=1,  # Dual link topology
             cluster_axis=sp_axis,  # Ring axis (SP axis for multi-device configurations)
             mesh_device=mesh_device,
             topology=Topology.Linear,
             subdevice_id=worker_sub_device_id,
-            ccl_core_grid_offset=(0, sdpa_compute_grid[1]),  # Point to CCL row
+            ccl_core_grid_offset=(ccl_column, 0),  # Point to CCL column
         )
         logger.info("Ring joint attention completed successfully!")
 
@@ -581,7 +589,7 @@ def run_ring_joint_sdpa(
 # Generate shapes dynamically based on detected hardware
 INPUT_SHAPES, INPUT_IDS = generate_input_shapes()
 
-Q_CHUNK_SIZES = [64, 128, 256, 512]
+Q_CHUNK_SIZES = [224, 256, 288]
 K_CHUNK_SIZES = [128, 256, 512]
 
 

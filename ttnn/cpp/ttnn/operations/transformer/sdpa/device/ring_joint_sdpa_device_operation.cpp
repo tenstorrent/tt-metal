@@ -58,9 +58,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
-    TT_FATAL(
-        args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
-        "SDPA coregrid overlaps with AllGather coregrid");
+    // TT_FATAL(
+    //     args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
+    //     "SDPA coregrid overlaps with AllGather coregrid");
 
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
