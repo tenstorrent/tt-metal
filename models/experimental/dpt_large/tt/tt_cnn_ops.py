@@ -79,8 +79,12 @@ def ensure_tt_device_tensor(x, tt_device):
 
 def tt_relu(x):
     _require_ttnn()
-    # Keep ReLU out-of-place so pre-activation residual paths preserve the
-    # original skip tensor semantics.
+    # In current TTNN runtimes, ROW_MAJOR ReLU can produce numerically
+    # incorrect results; execute in TILE and convert back if needed.
+    if hasattr(x, "layout") and x.layout == ttnn.ROW_MAJOR_LAYOUT:
+        x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        y_tile = ttnn.relu(x_tile)
+        return ttnn.to_layout(y_tile, ttnn.ROW_MAJOR_LAYOUT)
     return ttnn.relu(x)
 
 
