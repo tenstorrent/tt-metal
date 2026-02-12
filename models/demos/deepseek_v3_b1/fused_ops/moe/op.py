@@ -673,7 +673,6 @@ class MoeRoutedExpertOp:
         fused_add_tensor,
         final_output_tensor,
         gate_proj_in1_buf_tensor,
-        up_proj_in1_buf_tensor,
         down_proj_in1_buf_tensor,
         mul_scalar_buf_tensor,
         use_hardcoded_expert_index=False,
@@ -867,7 +866,7 @@ class MoeRoutedExpertOp:
             device=device,
             weights_tensor=up_proj_weights_tensor,
             output_tensor=up_proj_mm_out_tensor,
-            working_buf_tensor=up_proj_in1_buf_tensor,
+            working_buf_tensor=gate_proj_in1_buf_tensor,  # Shares CB with gate_proj
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,
@@ -2550,7 +2549,6 @@ class MoeOp:
         fused_add_tensor,
         final_output_tensor,
         gate_proj_in1_buf_tensor,
-        up_proj_in1_buf_tensor,
         down_proj_in1_buf_tensor,
         mul_scalar_buf_tensor,
         # Shared expert tensors
@@ -2604,7 +2602,6 @@ class MoeOp:
             fused_add_tensor,
             final_output_tensor,
             gate_proj_in1_buf_tensor,
-            up_proj_in1_buf_tensor,
             down_proj_in1_buf_tensor,
             mul_scalar_buf_tensor,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
@@ -2763,7 +2760,6 @@ class MoeOp:
             final_output_tensor,
             # Tensor-backed working buffers
             gate_proj_in1_buf_tensor,
-            up_proj_in1_buf_tensor,
             down_proj_in1_buf_tensor,
             mul_scalar_buf_tensor,
             # Shared expert tensors

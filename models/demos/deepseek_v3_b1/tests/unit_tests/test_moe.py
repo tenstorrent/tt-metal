@@ -854,7 +854,6 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index):
         "final_output_tensor": final_output_tensor,
         # Tensor-backed working buffers (gate_proj and up_proj share one buffer)
         "gate_proj_in1_buf_tensor": gate_up_proj_in1_buf_tensor,
-        "up_proj_in1_buf_tensor": gate_up_proj_in1_buf_tensor,
         "down_proj_in1_buf_tensor": down_proj_in1_buf_tensor,
         "mul_scalar_buf_tensor": mul_scalar_buf_tensor,
         # Keep-alive references (prevent garbage collection)
@@ -945,7 +944,6 @@ def test_moe_fused(device, use_hardcoded_expert_index):
             s["ttnn_output_mcast_dst"],
             r["final_output_tensor"],
             r["gate_proj_in1_buf_tensor"],
-            r["up_proj_in1_buf_tensor"],
             r["down_proj_in1_buf_tensor"],
             r["mul_scalar_buf_tensor"],
             # Shared expert tensors

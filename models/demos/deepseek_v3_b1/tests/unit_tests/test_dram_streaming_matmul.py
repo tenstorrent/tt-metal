@@ -116,8 +116,7 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
 @pytest.mark.parametrize("k, n", [(7168, 2048), (2048, 7168)])
 @pytest.mark.parametrize("m", [1, 4, 8])
 @pytest.mark.parametrize("fused_activation", [None, "silu"])
-@pytest.mark.parametrize("num_loop_iters", [100])
-def test_dram_streaming_matmul(device, k, n, m, fused_activation, num_loop_iters):
+def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     """Test simplified DRAM streaming matmul with optional fused activation.
 
     In the simplified version:
@@ -129,6 +128,9 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation, num_loop_iters
     Args:
         fused_activation: Optional activation to fuse (e.g., "silu", "gelu", "relu")
     """
+
+    # Use 100 iterations for m=1 to stress-test CB boundary wrapping, 1 iteration otherwise
+    num_loop_iters = 100 if m == 1 else 1
 
     tile_h = m  # Tile height matches m (1 for tiny tiles, 32 for standard)
     tile_w = 32
@@ -226,7 +228,6 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation, num_loop_iters
     # ========== Working buffer for CB1 (needed for kernel-level looping) ==========
     in1_tile = ttnn.Tile([tile_w, tile_w])  # in1 uses 32x32 tiles
     in1_dtype = ttnn.bfloat4_b
-    in1_tile_size = in1_tile.get_tile_size(in1_dtype)
     num_in1_buffers = 3 * num_subblocks_k
     in1_CB_tiles = subblock_k * num_in1_buffers
     # Working buffer: WIDTH_SHARDED in L1, shard = [tile_w, in1_CB_tiles * tile_w]

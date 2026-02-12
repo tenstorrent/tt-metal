@@ -154,6 +154,14 @@ class DRAMStreamingMatmul:
         enable_indexing = index_tensor is not None
         device = input_a.device()
 
+        # Validate that working_buf_tensor is provided when looping is enabled
+        if num_loop_iters > 1 and working_buf_tensor is None:
+            raise ValueError(
+                f"working_buf_tensor must be provided when num_loop_iters > 1 "
+                f"(got num_loop_iters={num_loop_iters}, working_buf_tensor=None). "
+                f"The kernel uses the working buffer address for CB1 boundary wrapping."
+            )
+
         # Get tiles
         in0_tile = input_a.get_tile()
         in1_tile = input_b.get_tile()
