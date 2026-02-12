@@ -155,6 +155,7 @@ void kernel_main() {
 
 #ifdef FUSE_MM_OP_SIGNALER
     // Wait for matmul to finish writing all output before starting reduce-scatter
+    DPRINT << "Waiting for matmul to finish writing all output before starting reduce-scatter" << ENDL();
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 1);
 #endif
 
