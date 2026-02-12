@@ -137,11 +137,6 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-void Conv2dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     hashable_operation_attributes_t hashable_args = {

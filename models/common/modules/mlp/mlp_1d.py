@@ -34,6 +34,7 @@ from models.common.modules.tt_ccl import (
 )
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim, pad_dim_to_size
 from models.common.utility_functions import is_blackhole
+from models.tt_transformers.tt.common import Mode
 
 # =============================================================================
 # Top-level config dataclass
@@ -484,10 +485,10 @@ class MLP1D(LightweightModule):
         )
 
         # Get decode program configs from model_config
-        decode_w1_w3_prg_config = model_config.get("DECODE_MLP_W1_W3_PRG_CONFIG")
-        decode_w2_prg_config = model_config.get("DECODE_MLP_W2_PRG_CONFIG")
-        decode_mlp2_input_memcfg = model_config.get("SHARDED_MLP2_INPUT_MEMCFG")
-        decode_residual_memcfg = model_config.get("DECODE_RESIDUAL_MEMCFG")
+        decode_w1_w3_prg_config = args.get_mlp_ff1_3_prg_config(Mode.DECODE, None, None)
+        decode_w2_prg_config = args.get_mlp_ff2_prg_config(Mode.DECODE, None, None)
+        decode_mlp2_input_memcfg = args.get_mlp_binary_mult_mem_config(Mode.DECODE)
+        decode_residual_memcfg = args.get_mlp_output_mem_config(Mode.DECODE, None)
 
         # Compute memory configs for weights
         num_devices = mesh_device.get_num_devices()

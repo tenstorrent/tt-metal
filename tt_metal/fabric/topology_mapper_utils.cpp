@@ -13,6 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "cluster.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -960,6 +961,7 @@ std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt
 }
 
 std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
+    tt::tt_metal::ClusterType cluster_type,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     std::map<MeshId, PhysicalAdjacencyMap> adjacency_map;
@@ -974,7 +976,6 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
 
     for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
         auto z_channels = std::unordered_set<uint8_t>{8, 9};
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
                                        const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {

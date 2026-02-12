@@ -387,12 +387,6 @@ void Device::configure_fabric() {
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
-// backward compatibility
-void Device::init_fabric() {
-    this->compile_fabric();
-    this->configure_fabric();
-}
-
 bool Device::initialize(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,

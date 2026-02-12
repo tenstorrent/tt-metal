@@ -7,6 +7,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
@@ -83,38 +84,35 @@ class VisionAttention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.transformation_mats = transformation_mats
-
+        self.configuration = configuration
+        self.decoders_optimizations = configuration.decoders_optimizations
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
-        self.activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        self.activation_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
-        self.wqkv_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.WQKV
-        )
-        self.wo_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.WO
-        )
-        self.kv_cache_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        self.wqkv_dtype = self.decoders_optimizations.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.WQKV)
+        self.wo_dtype = self.decoders_optimizations.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.WO)
+        self.kv_cache_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
         )
-        self.li_qkv_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+        self.li_qkv_decode_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration
         )
-        self.sdpa_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+        self.sdpa_decode_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
         )
-        self.li_o_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+        self.li_o_decode_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
         )
-        self.sdpa_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+        self.sdpa_prefill_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=configuration
         )
-        self.li_qkv_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+        self.li_qkv_prefill_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
         )
-        self.li_o_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+        self.li_o_prefill_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
         )
 
@@ -240,11 +238,11 @@ class VisionAttention(LightweightModule):
 
         def norm_reshard(x, norm, mode):
             """Hack until RMSNorm supports height-sharded output config"""
-            if mode == "decode":
+            if mode == Mode.DECODE:
                 mem_cfg = x.memory_config()
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=x.dtype)
             x = norm(x, mode)
-            if mode == "decode":
+            if mode == Mode.DECODE:
                 x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
             return x
 
@@ -405,8 +403,8 @@ class VisionAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
-        k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+        q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode=Mode.PREFILL)
+        k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode=Mode.PREFILL)
 
         # last_five_unpadded = lambda x, mesh_device: first_five(x, mesh_device, start=-(96 - 80) - 5, end=-(96 - 80))
 
@@ -469,7 +467,9 @@ class VisionAttention(LightweightModule):
                 chunk_start_idx,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.configuration.get_attn_sdpa_program_config(
+                    Mode.PREFILL, seq_len, chunk_start_idx, None
+                ),
             )
         else:
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
@@ -479,7 +479,7 @@ class VisionAttention(LightweightModule):
                 is_causal=False,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
             )
 
         # deallocate keys and values
