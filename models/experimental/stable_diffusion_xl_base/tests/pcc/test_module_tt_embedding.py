@@ -7,6 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_embedding import TtTimestepEmbedding
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -28,7 +29,10 @@ def test_embedding(device, input_shape, module_path, is_ci_env, reset_seeds, lin
     torch_embedding = eval("unet." + module_path)
     assert torch_embedding is not None, f"{module_path} is not a valid UNet module"
 
-    tt_embedding = TtTimestepEmbedding(device, state_dict, module_path, linear_weights_dtype=linear_weights_dtype)
+    model_config = ModelOptimisations()
+    tt_embedding = TtTimestepEmbedding(
+        device, state_dict, module_path, model_config, linear_weights_dtype=linear_weights_dtype
+    )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_embedding(torch_input_tensor)
