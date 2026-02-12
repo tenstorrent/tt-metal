@@ -3,9 +3,6 @@ name: "[internal] ttnn unit tests impl"
 on:
   workflow_call:
     inputs:
-      arch:
-        required: true
-        type: string
       enabled-skus:
         required: true
         type: string
@@ -103,7 +100,6 @@ jobs:
     container:
       image: ${{ matrix.test-group.sku != 'bh_p100' && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
       env:
-        ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:

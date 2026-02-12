@@ -296,7 +296,6 @@ jobs:
     secrets: inherit
     with:
       enabled-skus: "wh_n300_civ2"
-      arch: wormhole_b0
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       merge-gate-call: true

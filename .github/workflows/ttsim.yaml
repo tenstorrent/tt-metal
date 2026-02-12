@@ -222,7 +222,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}:/work
       env:
-        ARCH_NAME: ${{ matrix.arch.name }}
         TT_METAL_SIMULATOR_HOME: /work/sim
         TT_METAL_SIMULATOR: /work/sim/libttsim.so
         TT_METAL_SLOW_DISPATCH_MODE: 1
