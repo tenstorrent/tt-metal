@@ -215,32 +215,84 @@ class TTPatchEmbedding:
 
 
 class TTLayerNorm:
-    def __init__(self, weight: torch.Tensor, bias: torch.Tensor, eps: float, device):
+    def __init__(
+        self,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+        eps: float,
+        device,
+        output_mem: Optional[ttnn.MemoryConfig] = None,
+        program_config=None,
+        allow_cpu_fallback: bool = True,
+    ):
         self.weight = weight
         self.bias = bias
         self.eps = eps
         self.device = device
+        self.output_mem = output_mem
+        self.program_config = program_config
+        self.allow_cpu_fallback = bool(allow_cpu_fallback)
+        try:
+            # ttnn.layer_norm consumes device-side affine params.
+            self.weight_tt = ttnn.from_torch(
+                weight.detach().unsqueeze(0).to(dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+            self.bias_tt = ttnn.from_torch(
+                bias.detach().unsqueeze(0).to(dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+        except Exception:
+            self.weight_tt = None
+            self.bias_tt = None
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Host LN for strict parity
-        x_host = x.cpu()
-        if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-            x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-        x_torch = x_host.to_torch()
-        y_torch = torch.nn.functional.layer_norm(
-            x_torch,
-            normalized_shape=[x_torch.shape[-1]],
-            weight=self.weight,
-            bias=self.bias,
-            eps=self.eps,
-        )
-        y = ttnn.from_torch(
-            y_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        return y
+        try:
+            if self.weight_tt is None or self.bias_tt is None:
+                raise RuntimeError("LayerNorm affine params not available on device")
+
+            kwargs = {
+                "weight": self.weight_tt,
+                "bias": self.bias_tt,
+                "epsilon": self.eps,
+            }
+            if self.output_mem is not None:
+                kwargs["memory_config"] = self.output_mem
+
+            pc = getattr(self.program_config, "ln_program_config", None)
+            if pc is not None:
+                kwargs["program_config"] = pc
+            cc = getattr(self.program_config, "ln_compute_config", None)
+            if cc is not None:
+                kwargs["compute_kernel_config"] = cc
+
+            return ttnn.layer_norm(x, **kwargs)
+        except Exception as exc:
+            if not self.allow_cpu_fallback:
+                raise RuntimeError("TTLayerNorm device path failed and CPU fallback is disabled") from exc
+            # Host fallback path for strict parity/debugging.
+            x_host = x.cpu()
+            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
+                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
+            x_torch = x_host.to_torch()
+            y_torch = torch.nn.functional.layer_norm(
+                x_torch,
+                normalized_shape=[x_torch.shape[-1]],
+                weight=self.weight,
+                bias=self.bias,
+                eps=self.eps,
+            )
+            y = ttnn.from_torch(
+                y_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            return y
 
 
 class TTAttention:
@@ -551,8 +603,24 @@ class TTTransformerBlock:
         ln2_w = state_dict[f"{base}.layernorm_after.weight"]
         ln2_b = state_dict[f"{base}.layernorm_after.bias"]
 
-        self.ln1 = TTLayerNorm(ln1_w, ln1_b, eps, device)
-        self.ln2 = TTLayerNorm(ln2_w, ln2_b, eps, device)
+        self.ln1 = TTLayerNorm(
+            ln1_w,
+            ln1_b,
+            eps,
+            device,
+            output_mem=output_mem,
+            program_config=program_config,
+            allow_cpu_fallback=allow_cpu_fallback,
+        )
+        self.ln2 = TTLayerNorm(
+            ln2_w,
+            ln2_b,
+            eps,
+            device,
+            output_mem=output_mem,
+            program_config=program_config,
+            allow_cpu_fallback=allow_cpu_fallback,
+        )
         self.attn = TTAttention(
             q_w,
             q_b,
