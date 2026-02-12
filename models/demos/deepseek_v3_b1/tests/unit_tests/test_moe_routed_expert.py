@@ -1151,6 +1151,7 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
 
     logger.info("Running moe routed expert operation...")
 
+    num_iterations = 100
     for iteration in range(num_iterations):
         ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeRoutedExpert.op(
             ttnn_input,
