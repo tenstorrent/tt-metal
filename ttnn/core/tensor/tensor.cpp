@@ -88,8 +88,8 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    if (device_storage().mesh_buffer != nullptr) {
-        mesh_device_ = storage.mesh_buffer->device();
+    if (auto buffer = device_storage().mesh_buffer; buffer != nullptr) {
+        mesh_device_ = buffer->device();
     }
 }
 
