@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 #include "api/tensor/tensor_accessor.h"
-#include "tests/tt_metal/tt_metal/data_movement/multi_interleaved/kernels/barrier_sync.hpp"
+#include "barrier_sync.hpp"
 
 // L1 to DRAM write
 void kernel_main() {
