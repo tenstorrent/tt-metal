@@ -37,6 +37,9 @@ bool SDMeshCommandQueue::write_shard_to_device(
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return false;  // Skip hardware write for mock devices
     }
+    // Wait for idle here to ensure that a previous program potentially using this address space
+    // is complete.
+    wait_for_cores_idle();
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
@@ -64,6 +67,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }
+    // Wait for idle here to ensure that programs emitting this data are complete.
     wait_for_cores_idle();
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
@@ -97,10 +101,6 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     auto lock = lock_api_function_();
-    if (!blocking) {
-        log_debug(
-            tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload execution.", __FUNCTION__);
-    }
     wait_for_cores_idle();
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
@@ -143,7 +143,7 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
     return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
 
-void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
+void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) { wait_for_cores_idle(); }
 
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {

@@ -59,7 +59,7 @@ class HostInterface:
             raise ValueError("Host <-> Device Communication for Blitz Decode must be on a single core.")
         if h2d_socket.get_active_cores()[0] != d2h_socket.get_active_cores()[0]:
             raise ValueError("Expected Host <-> Device Communication for Blitz Decode to be on the same core.")
-        if h2d_socket.get_mesh_device() != d2h_socket.get_mesh_device():
+        if h2d_socket.get_mesh_device().id() != d2h_socket.get_mesh_device().id():
             raise ValueError("Expected Host <-> Device Communication for Blitz Decode to be on the same mesh device.")
 
         self.mesh_device = h2d_socket.get_mesh_device()
