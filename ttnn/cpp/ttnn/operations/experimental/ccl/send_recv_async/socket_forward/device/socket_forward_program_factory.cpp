@@ -96,7 +96,6 @@ ttnn::device_operation::CachedProgram<SocketForwardSharedVariables> SocketForwar
     uint32_t num_whole_packets = num_bytes / fabric_max_payload_size;
     uint32_t num_whole_packets_link_0 =
         (num_whole_packets / num_fwd_links) + static_cast<uint32_t>(partial_packet_size > 0);
-    uint32_t num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
 
     uint32_t packet_header_cb_num_pages = num_fwd_links + num_bwd_links;
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -110,14 +109,13 @@ ttnn::device_operation::CachedProgram<SocketForwardSharedVariables> SocketForwar
 
     CreateCircularBuffer(program, my_core_coord, cb_packet_header_config);
 
-    constexpr uint32_t barrier_address = 639680;
+    constexpr uint32_t barrier_address = 1105600;
     std::vector<uint32_t> compile_args = {
         packet_header_cb_index,
         socket_block_size,
         partial_packet_size,
         fabric_max_payload_size,
         num_whole_packets_link_0,
-        num_whole_packets_link_1,
         barrier_address,
     };
 

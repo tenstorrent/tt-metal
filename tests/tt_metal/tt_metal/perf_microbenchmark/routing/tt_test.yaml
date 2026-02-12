@@ -13,12 +13,12 @@
       size: 7168
 
     senders:
-      - device: 0
+      - device: 26
         patterns:
           # First traffic stream from core [1,1]
           - ntype: unicast_write
             destination:
-              device: 1
+              device: 9
 
   - name: "SR15"
     fabric_setup:
@@ -32,12 +32,12 @@
 
     latency_test_mode: true
     senders:
-      - device: 1
+      - device: 9
         patterns:
           # First traffic stream from core [1,1]
           - ntype: unicast_write
             destination:
-              device: 5
+              device: 30
 
   - name: SR54
     fabric_setup:
@@ -51,12 +51,12 @@
 
     latency_test_mode: true
     senders:
-      - device: 5
+      - device: 30
         patterns:
           # First traffic stream from core [1,1]
           - ntype: unicast_write
             destination:
-              device: 4
+              device: 23
 
   - name: SR40
     fabric_setup:
@@ -70,9 +70,9 @@
 
     latency_test_mode: true
     senders:
-      - device: 4
+      - device: 23
         patterns:
           # First traffic stream from core [1,1]
           - ntype: unicast_write
             destination:
-              device: 0
+              device: 26

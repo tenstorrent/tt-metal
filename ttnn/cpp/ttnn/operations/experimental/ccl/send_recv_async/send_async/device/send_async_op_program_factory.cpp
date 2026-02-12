@@ -90,7 +90,6 @@ SendAsyncMeshWorkloadFactory::create_at(
     uint32_t partial_packet_size = input_page_size % fabric_max_payload_size;
     uint32_t num_whole_packets_link_0 =
         (num_whole_packets / num_links) + static_cast<uint32_t>(partial_packet_size > 0);
-    uint32_t num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
 
     uint32_t socket_block_size = socket_aligned_page_size;
     uint32_t socket_fifo_size_in_pages =
@@ -124,7 +123,7 @@ SendAsyncMeshWorkloadFactory::create_at(
     const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer());
     auto compile_time_args = input_accessor_args.get_compile_time_args();
 
-    constexpr uint32_t barrier_address = 639680;
+    constexpr uint32_t barrier_address = 1105600;
     std::vector<uint32_t> writer_compile_args = {
         src0_cb_index,             // cb0_id
         packet_header_cb_index,    // fabric_packet_header_cb_id
@@ -132,7 +131,6 @@ SendAsyncMeshWorkloadFactory::create_at(
         partial_packet_size,       // partial_packet_size
         fabric_max_payload_size,   // whole_packet_size (fabric_max_payload_size)
         num_whole_packets_link_0,  // num_whole_packets_link_0
-        num_whole_packets_link_1,  // num_whole_packets_link_1
         input_page_size,           // input_page_size
         barrier_address,
     };

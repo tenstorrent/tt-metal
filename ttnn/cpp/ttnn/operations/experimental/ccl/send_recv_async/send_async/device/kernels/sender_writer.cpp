@@ -19,11 +19,10 @@ constexpr uint32_t socket_block_size = get_compile_time_arg_val(2);  // This is 
 constexpr uint32_t aligned_partial_packet_size = get_compile_time_arg_val(3);
 constexpr uint32_t whole_packet_size = get_compile_time_arg_val(4);
 constexpr uint32_t num_whole_packets_link_0 = get_compile_time_arg_val(5);
-constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(6);
-constexpr uint32_t input_page_size = get_compile_time_arg_val(7);
-constexpr uint32_t credit_address = get_compile_time_arg_val(8);
+constexpr uint32_t input_page_size = get_compile_time_arg_val(6);
+constexpr uint32_t credit_address = get_compile_time_arg_val(7);
 
-constexpr uint32_t input_args_cta_idx = 9;
+constexpr uint32_t input_args_cta_idx = 8;
 constexpr uint32_t input_args_crta_idx = 0;
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
