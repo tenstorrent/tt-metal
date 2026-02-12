@@ -202,33 +202,20 @@ const core_descriptor_t& get_core_descriptor_config(
     size_t start_x = compute_with_storage_start[0].as<size_t>();
     size_t start_y = compute_with_storage_start[1].as<size_t>();
 
-    // When slow dispatch is on, expand compute grid to full logical grid by reclaiming dispatch cores
-    // Query SOC descriptor for the actual logical grid dimensions (accounts for harvesting)
+    CoreCoord compute_grid_size;
+    // When slow dispatch is on, use full logical grid (no dispatch cores to reserve)
     if (!fast_dispatch && !tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        CoreCoord logical_grid_size =
+        compute_grid_size =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(
                 CoreType::TENSIX);
-
-        if (dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::COL) {
-            // Expand to full width (reclaim dispatch column)
-            end_x = logical_grid_size.x - 1;  // grid_size is dimensions, end_x is 0-indexed coordinate
-            log_info(
-                tt::LogDevice,
-                "Slow dispatch mode: Expanding grid to full width ({}, {}) using logical_grid_size from SOC descriptor",
-                (end_x - start_x) + 1,
-                (end_y - start_y) + 1);
-        } else {
-            // Expand to full height (reclaim dispatch row)
-            end_y = logical_grid_size.y - 1;  // grid_size is dimensions, end_y is 0-indexed coordinate
-            log_info(
-                tt::LogDevice,
-                "Slow dispatch mode: Expanding grid to full height ({}, {}) using logical_grid_size from SOC "
-                "descriptor",
-                (end_x - start_x) + 1,
-                (end_y - start_y) + 1);
-        }
+        log_info(
+            tt::LogDevice,
+            "Slow dispatch mode: Using full logical grid ({}, {})",
+            compute_grid_size.x,
+            compute_grid_size.y);
+    } else {
+        compute_grid_size = CoreCoord((end_x - start_x) + 1, (end_y - start_y) + 1);
     }
-    CoreCoord compute_grid_size((end_x - start_x) + 1, (end_y - start_y) + 1);
 
     std::vector<RelativeCoreCoord> compute_cores;
     for (auto x = 0; x < compute_grid_size.x; x++) {
