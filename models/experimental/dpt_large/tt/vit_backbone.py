@@ -48,6 +48,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         pretrained: bool = True,
         device: str = "cpu",
         tt_layer_cfg=None,
+        tt_device_override=None,
     ):
         super().__init__()
         self.config = config if config is not None else DPTLargeConfig()
@@ -78,6 +79,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
 
         # TT-specific members
         self.tt_device = None
+        self._owns_tt_device = False
         self.TTTransformerBlock = None
         self.TTPatchEmbedding = None
         self.tt_prog_cfg = None
@@ -99,7 +101,10 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             from .tt_modules import TTTransformerBlock, TTPatchEmbedding
 
             # Use config.device for TT accelerator selection so the host can remain on CPU.
-            if self.config.enable_tt_device and self.config.device != "cpu":
+            if tt_device_override is not None:
+                self.tt_device = tt_device_override
+                self._owns_tt_device = False
+            elif self.config.enable_tt_device and self.config.device != "cpu":
                 # `fallback_ops` conversion wrappers expect MeshDevice-based tensors.
                 if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape"):
                     try:
@@ -125,16 +130,19 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                             )
                 else:
                     self.tt_device = ttnn.open_device(device_id=0, l1_small_size=self._tt_l1_small_size)
+                self._owns_tt_device = True
                 try:
                     ttnn.SetDefaultDevice(self.tt_device)
                 except Exception:
                     pass
+            if self.tt_device is not None:
                 self.TTTransformerBlock = TTTransformerBlock
                 self.TTPatchEmbedding = TTPatchEmbedding
                 # Pass through TT layer config only for perf encoder path
                 self.tt_prog_cfg = self.tt_layer_cfg if getattr(self.config, "tt_perf_encoder", False) else None
         except Exception:
             self.tt_device = None
+            self._owns_tt_device = False
 
         if self.tt_device:
             sd = self.model.state_dict()
@@ -524,10 +532,11 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             import ttnn  # type: ignore
 
             try:
-                if hasattr(ttnn, "MeshDevice") and isinstance(self.tt_device, ttnn.MeshDevice):
-                    ttnn.close_mesh_device(self.tt_device)
-                else:
-                    ttnn.close_device(self.tt_device)
+                if self._owns_tt_device:
+                    if hasattr(ttnn, "MeshDevice") and isinstance(self.tt_device, ttnn.MeshDevice):
+                        ttnn.close_mesh_device(self.tt_device)
+                    else:
+                        ttnn.close_device(self.tt_device)
             finally:
                 self.tt_device = None
         except Exception:

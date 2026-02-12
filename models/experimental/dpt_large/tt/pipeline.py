@@ -7,7 +7,7 @@ import copy
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Any
 
 import numpy as np
 import torch
@@ -40,6 +40,7 @@ class DPTTTPipeline:
     config: DPTLargeConfig = field(default_factory=DPTLargeConfig)
     pretrained: bool = True
     device: str = "cpu"
+    tt_device_override: Optional[Any] = None
 
     def __post_init__(self):
         # Avoid mutating a caller-provided config (and never mutate the module-level DEFAULT_CONFIG).
@@ -70,6 +71,7 @@ class DPTTTPipeline:
             pretrained=self.pretrained,
             device=self.device,
             tt_layer_cfg=self.tt_layer_configs["vit_block"],
+            tt_device_override=self.tt_device_override,
         )
         tt_dev = getattr(self.backbone, "tt_device", None)
         self.reassembly = DPTReassembly(

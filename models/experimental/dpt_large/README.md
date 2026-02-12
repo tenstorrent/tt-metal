@@ -35,6 +35,17 @@ python -m models.experimental.dpt_large.demo.runner \
   --dump-perf generated/dpt_large_perf.json
 ```
 
+N300 data-parallel throughput run (2 chips in a `1x2` mesh, B=1 per chip):
+
+```sh
+python -m models.experimental.dpt_large.demo.runner \
+  --images-dir path/to/images \
+  --tt-run --device wormhole_n300 \
+  --dp 2 --batch-size 2 \
+  --tt-execution-mode trace_2cq \
+  --dump-perf generated/dpt_large_perf_dp2.json
+```
+
 ## Accuracy + Throughput (PCC/FPS)
 
 Compute PCC (TT vs CPU) and per-image FPS on a folder of images:
@@ -43,6 +54,7 @@ Compute PCC (TT vs CPU) and per-image FPS on a folder of images:
 python -m models.experimental.dpt_large.demo.eval_pcc \
   --images-dir path/to/images \
   --tt-run --device wormhole_n300 \
+  --dp 2 --batch-size 2 \
   --dump-json generated/dpt_large_eval.json
 ```
 

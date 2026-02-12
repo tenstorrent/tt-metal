@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,87 @@ def _fps_from_ms(latency_ms: float) -> float:
     return 1000.0 / latency_ms if latency_ms > 0 else 0.0
 
 
-def time_pipeline(pipeline, images: list[str], warmup: int, repeat: int):
+def _resolve_effective_dp(args, use_tt: bool) -> int:
+    if int(args.dp) < 1:
+        raise SystemExit("--dp must be >= 1")
+    if int(args.batch_size) < 1:
+        raise SystemExit("--batch-size must be >= 1")
+
+    if int(args.dp) != 1 and int(args.batch_size) != 1 and int(args.dp) != int(args.batch_size):
+        raise SystemExit("--dp and --batch-size must match when both are > 1")
+
+    effective_dp = max(int(args.dp), int(args.batch_size) if use_tt else 1)
+    if effective_dp not in (1, 2):
+        raise SystemExit("Only dp=1 or dp=2 is currently supported")
+    if effective_dp > 1 and not use_tt:
+        raise SystemExit("Data parallel mode requires --tt-run")
+    if effective_dp > 1 and str(args.device).lower() != "wormhole_n300":
+        raise SystemExit("Data parallel mode (dp=2) is currently supported only on --device wormhole_n300")
+    return effective_dp
+
+
+def _open_dp_mesh_device(effective_dp: int, num_cq: int):
+    import ttnn  # type: ignore
+
+    mesh_shape = ttnn.MeshShape(1, int(effective_dp))
+    common_kwargs = dict(
+        l1_small_size=24576,
+        trace_region_size=8 * 1024 * 1024,
+        num_command_queues=int(num_cq),
+    )
+    # Keep N300 mesh dispatch aligned with standard wormhole demo fixtures.
+    try:
+        dispatch_core_type = getattr(getattr(ttnn, "device", None), "DispatchCoreType", None)
+        if dispatch_core_type is not None and hasattr(dispatch_core_type, "WORKER"):
+            common_kwargs["dispatch_core_type"] = dispatch_core_type.WORKER
+    except Exception:
+        pass
+
+    def _call_open(open_fn):
+        kwargs = dict(common_kwargs)
+        try:
+            return open_fn(kwargs)
+        except TypeError as exc:
+            msg = str(exc)
+            if "dispatch_core_type" in msg and "dispatch_core_type" in kwargs:
+                kwargs.pop("dispatch_core_type", None)
+                return open_fn(kwargs)
+            raise
+
+    return _call_open(lambda kwargs: ttnn.open_mesh_device(mesh_shape=mesh_shape, **kwargs))
+
+
+def _select_iteration_inputs(pixel_values_list: list, tt_inputs_host_list: list | None, batch_size: int):
+    indices = [i % len(pixel_values_list) for i in range(int(batch_size))]
+    iter_pixel_values = [pixel_values_list[i] for i in indices]
+    iter_tt_inputs = None
+    if tt_inputs_host_list is not None:
+        iter_tt_inputs = [tt_inputs_host_list[i] for i in indices]
+    return iter_pixel_values, iter_tt_inputs
+
+
+def _run_single_tt_call(pipeline, pixel_values, tt_input_host):
+    if tt_input_host is not None:
+        return pipeline.forward_tt_host_tensor(tt_input_host, normalize=True)
+    return pipeline.forward_pixel_values(pixel_values, normalize=True)
+
+
+def _run_dp_batch(tt_pipelines: list, pixel_values_batch: list, tt_inputs_host_batch: list | None, executor) -> list:
+    outputs = []
+    worker_count = len(tt_pipelines)
+    for start in range(0, len(pixel_values_batch), worker_count):
+        end = min(start + worker_count, len(pixel_values_batch))
+        futures = []
+        for worker_idx, batch_idx in enumerate(range(start, end)):
+            pipeline = tt_pipelines[worker_idx]
+            tt_input_host = None if tt_inputs_host_batch is None else tt_inputs_host_batch[batch_idx]
+            futures.append(executor.submit(_run_single_tt_call, pipeline, pixel_values_batch[batch_idx], tt_input_host))
+        for future in futures:
+            outputs.append(future.result())
+    return outputs
+
+
+def time_pipeline_single(pipeline, images: list[str], warmup: int, repeat: int, batch_size: int):
     prepare = None
     if hasattr(pipeline, "fallback") and hasattr(pipeline.fallback, "_prepare"):
         prepare = pipeline.fallback._prepare
@@ -43,23 +124,25 @@ def time_pipeline(pipeline, images: list[str], warmup: int, repeat: int):
     pixel_values_list = None
     if prepare is not None and hasattr(pipeline, "forward_pixel_values"):
         pixel_values_list = [prepare(img) for img in images]
+    if pixel_values_list is None or len(pixel_values_list) == 0:
+        raise RuntimeError("Failed to create preprocessed inputs for timing")
 
     tt_inputs_host_list = None
     exec_mode = str(getattr(getattr(pipeline, "config", None), "tt_execution_mode", "eager")).lower()
-    if pixel_values_list is not None and hasattr(pipeline, "forward_tt_host_tensor") and exec_mode in ("trace", "trace_2cq"):
+    if hasattr(pipeline, "forward_tt_host_tensor") and exec_mode in ("trace", "trace_2cq"):
         import ttnn  # type: ignore
 
         tt_inputs_host_list = [
             ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for pv in pixel_values_list
         ]
 
+    iter_pixel_values, iter_tt_inputs = _select_iteration_inputs(pixel_values_list, tt_inputs_host_list, batch_size=batch_size)
+
     for _ in range(max(0, int(warmup))):
-        if tt_inputs_host_list is not None:
-            _ = pipeline.forward_tt_host_tensor(tt_inputs_host_list[0], normalize=True)
-        elif pixel_values_list is not None:
-            _ = pipeline.forward_pixel_values(pixel_values_list[0], normalize=True)
+        if iter_tt_inputs is not None:
+            _ = pipeline.forward_tt_host_tensor(iter_tt_inputs[0], normalize=True)
         else:
-            _ = pipeline.forward(images[0], normalize=True)
+            _ = pipeline.forward_pixel_values(iter_pixel_values[0], normalize=True)
 
     # Steady-state guard: after warmup, do not allow any silent host fallbacks.
     if hasattr(pipeline, "config") and not bool(getattr(pipeline.config, "allow_cpu_fallback", True)):
@@ -69,28 +152,27 @@ def time_pipeline(pipeline, images: list[str], warmup: int, repeat: int):
     last = None
     for _ in range(max(1, int(repeat))):
         start = time.perf_counter()
-        if tt_inputs_host_list is not None:
-            for tth in tt_inputs_host_list:
+        if iter_tt_inputs is not None:
+            for tth in iter_tt_inputs:
                 last = pipeline.forward_tt_host_tensor(tth, normalize=True)
-        elif pixel_values_list is not None:
-            for pv in pixel_values_list:
-                last = pipeline.forward_pixel_values(pv, normalize=True)
         else:
-            for img in images:
-                last = pipeline.forward(img, normalize=True)
+            for pv in iter_pixel_values:
+                last = pipeline.forward_pixel_values(pv, normalize=True)
         end = time.perf_counter()
         timings_ms.append((end - start) * 1000.0)
 
     total_ms_mean = float(np.mean(timings_ms))
-    per_image_ms = total_ms_mean / max(1, len(images))
+    per_image_ms = total_ms_mean / max(1, len(iter_pixel_values))
     stats = {
         "repeat_total_ms": timings_ms,
         "total_ms_mean": total_ms_mean,
         "total_ms_std": float(np.std(timings_ms)),
+        "num_images_per_iter": int(len(iter_pixel_values)),
         "per_image_ms": per_image_ms,
         "fps": _fps_from_ms(per_image_ms),
         "last_output": last,
         "fallback_counts": PERF_COUNTERS.snapshot(),
+        "data_parallel_degree": 1,
     }
     if hasattr(pipeline, "config") and not bool(getattr(pipeline.config, "allow_cpu_fallback", True)):
         counts = stats["fallback_counts"]
@@ -100,6 +182,75 @@ def time_pipeline(pipeline, images: list[str], warmup: int, repeat: int):
             counts.get("upsample_host_fallback_count", 0)
         ) != 0:
             raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
+    return stats
+
+
+def time_pipeline_dp(tt_pipelines: list, images: list[str], warmup: int, repeat: int, batch_size: int):
+    if len(tt_pipelines) < 2:
+        raise RuntimeError("time_pipeline_dp requires at least 2 TT pipelines")
+
+    prepare = tt_pipelines[0].fallback._prepare
+    pixel_values_list = [prepare(img) for img in images]
+    if len(pixel_values_list) == 0:
+        raise RuntimeError("Failed to create preprocessed inputs for timing")
+
+    tt_inputs_host_list = None
+    exec_mode = str(getattr(getattr(tt_pipelines[0], "config", None), "tt_execution_mode", "eager")).lower()
+    if exec_mode in ("trace", "trace_2cq"):
+        import ttnn  # type: ignore
+
+        tt_inputs_host_list = [
+            ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for pv in pixel_values_list
+        ]
+
+    iter_pixel_values, iter_tt_inputs = _select_iteration_inputs(pixel_values_list, tt_inputs_host_list, batch_size=batch_size)
+
+    timings_ms: list[float] = []
+    last = None
+    with ThreadPoolExecutor(max_workers=len(tt_pipelines)) as executor:
+        # Force one pass on each worker so both chips compile/capture trace before timing.
+        warmup_pixels = [iter_pixel_values[i % len(iter_pixel_values)] for i in range(len(tt_pipelines))]
+        warmup_tt_inputs = None
+        if iter_tt_inputs is not None:
+            warmup_tt_inputs = [iter_tt_inputs[i % len(iter_tt_inputs)] for i in range(len(tt_pipelines))]
+        _ = _run_dp_batch(tt_pipelines, warmup_pixels, warmup_tt_inputs, executor)
+
+        for _ in range(max(0, int(warmup))):
+            _ = _run_dp_batch(tt_pipelines, iter_pixel_values, iter_tt_inputs, executor)
+
+        reset_perf_counters()
+
+        for _ in range(max(1, int(repeat))):
+            start = time.perf_counter()
+            outs = _run_dp_batch(tt_pipelines, iter_pixel_values, iter_tt_inputs, executor)
+            end = time.perf_counter()
+            timings_ms.append((end - start) * 1000.0)
+            if len(outs) > 0:
+                last = outs[-1]
+
+    total_ms_mean = float(np.mean(timings_ms))
+    per_image_ms = total_ms_mean / max(1, len(iter_pixel_values))
+    stats = {
+        "repeat_total_ms": timings_ms,
+        "total_ms_mean": total_ms_mean,
+        "total_ms_std": float(np.std(timings_ms)),
+        "num_images_per_iter": int(len(iter_pixel_values)),
+        "per_image_ms": per_image_ms,
+        "fps": _fps_from_ms(per_image_ms),
+        "last_output": last,
+        "fallback_counts": PERF_COUNTERS.snapshot(),
+        "data_parallel_degree": len(tt_pipelines),
+        "stage_breakdown_ms_per_worker": [
+            dict(p.last_perf) for p in tt_pipelines if getattr(p, "last_perf", None) is not None
+        ],
+    }
+    counts = stats["fallback_counts"]
+    if int(counts.get("vit_backbone_fallback_count", 0)) != 0 or int(
+        counts.get("reassembly_readout_fallback_count", 0)
+    ) != 0 or int(
+        counts.get("upsample_host_fallback_count", 0)
+    ) != 0:
+        raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
     return stats
 
 
@@ -121,6 +272,18 @@ def main():
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Images processed per timed iteration. In TT mode with dp=2, each chip still runs B=1.",
+    )
+    parser.add_argument(
+        "--dp",
+        type=int,
+        default=1,
+        help="Data-parallel degree. Use dp=2 on wormhole_n300 to process two images concurrently.",
+    )
+    parser.add_argument(
         "--tt-execution-mode",
         type=str,
         default="eager",
@@ -140,6 +303,10 @@ def main():
     if args.tt_run and args.device == "cpu":
         raise SystemExit("--tt-run requires --device != cpu")
 
+    use_tt = bool(args.tt_run)
+    effective_dp = _resolve_effective_dp(args, use_tt=use_tt)
+    effective_batch_size = max(1, int(args.batch_size))
+
     # Always build a CPU reference pipeline (the thing we compare to for PCC).
     cfg_cpu = DPTLargeConfig(
         image_size=int(args.image_size),
@@ -153,11 +320,13 @@ def main():
         tt_perf_neck=False,
     )
     cpu = DPTFallbackPipeline(config=cfg_cpu, pretrained=bool(args.pretrained), device="cpu")
-    cpu_stats = time_pipeline(cpu, images, warmup=args.warmup, repeat=args.repeat)
+    cpu_stats = time_pipeline_single(cpu, images, warmup=args.warmup, repeat=args.repeat, batch_size=effective_batch_size)
 
     result: dict[str, Any] = {
         "num_images": len(images),
         "image_size": int(args.image_size),
+        "batch_size": int(effective_batch_size),
+        "data_parallel_degree": int(effective_dp if use_tt else 1),
         "pretrained": bool(args.pretrained),
         "tt_execution_mode": str(args.tt_execution_mode) if bool(args.tt_run) else None,
         "cpu": {k: v for k, v in cpu_stats.items() if k != "last_output"},
@@ -172,25 +341,6 @@ def main():
         return
 
     from ..tt.pipeline import DPTTTPipeline
-
-    # Perf path: full TT backbone+neck+head and traced execution mode.
-    cfg_tt_perf = DPTLargeConfig(
-        image_size=int(args.image_size),
-        patch_size=16,
-        device=str(args.device),
-        allow_cpu_fallback=False,
-        enable_tt_device=True,
-        # Keep neck/head fully on TT device for practical hot path.
-        tt_device_reassembly=True,
-        tt_device_fusion=True,
-        tt_perf_encoder=True,
-        tt_perf_neck=True,
-        tt_approx_align_corners=True,
-        tt_execution_mode=str(args.tt_execution_mode),
-    )
-
-    with DPTTTPipeline(config=cfg_tt_perf, pretrained=bool(args.pretrained), device="cpu") as tt_perf:
-        tt_stats = time_pipeline(tt_perf, images, warmup=args.warmup, repeat=args.repeat)
 
     # PCC path: keep TT encoder active but route neck/head through HF modules.
     # This compares TT-encoded features against the strict HF reference without
@@ -217,6 +367,73 @@ def main():
             passed, pcc = comp_pcc(depth_cpu, depth_tt, pcc=0.99)
             pccs.append(float(pcc))
             pcc_pass_flags.append(bool(passed))
+
+    # Perf path: full TT backbone+neck+head and traced execution mode.
+    cfg_tt_perf = DPTLargeConfig(
+        image_size=int(args.image_size),
+        patch_size=16,
+        device=str(args.device),
+        allow_cpu_fallback=False,
+        enable_tt_device=True,
+        # Keep neck/head fully on TT device for practical hot path.
+        tt_device_reassembly=True,
+        tt_device_fusion=True,
+        tt_perf_encoder=True,
+        tt_perf_neck=True,
+        tt_approx_align_corners=True,
+        tt_execution_mode=str(args.tt_execution_mode),
+    )
+
+    tt_stats = None
+    if effective_dp > 1:
+        import ttnn  # type: ignore
+
+        mesh_device = None
+        tt_pipelines = []
+        try:
+            num_cq = 2 if str(args.tt_execution_mode).lower() == "trace_2cq" else 1
+            mesh_device = _open_dp_mesh_device(effective_dp=effective_dp, num_cq=num_cq)
+            try:
+                submeshes = list(mesh_device.create_submeshes(ttnn.MeshShape(1, 1)))
+            except TypeError:
+                submeshes = list(mesh_device.create_submeshes(ttnn.MeshShape((1, 1))))
+            if len(submeshes) < effective_dp:
+                raise RuntimeError(f"Expected at least {effective_dp} submeshes but got {len(submeshes)}")
+
+            for i in range(effective_dp):
+                tt_pipelines.append(
+                    DPTTTPipeline(
+                        config=cfg_tt_perf,
+                        pretrained=bool(args.pretrained),
+                        device="cpu",
+                        tt_device_override=submeshes[i],
+                    )
+                )
+            tt_stats = time_pipeline_dp(
+                tt_pipelines,
+                images,
+                warmup=args.warmup,
+                repeat=args.repeat,
+                batch_size=effective_batch_size,
+            )
+        finally:
+            for pipeline in tt_pipelines:
+                pipeline.close()
+            if mesh_device is not None:
+                try:
+                    ttnn.close_mesh_device(mesh_device)
+                except Exception:
+                    pass
+    else:
+        with DPTTTPipeline(config=cfg_tt_perf, pretrained=bool(args.pretrained), device="cpu") as tt_perf:
+            tt_stats = time_pipeline_single(
+                tt_perf,
+                images,
+                warmup=args.warmup,
+                repeat=args.repeat,
+                batch_size=effective_batch_size,
+            )
+    assert tt_stats is not None
 
     result["tt"] = {k: v for k, v in tt_stats.items() if k != "last_output"}
     result["pcc_mode"] = "tt_encoder_with_hf_neck_head"
