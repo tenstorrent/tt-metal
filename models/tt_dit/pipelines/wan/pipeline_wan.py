@@ -133,6 +133,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         is_fsdp: bool = True,
         model_type: str = "t2v",
+        vae_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -186,7 +187,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=vae_dtype,
         )
 
         self.tt_vae.load_state_dict(self.vae.state_dict())
@@ -894,8 +895,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         if not output_type == "latent":
-            print("LATENT_PROCESSING")
-            latents = latents.to(torch.float32)
+            latents = latents.to(self.vae.dtype)
             latents_mean = (
                 torch.tensor(self.vae.config.latents_mean)
                 .view(1, self.vae.config.z_dim, 1, 1, 1)
@@ -905,7 +905,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 latents.device, latents.dtype
             )
             latents = latents / latents_std + latents_mean
-            print("LATENT_TYPE:", latents.dtype)
 
             # VAE on device
             tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)
@@ -913,7 +912,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             tt_latents_BTHWC, logical_h = conv_pad_height(
                 tt_latents_BTHWC, self.vae_parallel_config.height_parallel.factor
             )
-            print("CREATE VAE INPUT")
             tt_latents_BTHWC = bf16_tensor_2dshard(
                 tt_latents_BTHWC,
                 self.mesh_device,
@@ -922,13 +920,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self.vae_parallel_config.height_parallel.mesh_axis: 2,
                     self.vae_parallel_config.width_parallel.mesh_axis: 3,
                 },
-                dtype=ttnn.DataType.FLOAT32,
+                dtype=self.tt_vae.dtype,
             )
-            print("LATENT_TYPE2:", tt_latents_BTHWC.dtype)
             if profiler:
                 profiler.start("vae", profiler_iteration)
             tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
-            print("VAE_OUT_TYPE:", tt_video_BCTHW.dtype)
             if profiler:
                 profiler.end("vae", profiler_iteration)
 
@@ -940,9 +936,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
                 ),
-                dtype=torch.float32,
             )
-            print("TORCH_OUT_TYPE:", video_torch.dtype)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
             video = self.video_processor.postprocess_video(video_torch, output_type=output_type)

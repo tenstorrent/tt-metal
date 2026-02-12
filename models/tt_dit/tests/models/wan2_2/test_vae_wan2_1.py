@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import time
 from collections import defaultdict
 
@@ -329,112 +328,6 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
     assert_quality(torch_output, tt_output_torch, pcc=0.999_980, relative_rmse=0.007)
 
 
-def _print_conv3d_error_analysis(ref, tt, label=""):
-    """Print detailed error analysis for conv3d outputs (BCTHW format)."""
-    diff = ref.float() - tt.float()
-    abs_err = diff.abs()
-    pcc_val = torch.corrcoef(torch.stack([ref.float().flatten(), tt.float().flatten()]))[0, 1].item()
-    rmse = diff.pow(2).mean().sqrt().item()
-    max_err = abs_err.max().item()
-    ref_std = ref.float().std().item()
-    print(
-        f"  {label}: PCC={pcc_val:.6f}  RMSE={rmse:.4e}  maxerr={max_err:.4e}  ref_std={ref_std:.4e}  shape={list(ref.shape)}"
-    )
-
-    # Top-10 worst elements
-    flat_abs = abs_err.flatten()
-    top_vals, top_flat_idx = flat_abs.topk(min(10, flat_abs.numel()))
-    if top_vals[0] > 0.01:
-        print(f"         worst elements (>{0.01:.2f}):")
-        for k in range(len(top_vals)):
-            if top_vals[k] < 0.01:
-                break
-            coords = torch.unravel_index(top_flat_idx[k], abs_err.shape)
-            idx = tuple(c.item() for c in coords)
-            rv = ref[idx].float().item()
-            tv = tt[idx].float().item()
-            print(f"           {list(idx)} ref={rv:+.4f} tt={tv:+.4f} err={top_vals[k]:.4f}")
-
-
-def _analyze_conv3d_per_block(ref_output, tt_output, weight, bias, input_BCTHW, C_in_block):
-    """
-    Compute per-C_in_block partial sums manually in bf16 and compare to TT output.
-    This identifies which block's contribution disagrees with the manual calculation.
-    """
-    C_in = weight.shape[1]
-    num_blocks = C_in // C_in_block
-    kernel_size = weight.shape[2:]  # (kT, kH, kW)
-
-    # Apply causal padding (replicate front 2 frames) to match WanCausalConv3d behavior
-    input_bf16 = input_BCTHW.to(torch.bfloat16)
-    front_pad = input_bf16[:, :, 0:1, :, :].repeat(1, 1, kernel_size[0] - 1, 1, 1)
-    padded_input = torch.cat([front_pad, input_bf16], dim=2)
-
-    weight_bf16 = weight.to(torch.bfloat16)
-    spatial_padding = (0, kernel_size[1] // 2, kernel_size[2] // 2)
-
-    # Compute each block's partial conv output
-    partial_sums = []
-    for block_idx in range(num_blocks):
-        c_start = block_idx * C_in_block
-        c_end = c_start + C_in_block
-        with torch.no_grad():
-            partial = torch.nn.functional.conv3d(
-                padded_input[:, c_start:c_end, :, :, :],
-                weight_bf16[:, c_start:c_end, :, :, :],
-                bias=None,
-                padding=spatial_padding,
-            ).float()
-        partial_sums.append(partial)
-
-    # Sum all partials + bias (mimics reducer accumulation)
-    total = partial_sums[0].clone()
-    for i in range(1, num_blocks):
-        total = (total.to(torch.bfloat16) + partial_sums[i].to(torch.bfloat16)).float()
-    if bias is not None:
-        total = (
-            total.to(torch.bfloat16) + bias.to(torch.bfloat16).float().reshape(1, -1, 1, 1, 1).to(torch.bfloat16)
-        ).float()
-
-    print(f"\n  Per-block analysis (C_in_block={C_in_block}, num_blocks={num_blocks}):")
-    sum_vs_ref = (total - ref_output).abs().max().item()
-    sum_vs_tt = (total - tt_output).abs().max().item()
-    print(f"    sum_of_partials vs ref: maxdiff={sum_vs_ref:.4e}")
-    print(f"    sum_of_partials vs tt:  maxdiff={sum_vs_tt:.4e}")
-
-    # Find worst error positions between ref and tt
-    diff = (ref_output - tt_output).abs()
-    flat_diff = diff.flatten()
-    top_vals, top_idx = flat_diff.topk(min(10, flat_diff.numel()))
-
-    for k in range(len(top_vals)):
-        if top_vals[k] < 0.01:
-            break
-        coords = torch.unravel_index(top_idx[k], diff.shape)
-        b, c, t, h, w = [coords[d].item() for d in range(5)]
-
-        ref_val = ref_output[b, c, t, h, w].item()
-        tt_val = tt_output[b, c, t, h, w].item()
-        bias_val = bias[c].to(torch.bfloat16).float().item() if bias is not None else 0.0
-        manual_sum = sum(ps[b, c, t, h, w].item() for ps in partial_sums) + bias_val
-
-        block_strs = [f"b{bi}={partial_sums[bi][b, c, t, h, w].item():+.6f}" for bi in range(num_blocks)]
-        print(
-            f"    [{b},{c},{t},{h},{w}] ref={ref_val:+.6f} tt={tt_val:+.6f} err={top_vals[k]:.4f} manual_sum={manual_sum:+.6f}"
-        )
-        print(f"      partials: {' '.join(block_strs)}  bias={bias_val:+.6f}")
-
-        # Test hypotheses: was a block dropped or doubled?
-        error = tt_val - ref_val
-        for bi in range(num_blocks):
-            pv = partial_sums[bi][b, c, t, h, w].item()
-            if abs(pv) > 0.001:
-                if abs(error + pv) < abs(error) * 0.1:
-                    print(f"      ** block {bi} may have been DROPPED (error + partial ≈ 0)")
-                if abs(error - pv) < abs(error) * 0.1:
-                    print(f"      ** block {bi} may have been DOUBLED (error - partial ≈ 0)")
-
-
 @pytest.mark.parametrize(
     ("B, C_in, C_out, T, H, W, kernel_size, stride, padding"),
     [
@@ -560,95 +453,7 @@ def test_wan_conv3d(
         tt_output_torch = tt_output_torch[:, :C_out]
         logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
 
-    _print_conv3d_error_analysis(
-        torch_output, tt_output_torch, label=f"conv3d C_in={C_in} C_out={C_out} T={T} H={H} W={W} k={kernel_size}"
-    )
     assert_quality(torch_output, tt_output_torch, pcc=0.999_980, relative_rmse=0.007)
-
-
-@pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
-    [((1, 1), 0, 1)],
-    ids=["1x1_h0_w1"],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_conv3d_real_weights(mesh_device, h_axis, w_axis):
-    """Test conv3d with real model weights saved from mid_block run."""
-    from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d as TorchWanCausalConv3d
-
-    weights_path = "/tmp/resblock_weights/conv2_state_dict.pt"
-    input_path = "/tmp/resblock_debug/tt_r5_after_silu2.pt"  # BCTHW format
-    assert os.path.exists(weights_path), f"Run mid_block test first to save weights: {weights_path}"
-    assert os.path.exists(input_path), f"Run mid_block test first to save input: {input_path}"
-
-    conv2_sd = torch.load(weights_path, weights_only=True)
-    input_BCTHW = torch.load(input_path, weights_only=True)  # BCTHW float
-    B, C_in, T, H, W = input_BCTHW.shape
-    C_out = conv2_sd["weight"].shape[0]
-
-    torch_model = TorchWanCausalConv3d(in_channels=C_in, out_channels=C_out, kernel_size=3, stride=1, padding=1)
-    torch_model.load_state_dict(conv2_sd)
-    torch_model.eval()
-
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
-        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
-    )
-    tt_model = WanCausalConv3d(
-        in_channels=C_in,
-        out_channels=C_out,
-        kernel_size=3,
-        mesh_device=mesh_device,
-        stride=1,
-        padding=1,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-    )
-    tt_model.load_state_dict(conv2_sd)
-
-    # input_BCTHW *= 0
-    # input_BCTHW += 0.1
-
-    tt_input_tensor = input_BCTHW.permute(0, 2, 3, 4, 1)  # BCTHW -> BTHWC
-    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-    tt_input_tensor = bf16_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
-    )
-
-    torch_model_bf16 = torch_model.to(torch.bfloat16)
-    with torch.no_grad():
-        torch_output = torch_model_bf16(input_BCTHW.to(torch.bfloat16)).float()
-    tt_output = tt_model(tt_input_tensor, logical_h=logical_h)
-
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-    )
-    tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
-    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
-    if tt_output_torch.shape != torch_output.shape:
-        tt_output_torch = tt_output_torch[:, :C_out]
-
-    _print_conv3d_error_analysis(torch_output, tt_output_torch, label="conv3d_real_weights")
-
-    # Per-block partial sum analysis: identify which C_in block disagrees
-    C_in_block = tt_model.conv_config.C_in_block
-    _analyze_conv3d_per_block(
-        torch_output,
-        tt_output_torch,
-        conv2_sd["weight"],
-        conv2_sd.get("bias", None),
-        input_BCTHW,
-        C_in_block,
-    )
-
-    # assert_quality(torch_output, tt_output_torch, pcc=0.999_980, relative_rmse=0.007)
 
 
 @pytest.mark.parametrize(
@@ -913,14 +718,13 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     [
         # (1, 384, 1, 90, 160),  # decoder.mid_block.resnets.0
         (1, 384, 4, 60, 104),  # decoder.mid_block.resnets.0
-        # (1, 384, 1, 60, 104),  # decoder.mid_block.resnets.0
     ],
     ids=[
         "mid_block",
     ],
 )
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
-@pytest.mark.parametrize("mean, std", [(0, 1)])
+@pytest.mark.parametrize("mean, std", [(0, 1), (0, 0.1)], ids=["std=1", "std=0.1"])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
     [
@@ -1028,96 +832,6 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         feat_cache=tt_feat_cache,
         feat_idx=tt_feat_idx,
     )
-
-    # DEBUG: Compare TT intermediates against torch step-by-step
-    import os
-
-    if os.path.exists("/tmp/midblock_debug/tt_0_input.pt"):
-        logger.info("=== Intermediate PCC comparison (mid_block level) ===")
-        # Run torch model step-by-step
-        torch_feat_idx_dbg = [0]
-        torch_feat_cache_dbg = [None] * count_convs(tt_model)
-        with torch.no_grad():
-            torch_r0 = torch_model.resnets[0](
-                torch_input_tensor, feat_cache=torch_feat_cache_dbg, feat_idx=torch_feat_idx_dbg
-            )
-            torch_a0 = torch_model.attentions[0](torch_r0)
-            torch_r1 = torch_model.resnets[1](torch_a0, feat_cache=torch_feat_cache_dbg, feat_idx=torch_feat_idx_dbg)
-
-        for name, torch_ref in [
-            ("1_after_resnet0", torch_r0),
-            ("2_after_attn0", torch_a0),
-            ("3_after_resnet1", torch_r1),
-        ]:
-            tt_inter = torch.load(f"/tmp/midblock_debug/tt_{name}.pt")
-            pcc = torch.corrcoef(torch.stack([torch_ref.float().flatten(), tt_inter.float().flatten()]))[0, 1].item()
-            rmse = (torch_ref.float() - tt_inter.float()).pow(2).mean().sqrt().item()
-            ref_std = torch_ref.float().std().item()
-            logger.info(
-                f"  {name}: PCC={pcc*100:.4f}% RMSE={rmse:.4e} RMSE/std={rmse/ref_std*100:.1f}% "
-                f"tt_dtype={tt_inter.dtype} tt_shape={list(tt_inter.shape)}"
-            )
-        logger.info("=== End mid_block level comparison ===")
-
-    # DEBUG: Compare attention-internal intermediates
-    if os.path.exists("/tmp/midblock_debug/tt_attn_0_input_TNC.pt"):
-        logger.info("=== Attention-internal PCC comparison ===")
-        torch_attn = torch_model.attentions[0]
-        with torch.no_grad():
-            # Reproduce torch attention step-by-step using resnet0 output
-            # torch_r0 is (B, C, T, H, W) from the mid_block-level debug above
-            B_d, C_d, T_d, H_d, W_d = torch_r0.shape
-            # Torch model: permute to (B*T, C, H, W) then apply norm
-            x_torch = torch_r0.permute(0, 2, 1, 3, 4).reshape(B_d * T_d, C_d, H_d, W_d)
-            # input_TNC: (B*T, H*W, C)
-            torch_input_tnc = x_torch.reshape(B_d * T_d, C_d, H_d * W_d).permute(0, 2, 1)
-
-            x_normed = torch_attn.norm(x_torch)  # (B*T, C, H, W)
-            torch_after_norm = x_normed.reshape(B_d * T_d, C_d, H_d * W_d).permute(0, 2, 1)
-
-            qkv = torch_attn.to_qkv(x_normed)  # (B*T, 3C, H, W)
-            torch_after_qkv = qkv.reshape(B_d * T_d, C_d * 3, H_d * W_d).permute(0, 2, 1)
-
-            qkv_for_sdpa = qkv.reshape(B_d * T_d, 1, C_d * 3, -1).permute(0, 1, 3, 2).contiguous()
-            q, k, v = qkv_for_sdpa.chunk(3, dim=-1)
-            sdpa_out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-            torch_after_sdpa = sdpa_out.squeeze(1)  # (B*T, H*W, C)
-
-            proj_in = sdpa_out.squeeze(1).permute(0, 2, 1).reshape(B_d * T_d, C_d, H_d, W_d)
-            proj_out = torch_attn.proj(proj_in)  # (B*T, C, H, W)
-            torch_after_proj = proj_out.reshape(B_d * T_d, C_d, H_d * W_d).permute(0, 2, 1)
-
-        attn_intermediates = [
-            ("0_input_TNC", torch_input_tnc),
-            ("1_after_norm", torch_after_norm),
-            ("2_after_qkv", torch_after_qkv),
-            ("3_after_sdpa", torch_after_sdpa),
-            ("4_after_proj", torch_after_proj),
-        ]
-        for name, torch_ref in attn_intermediates:
-            fpath = f"/tmp/midblock_debug/tt_attn_{name}.pt"
-            if not os.path.exists(fpath):
-                logger.info(f"  {name}: [file not found]")
-                continue
-            tt_inter = torch.load(fpath)
-            # Squeeze head dim if present (SDPA output is THNC with H=1)
-            if tt_inter.dim() == 4 and tt_inter.shape[1] == 1:
-                tt_inter = tt_inter.squeeze(1)
-            # Flatten both for comparison
-            ref_flat = torch_ref.float().flatten()
-            tt_flat = tt_inter.float().flatten()
-            if ref_flat.shape != tt_flat.shape:
-                logger.info(f"  {name}: shape mismatch ref={list(torch_ref.shape)} tt={list(tt_inter.shape)}")
-                continue
-            pcc = torch.corrcoef(torch.stack([ref_flat, tt_flat]))[0, 1].item()
-            rmse = (torch_ref.float() - tt_inter.float()).pow(2).mean().sqrt().item()
-            ref_std = torch_ref.float().std().item()
-            logger.info(
-                f"  {name}: PCC={pcc*100:.4f}% RMSE={rmse:.4e} RMSE/std={rmse/ref_std*100:.1f}% "
-                f"tt_dtype={tt_inter.dtype} tt_shape={list(tt_inter.shape)}"
-            )
-        logger.info("=== End attention-internal comparison ===")
-    # return
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 2
@@ -1484,9 +1198,12 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("check_cache", [True])
 @pytest.mark.parametrize(
-    "dtype",
-    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
-    ids=["bf16", "f32"],
+    "dtype, MIN_PCC, MAX_RMSE",
+    [
+        (ttnn.DataType.FLOAT32, 0.999915, 0.012),
+        (ttnn.DataType.BFLOAT16, 0.99944, 0.034),
+    ],
+    ids=["f32", "bf16"],
 )
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
@@ -1507,7 +1224,9 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache, dtype):
+def test_wan_decoder3d(
+    mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache, dtype, MIN_PCC, MAX_RMSE
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
 
     torch.manual_seed(0)
@@ -1524,10 +1243,6 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     dropout = 0.0
     out_channels = 3
     is_residual = False
-
-    # FIXME:
-    MIN_PCC = 0.99 if tuple(mesh_device.shape)[h_axis] == 4 else 0.997
-    MAX_RMSE = 0.12 if tuple(mesh_device.shape)[h_axis] == 4 else 0.08
 
     torch_model = TorchWanDecoder3d(
         dim=base_dim,

@@ -452,11 +452,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
     uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
     TT_FATAL(!(input_tensor_shape[-1] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
+    TT_FATAL(!(input_tensor_shape[-2] % TILE_WIDTH), "Input tensor height must be a multiple of TILE_WIDTH");
     TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
+    TT_FATAL(!(output_tensor_shape[-2] % TILE_WIDTH), "Output tensor height must be a multiple of TILE_WIDTH");
     uint32_t TILE_WIDTH = 32;
 
-    // FIXME: Assert if either of these are 0.
-    // TODO: Add asserts in other program factories.
     uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
     uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
 

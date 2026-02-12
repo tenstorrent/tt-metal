@@ -21,20 +21,23 @@ def _ntuple(x, n):
 
 
 def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size):
-    config_to_blocking = {
-        # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
-        (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
-        (192, 96, (1, 3, 3)): (192, 96, 1, 4, 4),
-        (96, 96, (3, 3, 3)): (96, 96, 1, 32, 2),
-        (384, 192, (1, 3, 3)): (192, 96, 1, 16, 1),
-        (192, 192, (3, 3, 3)): (96, 96, 1, 64, 1),
-        (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
-        # (16, 384, (3, 3, 3)): (16, 32, 1, 1, 1),
-        (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
-        (384, 384, (3, 3, 3)): (128, 128, 1, 16, 2),
-        (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
-    }
-    config_to_blocking = {(in_channels, out_channels, kernel_size): (32, 32, 1, 1, 1)}
+    if weights_dtype == ttnn.float32:
+        # Use smaller block size to reduce memory use.
+        config_to_blocking = {(in_channels, out_channels, kernel_size): (32, 32, 1, 1, 1)}
+    else:
+        config_to_blocking = {
+            # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+            (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
+            (192, 96, (1, 3, 3)): (192, 96, 1, 4, 4),
+            (96, 96, (3, 3, 3)): (96, 96, 1, 32, 2),
+            (384, 192, (1, 3, 3)): (192, 96, 1, 16, 1),
+            (192, 192, (3, 3, 3)): (96, 96, 1, 64, 1),
+            (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
+            # (16, 384, (3, 3, 3)): (16, 32, 1, 1, 1),
+            (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
+            (384, 384, (3, 3, 3)): (128, 128, 1, 16, 2),
+            (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
+        }
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
     if blocking is None:
