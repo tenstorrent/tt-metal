@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 from pathlib import Path
 
@@ -12,30 +13,127 @@ MODEL_PATH = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/d
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
 
-@pytest.mark.parametrize("repeat_batches", [2])
-@pytest.mark.timeout(900)
-def test_demo(repeat_batches, force_recalculate_weight_config):
+@pytest.mark.parametrize(
+    "max_prompts,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name",
+    [
+        pytest.param(
+            56,
+            2,
+            128,
+            5,
+            False,
+            None,
+            id="tg_stress",
+            marks=pytest.mark.requires_device(["TG"]),
+        ),
+        pytest.param(
+            256,
+            1,
+            129,
+            None,
+            True,
+            "dual_demo_full_results",
+            id="dual_full_demo",
+            marks=pytest.mark.requires_device(["DUAL"]),
+        ),
+        pytest.param(
+            56,
+            20,
+            129,
+            None,
+            True,
+            "dual_demo_stress_results",
+            id="dual_stress_demo",
+            marks=pytest.mark.requires_device(["DUAL"]),
+        ),
+        pytest.param(
+            512,
+            1,
+            129,
+            None,
+            True,
+            "quad_demo_full_results",
+            id="quad_full_demo",
+            marks=pytest.mark.requires_device(["QUAD"]),
+        ),
+        pytest.param(
+            56,
+            20,
+            129,
+            None,
+            True,
+            "quad_demo_stress_results",
+            id="quad_stress_demo",
+            marks=pytest.mark.requires_device(["QUAD"]),
+        ),
+    ],
+)
+def test_demo(
+    max_prompts: int,
+    repeat_batches: int,
+    max_new_tokens: int,
+    override_num_layers: int,
+    enable_trace: bool,
+    artifact_name: str,
+):
     """
-    Stress test the DeepSeek v3 demo with prompts loaded from JSON file, 2x runs.
-    Uses only 5 layers (override_num_layers=5) for faster CI execution.
+    DeepSeek v3 demo test with prompts loaded from JSON file.
+
+    Test variants:
+    - tg_stress (TG): 56 prompts, 2 batches, 5 layers - stress test for CI
+    - dual_full_demo (DUAL): 256 prompts, 1 batch - tests full prompt capacity
+    - dual_stress_demo (DUAL): 56 prompts, 20 batches - tests stability under repeated execution
+    - quad_full_demo (QUAD): 512 prompts, 1 batch - tests full prompt capacity
+    - quad_stress_demo (QUAD): 56 prompts, 20 batches - tests stability under repeated execution
     """
     # Path to the external JSON file containing prompts
     json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
 
     # Load prompts from JSON file
-    prompts = load_prompts_from_json(json_path, max_prompts=56)
+    prompts = load_prompts_from_json(json_path, max_prompts=max_prompts)
 
-    # Run demo with only 5 layers for faster CI execution
-    results = run_demo(
+    # Run demo
+    run_kwargs = dict(
         prompts=prompts,
         model_path=MODEL_PATH,
         cache_dir=CACHE_DIR,
         random_weights=False,
-        max_new_tokens=128,
-        override_num_layers=5,
+        max_new_tokens=max_new_tokens,
         repeat_batches=repeat_batches,
-        force_recalculate=force_recalculate_weight_config,
     )
+    if override_num_layers is not None:
+        run_kwargs["override_num_layers"] = override_num_layers
+    if enable_trace:
+        run_kwargs["enable_trace"] = True
+
+    results = run_demo(**run_kwargs)
 
     # Check output
-    assert len(results["generations"][0]["tokens"]) == 128
+    assert len(results["generations"][0]["tokens"]) == max_new_tokens
+
+    # Save results to JSON for artifact upload (QUAD tests only)
+    if artifact_name is not None:
+        artifact_dir = Path("generated/artifacts")
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        output_file = artifact_dir / f"{artifact_name}.json"
+
+        output_data = {
+            "prompts": prompts,
+            "generations": [],
+            "statistics": results.get("statistics", {}),
+        }
+
+        for i, gen_result in enumerate(results["generations"]):
+            prompt_text = prompts[i] if i < len(prompts) else "[empty prompt]"
+            output_data["generations"].append(
+                {
+                    "index": i + 1,
+                    "prompt": prompt_text,
+                    "text": gen_result.get("text"),
+                }
+            )
+
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
+
+        print(f"\nDemo results saved to: {output_file}")
