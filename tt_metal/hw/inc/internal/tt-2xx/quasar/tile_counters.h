@@ -19,8 +19,8 @@
 #define TILE_COUNTERS_BASE  0x0080c000
 #endif
 
-constexpr uint32_t NUM_TILE_COUNTERS = 16;
-constexpr uint32_t NUM_WORDS_TILE_CNT = 8;
+constexpr uint32_t DFB_NUM_TILE_COUNTERS = 16;
+constexpr uint32_t DFB_NUM_WORDS_TILE_CNT = 8;
 
 typedef struct {
     std::uint32_t reserved0;
@@ -31,20 +31,24 @@ typedef struct {
     std::uint32_t tiles_posted_raw;
     std::uint32_t tiles_acked_raw;
     std::uint32_t error_status;
-} tile_counter_t;
+} dfb_tile_counter_t;
 
-static_assert(sizeof(tile_counter_t) == NUM_WORDS_TILE_CNT*sizeof(uint32_t), "tile_counter_t must be 8 words (32 bytes)!");
+static_assert(
+    sizeof(dfb_tile_counter_t) == DFB_NUM_WORDS_TILE_CNT * sizeof(uint32_t),
+    "tile_counter_t must be 8 words (32 bytes)!");
 
 typedef union {
-    uint32_t words[NUM_WORDS_TILE_CNT];
-    tile_counter_t f;
-} tile_counter_u;
+    uint32_t words[DFB_NUM_WORDS_TILE_CNT];
+    dfb_tile_counter_t f;
+} dfb_tile_counter_u;
 
-extern tile_counter_u volatile * const tile_counters;
+// Define tile_counters pointer to the hardware register base address
+inline volatile dfb_tile_counter_u* const dfb_tile_counters =
+    reinterpret_cast<volatile dfb_tile_counter_u* const>(TILE_COUNTERS_BASE);
 
 inline void tile_counters_reset() {
-    for (uint32_t i = 0; i < NUM_TILE_COUNTERS; i++) {
-        tile_counters[i].f.reset = 1;
+    for (uint32_t i = 0; i < DFB_NUM_TILE_COUNTERS; i++) {
+        dfb_tile_counters[i].f.reset = 1;
     }
 }
 

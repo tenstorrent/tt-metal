@@ -14,6 +14,7 @@
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
 #include "experimental/noc.h"
 #else
+#include "api/compute/common_globals.h"
 #include "internal/tt-2xx/quasar/tile_counters.h"
 #endif
 
@@ -38,10 +39,12 @@ public:
         PackedTileCounter packed_tc = g_dfb_interface[logical_dfb_id_].packed_tile_counter[counter_idx_];
         uint8_t tc_id = get_counter_id(packed_tc);
 #ifdef COMPILE_FOR_TRISC
-        uint16_t entries_freed;
-        do {
-            entries_freed = tile_counters[tc_id].f.acked;
-        } while (entries_freed < num_entries);
+        PACK({
+            uint16_t entries_freed;
+            do {
+                entries_freed = dfb_tile_counters[tc_id].f.acked;
+            } while (entries_freed < num_entries);
+        })
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
         while (llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
@@ -54,20 +57,29 @@ public:
         PackedTileCounter packed_tc = local_dfb_interface.packed_tile_counter[counter_idx_];
         uint8_t tc_id = get_counter_id(packed_tc);
 #ifdef COMPILE_FOR_TRISC
-        tile_counters[tc_id].f.posted = num_entries;
+        PACK({
+            dfb_tile_counters[tc_id].f.posted = num_entries;
+            local_dfb_interface.wr_ptr[counter_idx_] += (num_entries * local_dfb_interface.stride_size);
+            // DPRINT << "push_back: updated wr_ptr: " << local_dfb_interface.wr_ptr[counter_idx_] << ENDL();
+            if (local_dfb_interface.wr_ptr[counter_idx_] == local_dfb_interface.limit[counter_idx_]) {
+                local_dfb_interface.wr_ptr[counter_idx_] = local_dfb_interface.base_addr[counter_idx_];
+            }
+
+            counter_idx_ = (counter_idx_ + 1) % local_dfb_interface.num_tcs_to_rr;
+            // DPRINT << "push_back: updated counter_idx: " << (uint32_t)counter_idx_ << ENDL();
+        })
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
         llk_intf_inc_posted(tensix_id, tc_id, num_entries);
-#endif
-
         local_dfb_interface.wr_ptr[counter_idx_] += (num_entries * local_dfb_interface.stride_size);
-        DPRINT << "push_back: updated wr_ptr: " << local_dfb_interface.wr_ptr[counter_idx_] << ENDL();
+        // DPRINT << "push_back: updated wr_ptr: " << local_dfb_interface.wr_ptr[counter_idx_] << ENDL();
         if (local_dfb_interface.wr_ptr[counter_idx_] == local_dfb_interface.limit[counter_idx_]) {
             local_dfb_interface.wr_ptr[counter_idx_] = local_dfb_interface.base_addr[counter_idx_];
         }
 
         counter_idx_ = (counter_idx_ + 1) % local_dfb_interface.num_tcs_to_rr;
-        DPRINT << "push_back: updated counter_idx: " << (uint32_t)counter_idx_ << ENDL();
+        // DPRINT << "push_back: updated counter_idx: " << (uint32_t)counter_idx_ << ENDL();
+#endif
     }
 
     void wait_front(uint16_t num_entries) {
@@ -75,16 +87,18 @@ public:
         PackedTileCounter packed_tc = g_dfb_interface[logical_dfb_id_].packed_tile_counter[counter_idx_];
         uint8_t tc_id = get_counter_id(packed_tc);
 #ifdef COMPILE_FOR_TRISC
-        uint16_t entries_received;
-        do {
-            entries_received = tile_counters[tc_id].f.posted;
-        } while (entries_received < num_entries);
+        UNPACK({
+            uint16_t entries_received;
+            do {
+                entries_received = dfb_tile_counters[tc_id].f.posted;
+            } while (entries_received < num_entries);
+        })
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
-        DPRINT << "wait_front: tensix_id: " << static_cast<uint32_t>(tensix_id)
-               << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
-               << " tc_id: " << static_cast<uint32_t>(tc_id)
-               << " occupancy: " << static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)) << ENDL();
+        // DPRINT << "wait_front: tensix_id: " << static_cast<uint32_t>(tensix_id)
+        //        << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
+        //        << " tc_id: " << static_cast<uint32_t>(tc_id)
+        //        << " occupancy: " << static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)) << ENDL();
         while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
     }
@@ -95,12 +109,19 @@ public:
         PackedTileCounter packed_tc = local_dfb_interface.packed_tile_counter[counter_idx_];
         uint8_t tc_id = get_counter_id(packed_tc);
 #ifdef COMPILE_FOR_TRISC
-        tile_counters[tc_id].f.acked = num_entries;
+        UNPACK({
+            dfb_tile_counters[tc_id].f.acked = num_entries;
+            local_dfb_interface.rd_ptr[counter_idx_] += (num_entries * local_dfb_interface.stride_size);
+            // DPRINT << "pop_front: updated rd_ptr: " << local_dfb_interface.rd_ptr[counter_idx_] << ENDL();
+            if (local_dfb_interface.rd_ptr[counter_idx_] == local_dfb_interface.limit[counter_idx_]) {
+                local_dfb_interface.rd_ptr[counter_idx_] = local_dfb_interface.base_addr[counter_idx_];
+            }
+            counter_idx_ = (counter_idx_ + 1) % local_dfb_interface.num_tcs_to_rr;
+            // DPRINT << "pop_front: updated counter_idx: " << (uint32_t)counter_idx_ << ENDL();
+        })
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
         llk_intf_inc_acked(tensix_id, tc_id, num_entries);
-#endif
-
         local_dfb_interface.rd_ptr[counter_idx_] += (num_entries * local_dfb_interface.stride_size);
         DPRINT << "pop_front: updated rd_ptr: " << local_dfb_interface.rd_ptr[counter_idx_] << ENDL();
         if (local_dfb_interface.rd_ptr[counter_idx_] == local_dfb_interface.limit[counter_idx_]) {
@@ -108,6 +129,7 @@ public:
         }
         counter_idx_ = (counter_idx_ + 1) % local_dfb_interface.num_tcs_to_rr;
         DPRINT << "pop_front: updated counter_idx: " << (uint32_t)counter_idx_ << ENDL();
+#endif
     }
     // Explicit sync APIs end
 
@@ -129,7 +151,7 @@ public:
                 PackedTileCounter packed_tc = local_dfb_interface.packed_tile_counter[i];
                 uint8_t tc_id = get_counter_id(packed_tc);
 #ifdef COMPILE_FOR_TRISC
-                all_acked = all_acked && (tile_counters[tc_id].f.posted == 0);
+                UNPACK({ all_acked = all_acked && (dfb_tile_counters[tc_id].f.posted == 0); })
 #else
                 uint8_t tensix_id = get_tensix_id(packed_tc);
                 all_acked &=

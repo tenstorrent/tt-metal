@@ -16,12 +16,16 @@ void kernel_main() {
     const uint32_t num_producers = static_cast<uint32_t>(__builtin_popcount(producer_mask));
 
     experimental::DataflowBuffer dfb(0);
+#ifndef COMPILE_FOR_TRISC
     experimental::Noc noc;
 
     // kinda weird to do this to get the producer idx
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << hartid) - 1u)));
+#else
+    uint32_t producer_idx = 0;
+#endif
 
     // DPRINT << "producer_idx: " << producer_idx << " num_entries_per_producer: " << num_entries_per_producer <<
     // ENDL();
@@ -29,12 +33,12 @@ void kernel_main() {
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
-    for (uint32_t tensix_id = 0; tensix_id < 4; tensix_id++) {
-        for (uint32_t tc_id = 0; tc_id < 16; tc_id++) {
-            DPRINT << "tensix_id: " << tensix_id << " tc_id: " << tc_id
-                   << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)) << ENDL();
-        }
-    }
+    // for (uint32_t tensix_id = 0; tensix_id < 4; tensix_id++) {
+    //     for (uint32_t tc_id = 0; tc_id < 16; tc_id++) {
+    //         DPRINT << "tensix_id: " << tensix_id << " tc_id: " << tc_id
+    //                << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)) << ENDL();
+    //     }
+    // }
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         // DPRINT << "rbw" << ENDL();
@@ -42,8 +46,10 @@ void kernel_main() {
         // DPRINT << "rbd" << ENDL();
         // DPRINT << "rdi" << ENDL();
         DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) << ENDL();
+#ifndef COMPILE_FOR_TRISC
         noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = tile_id * num_producers + producer_idx}, {});
         noc.async_read_barrier();
+#endif
         // DPRINT << "rdd" << ENDL();
         dfb.push_back(1);
         // DPRINT << "pbd" << ENDL();

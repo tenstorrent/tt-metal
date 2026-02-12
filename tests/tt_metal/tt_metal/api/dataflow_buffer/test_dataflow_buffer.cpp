@@ -106,12 +106,13 @@ void run_dfb_program(
             dfb_config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
         }
     } else {
+        std::cout << "Creating consumer kernel" << std::endl;
         consumer_kernel = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
             logical_core,
             ComputeConfig{.compile_args = consumer_cta});
-        dfb_config.consumer_risc_mask = 0x10;
+        dfb_config.consumer_risc_mask = 0x100;
     }
 
     log_info(
@@ -125,30 +126,34 @@ void run_dfb_program(
     SetRuntimeArgs(program, producer_kernel, logical_core, {(uint32_t)dfb_config.producer_risc_mask});
     SetRuntimeArgs(program, consumer_kernel, logical_core, {(uint32_t)dfb_config.consumer_risc_mask});
 
-    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, buffer_size / sizeof(uint32_t));
-    distributed::WriteShard(mesh_device->mesh_command_queue(), in_buffer, input, zero_coord, true);
+    std::vector<uint32_t> input;
+    if (producer_type == DFBPorCType::DM and consumer_type == DFBPorCType::DM) {
+        input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, buffer_size / sizeof(uint32_t));
+        distributed::WriteShard(mesh_device->mesh_command_queue(), in_buffer, input, zero_coord, true);
+    }
 
     // Execute using slow dispatch (DFBs not yet supported in MeshWorkload path)
     IDevice* device = mesh_device->get_devices()[0];
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
 
-    std::vector<uint32_t> output;
-    distributed::ReadShard(mesh_device->mesh_command_queue(), output, out_buffer, zero_coord, true);
+    if (producer_type == DFBPorCType::DM and consumer_type == DFBPorCType::DM) {
+        std::vector<uint32_t> output;
+        distributed::ReadShard(mesh_device->mesh_command_queue(), output, out_buffer, zero_coord, true);
 
-    if (input != output) {
-        log_info(tt::LogTest, "Printing input");
-        for (auto i : input) {
-            std::cout << i << " ";
+        if (input != output) {
+            log_info(tt::LogTest, "Printing input");
+            for (auto i : input) {
+                std::cout << i << " ";
+            }
+            std::cout << std::endl;
+            log_info(tt::LogTest, "Printing output");
+            for (auto i : output) {
+                std::cout << i << " ";
+            }
+            std::cout << std::endl;
         }
-        std::cout << std::endl;
-        log_info(tt::LogTest, "Printing output");
-        for (auto i : output) {
-            std::cout << i << " ";
-        }
-        std::cout << std::endl;
+        EXPECT_EQ(input, output);
     }
-
-    EXPECT_EQ(input, output);
 }
 
 TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1S) {

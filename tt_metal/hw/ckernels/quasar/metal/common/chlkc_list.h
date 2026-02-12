@@ -43,7 +43,7 @@
 
 std::uint32_t run_kernel() {
 #ifdef UCK_CHLKC_MATH
-    ckernel::zeroacc();
+    ckernel::p_zeroacc();
     chlkc_math::math_main();
 #endif
 
@@ -52,7 +52,7 @@ std::uint32_t run_kernel() {
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
-    ckernel::zerosrc();
+    ckernel::p_zerosrc();
     chlkc_unpack::unpack_main();
 #endif
 
