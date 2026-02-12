@@ -913,6 +913,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     [
         # (1, 384, 1, 90, 160),  # decoder.mid_block.resnets.0
         (1, 384, 4, 60, 104),  # decoder.mid_block.resnets.0
+        # (1, 384, 1, 60, 104),  # decoder.mid_block.resnets.0
     ],
     ids=[
         "mid_block",
@@ -1027,6 +1028,96 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         feat_cache=tt_feat_cache,
         feat_idx=tt_feat_idx,
     )
+
+    # DEBUG: Compare TT intermediates against torch step-by-step
+    import os
+
+    if os.path.exists("/tmp/midblock_debug/tt_0_input.pt"):
+        logger.info("=== Intermediate PCC comparison (mid_block level) ===")
+        # Run torch model step-by-step
+        torch_feat_idx_dbg = [0]
+        torch_feat_cache_dbg = [None] * count_convs(tt_model)
+        with torch.no_grad():
+            torch_r0 = torch_model.resnets[0](
+                torch_input_tensor, feat_cache=torch_feat_cache_dbg, feat_idx=torch_feat_idx_dbg
+            )
+            torch_a0 = torch_model.attentions[0](torch_r0)
+            torch_r1 = torch_model.resnets[1](torch_a0, feat_cache=torch_feat_cache_dbg, feat_idx=torch_feat_idx_dbg)
+
+        for name, torch_ref in [
+            ("1_after_resnet0", torch_r0),
+            ("2_after_attn0", torch_a0),
+            ("3_after_resnet1", torch_r1),
+        ]:
+            tt_inter = torch.load(f"/tmp/midblock_debug/tt_{name}.pt")
+            pcc = torch.corrcoef(torch.stack([torch_ref.float().flatten(), tt_inter.float().flatten()]))[0, 1].item()
+            rmse = (torch_ref.float() - tt_inter.float()).pow(2).mean().sqrt().item()
+            ref_std = torch_ref.float().std().item()
+            logger.info(
+                f"  {name}: PCC={pcc*100:.4f}% RMSE={rmse:.4e} RMSE/std={rmse/ref_std*100:.1f}% "
+                f"tt_dtype={tt_inter.dtype} tt_shape={list(tt_inter.shape)}"
+            )
+        logger.info("=== End mid_block level comparison ===")
+
+    # DEBUG: Compare attention-internal intermediates
+    if os.path.exists("/tmp/midblock_debug/tt_attn_0_input_TNC.pt"):
+        logger.info("=== Attention-internal PCC comparison ===")
+        torch_attn = torch_model.attentions[0]
+        with torch.no_grad():
+            # Reproduce torch attention step-by-step using resnet0 output
+            # torch_r0 is (B, C, T, H, W) from the mid_block-level debug above
+            B_d, C_d, T_d, H_d, W_d = torch_r0.shape
+            # Torch model: permute to (B*T, C, H, W) then apply norm
+            x_torch = torch_r0.permute(0, 2, 1, 3, 4).reshape(B_d * T_d, C_d, H_d, W_d)
+            # input_TNC: (B*T, H*W, C)
+            torch_input_tnc = x_torch.reshape(B_d * T_d, C_d, H_d * W_d).permute(0, 2, 1)
+
+            x_normed = torch_attn.norm(x_torch)  # (B*T, C, H, W)
+            torch_after_norm = x_normed.reshape(B_d * T_d, C_d, H_d * W_d).permute(0, 2, 1)
+
+            qkv = torch_attn.to_qkv(x_normed)  # (B*T, 3C, H, W)
+            torch_after_qkv = qkv.reshape(B_d * T_d, C_d * 3, H_d * W_d).permute(0, 2, 1)
+
+            qkv_for_sdpa = qkv.reshape(B_d * T_d, 1, C_d * 3, -1).permute(0, 1, 3, 2).contiguous()
+            q, k, v = qkv_for_sdpa.chunk(3, dim=-1)
+            sdpa_out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+            torch_after_sdpa = sdpa_out.squeeze(1)  # (B*T, H*W, C)
+
+            proj_in = sdpa_out.squeeze(1).permute(0, 2, 1).reshape(B_d * T_d, C_d, H_d, W_d)
+            proj_out = torch_attn.proj(proj_in)  # (B*T, C, H, W)
+            torch_after_proj = proj_out.reshape(B_d * T_d, C_d, H_d * W_d).permute(0, 2, 1)
+
+        attn_intermediates = [
+            ("0_input_TNC", torch_input_tnc),
+            ("1_after_norm", torch_after_norm),
+            ("2_after_qkv", torch_after_qkv),
+            ("3_after_sdpa", torch_after_sdpa),
+            ("4_after_proj", torch_after_proj),
+        ]
+        for name, torch_ref in attn_intermediates:
+            fpath = f"/tmp/midblock_debug/tt_attn_{name}.pt"
+            if not os.path.exists(fpath):
+                logger.info(f"  {name}: [file not found]")
+                continue
+            tt_inter = torch.load(fpath)
+            # Squeeze head dim if present (SDPA output is THNC with H=1)
+            if tt_inter.dim() == 4 and tt_inter.shape[1] == 1:
+                tt_inter = tt_inter.squeeze(1)
+            # Flatten both for comparison
+            ref_flat = torch_ref.float().flatten()
+            tt_flat = tt_inter.float().flatten()
+            if ref_flat.shape != tt_flat.shape:
+                logger.info(f"  {name}: shape mismatch ref={list(torch_ref.shape)} tt={list(tt_inter.shape)}")
+                continue
+            pcc = torch.corrcoef(torch.stack([ref_flat, tt_flat]))[0, 1].item()
+            rmse = (torch_ref.float() - tt_inter.float()).pow(2).mean().sqrt().item()
+            ref_std = torch_ref.float().std().item()
+            logger.info(
+                f"  {name}: PCC={pcc*100:.4f}% RMSE={rmse:.4e} RMSE/std={rmse/ref_std*100:.1f}% "
+                f"tt_dtype={tt_inter.dtype} tt_shape={list(tt_inter.shape)}"
+            )
+        logger.info("=== End attention-internal comparison ===")
+    # return
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 2
@@ -1401,12 +1492,14 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     "mesh_device, h_axis, w_axis, num_links",
     [
         ((2, 4), 0, 1, 1),
+        ((2, 4), 1, 0, 1),
         ((1, 8), 0, 1, 1),
         ((1, 4), 1, 0, 1),
         ((4, 8), 0, 1, 4),
     ],
     ids=[
         "2x4_h0_w1",
+        "2x4_h1_w0",
         "1x8_h0_w1",
         "1x4_h1_w0",
         "4x8_h0_w1",

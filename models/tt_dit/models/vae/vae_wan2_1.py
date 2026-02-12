@@ -125,6 +125,49 @@ class WanAttentionBlock:
             }
         )
 
+    def _dump_attn_tensor(self, tensor, name, B, T, H, W, C):
+        """Dump an intermediate attention tensor for debugging.
+        Saves as TNC format (B*T, H*W, C).
+        """
+        import os
+
+        import torch
+
+        os.makedirs("/tmp/midblock_debug", exist_ok=True)
+
+        # Handle 4D THNC tensors (from SDPA): squeeze head dim first
+        if len(tensor.shape) == 4:
+            tensor = ttnn.transformer.concatenate_heads(tensor)
+
+        C_tensor = tensor.shape[2]
+
+        # Synchronize to ensure async all_gather has completed
+        ttnn.synchronize_device(self.mesh_device)
+
+        t = ttnn.to_torch(
+            tensor,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+        )
+        # Diagnostic: print full concatenated tensor info before slicing
+        num_devices = self.mesh_device.get_num_devices()
+        chunk_size = B * T
+        print(
+            f"  [TT-attn-raw] {name}: full_shape={list(t.shape)} full_std={t.float().std():.4e} "
+            f"num_devices={num_devices}",
+            flush=True,
+        )
+        for d in range(num_devices):
+            chunk = t[d * chunk_size : (d + 1) * chunk_size]
+            print(
+                f"    device[{d}]: std={chunk.float().std():.4e} first3={chunk.float().flatten()[:3].tolist()}",
+                flush=True,
+            )
+        # Data is replicated — take first device's copy
+        t = t[: B * T]
+
+        torch.save(t, f"/tmp/midblock_debug/tt_attn_{name}.pt")
+        print(f"  [TT-attn] {name}: shape={list(t.shape)} std={t.float().std():.4e} dtype={t.dtype}", flush=True)
+
     def __call__(self, x_BTHWC, logical_h):
         """
         x_BTHWC: (B, T, H, W, C) fractured on H and W
@@ -136,26 +179,60 @@ class WanAttentionBlock:
 
         residual_BTHWC = x_BTHWC
 
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
+        #############
+        # print("INPUT_TYPE:", x_BTHWC.dtype)
+        # ttnn.synchronize_device(self.mesh_device)
+        # from ...utils.conv3d import conv_unpad_height
+        # concat_dims = [None, None]
+        # concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
+        # concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
+        # t = ttnn.to_torch(
+        #    x_BTHWC,
+        #    mesh_composer=ttnn.ConcatMesh2dToTensor(
+        #        self.mesh_device,
+        #        mesh_shape=tuple(self.mesh_device.shape),
+        #        dims=concat_dims,
+        #    ),
+        #    dtype=torch.float32
+        # )
+        # print("DTYPE:", t.dtype)
+        # print("IN_PADDED_SHAPE:", t.shape)
+        # t = conv_unpad_height(t, logical_h)
+        # print("IN_SHAPE:", t.shape)       # (1, 4, 60, 104, 384)
+        # print("IN_logical:", logical_h)
+        # print("IN_STD:", t.float().std())
+        #############
+
+        ttnn.synchronize_device(self.mesh_device)
+        print("SHAPE_IN:", x_BTHWC.shape)
         # Gather height and width for replicated attention
         if self.parallel_config.height_parallel.factor > 1:
             x_BTHWC = ttnn.experimental.all_gather_async(
                 x_BTHWC,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis
+                    x_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis, dtype=x_BTHWC.dtype
                 ),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.height_parallel.mesh_axis
+                    self.parallel_config.height_parallel.mesh_axis,
                 ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.height_parallel.mesh_axis,
             )
+        ttnn.synchronize_device(self.mesh_device)
+        print("SHAPE_AFTER_H_OUT:", x_BTHWC.shape)
+
         if self.parallel_config.width_parallel.factor > 1:
             x_BTHWC = ttnn.experimental.all_gather_async(
                 x_BTHWC,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 3, self.parallel_config.width_parallel.mesh_axis
+                    x_BTHWC.shape,
+                    3,
+                    self.parallel_config.width_parallel.mesh_axis,
+                    dtype=x_BTHWC.dtype,
                 ),
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -166,20 +243,51 @@ class WanAttentionBlock:
                 cluster_axis=self.parallel_config.width_parallel.mesh_axis,
             )
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+
+        ################################
+        # ttnn.synchronize_device(self.mesh_device)
+        # test = ttnn.from_device(x_BTHWC, dtype=torch.float32)
+        # print("DTYPE:", test.dtype)
+        # t = ttnn.to_torch(
+        #    #test,
+        #    x_BTHWC,
+        #    mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+        #    dtype=torch.float32,
+        # )
+        # print("T_CONCAT_SHAPE:", t.shape, "T_CONCAT_TYPE:", t.dtype)
+        # for j  in range(4):
+        #    for i in range(8):
+        #        print("HERE:", i, j, ":", t[i, j, :, :, :].float().std())
+        # t = t[0:1, :, :, :, :]
+        # print("SHAPE:", t.shape)       # (1, 4, 60, 104, 384)
+        # print("logical_h:", logical_h)
+        # print("STD:", t.float().std())
+        # nan_mask = torch.isnan(t)
+        # nan_indices = torch.nonzero(nan_mask, as_tuple=False)
+        # print("NaNs at:", nan_indices)
+        # inf_mask = torch.isinf(t)
+        # inf_indices = torch.nonzero(inf_mask, as_tuple=False)
+        # print("Infs at:", inf_indices)
+        ################################
+
+        padded_h = x_BTHWC.shape[2]
+        if padded_h != logical_h:
             """
             H is padded, so slice it out before attention
             """
-            padded_h = x_BTHWC.shape[2]
             x_BTHWC = x_BTHWC[:, :, :logical_h, :, :]
         B, T, H, W, C = x_BTHWC.shape
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
+        # self._dump_attn_tensor(x_TNC, "0_input_TNC", B, T, H, W, C)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        # self._dump_attn_tensor(x_TNC, "1_after_norm", B, T, H, W, C)
         default_block_size = (2, 2, 2) if x_TNC.dtype == ttnn.DataType.FLOAT32 else (8, 8, 8)
         x_TND = self.to_qkv(
             x_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
         )
+        # self._dump_attn_tensor(x_TND, "2_after_qkv", B, T, H, W, C)
         q_THNC, k_THNC, v_THNC = ttnn.transformer.split_query_key_value_and_split_heads(
             x_TND, num_heads=1, transpose_key=False
         )
@@ -192,13 +300,15 @@ class WanAttentionBlock:
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
         out_THNC = ttnn.typecast(out_THNC, q_THNC.dtype) if out_THNC.dtype != q_THNC.dtype else out_THNC
+        # self._dump_attn_tensor(out_THNC, "3_after_sdpa", B, T, H, W, C)
         out_TNC = ttnn.transformer.concatenate_heads(out_THNC)
         out_TND = self.proj(
             out_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
         )
+        # self._dump_attn_tensor(out_TND, "4_after_proj", B, T, H, W, C)
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if padded_h != logical_h:
             """
             H should be padded to divide by H parallel factor.
             """
@@ -352,7 +462,7 @@ class WanCausalConv3d:
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
             x_BTHWC = ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C))
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
             """
@@ -419,7 +529,7 @@ class WanCausalConv3d:
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
             """
@@ -618,6 +728,7 @@ class WanMidBlock:
     ):
         self.dim = dim
         self.mesh_device = mesh_device
+        self.parallel_config = parallel_config
         resnets = []
         attentions = []
 
@@ -670,8 +781,8 @@ class WanMidBlock:
         from ...utils.conv3d import conv_unpad_height
 
         concat_dims = [None, None]
-        concat_dims[0] = 2
-        concat_dims[1] = 3
+        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
+        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
 
         os.makedirs("/tmp/midblock_debug", exist_ok=True)
         t = ttnn.to_torch(
@@ -695,7 +806,6 @@ class WanMidBlock:
         for i in range(len(self.attentions)):
             x_attn_BTHWC = self.attentions[i](x_BTHWC, logical_h)
             # self.dump_tensor(x_attn_BTHWC, f"2_after_attn{i}", logical_h)
-            # x_attn_BTHWC = ttnn.clone(x_attn_BTHWC)  # DEBUG: force clean tensor
             x_BTHWC = self.resnets[i + 1](x_attn_BTHWC, logical_h, feat_cache, feat_idx)
             # self.dump_tensor(x_BTHWC, f"3_after_resnet{i+1}", logical_h)
         return x_BTHWC
@@ -806,7 +916,7 @@ class WanConv2d:
         return self.mask_cache[key]
 
     def __call__(self, x_BTHWC, logical_h):
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
             """
@@ -873,7 +983,7 @@ class WanConv2d:
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
             """
