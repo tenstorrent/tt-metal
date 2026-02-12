@@ -262,7 +262,7 @@ TEST_F(N300UtilsTest, DropoutDifferentSeed) {
 }
 
 TEST_F(N300UtilsTest, MorehClipGradNorm) {
-    // Skip with watcher enabled github issue #37040
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();

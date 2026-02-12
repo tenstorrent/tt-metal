@@ -9,7 +9,6 @@ void kernel_main() {
     const auto num_tiles = get_arg_val<uint32_t>(i++);
     const auto p = get_arg_val<uint32_t>(i++);
     const bool p_is_negative = get_arg_val<uint32_t>(i++) == 1;
-    const auto norm_type = get_arg_val<uint32_t>(i++);
 
     std::uint8_t input_id{0};
     const auto cb_input = input_id++;    // input(==tmp_pow_sum)
