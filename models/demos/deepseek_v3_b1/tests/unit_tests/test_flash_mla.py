@@ -30,7 +30,7 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
         and num_chunks == 1
         and batch_size == 1
     ):
-        pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37645")
+        pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37631")
 
     # Calculate decode_position from num_chunks and k_chunk_size
     decode_position = num_chunks * k_chunk_size - 1
