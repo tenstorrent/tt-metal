@@ -88,6 +88,10 @@ class Generator:
 
         return output_logits
 
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params=None):
+        logger.warning("Warmup model prefill not implemented for Qwen3_VL Generator")
+        logger.warning("Tracing in prefill mode is not supported for Qwen3_VL")
+
     def update_cos_sin(self, cos_matrix_pt=None, sin_matrix_pt=None):
         self.model.rope_setup.update_cos_sin(cos_matrix_pt=cos_matrix_pt, sin_matrix_pt=sin_matrix_pt)
 
