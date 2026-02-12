@@ -14,10 +14,38 @@ import sys
 from unittest.mock import MagicMock
 
 
-# Mock ttnn before importing sequential
-sys.modules["ttnn"] = MagicMock()
-sys.modules["ttnn._ttnn"] = MagicMock()
-sys.modules["ttnn._ttnn.program_descriptor"] = MagicMock()
+# Mock ttnn before importing the descriptor modules (which do `import ttnn` at
+# module level).  We snapshot sys.modules BEFORE the mock, import the descriptor
+# modules under the mock, keep private references to them, then FULLY UNDO
+# everything in sys.modules so that test files collected later (e.g.
+# test_sequential.py) re-import from scratch with the real ttnn.
+#
+# The standalone test functions below access the mock-backed modules via the
+# private module-level references (_mock_sequential / _mock_cpp_parser) instead
+# of doing a bare `from models.experimental.ops... import X`.
+
+_modules_before = set(sys.modules)
+_ttnn_mocked_keys = ["ttnn", "ttnn._ttnn", "ttnn._ttnn.program_descriptor"]
+_ttnn_originals = {k: sys.modules.get(k) for k in _ttnn_mocked_keys}
+
+for _k in _ttnn_mocked_keys:
+    sys.modules[_k] = MagicMock()
+
+import models.experimental.ops.descriptors.sequential as _mock_sequential  # noqa: E402
+import models.experimental.ops.descriptors.cpp_parser as _mock_cpp_parser  # noqa: E402
+
+# Remove every module that was added during the mock window.
+for _k in set(sys.modules) - _modules_before:
+    del sys.modules[_k]
+
+# Restore the original ttnn entries (or remove mock entries).
+for _k in _ttnn_mocked_keys:
+    if _ttnn_originals[_k] is not None:
+        sys.modules[_k] = _ttnn_originals[_k]
+    else:
+        sys.modules.pop(_k, None)
+
+del _modules_before, _ttnn_originals, _ttnn_mocked_keys, _k
 
 
 class TestCBInfo:
@@ -25,7 +53,7 @@ class TestCBInfo:
 
     def test_creation(self):
         """Test creating CBInfo."""
-        from models.experimental.ops.descriptors.sequential import CBInfo
+        CBInfo = _mock_sequential.CBInfo
 
         cb = CBInfo(
             original_index=5,
@@ -47,7 +75,8 @@ class TestPhaseInfo:
 
     def test_creation(self):
         """Test creating PhaseInfo."""
-        from models.experimental.ops.descriptors.sequential import PhaseInfo, CBInfo
+        PhaseInfo = _mock_sequential.PhaseInfo
+        CBInfo = _mock_sequential.CBInfo
 
         phase = PhaseInfo(
             phase_idx=0,
@@ -61,7 +90,7 @@ class TestPhaseInfo:
 
     def test_default_empty_cb_info(self):
         """Test PhaseInfo with default empty cb_info."""
-        from models.experimental.ops.descriptors.sequential import PhaseInfo
+        PhaseInfo = _mock_sequential.PhaseInfo
 
         phase = PhaseInfo(phase_idx=1, op_descriptor=MagicMock())
         assert phase.cb_info == {}
@@ -72,7 +101,7 @@ class TestExtractCBInfo:
 
     def test_extract_from_descriptor(self):
         """Test extracting CB info from a mock descriptor."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_info
+        extract_cb_info = _mock_sequential.extract_cb_info
 
         # Create mock format descriptor
         fmt_desc = MagicMock()
@@ -99,7 +128,7 @@ class TestExtractCBInfo:
 
     def test_extract_multiple_cbs(self):
         """Test extracting multiple CBs."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_info
+        extract_cb_info = _mock_sequential.extract_cb_info
 
         fmt1 = MagicMock(buffer_index=0, data_format="F16", page_size=1024)
         fmt2 = MagicMock(buffer_index=16, data_format="F32", page_size=2048)
@@ -123,7 +152,7 @@ class TestExtractCBNames:
 
     def test_extract_cb_names(self):
         """Test extracting CB names from kernel descriptor."""
-        from models.experimental.ops.descriptors.sequential import extract_cb_names_from_kernel
+        extract_cb_names_from_kernel = _mock_sequential.extract_cb_names_from_kernel
 
         kernel = MagicMock()
         kernel.named_compile_time_args = [
@@ -148,7 +177,7 @@ class TestSequentialChainBuilderBasic:
 
     def test_creation(self):
         """Test creating a builder."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
 
         builder = SequentialChainBuilder()
         assert len(builder.phases) == 0
@@ -156,7 +185,7 @@ class TestSequentialChainBuilderBasic:
 
     def test_add_phase(self):
         """Test adding phases to the builder."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
 
         builder = SequentialChainBuilder()
 
@@ -173,7 +202,7 @@ class TestSequentialChainBuilderBasic:
 
     def test_method_chaining(self):
         """Test that builder methods return self."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
 
         builder = SequentialChainBuilder()
 
@@ -187,7 +216,7 @@ class TestSequentialChainBuilderBasic:
 
     def test_single_phase_returns_original(self):
         """Test that single-phase build returns original descriptor."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
 
         builder = SequentialChainBuilder()
 
@@ -201,7 +230,7 @@ class TestSequentialChainBuilderBasic:
 
     def test_build_empty_raises(self):
         """Test that building empty chain raises ValueError."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
 
         builder = SequentialChainBuilder()
 
@@ -210,7 +239,7 @@ class TestSequentialChainBuilderBasic:
 
     def test_build_twice_raises(self):
         """Test that building twice raises ValueError."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
 
         builder = SequentialChainBuilder()
         mock_desc = MagicMock()
@@ -228,7 +257,7 @@ class TestChainDescriptorsConvenience:
 
     def test_single_descriptor(self):
         """Test that single descriptor returns it unchanged."""
-        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        chain_descriptors = _mock_sequential.chain_descriptors
 
         mock_desc = MagicMock()
         mock_desc.descriptor = MagicMock(cbs=[])
@@ -238,7 +267,7 @@ class TestChainDescriptorsConvenience:
 
     def test_empty_list_raises(self):
         """Test that empty list raises ValueError."""
-        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        chain_descriptors = _mock_sequential.chain_descriptors
 
         with pytest.raises(ValueError, match="no phases"):
             chain_descriptors([], device=MagicMock())
@@ -249,14 +278,14 @@ class TestParallelChainsStandalone:
 
     def test_create_parallel_chain_empty(self):
         """Test creating parallel chains with empty list."""
-        from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
+        create_parallel_chain_descriptors = _mock_sequential.create_parallel_chain_descriptors
 
         result = create_parallel_chain_descriptors([], device=MagicMock())
         assert result == []
 
     def test_create_parallel_chain_single_ops(self):
         """Test creating parallel chains with single-op chains."""
-        from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
+        create_parallel_chain_descriptors = _mock_sequential.create_parallel_chain_descriptors
 
         mock_desc1 = MagicMock()
         mock_desc1.descriptor = MagicMock(cbs=[])
@@ -277,7 +306,7 @@ class TestSourceTransformations:
 
     def test_prefix_named_args_phase0_unchanged(self):
         """Test that phase 0 source is unchanged."""
-        from models.experimental.ops.descriptors.sequential import _prefix_named_args_in_source
+        _prefix_named_args_in_source = _mock_sequential._prefix_named_args_in_source
 
         source = 'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");'
         result = _prefix_named_args_in_source(source, 0)
@@ -285,7 +314,7 @@ class TestSourceTransformations:
 
     def test_prefix_named_args_phase1(self):
         """Test that phase 1 gets prefixed named args."""
-        from models.experimental.ops.descriptors.sequential import _prefix_named_args_in_source
+        _prefix_named_args_in_source = _mock_sequential._prefix_named_args_in_source
 
         source = 'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");'
         result = _prefix_named_args_in_source(source, 1)
@@ -293,7 +322,7 @@ class TestSourceTransformations:
 
     def test_prefix_named_args_phase2(self):
         """Test phase 2 prefix."""
-        from models.experimental.ops.descriptors.sequential import _prefix_named_args_in_source
+        _prefix_named_args_in_source = _mock_sequential._prefix_named_args_in_source
 
         source = 'constexpr uint32_t blk = get_named_compile_time_arg_val("blk");'
         result = _prefix_named_args_in_source(source, 2)
@@ -301,7 +330,7 @@ class TestSourceTransformations:
 
     def test_offset_runtime_args_phase0_unchanged(self):
         """Test that phase 0 runtime args are unchanged."""
-        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
 
         source = "uint32_t val = get_arg_val<uint32_t>(3);"
         result = _offset_runtime_args_in_source(source, 0)
@@ -309,7 +338,7 @@ class TestSourceTransformations:
 
     def test_offset_runtime_args_phase1(self):
         """Test phase 1 runtime arg offsetting."""
-        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
 
         source = "uint32_t val = get_arg_val<uint32_t>(3);"
         result = _offset_runtime_args_in_source(source, 1)
@@ -318,7 +347,7 @@ class TestSourceTransformations:
 
     def test_offset_runtime_args_variable_init(self):
         """Test that incrementing variable init pattern is offset."""
-        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
 
         source = "uint32_t rt_args_idx = 0;"
         result = _offset_runtime_args_in_source(source, 1)
@@ -328,7 +357,7 @@ class TestSourceTransformations:
 
     def test_offset_compile_time_args_phase0_unchanged(self):
         """Test that phase 0 positional args are unchanged."""
-        from models.experimental.ops.descriptors.sequential import _offset_compile_time_args_in_source
+        _offset_compile_time_args_in_source = _mock_sequential._offset_compile_time_args_in_source
 
         source = "uint32_t blk = get_compile_time_arg_val(0);"
         result = _offset_compile_time_args_in_source(source, 0, 0)
@@ -336,7 +365,7 @@ class TestSourceTransformations:
 
     def test_offset_compile_time_args_phase1(self):
         """Test that phase 1 positional args are offset."""
-        from models.experimental.ops.descriptors.sequential import _offset_compile_time_args_in_source
+        _offset_compile_time_args_in_source = _mock_sequential._offset_compile_time_args_in_source
 
         source = "uint32_t blk = get_compile_time_arg_val(0);\nuint32_t mode = get_compile_time_arg_val(1);"
         result = _offset_compile_time_args_in_source(source, 1, 3)
@@ -345,7 +374,7 @@ class TestSourceTransformations:
 
     def test_offset_compile_time_args_tensor_accessor(self):
         """Test that TensorAccessorArgs<N> is also offset."""
-        from models.experimental.ops.descriptors.sequential import _offset_compile_time_args_in_source
+        _offset_compile_time_args_in_source = _mock_sequential._offset_compile_time_args_in_source
 
         source = "constexpr auto src_args = TensorAccessorArgs<2>();"
         result = _offset_compile_time_args_in_source(source, 1, 5)
@@ -353,7 +382,7 @@ class TestSourceTransformations:
 
     def test_transform_phase_source_combines_all(self):
         """Test that _transform_phase_source applies all transforms."""
-        from models.experimental.ops.descriptors.sequential import _transform_phase_source
+        _transform_phase_source = _mock_sequential._transform_phase_source
 
         source = (
             'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");\n'
@@ -373,7 +402,7 @@ class TestIfdefResolution:
 
     def test_resolve_ifdef_rmsnorm_defined(self):
         """Test resolving #ifdef RMSNORM when it's defined."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -392,7 +421,7 @@ int d = 4;
 
     def test_resolve_ifdef_rmsnorm_not_defined(self):
         """Test resolving #ifdef RMSNORM when it's not defined."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -411,7 +440,7 @@ int d = 4;
 
     def test_resolve_ifdef_fuse_gamma_defined(self):
         """Test resolving #ifdef FUSE_GAMMA when it's defined."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -427,7 +456,7 @@ int b = 3;
 
     def test_resolve_ifdef_fuse_gamma_not_defined(self):
         """Test resolving #ifdef FUSE_GAMMA when it's not defined."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -443,7 +472,7 @@ int b = 3;
 
     def test_resolve_leaves_unknown_defines(self):
         """Test that unknown defines are left untouched."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """
 #ifdef SOME_OTHER_FLAG
@@ -462,7 +491,7 @@ class TestKernelBodyExtraction:
 
     def test_extract_simple_body(self):
         """Test extracting a simple kernel body."""
-        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
         source = """
 #include "api.h"
@@ -491,7 +520,7 @@ void other_func() {
 
     def test_extract_nested_braces(self):
         """Test extracting body with nested braces."""
-        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -508,7 +537,7 @@ void kernel_main() {
 
     def test_extract_empty_body(self):
         """Test extracting from source with no kernel_main."""
-        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
         source = """
 void other_function() {
@@ -524,7 +553,7 @@ class TestCollectIncludes:
 
     def test_collect_unique_includes(self):
         """Test collecting unique includes from multiple sources."""
-        from models.experimental.ops.descriptors.cpp_parser import collect_includes
+        collect_includes = _mock_cpp_parser.collect_includes
 
         sources = [
             '#include "common.h"\n#include "phase0.h"\nvoid kernel_main() {}',
@@ -544,7 +573,7 @@ class TestCollectDefines:
 
     def test_collect_defines_before_main(self):
         """Test collecting defines only before kernel_main."""
-        from models.experimental.ops.descriptors.cpp_parser import collect_defines
+        collect_defines = _mock_cpp_parser.collect_defines
 
         sources = [
             "#define FOO 1\n#define BAR 2\nvoid kernel_main() {\n#define INSIDE 3\n}",
@@ -563,7 +592,7 @@ class TestInlineLocalIncludes:
 
     def test_inlines_local_include(self, tmp_path):
         """Test inlining a local include file."""
-        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
+        inline_local_includes = _mock_cpp_parser.inline_local_includes
 
         # Create a local header file
         header = tmp_path / "utils.h"
@@ -579,7 +608,7 @@ class TestInlineLocalIncludes:
 
     def test_leaves_path_includes(self):
         """Test that includes with paths are left unchanged."""
-        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
+        inline_local_includes = _mock_cpp_parser.inline_local_includes
 
         source = '#include "api/dataflow/dataflow_api.h"\nvoid kernel_main() {}\n'
         result = inline_local_includes(source, "/some/dir")
@@ -589,7 +618,7 @@ class TestInlineLocalIncludes:
 
     def test_no_kernel_dir_returns_unchanged(self):
         """Test that None kernel_dir returns source unchanged."""
-        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
+        inline_local_includes = _mock_cpp_parser.inline_local_includes
 
         source = '#include "utils.h"\nvoid kernel_main() {}\n'
         result = inline_local_includes(source, None)
@@ -601,7 +630,7 @@ class TestMergeNamedCompileTimeArgs:
 
     def test_phase0_keeps_original_names(self):
         """Test that phase 0 keeps original arg names."""
-        from models.experimental.ops.descriptors.sequential import _merge_named_compile_time_args
+        _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(named_compile_time_args=[("cb_in", 0), ("blk", 4)])},
@@ -616,7 +645,7 @@ class TestMergeNamedCompileTimeArgs:
 
     def test_phase1_gets_prefixed_names(self):
         """Test that phase 1+ args get prefixed."""
-        from models.experimental.ops.descriptors.sequential import _merge_named_compile_time_args
+        _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(named_compile_time_args=[("cb_in", 0)])},
@@ -630,7 +659,7 @@ class TestMergeNamedCompileTimeArgs:
 
     def test_rt_arg_offsets_added(self):
         """Test that runtime arg offsets are added for phase 1+."""
-        from models.experimental.ops.descriptors.sequential import _merge_named_compile_time_args
+        _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(named_compile_time_args=[("cb_in", 0)])},
@@ -645,7 +674,8 @@ class TestMergeNamedCompileTimeArgs:
 
     def test_barrier_config_added(self):
         """Test that barrier config named args are added."""
-        from models.experimental.ops.descriptors.sequential import _merge_named_compile_time_args, BarrierConfig
+        _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
+        BarrierConfig = _mock_sequential.BarrierConfig
 
         phase_kernels = [
             {"reader": MagicMock(named_compile_time_args=[])},
@@ -710,7 +740,7 @@ class TestComputeRuntimeArgOffsets:
 
     def test_basic_offsets(self):
         """Test basic runtime arg offset computation."""
-        from models.experimental.ops.descriptors.sequential import _compute_runtime_arg_offsets
+        _compute_runtime_arg_offsets = _mock_sequential._compute_runtime_arg_offsets
 
         core_ranges = _make_mock_core_ranges()
 
@@ -733,7 +763,7 @@ class TestComputeRuntimeArgOffsets:
 
     def test_offsets_with_missing_kernel(self):
         """Test offsets when a phase has no kernel of that type."""
-        from models.experimental.ops.descriptors.sequential import _compute_runtime_arg_offsets
+        _compute_runtime_arg_offsets = _mock_sequential._compute_runtime_arg_offsets
 
         core_ranges = _make_mock_core_ranges()
 
@@ -756,7 +786,7 @@ class TestConcatenateRuntimeArgs:
 
     def test_basic_concatenation(self):
         """Test basic runtime arg concatenation across phases."""
-        from models.experimental.ops.descriptors.sequential import _concatenate_runtime_args
+        _concatenate_runtime_args = _mock_sequential._concatenate_runtime_args
 
         core_ranges = _make_mock_core_ranges()
 
@@ -784,7 +814,7 @@ class TestMergeCompileTimeArgs:
 
     def test_concatenates_all_phases(self):
         """Test that compile-time args from all phases are concatenated."""
-        from models.experimental.ops.descriptors.sequential import _merge_compile_time_args
+        _merge_compile_time_args = _mock_sequential._merge_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(compile_time_args=[10, 20, 30])},
@@ -797,7 +827,7 @@ class TestMergeCompileTimeArgs:
 
     def test_handles_missing_kernel(self):
         """Test offset computation with a missing kernel."""
-        from models.experimental.ops.descriptors.sequential import _merge_compile_time_args
+        _merge_compile_time_args = _mock_sequential._merge_compile_time_args
 
         phase_kernels = [
             {"reader": MagicMock(compile_time_args=[10, 20])},
@@ -815,7 +845,7 @@ class TestMergeDefines:
 
     def test_common_defines_kept(self):
         """Test that common defines (REDUCE_OP etc.) are kept once."""
-        from models.experimental.ops.descriptors.sequential import _merge_defines
+        _merge_defines = _mock_sequential._merge_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "1")])},
@@ -833,7 +863,7 @@ class TestMergeDefines:
 
     def test_source_level_defines_excluded(self):
         """Test that source-level defines (RMSNORM, FUSE_GAMMA, etc.) are excluded."""
-        from models.experimental.ops.descriptors.sequential import _merge_defines
+        _merge_defines = _mock_sequential._merge_defines
 
         phase_kernels = [
             {
@@ -864,7 +894,7 @@ class TestValidateFp32Consistency:
 
     def test_consistent_fp32_passes(self):
         """Test that consistent fp32 settings pass validation."""
-        from models.experimental.ops.descriptors.sequential import _validate_fp32_consistency
+        _validate_fp32_consistency = _mock_sequential._validate_fp32_consistency
 
         mock_kernel1 = MagicMock()
         mock_kernel1.config = MagicMock(fp32_dest_acc_en=True)
@@ -882,7 +912,7 @@ class TestValidateFp32Consistency:
 
     def test_inconsistent_fp32_raises(self):
         """Test that inconsistent fp32 settings raise ValueError."""
-        from models.experimental.ops.descriptors.sequential import _validate_fp32_consistency
+        _validate_fp32_consistency = _mock_sequential._validate_fp32_consistency
 
         mock_kernel1 = MagicMock()
         mock_kernel1.config = MagicMock(fp32_dest_acc_en=True)
@@ -904,7 +934,7 @@ class TestCategorizePreMain:
 
     def test_categorizes_namespace_and_functions(self):
         """Test that namespace code, functions, and variables are categorized."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """#include "api.h"
 #define FOO 1
@@ -937,7 +967,7 @@ void kernel_main() {
 
     def test_skips_includes_defines_comments(self):
         """Pre-main should not include #include, #define, or comments."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """#include <cstdint>
 #define FOO 1
@@ -954,7 +984,7 @@ void kernel_main() {}
 
     def test_function_with_alwi(self):
         """ALWI-prefixed functions are correctly detected."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -969,7 +999,7 @@ void kernel_main() {}
 
     def test_namespace_alias(self):
         """Namespace aliases are categorized correctly."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
@@ -982,7 +1012,7 @@ void kernel_main() {}
 
     def test_using_declaration(self):
         """Using declarations are categorized correctly."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """using std::uint32_t;
 void kernel_main() {}
@@ -993,7 +1023,7 @@ void kernel_main() {}
 
     def test_template_function(self):
         """Template functions are categorized as functions."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """template <typename T>
 inline void process(T x) {
@@ -1008,7 +1038,7 @@ void kernel_main() {}
 
     def test_struct_definition(self):
         """Struct definitions are categorized as struct."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """struct Config {
     int x;
@@ -1022,7 +1052,7 @@ void kernel_main() {}
 
     def test_variable_types(self):
         """Various variable declaration types are detected."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """constexpr uint32_t MAX_TILES = 64;
 static uint32_t counter = 0;
@@ -1039,14 +1069,14 @@ void kernel_main() {}
 
     def test_empty_source(self):
         """Empty source returns no blocks."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         blocks = categorize_pre_main("void kernel_main() {}")
         assert len(blocks) == 0
 
     def test_stops_at_kernel_main(self):
         """Should not include code from inside or after kernel_main."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """int before = 1;
 void kernel_main() {
@@ -1075,7 +1105,7 @@ class TestCollectAllPreMainCode:
 
     def test_single_phase_functions_prefixed(self):
         """Single phase: functions get phase0_ prefix."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source = self._make_source("ALWI void ACQ() { acquire_dst(); }")
         result, names = _collect_all_pre_main_code([(0, source)])
@@ -1084,7 +1114,7 @@ class TestCollectAllPreMainCode:
 
     def test_single_phase_shared_items_no_prefix(self):
         """Single phase: namespace aliases and using declarations NOT prefixed."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source = self._make_source("namespace g = norm;")
         result, names = _collect_all_pre_main_code([(0, source)])
@@ -1093,7 +1123,7 @@ class TestCollectAllPreMainCode:
 
     def test_identical_functions_both_prefixed(self):
         """Identical function from two phases: both emitted with distinct prefixes."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source = self._make_source("namespace g = norm;\n\nALWI void ACQ() { acquire_dst(); }")
         result, names = _collect_all_pre_main_code([(0, source), (1, source)])
@@ -1107,7 +1137,7 @@ class TestCollectAllPreMainCode:
 
     def test_different_helpers_both_prefixed(self):
         """Different helper functions from different ops are both prefixed."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source0 = self._make_source("ALWI void helper_a() { return; }")
         source1 = self._make_source("ALWI void helper_b() { return; }")
@@ -1117,7 +1147,7 @@ class TestCollectAllPreMainCode:
 
     def test_same_signature_different_body_both_emitted(self):
         """Same function signature but different body: both emitted with prefixes."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source0 = self._make_source("inline void process() {\n    int x = 1;\n}")
         source1 = self._make_source("inline void process() {\n    int x = 2;\n}")
@@ -1130,7 +1160,7 @@ class TestCollectAllPreMainCode:
 
     def test_global_vars_all_phases_prefixed(self):
         """Global variables from ALL phases get phase-prefixed."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source0 = self._make_source("uint32_t counter = 0;")
         source1 = self._make_source("uint32_t counter = 0;")
@@ -1142,7 +1172,7 @@ class TestCollectAllPreMainCode:
 
     def test_namespace_blocks_deduped_by_signature(self):
         """Namespace blocks with same name are deduped (shared)."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         ns_block = "namespace my_ns {\n" "using T = uint32_t;\n" "inline void f() { return; }\n" "}  // namespace my_ns"
         source0 = self._make_source(ns_block)
@@ -1153,7 +1183,7 @@ class TestCollectAllPreMainCode:
 
     def test_different_namespaces_both_kept(self):
         """Different namespace blocks are both kept (shared, not prefixed)."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source0 = self._make_source("namespace ns_a {\ninline void fa() { return; }\n}")
         source1 = self._make_source("namespace ns_b {\ninline void fb() { return; }\n}")
@@ -1163,7 +1193,7 @@ class TestCollectAllPreMainCode:
 
     def test_mixed_content(self):
         """Mix of aliases, functions, and globals from multiple phases."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source0 = self._make_source(
             "namespace g = norm;\n\n" "ALWI void ACQ() { acquire_dst(); }\n\n" "uint32_t state = 0;"
@@ -1191,7 +1221,7 @@ class TestCollectAllPreMainCode:
 
     def test_phase_names_returned(self):
         """phase_names dict correctly tracks all prefixed names per phase."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source0 = self._make_source("ALWI void ACQ() { acquire_dst(); }\n\nuint32_t x = 1;")
         source1 = self._make_source("ALWI void REL() { release_dst(); }\n\nfloat y = 2.0;")
@@ -1201,7 +1231,7 @@ class TestCollectAllPreMainCode:
 
     def test_empty(self):
         """Empty input returns empty string and empty dict."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         result, names = _collect_all_pre_main_code([])
         assert result == ""
@@ -1209,7 +1239,7 @@ class TestCollectAllPreMainCode:
 
     def test_block_comments_stripped(self):
         """Block comments in pre-main are stripped before processing."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source = self._make_source("/**\n * @brief Helper\n */\n" "ALWI void helper() { return; }")
         result, _ = _collect_all_pre_main_code([(0, source)])
@@ -1218,7 +1248,7 @@ class TestCollectAllPreMainCode:
 
     def test_pragma_stripped(self):
         """#pragma directives are stripped from pre-main."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         source = self._make_source("#pragma once\n\nnamespace g = norm;")
         result, _ = _collect_all_pre_main_code([(0, source)])
@@ -1579,7 +1609,7 @@ void kernel_main() {
 
     def _merge_sources(self, *sources):
         """Run sources through the pre-main merging pipeline."""
-        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
 
         indexed = list(enumerate(sources))
         result, _ = _collect_all_pre_main_code(indexed)
@@ -1783,7 +1813,7 @@ class TestReplaceInCodeOnly:
     """Tests for tree-sitter-based code-aware replacement."""
 
     def test_replaces_in_code(self):
-        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
+        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
 
         source = "int ACQ = 1;\nACQ();"
         result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
@@ -1791,7 +1821,7 @@ class TestReplaceInCodeOnly:
         assert "phase0_ACQ()" in result
 
     def test_skips_string_literals(self):
-        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
+        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
 
         source = 'const char* s = "ACQ is here";\nint ACQ = 1;'
         result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
@@ -1799,7 +1829,7 @@ class TestReplaceInCodeOnly:
         assert "phase0_ACQ = 1" in result  # Code changed
 
     def test_skips_comments(self):
-        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
+        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
 
         source = "// ACQ comment\nint ACQ = 1;"
         result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
@@ -1807,7 +1837,7 @@ class TestReplaceInCodeOnly:
         assert "phase0_ACQ = 1" in result  # Code changed
 
     def test_skips_block_comments(self):
-        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
+        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
 
         source = "/* ACQ in block */\nint ACQ = 1;"
         result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
@@ -1815,7 +1845,7 @@ class TestReplaceInCodeOnly:
         assert "phase0_ACQ = 1" in result  # Code changed
 
     def test_word_boundary(self):
-        from models.experimental.ops.descriptors.cpp_parser import replace_in_code_only
+        replace_in_code_only = _mock_cpp_parser.replace_in_code_only
 
         source = "int ACQ = 1;\nint ACQUIRE = 2;"
         result = replace_in_code_only(source, "ACQ", "phase0_ACQ")
@@ -1827,7 +1857,7 @@ class TestExtractKernelBody:
     """Tests for tree-sitter-based kernel body extraction."""
 
     def test_extract_body_with_alwi_kernel_main(self):
-        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
         source = """
 ALWI void kernel_main() {
@@ -1841,7 +1871,7 @@ ALWI void kernel_main() {
 
     def test_extract_body_with_string_braces(self):
         """kernel_main body with string literal containing braces."""
-        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
         source = """
 void kernel_main() {
@@ -1854,14 +1884,14 @@ void kernel_main() {
         assert "int y = 2" in body
 
     def test_standard_kernel_main(self):
-        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
         source = "void kernel_main() {\n    int x = 1;\n}"
         body = extract_kernel_body(source)
         assert "int x = 1" in body
 
     def test_no_kernel_main(self):
-        from models.experimental.ops.descriptors.cpp_parser import extract_kernel_body
+        extract_kernel_body = _mock_cpp_parser.extract_kernel_body
 
         source = "void other_function() { int x = 1; }"
         body = extract_kernel_body(source)
@@ -1873,7 +1903,7 @@ class TestIfdefRobustness:
 
     def test_not_defined_c_style(self):
         """Test C++ standard !defined(X) syntax."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -1890,7 +1920,7 @@ int c = 3;
 
     def test_not_defined_no_parens(self):
         """Test !defined X without parentheses."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """
 #if !defined FUSE_PRE_ADD
@@ -1905,7 +1935,7 @@ int no_pre_add = 1;
 
     def test_if_0_if_1(self):
         """Test #if 0 and #if 1 unconditional blocks."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """
 int a = 1;
@@ -1925,7 +1955,7 @@ int b = 2;
 
     def test_line_continuation(self):
         """Test backslash line continuation in #if directives."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """int a = 1;
 #if defined FUSE_GAMMA \\
@@ -1938,7 +1968,7 @@ int b = 2;"""
 
     def test_mixed_defined_and_not_defined(self):
         """Test #if defined(A) && !defined(B)."""
-        from models.experimental.ops.descriptors.cpp_parser import resolve_ifdef_directives
+        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
 
         source = """
 #if defined(RMSNORM) && !defined(FUSE_PRE_ADD)
@@ -1958,7 +1988,7 @@ class TestCategorizePreMainVariables:
     """Tests for variable detection in categorize_pre_main."""
 
     def test_pointer_types(self):
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = "uint32_t* ptr = nullptr;\nvoid kernel_main() {}"
         blocks = categorize_pre_main(source)
@@ -1967,7 +1997,7 @@ class TestCategorizePreMainVariables:
         assert var_blocks[0].name == "ptr"
 
     def test_constexpr_types(self):
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = "constexpr uint32_t MAX_TILES = 64;\nvoid kernel_main() {}"
         blocks = categorize_pre_main(source)
@@ -1976,7 +2006,7 @@ class TestCategorizePreMainVariables:
         assert var_blocks[0].name == "MAX_TILES"
 
     def test_static_variables(self):
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = "static uint32_t counter = 0;\nvoid kernel_main() {}"
         blocks = categorize_pre_main(source)
@@ -1985,7 +2015,7 @@ class TestCategorizePreMainVariables:
         assert var_blocks[0].name == "counter"
 
     def test_functions_not_variables(self):
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = "ALWI void ACQ() { acquire_dst(); }\nvoid kernel_main() {}"
         blocks = categorize_pre_main(source)
@@ -1997,7 +2027,7 @@ class TestRuntimeArgsPattern:
     """Tests for the runtime args variable offset pattern."""
 
     def test_matches_arg_variables(self):
-        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
 
         source = "uint32_t rt_args_idx = 0;\nint x = get_arg_val<uint32_t>(0);"
         result = _offset_runtime_args_in_source(source, 1)
@@ -2006,7 +2036,7 @@ class TestRuntimeArgsPattern:
         assert "rt_args_idx = __phase1_rt_offset" in result
 
     def test_does_not_match_unrelated_variables(self):
-        from models.experimental.ops.descriptors.sequential import _offset_runtime_args_in_source
+        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
 
         source = "uint32_t counter = 0;\nuint32_t flags = 0;"
         result = _offset_runtime_args_in_source(source, 1)
@@ -2019,7 +2049,7 @@ class TestPrefixPhaseNamesSkipsStrings:
     """Tests for _prefix_phase_names_in_source respecting strings/comments."""
 
     def test_does_not_replace_in_string(self):
-        from models.experimental.ops.descriptors.sequential import _prefix_phase_names_in_source
+        _prefix_phase_names_in_source = _mock_sequential._prefix_phase_names_in_source
 
         source = 'const char* msg = "ACQ called";\nACQ();'
         result = _prefix_phase_names_in_source(source, 0, ["ACQ"])
@@ -2029,7 +2059,7 @@ class TestPrefixPhaseNamesSkipsStrings:
         assert "phase0_ACQ();" in result
 
     def test_does_not_replace_in_comment(self):
-        from models.experimental.ops.descriptors.sequential import _prefix_phase_names_in_source
+        _prefix_phase_names_in_source = _mock_sequential._prefix_phase_names_in_source
 
         source = "// Call ACQ to acquire\nACQ();"
         result = _prefix_phase_names_in_source(source, 0, ["ACQ"])
@@ -2037,7 +2067,7 @@ class TestPrefixPhaseNamesSkipsStrings:
         assert "phase0_ACQ();" in result
 
     def test_does_not_replace_in_block_comment(self):
-        from models.experimental.ops.descriptors.sequential import _prefix_phase_names_in_source
+        _prefix_phase_names_in_source = _mock_sequential._prefix_phase_names_in_source
 
         source = "/* ACQ description */\nACQ();"
         result = _prefix_phase_names_in_source(source, 0, ["ACQ"])
@@ -2050,7 +2080,7 @@ class TestFunctionDetectionRobust:
 
     def test_function_with_braces_in_string(self):
         """Function with braces in string is still detected as function."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = 'void foo() {\n    const char* s = "no { braces }";\n}\nvoid kernel_main() {}'
         blocks = categorize_pre_main(source)
@@ -2060,7 +2090,7 @@ class TestFunctionDetectionRobust:
 
     def test_scope_qualified_function(self):
         """Scope-qualified function names are extracted correctly."""
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = "void MyClass::process() {\n    return;\n}\nvoid kernel_main() {}"
         blocks = categorize_pre_main(source)
@@ -2074,7 +2104,7 @@ class TestInlineLocalIncludesRelative:
 
     def test_relative_path_inlined(self, tmp_path):
         """Includes with relative paths are resolved and inlined."""
-        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
+        inline_local_includes = _mock_cpp_parser.inline_local_includes
 
         # Create directory structure
         subdir = tmp_path / "subdir"
@@ -2089,7 +2119,7 @@ class TestInlineLocalIncludesRelative:
 
     def test_local_include_still_works(self, tmp_path):
         """Local includes (no path separator) still work."""
-        from models.experimental.ops.descriptors.cpp_parser import inline_local_includes
+        inline_local_includes = _mock_cpp_parser.inline_local_includes
 
         header = tmp_path / "local.h"
         header.write_text("int local_val = 1;")
@@ -2103,7 +2133,7 @@ class TestCategorizePreMainStopsAtKernelMain:
     """Test that categorize_pre_main stops at kernel_main with attributes."""
 
     def test_stops_at_alwi_kernel_main(self):
-        from models.experimental.ops.descriptors.cpp_parser import categorize_pre_main
+        categorize_pre_main = _mock_cpp_parser.categorize_pre_main
 
         source = """namespace g = norm;
 
