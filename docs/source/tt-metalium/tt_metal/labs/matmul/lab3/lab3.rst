@@ -781,172 +781,127 @@ In this exercise you have extended the multicast example program to include the 
 This is a common pattern in real applications, where we wish to maximize the utilization of the sender core.
 
 
+Exercise 3: Batched Multicast for Improved Throughput
+*****************************************************
 
+The multicast protocol used in the multicast example program involves a full semaphore handshake
+for every tile that is multicast: each receiver must signal readiness, the sender must wait for all
+receivers, perform the multicast, and then signal completion. While this protocol ensures correctness,
+the synchronization overhead is non-trivial. When tiles are transferred one at a time, this overhead is
+incurred for every single tile, which can significantly limit throughput.
+
+A straightforward way to amortize this overhead is to transfer multiple tiles per semaphore handshake.
+Instead of multicasting one tile and then performing the full synchronization protocol, the sender reads
+a **batch** of tiles from DRAM, multicasts the entire batch in a single ``noc_async_write_multicast``
+call, and only then performs the semaphore signaling. Receivers similarly reserve space for the entire
+batch and perform a single semaphore exchange per batch rather than per tile. This reduces the number of
+synchronization rounds by a factor equal to the batch size, while the NoC hardware transfers the larger
+payload efficiently.
+
+In this exercise, you will modify the basic multicast example to transfer ten tiles per batch instead of
+one tile at a time, and then profile both versions to measure the performance improvement.
+
+Perform the following steps to complete the exercise:
+
+#. Start by copying the files from the ``lab_multicast`` directory into a new directory
+   (e.g. ``lab3_exercise3``). Update the ``CMakeLists.txt`` files in the new directory and in the
+   parent directory to include the new executable, then build and run the new program to confirm that
+   it produces the expected output.
+
+#. Define a compile-time constant ``tiles_per_batch`` with a value of ``10`` in the host program.
+   This constant represents the number of tiles that will be transferred in each multicast batch.
+   Add an assertion to verify that the total number of tiles is divisible by ``tiles_per_batch``.
+
+#. Update the circular buffer setup in the host program. The input CB (``c_0``) must now be large
+   enough to hold a full batch of tiles on each side of the double buffer to ensure that an entire
+   batch can be loaded into one half of the double buffer while the previous batch is being consumed
+   from the other half.
+
+#. Pass ``tiles_per_batch`` as a compile-time argument to both the sender and receiver kernels.
+
+#. Update the sender kernel to operate on batches of tiles rather than individual tiles by
+   reserving ``tiles_per_batch`` tiles in the CB at once using ``cb_reserve_back``.
+   You can still read tiles from DRAM one at a time in an inner loop.
+   Perform the semaphore handshake once per batch using the same semaphore handshake protocol
+   as before, but transferring ``tiles_per_batch`` tiles at once.
+
+#. Update the receiver kernel to receive one batch at a time  rather than one tile at a time by
+   reserving ``tiles_per_batch`` tiles in the CB at once using ``cb_reserve_back``, performing
+   the semaphore handshake once per batch, and pushing ``tiles_per_batch`` tiles at once.
+
+   Note that the compute and writer kernels do not need to change. The compute kernel still processes
+   tiles individually from the CB, and the CB abstraction hides whether tiles were loaded one at a time
+   or in batches.
+
+#. Build and run your modified program. Verify that it completes successfully.
+
+#. Profile the original (unmodified) basic multicast example using the device profiler
+   you learned about in previous labs.
+   Then profile your batched multicast program in the same way. Compare the firmware times of the
+   two versions. You should observe that the batched version is noticeably faster due to the reduced
+   number of synchronization rounds.
+
+In this exercise you have observed that the semaphore handshake protocol has measurable overhead,
+and that batching multiple tiles per handshake is an effective strategy for amortizing this cost.
+This principle of minimizing synchronization overhead by increasing the granularity of data transfers
+is broadly applicable to multicast-based communication patterns in TT-Metalium programs.
 
 
 Applying Multicast to Multi Core Matmul
 ***************************************
 
-In Lab 2, you reduced DRAM traffic in multi core matrix multiplication by:
+You now have sufficient understanding of the multicast protocol to apply it to the matrix multiplication problem.
+In the introductory sections of this lab, we already described the high-level idea of using multicast to reduce DRAM traffic.
+As shonw in Figure 2, the idea is to have only one core read tiles of A and B from DRAM and multicast them to all other cores in
+the same row and column. As discussed earlier, to use ``noc_async_write_multicast`` or ``noc_semaphore_set_multicast``,
+the destination must be a rectangular grid of cores. One way to meet this requirement is to have cores in the leftmost column
+read tiles of A from DRAM and multicast them to all other cores in the same row, and have cores in the topmost row
+read tiles of B from DRAM and multicast them to all other cores in the same column.
+With this arrangement, all the receiving cores for every multicast operation form a rectangular grid.
+This is shown in Figure 5.
 
-* Dividing the output tiles into **blocks** ``C_block`` and assigning each block to a core.
-* Splitting the inner ``K`` dimension into **K-blocks** of size ``K_block_tiles``, so that ``Kt = K / TILE_WIDTH`` is divided into ``num_k_blocks = Kt / K_block_tiles`` equal chunks.
-* For each core and each K-block index ``b`` (``0 .. num_k_blocks - 1``), defining:
+.. figure:: images/core_roles.png
+   :alt: Core roles in Matrix Multiplication with Multicast
+   :width: 700
+   :align: center
 
-  * ``A_slab(b)``: a **slab** of tiles from ``A`` of size ``M_block_tiles x K_block_tiles``, covering the rows of that core's ``C_block`` and the K indices in block ``b``.
-  * ``B_slab(b)``: a **slab** of tiles from ``B`` of size ``K_block_tiles x N_block_tiles``, covering the columns of that core's ``C_block`` and the K indices in block ``b``.
+   Figure 5: Core roles in Matrix Multiplication with Multicast
 
-Each core in Lab 2:
+As a reminder, each square in Figure 5 represent a Tensix core labeled with its ``(x, y)`` core coordinates.
+The thick arrows in the figure represent multicast operations.
+While computation is the same on all cores, with each core compute its own output block ``C_block(x, y)``,
+the multicast approach involves four distinct roles that cores play, indicated by different colors in the figure.
 
-* Loaded its own ``A_slab(b)`` into an input CB (e.g., CB0),
-* Loaded its own ``B_slab(b)`` into another input CB (e.g., CB1),
-* Used those slabs to update all tiles in its ``C_block`` for that K-block,
-* Repeated this for every K-block, with partial results stored in an intermediate CB.
+Recall that in Lab 2, data was divided into slabs to allow data to fit into limited on-chip SRAM.
+With multicast, this approach stays the same. CB capacities, division of data into slabs and the slab
+organization inside CBs remain the same. The main change that is required is for reader kernels to read
+slabs of tiles of ``A`` and ``B`` differently depending on their role:
 
-The key observation is:
+* **Interior cores** (white background) with coordinates ``(x, y)``, where ``x > 0`` and ``y > 0``:
+  These cores never read slabs of ``A`` or ``B`` directly from DRAM, but always receive them via multicast.
 
-* For a **given row** of cores (fixed ``y`` in the core grid) and a fixed K-block index ``b``, **all cores in that row need the same ``A_slab(b)``**:
-
-  * They share the same range of output rows (same ``M_block_tiles`` rows of ``C``),
-  * They differ only in which columns of ``C`` they cover (different ``N_block_tiles`` regions),
-  * So their required tiles of ``A`` for that K-block are identical.
-
-* Similarly, for a **given column** of cores (fixed ``x``) and K-block index ``b``, **all cores in that column need the same ``B_slab(b)``**.
-
-In Lab 2 each core independently loaded its own copy of these slabs from DRAM, even though:
-
-* Every core in row ``y`` for K-block ``b`` needed the same ``A_slab(b)``,
-* Every core in column ``x`` for K-block ``b`` needed the same ``B_slab(b)``.
-
-In this lab, we keep the same blocked and slab-based algorithm, but change how slabs are brought into CBs:
-
-* For each row ``y`` and K-block ``b``, exactly one core in that row reads **one copy of** ``A_slab(b)`` from DRAM and multicasts every A tile in that slab to the other cores in that row.
-* For each column ``x`` and K-block ``b``, exactly one core in that column reads **one copy of** ``B_slab(b)`` from DRAM and multicasts every B tile in that slab to the other cores in that column.
-
-Compute kernels and writer kernels remain unchanged; only the **slab loading stage** (how ``A_slab(b)`` and ``B_slab(b)`` end up in CBs) is modified.
-
-Core Roles and Slabs on a 5x5 Grid
-==================================
-
-Assume a rectangular grid of logical cores of size ``core_grid.x`` by ``core_grid.y``. As in Lab 2, we divide the tiled output matrix ``C`` into blocks:
-
-* Each core ``(x, y)`` is responsible for a block of output tiles ``C_block(x, y)``:
-
-  * ``M_block_tiles`` rows of C tiles,
-  * ``N_block_tiles`` columns of C tiles.
-
-The mapping is chosen so that:
-
-* Cores with the same ``y`` index cover **different columns** but the same set of **rows** in C.
-* Cores with the same ``x`` index cover **different rows** but the same set of **columns** in C.
-
-For each K-block index ``b``:
-
-* Every core in row ``y`` needs **the same ``A_slab(b)``** (same rows of A for the K indices in that block).
-* Every core in column ``x`` needs **the same ``B_slab(b)``** (same columns of B for the K indices in that block).
-
-TODO: Add a figure here that shows arrows from sender cores to receiver cores.
+* **Left column A-source cores** (red background) with coordinates ``(0, y)``, where ``y > 0``:
+  Each of these cores reads slabs of ``A`` it needs for its own computation from DRAM and multicasts them across their row ``y``.
+  They receive slabs of ``B`` from the topmost core in their column via multicast.
 
 
-On a 5x5 grid, we assign four roles:
+* **Top row B-source cores** (blue background) with coordinates ``(x, 0)``, where ``x > 0``:
+  Each of these cores reads slabs of ``B`` it needs for its own computation from DRAM and multicasts them down their column ``x``.
+  They receive slabs of ``A`` from the leftmost core in their row via multicast.
 
-* **Top-left core** ``(0, 0)``:
-  * Computes ``C_block(0, 0)``.
-  * Reads ``A_slab(b)`` for row 0 and ``B_slab(b)`` for column 0 from DRAM.
-  * Multicasts A tiles horizontally to all cores in row 0.
-  * Multicasts B tiles vertically to all cores in column 0.
 
-* **Top row B-source cores** ``(x, 0)``, ``x > 0``:
-  * Compute ``C_block(x, 0)``.
-  * For each K-block, read ``B_slab(b)`` for column ``x`` from DRAM and multicast its B tiles down column ``x``.
-  * Receive A tiles by multicast from the left column core in their row (``(0, 0)`` for row 0).
+* **Top-left core** (purple background) with coordinates ``(0, 0)``:
+  This core reads slabs of both ``A`` and ``B`` it needs for its own computation from DRAM
+  It multicasts slabs of ``A`` to all the other cores in row 0, and multicasts slabs of ``B`` to all the other cores in column 0.
 
-* **Left column A-source cores** ``(0, y)``, ``y > 0``:
-  * Compute ``C_block(0, y)``.
-  * For each K-block, read ``A_slab(b)`` for row ``y`` from DRAM and multicast its A tiles across row ``y``.
-  * Receive B tiles by multicast from the top row core in their column (``(0, 0)`` for column 0).
+Similar to exercises 2 and 3, we observe that the compute and writer kernels do not need to change at all.
+Compute kernel uses CBs for its data, without any awareness of whether the data was received via multicast or DRAM read.
+The writer kernel reads tiles from the output of the compute kernel, and also doesn't requirte any changes.
 
-* **Interior cores** ``(x, y)`` with ``x > 0`` and ``y > 0``:
-  * Compute ``C_block(x, y)``.
-  * Do not read A or B directly from DRAM.
-  * For each K-block:
 
-    * Receive ``A_slab(b)`` by multicast from the A-source core at ``(0, y)``.
-    * Receive ``B_slab(b)`` by multicast from the B-source core at ``(x, 0)``.
+,
+as outlined above.
 
-A conceptual diagram for a 5x5 grid:
-
-.. code-block:: text
-
-   5x5 core grid roles (per C_block):
-
-       x = 0    1      2      3      4
-     +------+------+------+------+------+
-   y  |      |      |      |      |      |
-   =0 |  T   |  R   |  R   |  R   |  R   |
-     +------+------+------+------+------+
-   1 |  C   |  I   |  I   |  I   |  I   |
-     +------+------+------+------+------+
-   2 |  C   |  I   |  I   |  I   |  I   |
-     +------+------+------+------+------+
-   3 |  C   |  I   |  I   |  I   |  I   |
-     +------+------+------+------+------+
-   4 |  C   |  I   |  I   |  I   |  I   |
-
-Where:
-
-* ``T`` is the top-left core (A-source and B-source for row 0 and column 0).
-* ``R`` are top row B-source cores.
-* ``C`` are left column A-source cores.
-* ``I`` are interior cores (A- and B-receivers).
-
-For each row ``y`` and K-block ``b``:
-
-* The **A-source core** at ``(0, y)`` reads **one copy** of ``A_slab(b)`` from DRAM and multicasts its tiles to all cores in row ``y``.
-* Every core in row ``y``, including the source, ends up with the same ``A_slab(b)`` in its A CB (CB0).
-
-For each column ``x`` and K-block ``b``:
-
-* The **B-source core** at ``(x, 0)`` reads **one copy** of ``B_slab(b)`` from DRAM and multicasts its tiles to all cores in column ``x``.
-* Every core in column ``x``, including the source, ends up with the same ``B_slab(b)`` in its B CB (CB1).
-
-Slab Storage in CBs with Multicast
-==================================
-
-From Lab 2, recall that:
-
-* Input CBs must be sized to store **full slabs**:
-
-  * A CB (CB0) must store at least ``M_block_tiles * K_block_tiles`` tiles for ``A_slab(b)``.
-  * B CB (CB1) must store at least ``K_block_tiles * N_block_tiles`` tiles for ``B_slab(b)``.
-
-* In the Lab 2 version, each core used a reader kernel to fill CB0 with its own ``A_slab(b)`` and CB1 with its own ``B_slab(b)`` directly from DRAM for each K-block.
-
-In Lab 3:
-
-* CB capacities and the **slab organization inside CBs** remain the same.
-* What changes is **which kernel fills those slabs**:
-
-  * On A-source cores:
-    * A-reader/multicast kernel reads all tiles of ``A_slab(b)`` from DRAM into CB0 and multicasts each tile to the rest of the row.
-  * On other cores in the row:
-    * A-receiver kernel receives all tiles of ``A_slab(b)`` via multicast into CB0.
-
-  Consequently, every core in the row has a complete **identical** slab ``A_slab(b)`` in CB0.
-
-  * On B-source cores:
-    * B-reader/multicast kernel reads all tiles of ``B_slab(b)`` from DRAM into CB1 and multicasts each tile down the column.
-  * On other cores in the column:
-    * B-receiver kernel receives all tiles of ``B_slab(b)`` via multicast into CB1.
-
-  Consequently, every core in the column has a complete **identical** slab ``B_slab(b)`` in CB1.
-
-The order of tiles inside each slab within the CBs stays **exactly the same** as in Lab 2:
-
-* A slabs are stored in CB0 in **slab row-major order** (over ``i`` and local K index ``k_local``).
-* B slabs are stored in CB1 in **slab row-major order** (over ``k_local`` and ``j``).
-
-This guarantees that the compute kernel can continue to index ``A_slab(b)`` and ``B_slab(b)`` tiles using its existing logic (conceptually ``A_slab_tile(i, k_local)`` and ``B_slab_tile(k_local, j)``), without any awareness of multicast.
 
 Pseudocode with Slabs and Multicast
 ===================================
