@@ -340,7 +340,7 @@ public:
 
     void reset_params_for_core(const CoreCoord& core, const BufferCorePageMapping& core_page_mapping) {
         this->core = core;
- //       fmt::println(stderr, "Host mapping count: {}", core_page_mapping.host_ranges.size());
+        //       fmt::println(stderr, "Host mapping count: {}", core_page_mapping.host_ranges.size());
         this->core_page_mapping_it = core_page_mapping.begin();
         this->address =
             this->buffer->address() + core_page_mapping.device_start_page * this->buffer->aligned_page_size();
@@ -621,11 +621,11 @@ void populate_sharded_buffer_write_dispatch_cmds(
         dispatch_params.address,
         data_size_bytes);
 
-        #if 0
+#if 0
     if (!logged_writes) {
         fmt::println(stderr, "Host mappign count: {}", dispatch_params.core_page_mapping_it.
     }
-    #endif
+#endif
 
     uint8_t* dst = command_sequence.reserve_space<uint8_t*, true>(data_size_bytes);
     // TODO: Expose getter for cmd_write_offsetB?
@@ -658,11 +658,11 @@ void populate_sharded_buffer_write_dispatch_cmds(
             uint64_t src_offset = (uint64_t)(range.host_page_start) * dispatch_params.page_size_to_write;
             auto cmd_region_offset =
                 dispatch_params.page_size_to_write * (range.device_page_offset - start_device_page_offset);
-                #if 0
+#if 0
             if (!logged_writes) {
                 //fmt::println(stderr, "Writing pages to offset {} from offset {} size {} \n", dst_offset + cmd_region_offset, src_offset, range.num_pages * dispatch_params.page_size_to_write);
             }
-            #endif
+#endif
             command_sequence.update_cmd_sequence(
                 dst_offset + cmd_region_offset,
                 static_cast<const char*>(src) + src_offset,
@@ -1261,7 +1261,7 @@ bool write_to_device_buffer(
             }
         }
         if (has_pinned_inputs) {
-          //  log_info(tt::LogMetal, "Sharded using pinned transfer: {}", use_pinned_transfer);
+            //  log_info(tt::LogMetal, "Sharded using pinned transfer: {}", use_pinned_transfer);
         }
 
         ShardedBufferWriteDispatchParams dispatch_params(
