@@ -53,11 +53,11 @@ on:
         type: boolean
         default: true
         description: "Run ops unit tests"
-      run-galaxy-deepseek-tests:
+      run-galaxy-deepseek-apc-tests:
         required: false
         type: boolean
         default: true
-        description: "Run Galaxy DeepSeek tests"
+        description: "Run Galaxy DeepSeek APC tests"
       enable-watcher:
         required: false
         type: boolean
@@ -137,11 +137,11 @@ on:
         default: true
         type: boolean
         description: "Run ops unit tests"
-      run-galaxy-deepseek-tests:
+      run-galaxy-deepseek-apc-tests:
         required: false
         default: true
         type: boolean
-        description: "Run Galaxy DeepSeek tests"
+        description: "Run Galaxy DeepSeek APC tests"
       enable-watcher:
         required: false
         default: false
@@ -201,7 +201,7 @@ jobs:
       run-profiler-regression: ${{ steps.set-run-profiler-regression.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
-      galaxy-deepseek-tests: ${{ steps.set-galaxy-deepseek-tests.outputs.should-run }}
+      galaxy-deepseek-apc-tests: ${{ steps.set-galaxy-deepseek-apc-tests.outputs.should-run }}
     steps:
       - id: set-ttnn-unit-tests
         run: |
@@ -221,9 +221,9 @@ jobs:
       - id: set-ops-unit-tests
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}" >> "$GITHUB_OUTPUT"
-      - id: set-galaxy-deepseek-tests
+      - id: set-galaxy-deepseek-apc-tests
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-galaxy-deepseek-tests }}" >> "$GITHUB_OUTPUT"
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-galaxy-deepseek-apc-tests }}" >> "$GITHUB_OUTPUT"
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
@@ -352,10 +352,10 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
-  galaxy-deepseek-tests:
+  galaxy-deepseek-apc-tests:
     needs: [build-artifact, tests-to-run]
     secrets: inherit
-    if: ${{ needs.tests-to-run.outputs.galaxy-deepseek-tests == 'true' }}
+    if: ${{ needs.tests-to-run.outputs.galaxy-deepseek-apc-tests == 'true' }}
     uses: ./.github/workflows/galaxy-deepseek-post-commit.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
