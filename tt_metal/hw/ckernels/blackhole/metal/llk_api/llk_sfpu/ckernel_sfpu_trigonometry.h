@@ -42,7 +42,7 @@ sfpi_inline sfpi::vFloat reduce_pi_shifted(sfpi::vFloat v, sfpi::vInt& i) {
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
         sfpi::vFloat half;
         half.get() = __builtin_rvtt_sfpxloadi(0, 0x3f00);
-        j.get() = __builtin_rvtt_bh_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        j.get() = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     }
 
     // j += 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
@@ -60,7 +60,7 @@ sfpi_inline sfpi::vFloat reduce_pi_shifted(sfpi::vFloat v, sfpi::vInt& i) {
         vFloat two;
         __rvtt_vec_t neg_one = __builtin_rvtt_sfpreadlreg(sfpi::vConstNeg1.get());
         two.get() = __builtin_rvtt_sfpxloadi(0, 0x4000);  // 2.0
-        j.get() = __builtin_rvtt_bh_sfpmad(j.get(), two.get(), neg_one, SFPMAD_MOD1_OFFSET_NONE);
+        j.get() = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one, SFPMAD_MOD1_OFFSET_NONE);
     }
 
     // Four-stage Cody-Waite reduction; a = v - j * (PI/2).
@@ -89,7 +89,7 @@ sfpi_inline sfpi::vFloat reduce_pi(sfpi::vFloat v, sfpi::vInt& i) {
     // j = v * INV_PI + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
     // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
     rounding_bias.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
-    j.get() = __builtin_rvtt_bh_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    j.get() = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // We need the LSB of the integer later, to determine the sign of the result.
     i = sfpi::reinterpret<sfpi::vInt>(j);
