@@ -216,7 +216,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
-        input_tensor_v,  // V is implied by K in MLA mode
+        input_tensor_v,
         attn_mask,
         std::nullopt,  // page_table
         std::nullopt,  // attention_sink

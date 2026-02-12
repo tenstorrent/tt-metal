@@ -156,6 +156,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NQH: {}", NQH);
     log_debug(tt::LogOp, "NVH: {}", NVH);
+    log_debug(tt::LogOp, "Sq: {}", Sq);
     log_debug(tt::LogOp, "Sk: {}", Sk);
     log_debug(tt::LogOp, "padded_Sq: {}", padded_Sq);
     log_debug(tt::LogOp, "padded_Sk: {}", padded_Sk);
