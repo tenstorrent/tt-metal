@@ -148,6 +148,11 @@ void kernel_main() {
                 }
                 element_id_input /= input_tensor_shape[i];
             }
+            DPRINT << "page_id: " << page_id << ENDL();
+
+            DPRINT << "AAAAA global_coord: " << global_coord[0] << ", " << global_coord[1] << ", " << global_coord[2]
+                   << ", " << global_coord[3] << ENDL();
+            DPRINT << "AAAAA block_is_in_output_tensor: " << static_cast<uint32_t>(block_is_in_output_tensor) << ENDL();
 
             if (!block_is_in_output_tensor) {  // This input block is entirely outside the output tensor, so skip it
                 cb_wait_front(cb_id_out0, num_tiles_per_input_block);
@@ -155,9 +160,10 @@ void kernel_main() {
                 continue;
             }
 
-            uint32_t num_output_tensor_planes_before_current_block = 1;
-            for (int i = tensor_rank - 3; i >= 0; --i) {
-                num_output_tensor_planes_before_current_block *= global_coord[i];
+            uint32_t num_output_tensor_planes_before_current_block = 0;
+            for (int i = 0; i <= static_cast<int>(tensor_rank - 3); ++i) {
+                num_output_tensor_planes_before_current_block =
+                    num_output_tensor_planes_before_current_block * output_tensor_shape[i] + global_coord[i];
             }
             uint32_t start_row = num_output_tensor_planes_before_current_block * output_tensor_shape[tensor_rank - 2] +
                                  global_coord[tensor_rank - 2];
@@ -166,7 +172,13 @@ void kernel_main() {
                                              num_tiles_per_output_row * num_output_tensor_planes_before_current_block +
                                          (global_coord[tensor_rank - 2] / tile_height) * num_tiles_per_output_row +
                                          global_coord[tensor_rank - 1] / tile_width;
-
+            DPRINT << "AAAAA tile_id_in_output: " << tile_id_in_output << ENDL();
+            DPRINT << "AAAAA global_coord[tensor_rank - 2]: " << global_coord[tensor_rank - 2] << ENDL();
+            DPRINT << "AAAAA global_coord[tensor_rank - 1]: " << global_coord[tensor_rank - 1] << ENDL();
+            DPRINT << "AAAAA num_output_tensor_planes_before_current_block: "
+                   << num_output_tensor_planes_before_current_block << ENDL();
+            DPRINT << "num_tiles_per_output_row: " << num_tiles_per_output_row << ENDL();
+            DPRINT << "AAAAA start_row: " << start_row << ENDL();
             uint32_t tile_index_width = tile_id_in_output % num_tiles_per_output_row;
             uint32_t width_wise_input_block_index = tile_index_width / num_tiles_per_input_block;
 
