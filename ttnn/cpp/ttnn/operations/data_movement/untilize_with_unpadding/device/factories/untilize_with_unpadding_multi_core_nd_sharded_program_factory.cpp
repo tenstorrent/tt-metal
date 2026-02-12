@@ -43,13 +43,6 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
     uint32_t output_tensor_width = output.padded_shape()[-1];
     uint32_t output_tensor_height = output.padded_shape()[-2];
 
-    std::cout << "input tensor rank:" << input.padded_shape().rank() << std::endl;
-    std::cout << "output tensor rank:" << output.padded_shape().rank() << std::endl;
-    std::cout << "input tensor shape:" << input.padded_shape() << std::endl;
-    std::cout << "output tensor shape:" << output.padded_shape() << std::endl;
-    // TT_FATAL(false , "END HERE");
-
-    // TT_FATAL(false , "END HERE");
     const auto& tile_shape = input.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -273,10 +266,6 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
                 page_offset += num_tiles_per_input_block;
             }
         }
-
-        std::cout << "core: " << core.x << ", " << core.y
-                  << " num_input_blocks_to_process: " << num_input_blocks_to_process << std::endl;
-        std::cout << "start_shard_id: " << start_shard_id << std::endl;
         // Reader run-time args
         std::vector<uint32_t> reader_run_time_args = {src0_buffer->address(), start_shard_id};
 

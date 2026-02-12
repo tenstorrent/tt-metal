@@ -6,7 +6,6 @@
 #include <array>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     // run-time args
@@ -117,57 +116,17 @@ void kernel_main() {
     uint32_t input_tensor_shape[tensor_rank];
     for (uint32_t i = 0; i < tensor_rank; ++i) {
         output_tensor_shape[i] = get_common_arg_val<uint32_t>(i);
-        DPRINT << "output_tensor_shape[" << i << "]: " << output_tensor_shape[i] << ENDL();
     }
     for (uint32_t i = 0; i < tensor_rank; ++i) {
         input_tensor_shape[i] = get_common_arg_val<uint32_t>(i + tensor_rank);
-        DPRINT << "input_tensor_shape[" << i << "]: " << input_tensor_shape[i] << ENDL();
     }
-    // Access tensor shape via dspec
 
-    // Get runtime tensor shape
-    // uint32_t rank = 3;//dst_args.get_rank();
-    // uint32_t tensor_shape_offset = dst_args.tensor_shape_crta_offset();
-    // // Read shape values from runtime arguments
-    // DPRINT << "rank: " << rank << ENDL();
-    // DPRINT << "tensor_shape_offset: " << tensor_shape_offset << ENDL();
-    // for (uint32_t i = 0; i < rank; ++i) {
-    //     uint32_t dim = get_common_arg_val<uint32_t>(tensor_shape_offset + i);
-    //     DPRINT << "dim i: " << dim << ENDL();
-    //     // use dim...
-    // }
-
-    // constexpr uint32_t rank = 3;
-    // constexpr uint32_t shape_offset = dst_args.TensorShapeCTAOffset;
-    // DPRINT << "rank: " << dst_args.get_rank() << ENDL();
-    // DPRINT << "shape_offset: " << shape_offset << ENDL();
-    // DPRINT << get_compile_time_arg_val(18) << " " << get_compile_time_arg_val(19) << " " <<
-    // get_compile_time_arg_val(20) << ENDL();
-    //     // Read compile-time tensor shape
-    // // for (uint32_t i = 0; i < rank; ++i) {
-    // //     constexpr uint32_t dim = get_compile_time_arg_val(shape_offset + i);
-    // //     DPRINT << "dim i: " << dim << ENDL();
-    // //     // use dim...
-    // // }
-    // uint32_t tensor_shape[4]; // max rank you expect
-    // for (uint32_t i = 0; i < rank; ++i) {
-    //     tensor_shape[i] = get_compile_time_arg_val(shape_offset + i);
-    // }
-
-    // const auto& dspec = accessor_dst.dspec();
-    // const auto& output_tensor_shape = dspec.tensor_shape();
-    // DPRINT << "output_tensor_shape: " << output_tensor_shape[0] << ", " << output_tensor_shape[1] << ", " <<
-    // output_tensor_shape[2] << ENDL();
     uint32_t global_coord[tensor_rank];
-    DPRINT << "start_shard_id: " << start_shard_id << " num_shards: " << num_shards << " num_cores: " << num_cores
-           << ENDL();
+
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
-        DPRINT << "IN FOR LOOP 1" << ENDL();
         auto shard_pages = accessor_src.shard_pages(shard_id);
-        DPRINT << "shard_id: " << shard_id << " num_shards: " << num_shards << " num_cores: " << num_cores << ENDL();
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end();
              page_iter += num_tiles_per_input_block) {
-            DPRINT << "IN FOR LOOP 2" << ENDL();
             uint32_t page_id = page_iter->page_id();
             uint32_t global_element_start_row_input = page_id / num_tiles_per_input_row * tile_height;
             uint32_t global_element_start_column_input = page_id % num_tiles_per_input_row * tile_width;
@@ -178,24 +137,18 @@ void kernel_main() {
             for (size_t i = tensor_rank - 1; i >= 0; --i) {
                 uint32_t curr_dim = element_id_input % input_tensor_shape[i];
                 global_coord[i] = curr_dim;
-                DPRINT << "global_coord[" << i << "]: " << global_coord[i] << ENDL();
-                DPRINT << "output_tensor_shape[" << i << "]: " << output_tensor_shape[i] << ENDL();
                 if (curr_dim >= output_tensor_shape[i]) {
                     block_is_in_output_tensor = false;
                     break;
                 }
                 element_id_input /= input_tensor_shape[i];
             }
-            DPRINT << "page_id: " << page_id << ENDL();
             if (!block_is_in_output_tensor) {  // This input block is entirely outside the output tensor, so skip it
-                DPRINT << "DISCARDING BLOCK" << ENDL();
                 cb_wait_front(cb_id_out0, num_tiles_per_input_block);
                 cb_pop_front(cb_id_out0, num_tiles_per_input_block);
                 continue;
             }
 
-            // uint32_t num_tiles_per_output_dimension
-            // uint32_t page_id_in_output_coordinates =
             uint32_t element_id_output = 0;
             uint32_t stride = 1;
             for (size_t i = tensor_rank - 1; i >= 0; --i) {
@@ -214,16 +167,13 @@ void kernel_main() {
             uint32_t last_column_tensor_index_in_block =
                 (tile_index_width + num_tiles_per_input_block) * tile_width - 1;
             if (last_column_tensor_index_in_block >= output_tensor_width) {
-                // we have columns consisting of padding elements, so ignore those last padding columns
+                // we have columns which go beyond the output tensor width, so ignore those last columns
                 num_unpadded_cols_per_input_block = (output_tensor_width - tile_index_width * tile_width);
             }
-            // CHANGE THIS
             uint32_t last_row_tensor_index_in_block = global_coord[tensor_rank - 2] + tile_height - 1;
             uint32_t num_rows_to_write = tile_height;
             if (last_row_tensor_index_in_block >= output_tensor_height) {
-                // we have rows consisting of padding elements, so ignore those last padding rows. For untilize, the
-                // output_tensor_height is the padded shape height, so this should never happen. It may happen for
-                // untilize_with_unpadding.
+                // we have rows which go beyond the output tensor height, so ignore those last rows.
                 num_rows_to_write = (output_tensor_height - global_coord[tensor_rank - 2]);
             }
             uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
