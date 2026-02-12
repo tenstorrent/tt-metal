@@ -76,18 +76,19 @@ void kernel_main() {
     constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
     constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
-    constexpr uint32_t max_tiles_per_chunk = get_named_compile_time_arg_val("max_tiles_per_chunk");
+    constexpr uint32_t max_tiles_per_local_chunk = get_named_compile_time_arg_val("max_tiles_per_local_chunk");
+    constexpr uint32_t shared_cb_num_pages = get_named_compile_time_arg_val("shared_cb_num_pages");
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
-    uint32_t tiles_per_chunk = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t tiles_per_local_chunk = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Constants
     constexpr uint32_t one_page = 1;
 
     // Setup
     compute_kernel_hw_startup(tilize_input_cb_id, tilize_output_cb_id);
-    fast_tilize_init(tilize_input_cb_id, max_tiles_per_chunk, tilize_output_cb_id);
+    fast_tilize_init(tilize_input_cb_id, max_tiles_per_local_chunk, tilize_output_cb_id);
 
     // Wait for writer to push total_chunks via CB
     cb_wait_front(total_chunks_cb_id, one_page);
@@ -111,18 +112,20 @@ void kernel_main() {
         //     print_row_major_subset<buffer_width>(cb_addr, 0, 4, buffer_width - 8, buffer_width);  // last 4x8
         // }));
 
-        cb_reserve_back(tilize_output_cb_id, tiles_per_chunk);
+        // we reserve the entire CB so that we treat it as single buffered
+        // this is to allow us to gather into it before mcasting to the MM cores
+        cb_reserve_back(tilize_output_cb_id, shared_cb_num_pages);
 
-        fast_tilize_block(tilize_input_cb_id, tiles_per_chunk, tilize_output_cb_id);
+        fast_tilize_block(tilize_input_cb_id, tiles_per_local_chunk, tilize_output_cb_id);
 
         // DEBUG: Print first and last tiles of output (tilized format)
         // PACK(({
         //     DPRINT << "=== CHUNK " << chunk << " OUTPUT ===" << ENDL();
         //     print_tile_rows(tilize_output_cb_id, 0, true, 0, 1, 0, 1);                    // First tile, 4x8
-        //     // print_tile_rows(tilize_output_cb_id, tiles_per_chunk - 1, true, 0, 1, 0, 1);  // Last tile, 4x8
+        //     // print_tile_rows(tilize_output_cb_id, tiles_per_local_chunk - 1, true, 0, 1, 0, 1);  // Last tile, 4x8
         // }));
 
-        cb_push_back(tilize_output_cb_id, tiles_per_chunk);
+        cb_push_back(tilize_output_cb_id, shared_cb_num_pages);
 
         // Pop input from reader (tokens_per_chunk pages)
         cb_pop_front(tilize_input_cb_id, tokens_per_chunk);

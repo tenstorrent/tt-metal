@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -48,24 +49,18 @@ std::tuple<
     CoreRangeSet,            // MM CoreRangeSet
     CoreRangeSet,            // T + MM CoreRangeSet
     CoreRange,               // T bounding box
-    CoreRange,               // MM bounding box one
-    CoreRange>               // MM bounding box two
+    CoreRange>               // MM bounding box
 get_cores(ttnn::MeshDevice* mesh_device) {
+    /*
+     * - First tilize core is the drain sync
+     * - First ((total_tilize_cores + 1) / 2) tilize cores are primary mcast group
+     * - Remaining cores are secondary mcast group (with the first of them being the secondary mcaster)
+     */
+
     // Cores
-    const std::vector<CoreCoord> tilize_cores = {CoreCoord(5, 9), CoreCoord(5, 8), CoreCoord(5, 7), CoreCoord(5, 6)};
+    const std::vector<CoreCoord> tilize_cores = {CoreCoord(6, 9), CoreCoord(6, 8), CoreCoord(5, 9), CoreCoord(5, 8)};
     const std::vector<CoreCoord> matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-
-    std::pair<std::vector<CoreCoord>, std::vector<CoreCoord>> matmul_core_columns;
-    for (const CoreCoord& matmul_core : matmul_cores) {
-        if (matmul_core.x == 0) {
-            matmul_core_columns.first.push_back(matmul_core);
-        } else if (matmul_core.x == 4) {
-            matmul_core_columns.second.push_back(matmul_core);
-        } else {
-            TT_FATAL(false, "Matmul cores must have x value 0 or 4, but has {}", matmul_core.x);
-        }
-    }
 
     // CoreRangeSets
     const CoreRangeSet tilize_core_range_set = CoreRangeSet(tilize_cores);
@@ -74,26 +69,17 @@ get_cores(ttnn::MeshDevice* mesh_device) {
 
     // Bounding boxes
     const CoreRange tilize_bounding_box = tilize_core_range_set.bounding_box();
-    const CoreRange matmul_bounding_box_one = CoreRangeSet(matmul_core_columns.first).bounding_box();
-    const CoreRange matmul_bounding_box_two = CoreRangeSet(matmul_core_columns.second).bounding_box();
+    const CoreRange matmul_bounding_box = matmul_core_range_set.bounding_box();
 
     // Verify none of the bounding boxes overlap
-    TT_FATAL(
-        !tilize_bounding_box.intersects(matmul_bounding_box_one), "tilize and matmul bounding boxes cannot overlap");
-    TT_FATAL(
-        !tilize_bounding_box.intersects(matmul_bounding_box_two), "tilize and matmul bounding boxes cannot overlap");
-    TT_FATAL(
-        !matmul_bounding_box_one.intersects(matmul_bounding_box_two), "separate matmul bounding boxes cannot overlap");
+    TT_FATAL(!tilize_bounding_box.intersects(matmul_bounding_box), "tilize and matmul bounding boxes cannot overlap");
 
     // Combine cores (16 total), that don't overlap with any of the tilize or matmul bounding boxes
-    const CoreRange combine_core_range({1, 0}, {2, 7});
+    const CoreRange combine_core_range({5, 0}, {6, 7});
     const CoreRangeSet combine_core_range_set = CoreRangeSet(combine_core_range);
     const CoreRange combine_bounding_box = combine_core_range_set.bounding_box();
     TT_FATAL(!combine_bounding_box.intersects(tilize_bounding_box), "combine and tilize bounding boxes cannot overlap");
-    TT_FATAL(
-        !combine_bounding_box.intersects(matmul_bounding_box_one), "combine and matmul bounding boxes cannot overlap");
-    TT_FATAL(
-        !combine_bounding_box.intersects(matmul_bounding_box_two), "combine and matmul bounding boxes cannot overlap");
+    TT_FATAL(!combine_bounding_box.intersects(matmul_bounding_box), "combine and matmul bounding boxes cannot overlap");
 
     return {
         tilize_cores,
@@ -102,8 +88,7 @@ get_cores(ttnn::MeshDevice* mesh_device) {
         matmul_core_range_set,
         tilize_matmul_core_range_set,
         tilize_bounding_box,
-        matmul_bounding_box_one,
-        matmul_bounding_box_two};
+        matmul_bounding_box};
 }
 
 }  // namespace
@@ -229,35 +214,27 @@ MoEComputeMeshWorkloadFactory::create_at(
          matmul_core_range_set,
          tilize_matmul_core_range_set,
          tilize_bounding_box,
-         matmul_bounding_box_one,
-         matmul_bounding_box_two] = get_cores(mesh_device);
+         matmul_bounding_box] = get_cores(mesh_device);
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
-    const uint32_t matmul_bounding_box_one_num_cores = matmul_bounding_box_one.size();
-    const uint32_t matmul_bounding_box_two_num_cores = matmul_bounding_box_two.size();
+    const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
+    const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
 
     // Logical mcast bounding box coordinates
     const CoreCoord tilize_mcast_start_logical = tilize_bounding_box.start_coord;
     const CoreCoord tilize_mcast_end_logical = tilize_bounding_box.end_coord;
-    const CoreCoord matmul_mcast_box_one_start_logical = matmul_bounding_box_one.start_coord;
-    const CoreCoord matmul_mcast_box_one_end_logical = matmul_bounding_box_one.end_coord;
-    const CoreCoord matmul_mcast_box_two_start_logical = matmul_bounding_box_two.start_coord;
-    const CoreCoord matmul_mcast_box_two_end_logical = matmul_bounding_box_two.end_coord;
+    const CoreCoord matmul_mcast_start_logical = matmul_bounding_box.start_coord;
+    const CoreCoord matmul_mcast_end_logical = matmul_bounding_box.end_coord;
 
     // Convert to physical NOC coordinates
     const CoreCoord tilize_mcast_start_physical =
         mesh_device->worker_core_from_logical_core(tilize_mcast_start_logical);
     const CoreCoord tilize_mcast_end_physical = mesh_device->worker_core_from_logical_core(tilize_mcast_end_logical);
-    const CoreCoord matmul_mcast_box_one_start_physical =
-        mesh_device->worker_core_from_logical_core(matmul_mcast_box_one_start_logical);
-    const CoreCoord matmul_mcast_box_one_end_physical =
-        mesh_device->worker_core_from_logical_core(matmul_mcast_box_one_end_logical);
-    const CoreCoord matmul_mcast_box_two_start_physical =
-        mesh_device->worker_core_from_logical_core(matmul_mcast_box_two_start_logical);
-    const CoreCoord matmul_mcast_box_two_end_physical =
-        mesh_device->worker_core_from_logical_core(matmul_mcast_box_two_end_logical);
+    const CoreCoord matmul_mcast_start_physical =
+        mesh_device->worker_core_from_logical_core(matmul_mcast_start_logical);
+    const CoreCoord matmul_mcast_end_physical = mesh_device->worker_core_from_logical_core(matmul_mcast_end_logical);
 
     //-------------------------------------------------------------------------
     // Tilize semaphores
@@ -314,10 +291,10 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto
         [num_tilize_work_cores,
          all_tilize_work_cores,
-         tilize_cores_group_1,
-         tilize_cores_group_2,
-         tilize_units_per_core_g1,
-         tilize_units_per_core_g2] =
+         tilize_cores_work_group_1,
+         tilize_cores_work_group_2,
+         tilize_units_per_core_work_group_1,
+         tilize_units_per_core_work_group_2] =
             tt::tt_metal::split_work_to_cores(tilize_core_range_set, tilize_subtoken_units_of_work);
 
     //-------------------------------------------------------------------------
@@ -335,12 +312,13 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // All cores (not just Tilize and Matmul)
     CoreRangeSet shard_cores = output_tensor.memory_config().shard_spec()->grid;
+    const uint32_t shared_cb_num_pages = output_pages / shard_cores.size();
     auto output_cb = tt::tt_metal::create_cb(
         tilize_output_cb_id,
         program,
         shard_cores,
         output_page_size,
-        output_pages / shard_cores.size(),
+        shared_cb_num_pages,
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype()),
         output_tensor.buffer());
     tt::tt_metal::CBHandle sharded_output_cb_handle = std::get<1>(output_cb);
@@ -390,7 +368,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::tt_metal::datatype_to_dataformat_converter(tilize_e_t_output_tensor.dtype());
 
     uint32_t max_tilize_subtoken_size =
-        std::max(tilize_units_per_core_g1, tilize_units_per_core_g2) * tilize_subtoken_bytes_aligned;
+        std::max(tilize_units_per_core_work_group_1, tilize_units_per_core_work_group_2) *
+        tilize_subtoken_bytes_aligned;
 
     constexpr uint32_t tokens_per_chunk = 32;  // Hardcoding for now, can adjust when tiny tiles support added
 
@@ -582,7 +561,10 @@ MoEComputeMeshWorkloadFactory::create_at(
     // max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes
     constexpr uint32_t TILE_WIDTH = 32;
     uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
-    uint32_t max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes;
+    uint32_t max_tiles_per_local_chunk = max_tilize_subtoken_size / tile_width_bytes;
+
+    const uint32_t primary_mcast_gather_group_num_cores = (tilize_num_cores + 1) / 2;
+    const uint32_t secondary_mcast_gather_group_num_cores = tilize_num_cores / 2;
 
     // Drain core is always the first tilize core (index 0)
     CoreCoord tilize_drain_core_physical = tilize_cores_physical.at(0);
@@ -614,6 +596,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"indices_pages", tilize_indices_pages},
         {"mapping_pages", tilize_mapping_pages},
         {"scores_pages", tilize_input_scores_pages},
+        {"shared_cb_num_pages", shared_cb_num_pages},
 
         // Page sizes
         {"input_page_size", tilize_input_page_size},
@@ -651,27 +634,27 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
         {"drain_core_noc_y", (uint32_t)tilize_drain_core_physical.y},
 
+        // Gather groups
+        {"primary_mcast_gather_group_num_cores", primary_mcast_gather_group_num_cores},
+        {"secondary_mcast_gather_group_num_cores", secondary_mcast_gather_group_num_cores},
+
         // T multicast coordinates
+        {"num_tilize_cores", tilize_num_cores},
+
         {"tilize_mcast_start_x", (uint32_t)tilize_mcast_start_physical.x},
         {"tilize_mcast_start_y", (uint32_t)tilize_mcast_start_physical.y},
         {"tilize_mcast_end_x", (uint32_t)tilize_mcast_end_physical.x},
         {"tilize_mcast_end_y", (uint32_t)tilize_mcast_end_physical.y},
-        {"num_tilize_cores", tilize_num_cores},
+        {"tilize_bounding_box_num_cores", tilize_bounding_box_num_cores},
 
         // MM multicast coordinates
         {"num_matmul_cores", matmul_num_cores},
 
-        {"matmul_mcast_box_one_start_x", (uint32_t)matmul_mcast_box_one_start_physical.x},
-        {"matmul_mcast_box_one_start_y", (uint32_t)matmul_mcast_box_one_start_physical.y},
-        {"matmul_mcast_box_one_end_x", (uint32_t)matmul_mcast_box_one_end_physical.x},
-        {"matmul_mcast_box_one_end_y", (uint32_t)matmul_mcast_box_one_end_physical.y},
-        {"num_matmul_bounding_box_one_cores", matmul_bounding_box_one_num_cores},
-
-        {"matmul_mcast_box_two_start_x", (uint32_t)matmul_mcast_box_two_start_physical.x},
-        {"matmul_mcast_box_two_start_y", (uint32_t)matmul_mcast_box_two_start_physical.y},
-        {"matmul_mcast_box_two_end_x", (uint32_t)matmul_mcast_box_two_end_physical.x},
-        {"matmul_mcast_box_two_end_y", (uint32_t)matmul_mcast_box_two_end_physical.y},
-        {"num_matmul_bounding_box_two_cores", matmul_bounding_box_two_num_cores},
+        {"matmul_mcast_start_x", (uint32_t)matmul_mcast_start_physical.x},
+        {"matmul_mcast_start_y", (uint32_t)matmul_mcast_start_physical.y},
+        {"matmul_mcast_end_x", (uint32_t)matmul_mcast_end_physical.x},
+        {"matmul_mcast_end_y", (uint32_t)matmul_mcast_end_physical.y},
+        {"matmul_bounding_box_num_cores", matmul_bounding_box_num_cores},
 
         // Semaphores
         {"partial_metadata_ready_semaphore_id", tilize_partial_metadata_ready_semaphore_id},
@@ -725,7 +708,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tilize_output_cb_id", tilize_output_cb_id},
         {"total_chunks_cb_id", total_chunks_cb_id},
         {"tokens_per_chunk", tokens_per_chunk},
-        {"max_tiles_per_chunk", max_tiles_per_chunk},
+        {"max_tiles_per_local_chunk", max_tiles_per_local_chunk},
+        {"shared_cb_num_pages", shared_cb_num_pages},
     };
 
     tt::tt_metal::KernelHandle tilize_compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -745,39 +729,112 @@ MoEComputeMeshWorkloadFactory::create_at(
     };
 
     uint32_t is_drain_tilize_core_idx = tilize_runtime_args.size();
-    tilize_runtime_args.push_back(0);  // 8: is_drain_tilize_core
+    tilize_runtime_args.push_back(0);  // 7: is_drain_tilize_core
+    uint32_t is_secondary_mcaster_idx = tilize_runtime_args.size();
+    tilize_runtime_args.push_back(0);  // 8: is_secondary_mcaster
+
+    // Initial split mcast cores
+    uint32_t initial_mcast_gather_core_nox_x_idx = tilize_runtime_args.size();
+    tilize_runtime_args.push_back(0);  // 9: initial_mcast_gather_core_nox_x
+    uint32_t initial_mcast_gather_core_nox_y_idx = tilize_runtime_args.size();
+    tilize_runtime_args.push_back(0);  // 10: initial_mcast_gather_core_nox_x
 
     // Add work split runtime args for tilize cores
-    uint32_t tilize_subtoken_offset_idx = tilize_runtime_args.size();
-    tilize_runtime_args.push_back(0);  // 9: tilize_subtoken_offset
-    uint32_t tilize_subtoken_size_idx = tilize_runtime_args.size();
-    tilize_runtime_args.push_back(0);  // 10: tilize_subtoken_size
+    uint32_t global_subtoken_offset_idx = tilize_runtime_args.size();
+    tilize_runtime_args.push_back(0);  // 11: global_subtoken_offset
+    uint32_t mcast_group_subtoken_offset_idx = tilize_runtime_args.size();
+    tilize_runtime_args.push_back(0);  // 12: group_subtoken_offset
+
+    uint32_t mcast_group_subtoken_size_idx = tilize_runtime_args.size();
+    tilize_runtime_args.push_back(0);  // 13: group_subtoken_size
+    uint32_t subtoken_size_idx = tilize_runtime_args.size();
+    tilize_runtime_args.push_back(0);  // 14: subtoken_size
 
     // Token range for parallel metadata processing across tilize cores
     uint32_t core_token_start_idx = tilize_runtime_args.size();
-    tilize_runtime_args.push_back(0);  // 11: core_token_start
+    tilize_runtime_args.push_back(0);  // 15: core_token_start
     uint32_t core_token_end_idx = tilize_runtime_args.size();
-    tilize_runtime_args.push_back(0);  // 12: core_token_end
-    uint32_t tilize_core_idx_idx = tilize_runtime_args.size();
-    tilize_runtime_args.push_back(0);  // 13: tilize_core_idx (0 = drain, 1-3 = non-drain)
+    tilize_runtime_args.push_back(0);  // 16: core_token_end
+    uint32_t tilize_core_idx = tilize_runtime_args.size();
+    tilize_runtime_args.push_back(0);  // 17: tilize_core_idx (0 = drain, 1-3 = non-drain)
 
     // NOC coordinates for all tilize cores (for cross-core communication)
-    // Runtime args starting at index 14: [core0_noc_x, core0_noc_y, core1_noc_x, core1_noc_y, ...]
+    // Runtime args starting at index 18: [core0_noc_x, core0_noc_y, core1_noc_x, core1_noc_y, ...]
     for (uint32_t i = 0; i < tilize_num_cores; i++) {
         tilize_runtime_args.push_back((uint32_t)tilize_cores_physical.at(i).x);
         tilize_runtime_args.push_back((uint32_t)tilize_cores_physical.at(i).y);
+    }
+
+    // Calculate number of bytes per mcast_gather_group
+    uint32_t primary_mcast_gather_group_subtoken_size = 0;
+    uint32_t secondary_mcast_gather_group_subtoken_size = 0;
+    uint32_t global_subtoken_offset = 0;
+    for (uint32_t i = 0; i < tilize_num_cores; i++) {
+        uint32_t subtoken_size = 0;
+        if (tilize_cores_work_group_1.contains(tilize_cores.at(i))) {
+            subtoken_size = tilize_units_per_core_work_group_1 * tilize_subtoken_bytes_aligned;
+        } else if (tilize_cores_work_group_2.contains(tilize_cores.at(i))) {
+            subtoken_size = tilize_units_per_core_work_group_2 * tilize_subtoken_bytes_aligned;
+        }
+
+        // Clamp to not exceed the total token size
+        if (global_subtoken_offset + subtoken_size > tilize_input_aligned_page_size) {
+            subtoken_size = tilize_input_aligned_page_size - global_subtoken_offset;
+        }
+
+        if (i < primary_mcast_gather_group_num_cores) {
+            primary_mcast_gather_group_subtoken_size += subtoken_size;
+        } else {
+            secondary_mcast_gather_group_subtoken_size += subtoken_size;
+        }
+
+        global_subtoken_offset += subtoken_size;
     }
 
     // Calculate tokens per tilize core for parallel metadata processing
     uint32_t tokens_per_tilize_core = tokens / tilize_num_cores;
 
     // Compute kernel runtime args (separate from reader/writer)
-    std::vector<uint32_t> tilize_compute_runtime_args = {0};  // [0]: max_tiles_per_chunk (set per-core below)
+    std::vector<uint32_t> tilize_compute_runtime_args = {0};  // [0]: tiles_per_chunk (set per-core below)
 
-    uint32_t tilize_subtoken_offset = 0;
+    global_subtoken_offset = 0;
+    uint32_t group_subtoken_offset = 0;
     for (uint32_t i = 0; i < tilize_num_cores; i++) {
         // First tilize core is the drain tilize core (has indices/scores sharded to it)
         tilize_runtime_args.at(is_drain_tilize_core_idx) = (i == 0) ? 1 : 0;
+        tilize_runtime_args.at(is_secondary_mcaster_idx) = (i == primary_mcast_gather_group_num_cores) ? 1 : 0;
+
+        // Initial split mcast cores
+        CoreCoord initial_mcast_gather_core_physical =
+            i < primary_mcast_gather_group_num_cores ? tilize_cores_physical.at(0)
+                                                     : tilize_cores_physical.at(primary_mcast_gather_group_num_cores);
+        tilize_runtime_args.at(initial_mcast_gather_core_nox_x_idx) = (uint32_t)initial_mcast_gather_core_physical.x;
+        tilize_runtime_args.at(initial_mcast_gather_core_nox_y_idx) = (uint32_t)initial_mcast_gather_core_physical.y;
+
+        // Set work split parameters based on which group the core is in
+        tilize_runtime_args.at(global_subtoken_offset_idx) = global_subtoken_offset;
+        tilize_runtime_args.at(mcast_group_subtoken_offset_idx) = group_subtoken_offset;
+        tilize_runtime_args.at(mcast_group_subtoken_size_idx) = i < primary_mcast_gather_group_num_cores
+                                                                    ? primary_mcast_gather_group_subtoken_size
+                                                                    : secondary_mcast_gather_group_subtoken_size;
+
+        uint32_t subtoken_size = 0;
+        if (tilize_cores_work_group_1.contains(tilize_cores.at(i))) {
+            subtoken_size = tilize_units_per_core_work_group_1 * tilize_subtoken_bytes_aligned;
+        } else if (tilize_cores_work_group_2.contains(tilize_cores.at(i))) {
+            subtoken_size = tilize_units_per_core_work_group_2 * tilize_subtoken_bytes_aligned;
+        }
+        if (global_subtoken_offset + subtoken_size > tilize_input_aligned_page_size) {
+            // Clamp to not exceed the total token size
+            subtoken_size = tilize_input_aligned_page_size - global_subtoken_offset;
+        }
+        tilize_runtime_args.at(subtoken_size_idx) = subtoken_size;
+
+        global_subtoken_offset += subtoken_size;
+        group_subtoken_offset += subtoken_size;
+        if (i == primary_mcast_gather_group_num_cores - 1) {
+            group_subtoken_offset = 0;
+        }
 
         // Set token range for this core's metadata processing
         // Each core processes a contiguous range of tokens
@@ -785,36 +842,10 @@ MoEComputeMeshWorkloadFactory::create_at(
         uint32_t core_token_end = (i == tilize_num_cores - 1) ? tokens : (i + 1) * tokens_per_tilize_core;
         tilize_runtime_args.at(core_token_start_idx) = core_token_start;
         tilize_runtime_args.at(core_token_end_idx) = core_token_end;
-        tilize_runtime_args.at(tilize_core_idx_idx) = i;
+        tilize_runtime_args.at(tilize_core_idx) = i;
 
-        // Set work split parameters based on which group the core is in
-        uint32_t tilize_subtoken_size = 0;
-        if (tilize_cores_group_1.contains(tilize_cores.at(i))) {
-            tilize_runtime_args.at(tilize_subtoken_offset_idx) = tilize_subtoken_offset;
-            tilize_subtoken_size = tilize_units_per_core_g1 * tilize_subtoken_bytes_aligned;
-
-            // Clamp to not exceed the total token size
-            if (tilize_subtoken_offset + tilize_subtoken_size > tilize_input_aligned_page_size) {
-                tilize_subtoken_size = tilize_input_aligned_page_size - tilize_subtoken_offset;
-            }
-
-            tilize_runtime_args.at(tilize_subtoken_size_idx) = tilize_subtoken_size;
-            tilize_subtoken_offset += tilize_subtoken_size;
-        } else if (tilize_cores_group_2.contains(tilize_cores.at(i))) {
-            tilize_runtime_args.at(tilize_subtoken_offset_idx) = tilize_subtoken_offset;
-            tilize_subtoken_size = tilize_units_per_core_g2 * tilize_subtoken_bytes_aligned;
-
-            // Clamp to not exceed the total token size
-            if (tilize_subtoken_offset + tilize_subtoken_size > tilize_input_aligned_page_size) {
-                tilize_subtoken_size = tilize_input_aligned_page_size - tilize_subtoken_offset;
-            }
-
-            tilize_runtime_args.at(tilize_subtoken_size_idx) = tilize_subtoken_size;
-            tilize_subtoken_offset += tilize_subtoken_size;
-        }
-
-        // Set compute kernel runtime args - max_tiles_per_chunk based on tilize_subtoken_size
-        tilize_compute_runtime_args.at(0) = tilize_subtoken_size / tile_width_bytes;
+        // Set compute kernel runtime args
+        tilize_compute_runtime_args.at(0) = subtoken_size / tile_width_bytes;
 
         tt::tt_metal::SetRuntimeArgs(program, tilize_reader_kernel_id, tilize_cores.at(i), tilize_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, tilize_writer_kernel_id, tilize_cores.at(i), tilize_runtime_args);

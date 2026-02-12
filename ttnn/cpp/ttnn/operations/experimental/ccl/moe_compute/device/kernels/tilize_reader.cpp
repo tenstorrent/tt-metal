@@ -303,28 +303,22 @@ void kernel_main() {
     constexpr uint32_t drain_core_noc_y = get_named_compile_time_arg_val("drain_core_noc_y");
 
     // T multicast coordinates
+    constexpr uint32_t num_tilize_cores = get_named_compile_time_arg_val("num_tilize_cores");
+
     constexpr uint32_t tilize_mcast_start_x = get_named_compile_time_arg_val("tilize_mcast_start_x");
     constexpr uint32_t tilize_mcast_start_y = get_named_compile_time_arg_val("tilize_mcast_start_y");
     constexpr uint32_t tilize_mcast_end_x = get_named_compile_time_arg_val("tilize_mcast_end_x");
     constexpr uint32_t tilize_mcast_end_y = get_named_compile_time_arg_val("tilize_mcast_end_y");
-    constexpr uint32_t num_tilize_cores = get_named_compile_time_arg_val("num_tilize_cores");
+    constexpr uint32_t tilize_bounding_box_num_cores = get_named_compile_time_arg_val("tilize_bounding_box_num_cores");
 
     // Multicast coordinates for signalling MM cores
     constexpr uint32_t num_matmul_cores = get_named_compile_time_arg_val("num_matmul_cores");
 
-    constexpr uint32_t matmul_mcast_box_one_start_x = get_named_compile_time_arg_val("matmul_mcast_box_one_start_x");
-    constexpr uint32_t matmul_mcast_box_one_start_y = get_named_compile_time_arg_val("matmul_mcast_box_one_start_y");
-    constexpr uint32_t matmul_mcast_box_one_end_x = get_named_compile_time_arg_val("matmul_mcast_box_one_end_x");
-    constexpr uint32_t matmul_mcast_box_one_end_y = get_named_compile_time_arg_val("matmul_mcast_box_one_end_y");
-    constexpr uint32_t num_matmul_bounding_box_one_cores =
-        get_named_compile_time_arg_val("num_matmul_bounding_box_one_cores");
-
-    constexpr uint32_t matmul_mcast_box_two_start_x = get_named_compile_time_arg_val("matmul_mcast_box_two_start_x");
-    constexpr uint32_t matmul_mcast_box_two_start_y = get_named_compile_time_arg_val("matmul_mcast_box_two_start_y");
-    constexpr uint32_t matmul_mcast_box_two_end_x = get_named_compile_time_arg_val("matmul_mcast_box_two_end_x");
-    constexpr uint32_t matmul_mcast_box_two_end_y = get_named_compile_time_arg_val("matmul_mcast_box_two_end_y");
-    constexpr uint32_t num_matmul_bounding_box_two_cores =
-        get_named_compile_time_arg_val("num_matmul_bounding_box_two_cores");
+    constexpr uint32_t matmul_mcast_start_x = get_named_compile_time_arg_val("matmul_mcast_start_x");
+    constexpr uint32_t matmul_mcast_start_y = get_named_compile_time_arg_val("matmul_mcast_start_y");
+    constexpr uint32_t matmul_mcast_end_x = get_named_compile_time_arg_val("matmul_mcast_end_x");
+    constexpr uint32_t matmul_mcast_end_y = get_named_compile_time_arg_val("matmul_mcast_end_y");
+    constexpr uint32_t matmul_bounding_box_num_cores = get_named_compile_time_arg_val("matmul_bounding_box_num_cores");
 
     // Semaphores
     constexpr uint32_t partial_metadata_ready_semaphore_id =
@@ -339,19 +333,28 @@ void kernel_main() {
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                    // 0
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                  // 1
-    uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                   // 2
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                  // 3
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                     // 0
+    [[maybe_unused]] uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 1 - not used by reader
+    [[maybe_unused]] uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 2 - not used by reader
+    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                   // 3
     uint32_t per_expert_total_tokens_output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 4
-    uint32_t expert_activation_output_address = get_arg_val<uint32_t>(rt_args_idx++);        // 5
-    uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);                      // 6
-    bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);                  // 7
-    uint32_t tilize_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                  // 8
-    uint32_t tilize_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                    // 9
-    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                        // 10
-    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                          // 11
-    uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);                         // 12
+    uint32_t expert_activation_output_address = get_arg_val<uint32_t>(rt_args_idx++);               // 5
+    uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);                             // 6
+    bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);                         // 7
+    [[maybe_unused]] bool is_secondary_mcaster = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 8 - not used by reader
+    [[maybe_unused]] uint32_t initial_mcast_gather_core_nox_x =
+        get_arg_val<uint32_t>(rt_args_idx++);  // 9 - not used by reader
+    [[maybe_unused]] uint32_t initial_mcast_gather_core_nox_y =
+        get_arg_val<uint32_t>(rt_args_idx++);                                // 10 - not used by reader
+    uint32_t global_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);  // 11
+    [[maybe_unused]] uint32_t mcast_group_subtoken_offset =
+        get_arg_val<uint32_t>(rt_args_idx++);  // 12 - not used by reader
+    [[maybe_unused]] uint32_t mcast_group_subtoken_size =
+        get_arg_val<uint32_t>(rt_args_idx++);                          // 13 - not used by reader
+    uint32_t subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);     // 14
+    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);  // 15
+    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);    // 16
+    uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);   // 17
 
     // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output, expert_activation_output
     constexpr auto input_args = TensorAccessorArgs<0>();
@@ -367,8 +370,8 @@ void kernel_main() {
 
     // TensorAccessors
     const auto input_tensor_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
-    const auto indices_tensor_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
-    const auto scores_tensor_addr_gen = TensorAccessor(scores_args, scores_tensor_address, indices_page_size);
+    // indices not used by reader
+    // scores not used by reader
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
     const auto per_expert_total_tokens_output_tensor_addr_gen = TensorAccessor(
         per_expert_total_tokens_output_args,
@@ -765,7 +768,8 @@ void kernel_main() {
                 total_chunks_cb_read_ptr);
 
             // Multicast e_t buffer to all tilize cores
-            noc_async_write_multicast(e_t_cb_read_ptr, e_t_mcast_addr, e_t_buffer_total_size, num_tilize_cores - 1);
+            noc_async_write_multicast(
+                e_t_cb_read_ptr, e_t_mcast_addr, e_t_buffer_total_size, tilize_bounding_box_num_cores - 1);
 
             // Multicast per_expert_counts to all tilize cores
             noc_async_write_multicast(
@@ -776,7 +780,7 @@ void kernel_main() {
 
             // Multicast total_chunks to all tilize cores
             noc_async_write_multicast(
-                total_chunks_cb_read_ptr, total_chunks_mcast_addr, sizeof(uint32_t), num_tilize_cores - 1);
+                total_chunks_cb_read_ptr, total_chunks_mcast_addr, sizeof(uint32_t), tilize_bounding_box_num_cores - 1);
 
             // Signal non-drain cores via semaphore multicast
             // First, set the local semaphore to 1 - this is the value that will be multicast
@@ -790,7 +794,8 @@ void kernel_main() {
                 metadata_ready_semaphore_addr);
 
             // Multicast the value 1 to all non-drain tilize cores
-            noc_semaphore_set_multicast(metadata_ready_semaphore_addr, semaphore_mcast_addr, num_tilize_cores - 1);
+            noc_semaphore_set_multicast(
+                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
 
             // Flush writes since we change the local value of metadata_ready_semaphore when signalling
             // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
@@ -828,29 +833,16 @@ void kernel_main() {
         // == 2 ==
 
         // get mcast address
-        uint64_t matmul_metadata_ready_semaphore_mcast_box_one_addr = get_safe_multicast_noc_addr(
-            matmul_mcast_box_one_start_x,
-            matmul_mcast_box_one_start_y,
-            matmul_mcast_box_one_end_x,
-            matmul_mcast_box_one_end_y,
-            metadata_ready_semaphore_addr);
-        uint64_t matmul_metadata_ready_semaphore_mcast_box_two_addr = get_safe_multicast_noc_addr(
-            matmul_mcast_box_two_start_x,
-            matmul_mcast_box_two_start_y,
-            matmul_mcast_box_two_end_x,
-            matmul_mcast_box_two_end_y,
+        uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
+            matmul_mcast_start_x,
+            matmul_mcast_start_y,
+            matmul_mcast_end_x,
+            matmul_mcast_end_y,
             metadata_ready_semaphore_addr);
 
         // multicast semaphore
         noc_semaphore_set_multicast(
-            metadata_ready_semaphore_addr,
-            matmul_metadata_ready_semaphore_mcast_box_one_addr,
-            num_matmul_bounding_box_one_cores);
-        noc_semaphore_set_multicast(
-            metadata_ready_semaphore_addr,
-            matmul_metadata_ready_semaphore_mcast_box_two_addr,
-            num_matmul_bounding_box_two_cores);
-
+            metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, matmul_bounding_box_num_cores);
     }  // End of is_drain_tilize_core block
     else {
         // ========== NON-DRAIN tilize CORE: Step 4 - Send counts to drain ==========
@@ -927,9 +919,9 @@ void kernel_main() {
                 uint32_t token_id = *reinterpret_cast<uint32_t*>(e_t_expert_addr + (chunk_start + i) * e_t_entry_size);
                 // read the token from the input tensor at the tilize subtoken offset and size
                 noc_async_read(
-                    get_noc_addr(token_id, input_tensor_addr_gen) + tilize_subtoken_offset,
-                    get_write_ptr(tilize_input_cb_id) + i * tilize_subtoken_size,
-                    tilize_subtoken_size);
+                    get_noc_addr(token_id, input_tensor_addr_gen) + global_subtoken_offset,
+                    get_write_ptr(tilize_input_cb_id) + i * subtoken_size,
+                    subtoken_size);
             }
             noc_async_read_barrier();
             cb_push_back(tilize_input_cb_id, tokens_per_chunk);  // Push full chunk (padding is garbage, that's OK)
@@ -941,7 +933,7 @@ void kernel_main() {
             // idle during mcast. The very last wait is technically redundent since we won't be reading in another chunk
             // of tokens, however it's still required so we don't use NoC1 to write out the output tensors until the
             // last linked mcast completes.
-            noc_semaphore_wait_min(
+            noc_semaphore_wait(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(previous_chunk_sent_semaphore_addr), num_chunks_sent);
         }
     }
