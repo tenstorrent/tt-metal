@@ -60,7 +60,6 @@
 #include "mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal {
-class CommandQueue;
 class SystemMemoryManager;
 
 namespace program_cache::detail {
@@ -169,7 +168,18 @@ MeshDeviceImpl::ScopedDevices::~ScopedDevices() {
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
         }
-        tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close, /*skip_synchronize=*/true);
+        // Catch any exceptions during device close - destructors must not throw.
+        // This can happen when a device is hung and times out during close.
+        try {
+            tt_metal::MetalContext::instance().device_manager()->close_devices(
+                devices_to_close, /*skip_synchronize=*/true);
+        } catch (const std::exception& e) {
+            log_warning(
+                LogMetal,
+                "Exception during device close in ScopedDevices destructor: {}. "
+                "The device may be in an unrecoverable state and require a reset.",
+                e.what());
+        }
     }
 }
 
@@ -375,6 +385,9 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    TT_FATAL(
+        !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
+
     // Validate all devices are on compute meshes (not switches) before creating any resources
     const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
@@ -973,6 +986,8 @@ uint32_t MeshDeviceImpl::num_worker_cores(HalProgrammableCoreType core_type, Sub
 // Bank and memory management methods
 int MeshDeviceImpl::num_dram_channels() const { return reference_device()->num_dram_channels(); }
 
+int MeshDeviceImpl::get_clock_rate_mhz() const { return reference_device()->get_clock_rate_mhz(); }
+
 CoreCoord MeshDeviceImpl::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(this->get_devices(), [dram_channel](const auto* device) {
         return device->logical_core_from_dram_channel(dram_channel);
@@ -1014,11 +1029,6 @@ uint32_t MeshDeviceImpl::get_noc_multicast_encoding(uint8_t noc_index, const Cor
 SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
     TT_THROW("sysmem_manager() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->sysmem_manager();
-}
-
-CommandQueue& MeshDeviceImpl::command_queue(std::optional<uint8_t> cq_id) {
-    TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->command_queue(cq_id);
 }
 
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
@@ -1182,10 +1192,6 @@ void MeshDeviceImpl::configure_fabric() {
     TT_THROW("configure_fabric() is not supported on MeshDevice - use individual devices instead");
     reference_device()->configure_fabric();
 }
-void MeshDeviceImpl::init_fabric() {
-    TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_fabric();
-}
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDeviceImpl::get_programmable_core_type(CoreCoord virtual_core) const {
@@ -1317,6 +1323,7 @@ bool MeshDevice::is_initialized() const { return pimpl_->is_initialized(); }
 int MeshDevice::num_dram_channels() const { return pimpl_->num_dram_channels(); }
 uint32_t MeshDevice::l1_size_per_core() const { return pimpl_->l1_size_per_core(); }
 uint32_t MeshDevice::dram_size_per_channel() const { return pimpl_->dram_size_per_channel(); }
+int MeshDevice::get_clock_rate_mhz() const { return pimpl_->get_clock_rate_mhz(); }
 CoreCoord MeshDevice::grid_size() const { return pimpl_->grid_size(); }
 CoreCoord MeshDevice::logical_grid_size() const { return pimpl_->logical_grid_size(); }
 CoreCoord MeshDevice::dram_grid_size() const { return pimpl_->dram_grid_size(); }
@@ -1406,7 +1413,6 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
 SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
-CommandQueue& MeshDevice::command_queue(std::optional<uint8_t> cq_id) { return pimpl_->command_queue(cq_id); }
 MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     pimpl_->begin_mesh_trace(cq_id, trace_id);
@@ -1435,7 +1441,6 @@ void MeshDevice::init_command_queue_host() { pimpl_->init_command_queue_host(); 
 void MeshDevice::init_command_queue_device() { pimpl_->init_command_queue_device(); }
 bool MeshDevice::compile_fabric() { return pimpl_->compile_fabric(); }
 void MeshDevice::configure_fabric() { pimpl_->configure_fabric(); }
-void MeshDevice::init_fabric() { pimpl_->init_fabric(); }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }

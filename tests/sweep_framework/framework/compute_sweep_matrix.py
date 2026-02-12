@@ -66,6 +66,7 @@ def get_lead_models_mesh_runner_config():
             "test_group_name": "lead-models-single-chip",
             "arch": "wormhole_b0",
             "runs_on": "tt-ubuntu-2204-n150-stable",
+            "runner_label": "N150",
             "tt_smi_cmd": "tt-smi -r",
             "suite_name": "model_traced",
         },
@@ -81,6 +82,7 @@ def get_lead_models_mesh_runner_config():
                 "in-service",  # Available for use
                 "pipeline-functional",  # Functional pipeline
             ],
+            "runner_label": "topology-6u",
             "tt_smi_cmd": "tt-smi -r",
             "suite_name": "model_traced",
         },
@@ -140,8 +142,16 @@ def compute_lead_models_matrix(modules, batch_size):
         # The VectorExportSource will automatically load mesh-variant JSONs
         base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
 
-        # Create batches for this runner using base module names
-        runner_batches = chunk_modules(base_modules, batch_size)
+        # For Galaxy runners (multi-chip), run all modules as a single batch
+        # For single-chip runners, use the standard batch size
+        is_galaxy = runner_config["test_group_name"] == "lead-models-galaxy"
+        if is_galaxy:
+            # Single batch with all modules
+            runner_batches = [",".join(base_modules)] if base_modules else []
+        else:
+            # Standard batching for single-chip
+            runner_batches = chunk_modules(base_modules, batch_size)
+
         batches.extend(runner_batches)
 
         # Create matrix entries
@@ -152,6 +162,7 @@ def compute_lead_models_matrix(modules, batch_size):
                     "test_group_name": runner_config["test_group_name"],
                     "arch": runner_config["arch"],
                     "runs_on": runner_config["runs_on"],
+                    "runner_label": runner_config["runner_label"],
                     "tt_smi_cmd": runner_config["tt_smi_cmd"],
                     "module_selector": batch,
                     "batch_display": f"{mesh_label}:{batch}",
@@ -205,6 +216,7 @@ def compute_standard_matrix(modules, batch_size, suite_name):
         "test_group_name": "wormhole-n150-sweeps",
         "arch": "wormhole_b0",
         "runs_on": "tt-ubuntu-2204-n150-stable",
+        "runner_label": "N150",
         "tt_smi_cmd": "tt-smi -r",
     }
 
@@ -224,6 +236,7 @@ def compute_standard_matrix(modules, batch_size, suite_name):
             "test_group_name": "n300-llmbox-ccl",
             "arch": "wormhole_b0",
             "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
+            "runner_label": "n300-llmbox",
             "tt_smi_cmd": "tt-smi -r",
         }
         for batch in ccl_batches:
@@ -274,9 +287,14 @@ def main():
         is_comprehensive = True
     else:
         # Fallback to schedule-based detection when no explicit sweep is selected
-        if schedule_expr == "0 3 * * *":
+        # Schedule expressions must match ttnn-run-sweeps.yaml:
+        #   - "0 2 * * *"  -> lead models (2 AM daily)
+        #   - "0 3 * * *"  -> model traced (3 AM daily)
+        #   - "0 4 * * 3,6" -> comprehensive (4 AM Wed/Sat)
+        #   - "30 4 * * 0,1,2,4,5" -> nightly (falls through to else)
+        if schedule_expr == "0 2 * * *":
             is_lead_models = True
-        elif schedule_expr == "0 4 * * *":
+        elif schedule_expr == "0 3 * * *":
             is_model_traced = True
         elif schedule_expr == "0 4 * * 3,6":
             is_comprehensive = True

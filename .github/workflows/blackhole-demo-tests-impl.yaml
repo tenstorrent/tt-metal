@@ -20,6 +20,10 @@ on:
         required: false
         type: boolean
         default: false
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   single-card-demo-tests:
@@ -32,7 +36,7 @@ jobs:
             name: "whisper performance",
             arch: blackhole,
             runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
-            cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
+            cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
             owner_id: U05RWH3QUPM # Salar Hosseini
           },
           {
@@ -40,7 +44,7 @@ jobs:
             arch: blackhole,
             runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
             # I think we can get rid of TT_CACHE_PATH here by using a NFS export
-            cmd:  HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1" --max_seq_len 131072,
+            cmd:  HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072,
             owner_id: U03PUAKE719 # Miguel Tairum
           },
           { # This should be moved to a BH perf regression pipeline in the future
@@ -84,6 +88,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false}}
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
@@ -133,12 +138,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { # This test shall be executed on the BH with 20 cores
-              name: "panoptic_deeplab demo - 20 cores",
-              arch: blackhole,
-              cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4, 3" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline',
-              owner_id: U09LK84G4TF # Nikola Milicevic
-            },
             { # This test shall be executed on the BH P150 on 110 cores
               name: "panoptic_deeplab demo - 110 cores",
               arch: blackhole,
@@ -175,6 +174,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
 
       - name: Run frequent reg tests scripts
         timeout-minutes: 180

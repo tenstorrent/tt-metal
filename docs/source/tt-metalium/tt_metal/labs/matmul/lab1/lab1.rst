@@ -358,13 +358,13 @@ Key points will be highlighted in this text. Detailed comments are provided in t
 Exercise 2: Running the Example Program
 =======================================
 
-If you haven't already done so, clone an appropriate release of the TT-Metalium repository from https://github.com/tenstorrent/tt-metal
-Make sure you are in the ``tt-metal`` directory and then build the example program, using the following commands:
+If you haven't already done so, follow the instructions at
+https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#source to clone the TT-Metalium repository and build from source.
+Once the build is complete, set the environment variable and run the example program:
 
 .. code-block:: bash
 
    export TT_METAL_HOME=$PWD
-   ./build_metal.sh
    ./build/ttnn/examples/example_lab_eltwise_binary
 
 Make sure that the program executes correctly and that the output says "Test Passed" on the host terminal.
@@ -531,7 +531,7 @@ The function can be summarized by the following pseudo-code:
    read_runtime_arguments()
    read_compile_time_arguments()
    create_address_generators()
-   for (i in 0 .. n_tiles) {
+   for (i in 0 .. n_tiles - 1) {
        transfer_tile_from_dram_to_circular_buffer(in0, i)
        transfer_tile_from_dram_to_circular_buffer(in1, i)
    }
@@ -576,7 +576,7 @@ The function can be summarized by the following pseudo-code:
 
    read_compile_time_arguments()
    initialize_tensix_engine_for_elementwise_addition()
-   for (i in 0 .. n_tiles) {
+   for (i in 0 .. n_tiles - 1) {
        add_tiles_in_input_circular_buffers()
        write_result_to_output_circular_buffer()
    }
@@ -641,7 +641,7 @@ The kernel code can be summarized by the following pseudo-code:
 
 .. code-block:: cpp
 
-   for (i in 0 .. n_tiles) {
+   for (i in 0 .. n_tiles - 1) {
        transfer_tile_from_circular_buffer_to_dram(out0, i)
    }
 
@@ -916,7 +916,7 @@ by running the following from the ``tt-metal`` directory:
    ./create_venv.sh
    source python_env/bin/activate
    scripts/install_debugger.sh
-   pip install -r tools/triage/requirements.txt
+   uv pip install -r tools/triage/requirements.txt
 
 Note that you may need to reenter the virtual environment by re-running ``source python_env/bin/activate``
 if you open a new terminal later.
@@ -1163,10 +1163,10 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    so your code only needs to generate indices in the right order.
 
 #. Update the compute kernel to perform matrix multiplication rather than elementwise addition.
-   To initialize the Tensix Engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
+   To initialize the Tensix Engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/hw/inc/api/compute/matmul.h``.
    Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
    applicable to elementwise operations, not to matrix multiplication).
-   To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
+   To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/hw/inc/api/compute/matmul.h``.
    This function accumulates the result into the destination register; i.e. it adds to the existing values in the register rather than overwriting existing content.
    By judiciously choosing when to call ``tile_regs_acquire``, which initializes all tiles in the destination register array to zero, and when to call
    ``tile_regs_commit``, which signals that the compute core is done writing to the destination register,

@@ -1,0 +1,19 @@
+# This file defines the mapping from SKUs to GitHub Actions runner labels (runs_on).
+# This is the single source of truth for how SKUs map to runner configurations.
+
+# Each SKU entry contains:
+#   runs_on: Array of GitHub Actions runner labels that tests for this SKU.
+skus:
+  wh_galaxy:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-functional
+      - topology-6u
+      - in-service
+
+  bh_galaxy:
+    runs_on:
+      - arch-blackhole
+      - pipeline-functional
+      - topology-6u
+      - in-service

@@ -14,15 +14,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     EmbeddingConfig,
     FromWeightConfig,
     MeshDeviceStub,
-    OpConfigBase,
     TypecastConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import (
-    USERS_PER_ROW,
-    even_int_div,
-    find_largest_divisor,
-    shard_and_save,
-)
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -92,47 +86,6 @@ class Embedding1D(AbstractModule):
             Dict containing operator configurations for prefill mode
         """
 
-        return cls._embedding_config(
-            hf_config, mesh_device, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16
-        )  # RMSNorm does not support float32 in prefill
-
-    @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelDecodeConfig:
-        """Generate decode operator configuration for this embedding layer.
-        Same as prefill. Does not specify a mode because we override forward to handle both.
-
-        Returns:
-            Dict containing operator configurations for decode mode
-        """
-        _, num_sharding_devices = mesh_device.shape
-        num_width_shard_tiles = ttnn.core.divup(
-            even_int_div(hf_config.hidden_size, num_sharding_devices), ttnn.TILE_SIZE
-        )
-        num_sharding_cores = find_largest_divisor(num_width_shard_tiles, mesh_device.core_grid.num_cores)
-        memory_config = ttnn.create_sharded_memory_config(
-            shape=(
-                USERS_PER_ROW,
-                num_width_shard_tiles * ttnn.TILE_SIZE,
-            ),
-            core_grid=ttnn.num_cores_to_corerangeset(
-                num_sharding_cores, ttnn.CoreCoord(mesh_device.core_grid.x, mesh_device.core_grid.y)
-            ),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        return cls._embedding_config(hf_config, mesh_device, memory_config, ttnn.float32)
-
-    @classmethod
-    def _embedding_config(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.MeshDevice,
-        memory_config: ttnn.MemoryConfig,
-        output_dtype: ttnn.DataType,
-    ) -> dict[str, OpConfigBase]:
-        """Config for the Embedding module."""
         assert (
             hf_config.hidden_size % ttnn.TILE_SIZE == 0
         ), "Hidden dimension must be divisible by TILE_SIZE"  # TODO: remove this restriction once all gather async supports subtile gathering
@@ -143,12 +96,57 @@ class Embedding1D(AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
             ),
-            "typecast": TypecastConfig(dtype=output_dtype),
+            "typecast": TypecastConfig(dtype=ttnn.bfloat16),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=0,
                 dim=-1,
-                topology=ttnn.Topology.Linear,
+                # memory_config=memory_config, # TODO: uncomment once all gather async segfault is solved (Issue #26672)
+            ),
+        }
+
+    @classmethod
+    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelDecodeConfig:
+        """Generate decode operator configuration for this embedding layer.
+        Same as prefill. Does not specify a mode because we override forward to handle both.
+
+        Returns:
+            Dict containing operator configurations for decode mode
+        """
+        # _, num_sharding_devices = mesh_device.shape
+        # num_width_shard_tiles = ttnn.core.divup(
+        #     even_int_div(hf_config.hidden_size, num_sharding_devices), ttnn.TILE_SIZE
+        # )
+        # num_sharding_cores = find_largest_divisor(num_width_shard_tiles, mesh_device.core_grid.num_cores)
+        # memory_config = ttnn.create_sharded_memory_config(
+        #     shape=(
+        #         USERS_PER_ROW,
+        #         num_width_shard_tiles * ttnn.TILE_SIZE,
+        #     ),
+        #     core_grid=ttnn.num_cores_to_corerangeset(
+        #         num_sharding_cores, ttnn.CoreCoord(mesh_device.core_grid.x, mesh_device.core_grid.y)
+        #     ),
+        #     strategy=ttnn.ShardStrategy.WIDTH,
+        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        #     use_height_and_width_as_shard_shape=True,
+        # )
+
+        assert (
+            hf_config.hidden_size % ttnn.TILE_SIZE == 0
+        ), "Hidden dimension must be divisible by TILE_SIZE"  # TODO: remove this restriction once all gather async supports subtile gathering
+
+        return {
+            "embedding": EmbeddingConfig(
+                weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),  # matched to the path in the WeightConfig
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+            ),
+            "typecast": TypecastConfig(dtype=ttnn.float32),
+            "all_gather": AllGatherAsyncConfig(
+                mesh_device=MeshDeviceStub(mesh_device.shape),
+                cluster_axis=0,
+                dim=-1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 # memory_config=memory_config, # TODO: uncomment once all gather async segfault is solved (Issue #26672)
             ),
         }

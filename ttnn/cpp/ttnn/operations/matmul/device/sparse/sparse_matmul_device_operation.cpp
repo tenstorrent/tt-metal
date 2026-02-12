@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
@@ -218,6 +219,15 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
                 "If using optional output tensors, all output tensors must have a value");
             output_tensors.emplace_back(optional_output_tensor.value());
         }
+        for (auto& output_tensor : output_tensors) {
+            output_tensor = ttnn::zeros_like(
+                output_tensor,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::optional<Tensor>(output_tensor));
+        }
         return output_tensors;
     }
     const auto& device = input_tensors.at(0).device();
@@ -225,6 +235,15 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     output_tensors.reserve(output_specs.size());
     for (const auto& output_spec : output_specs) {
         output_tensors.emplace_back(create_device_tensor(output_spec, device));
+    }
+    for (auto& output_tensor : output_tensors) {
+        output_tensor = ttnn::zeros_like(
+            output_tensor,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::optional<Tensor>(output_tensor));
     }
     return output_tensors;
 }

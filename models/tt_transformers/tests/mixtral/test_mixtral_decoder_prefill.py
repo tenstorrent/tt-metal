@@ -14,7 +14,7 @@ from transformers.models.mixtral.modeling_mixtral import (
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import get_prefill_rot_mat, get_rot_transformation_mat
+from models.tt_transformers.tt.common import Mode, get_prefill_rot_mat, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -61,7 +61,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    mode = "prefill"
+    mode = Mode.PREFILL
     batch = 1
     max_seq_len = 4096
 

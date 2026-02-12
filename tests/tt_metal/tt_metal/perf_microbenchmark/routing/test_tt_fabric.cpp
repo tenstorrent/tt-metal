@@ -208,8 +208,6 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Building tests");
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
-            // Set performance test mode and line sync for this test group
-            test_context.set_performance_test_mode(test_config.performance_test_mode);
             // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
             test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
             // Set skip_packet_validation flag
@@ -224,6 +222,9 @@ int main(int argc, char** argv) {
 
                 // Prepare allocator and memory maps for this specific test
                 test_context.prepare_for_test(built_test);
+
+                // Set performance test mode for each iteration
+                test_context.set_performance_test_mode(built_test.performance_test_mode);
 
                 test_context.setup_devices();
                 log_info(tt::LogTest, "Device setup complete");

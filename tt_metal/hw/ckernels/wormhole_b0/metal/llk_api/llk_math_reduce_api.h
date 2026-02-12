@@ -45,3 +45,9 @@ template <
 inline void llk_math_reduce_init() {
     _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>();
 }
+
+template <bool enforce_fp32_accumulation = false>
+inline void llk_math_reduce_uninit(const std::uint32_t operandA) {
+    const std::uint32_t operand_id = get_operand_id(operandA);
+    _llk_math_reduce_uninit_<enforce_fp32_accumulation>(unpack_src_format[operand_id]);
+}

@@ -62,7 +62,9 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
 // Creates a mapper that shards a tensor along a single dimension.
 // Shorthand for specifying a MeshMapperConfig with 1D mesh shape, and sharding the tensor along a single dimension of
 // the tensor.
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim);
+
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
+    MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis = std::nullopt);
 
 // Composer interface used for aggregating a tensor distributed over a mesh.
 class MeshToTensor {

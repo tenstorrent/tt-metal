@@ -17,264 +17,167 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // CUSTOM_MM
-// Custom matmul that uses MOP to loop both srcA and srcB along inner dim. Output height
-// and width should be single tile with tile shape [1, 32]. Further work will uplift the
-// custom mm to support for tiles along the width.
-//
-// K-dimension optimized implementation with MOP looping over kt_dim
-//
-// Implementation assumptions:
-// - ct_dim = 1, rt_dim = 1 (single output tile, optimized for K-dimension reduction)
-// - MOP replay buffer unpacks both SrcA and SrcB, incrementing both addresses per iteration
-// - kernel_broadcast_a = 0 (no broadcast)
-// - kernel_broadcast_b = 0 (no broadcast)
-inline void _llk_unpack_AB_custom_mm_mop_config_(const bool unpB_partial_face) {
-    // in0/inA - loaded to SrcB
-    // in1/inB - loaded to SrcA
+// Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
+// in0 tile shape: [{1, 2, 4, 8}, 32]
+// in1 tile shape: [32, 32]
+// rt_dim: 1
+// ct_dim: {1, 2, 4, 6, 8, 10, 12, 14, 16}
+// kt_dim: even number from 2 to 256 (inclusive)
+// fidelity: LoFi only
+// throttle: not supported
 
-    // MOP replay buffer now updates both SrcA and SrcB addresses for K-dimension loop
-    const std::uint32_t replay_buf_run_len = unpB_partial_face ? 5 : 4;
-    const std::uint32_t replay_buf_prog_len = replay_buf_run_len * 2;
+inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
+    const std::uint32_t replay_buf_prog_len = ct_dim == 1 ? 10 : 32;
 
-    load_replay_buf(
-        0,
-        replay_buf_prog_len,
-        // Lambda function to set up replay buffer
-        [unpB_partial_face] {
-            // === Context 0 ===
+    load_replay_buf(0, replay_buf_prog_len, [ct_dim] {
+        // === Context 0 full ===
+        // Wait for context available
+        t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+
+        // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address and keeps SrcA address fixed at 0)
+        TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 0, 1);  // Also set dvalid
+
+        // Unpack SrcB (in0, one instruction per face, uses counters to manipulate addresses for both L1 and SrcB)
+        // Counters of interest are CH0 Y and Z (both with a stride of a single face in L1
+        // (datum_size * 16 * face_r_dim) and CH1 Y with a stride of a face in SrcB (16 rows)
+        // Each unpack instruction we move to next face in L1, but this is split among Y and Z counters
+        // Because they are 8 bit counters and to cover max inner dim of 256
+        // we need to increment face counter 512 times thus overflowing if we use a single counter,
+        // using both counters allows us to cover exactly 512 needed increments
+        // For SrcB first unpack has to land at index 0 and second one at index 16,
+        // increment from first to second is straightforward, but moving back to 0 after second requires us to exploit
+        // counter overflow as CH1 counters only use low 6 bits and wrap at the number of rows in a Src reg (64)
+        // thus an increment of 48 rows or 3 CH1 Y increments wraps us back to 0
+        // (which is conveniently the max we can increment in a single instruction)
+
+        TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
+        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1);  // Also set dvalid
+
+        // Signal context done
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+        if (ct_dim == 1) {
+            // === Context 1 full ===
             // Wait for context available
             t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
 
-            // Unpack SrcA (in1/inB)
-            TTI_UNPACR(
-                SrcA,
-                0b00000000,
-                0,
-                0,
-                0,
-                1 /*Set OvrdThreadId*/,
-                1 /*Set Dvalid*/,
-                p_unpacr::RAREFYB_DISABLE,
-                0,
-                0 /* Set ContextIdInc */,
-                0,
-                0,
-                1);
+            // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address and keeps SrcA address fixed at 0)
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);  // Also set dvalid
 
-            // Unpack SrcB (in0/inA)
-            if (unpB_partial_face) {
-                TTI_UNPACR(
-                    SrcB,
-                    0b00010001,
-                    0,
-                    0,
-                    0,
-                    1 /*Set OvrdThreadId*/,
-                    0 /*Set Dvalid*/,
-                    p_unpacr::RAREFYB_DISABLE,
-                    0,
-                    0 /* Set ContextIdInc */,
-                    0,
-                    0,
-                    1);
-                TTI_UNPACR(
-                    SrcB,
-                    0b00110001,
-                    0,
-                    0,
-                    0,
-                    1 /*Set OvrdThreadId*/,
-                    1 /*Set Dvalid*/,
-                    p_unpacr::RAREFYB_DISABLE,
-                    0,
-                    0 /* Set ContextIdInc */,
-                    0,
-                    0,
-                    1);
-            } else {
-                TTI_UNPACR(
-                    SrcB,
-                    0b00001010,
-                    0,
-                    0,
-                    0,
-                    1 /*Set OvrdThreadId*/,
-                    1 /*Set Dvalid*/,
-                    p_unpacr::RAREFYB_DISABLE,
-                    0,
-                    0 /* Set ContextIdInc */,
-                    0,
-                    0,
-                    1);
-            }
+            // Unpack SrcB (in0, one instruction per face, uses counters to manipulate addresses for both L1 and SrcB)
+            // Same counter shenanigans as described above
+            TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
+            TTI_UNPACR_COMMON(SrcB, 0b00110100, 1);  // Also set dvalid
+
+            // Signal context done
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+        } else {
+            // === Context 1 reuse ===
+            // Wait for context available
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+
+            // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address and keeps SrcA address fixed at 0)
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);  // Also set dvalid
 
             // Signal context done
             t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-            // === Context 1 ===
-            // Wait for context available
-            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+            for (std::uint32_t i = 0; i < 4; i++) {
+                // === Context 0 reuse ===
+                // Wait for context available
+                t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
 
-            // Unpack SrcA (in1/inB)
-            TTI_UNPACR(
-                SrcA,
-                0b00000000,
-                0,
-                1,
-                0,
-                1 /*Set OvrdThreadId*/,
-                1 /*Set Dvalid*/,
-                p_unpacr::RAREFYB_DISABLE,
-                0,
-                0 /* Set ContextIdInc */,
-                0,
-                0,
-                1);
+                // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address)
+                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 0, 1);  // Also set dvalid
 
-            // Unpack SrcB (in0/inA)
-            if (unpB_partial_face) {
-                TTI_UNPACR(
-                    SrcB,
-                    0b00010001,
-                    0,
-                    0,
-                    0,
-                    1 /*Set OvrdThreadId*/,
-                    0 /*Set Dvalid*/,
-                    p_unpacr::RAREFYB_DISABLE,
-                    0,
-                    0 /* Set ContextIdInc */,
-                    0,
-                    0,
-                    1);
-                TTI_UNPACR(
-                    SrcB,
-                    0b00110001,
-                    0,
-                    0,
-                    0,
-                    1 /*Set OvrdThreadId*/,
-                    1 /*Set Dvalid*/,
-                    p_unpacr::RAREFYB_DISABLE,
-                    0,
-                    0 /* Set ContextIdInc */,
-                    0,
-                    0,
-                    1);
-            } else {
-                TTI_UNPACR(
-                    SrcB,
-                    0b00001010,
-                    0,
-                    0,
-                    0,
-                    1 /*Set OvrdThreadId*/,
-                    1 /*Set Dvalid*/,
-                    p_unpacr::RAREFYB_DISABLE,
-                    0,
-                    0 /* Set ContextIdInc */,
-                    0,
-                    0,
-                    1);
+                // Signal context done
+                t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+                // === Context 1 reuse ===
+                // Wait for context available
+                t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+
+                // Unpack SrcA (in1, full tile, uses contexts to manipulate L1 address)
+                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);  // Also set dvalid
+
+                // Signal context done
+                t6_semaphore_get(semaphore::UNPACK_SYNC);
             }
+        }
+    });
 
-            t6_semaphore_get(semaphore::UNPACK_SYNC);
-        });
+    // When ct_dim == 1 we alternate between full sequences for both contexts kt_dim times in total
+    // When ct_dim > 1 we start with full context 0 and then alternate between reuse contexts 1 and 0 ct_dim - 1 times
+    // Since if ct_dim > 1 it must be even full sequence always lands on context 0
+    // thus instruction sequence is same for each kt_dim
+    // Mop is configured such that it always covers two iterations of the inner dim loop,
+    // this has two benefits:
+    // With the max number of mop iterations (128) we can cover up to 256 kt_dim, which is the max supported by this API
+    // There is no need to have different templates for contexts 0 and 1 since they are always executed as a pair
+    // In order to be able to usefully issue up to 128 mop iterations we are limited to only using 0s in zmask
+    // (not using SKIP_A/B instructions) since iterations beyond 32 always use 0s for zmask
+    // In ct_dim == 1 case we enable unpackB and two instructions we issue per iteration are replays for
+    // full context 0 and full context 1
+    // In ct_dim > 1 case we enable unpackHalo and thus have 4 instructions to execute two inner dim iterations,
+    // meaning 2 instructions per inner dim
+    // This is achieved with really long replay sequences that each cover half of the ct_dim iterations
+    // First half is:
+    // full context 0, {reuse context 1, reuse context 0} (ct_dim / 4) - 1 times, [reuse context 1] if ct_dim > 2
+    // Since our replay is organized like:
+    // full context 0, reuse context 1, {reuse context 0, reuse context 1} 4 times (which fills all 32 instructions)
+    // We just pick first ct_dim / 2 sequences (each sequence is 3 instructions plus first full one is
+    // 2 additional instructions, thus getting the equation which calculates first half of the replay length)
+    // Similarly second half is just {reuse context 0, reuse context 1} ct_dim / 4 times,
+    // which is just picking ct_dim / 2 sequences starting from the first reuse context 0 sequence
+    // (each sequence is 3 instructions so replay length calculation is simpler)
+    // To be sure that everything fits, for max ct_dim of 16, second half has to issue 4 pairs of sequences
+    // which is exactly what we recorded at the end
+    // First sequence already has the first pair as full context 0 and reuse context 1
+    // so it needs only 3 additional pair which are covered by the 4 pairs required for the second half
+    // Special case is ct_dim == 2 where first half is just full context 0
+    // and second half is just reuse context 1 thus having an earlier starting index
+
+    const std::uint32_t ctx0_full = lltt::replay_insn(0, 5);
+    const std::uint32_t ctx1_full = lltt::replay_insn(5, 5);
+    const std::uint32_t first_half = lltt::replay_insn(0, 2 + (ct_dim / 2) * 3);
+    const std::uint32_t second_half = lltt::replay_insn(ct_dim == 2 ? 5 : 8, (ct_dim / 2) * 3);
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        false,                                     // src B
-        false,                                     // halo - just used for 4 unpacks
-        lltt::replay_insn(0, replay_buf_run_len),  // runs when context is 0
-        0,
-        0,
-        0,
-        lltt::replay_insn(replay_buf_run_len, replay_buf_run_len),  // runs when context is 1
-        0,
-        0);
+        ct_dim == 1,                           // Use UNPACR_B and SKIP_B instructions?
+        ct_dim != 1,                           // Use UNPACR_A1/2/3 instructions?
+        ct_dim == 1 ? ctx0_full : first_half,  // A0
+        ct_dim == 1 ? 0 : second_half,         // A1
+        ct_dim == 1 ? 0 : first_half,          // A2
+        ct_dim == 1 ? 0 : second_half,         // A3
+        0,                                     // Skip A
+        ct_dim == 1 ? ctx1_full : 0,           // B
+        0                                      // Skip B
+    );
 
     tmp.program();
+    TTI_MOP_CFG(0);
 }
 
-template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void _llk_unpack_AB_custom_mm_hw_configure_(
-    const std::uint32_t unpA_src_format,
-    const std::uint32_t unpB_src_format,
-    const std::uint32_t unpA_dst_format,
-    const std::uint32_t unpB_dst_format,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t unpA_num_faces = 4,
-    const std::uint32_t unpB_num_faces = 4,
-    const std::uint32_t unpA_tile_size = 0,
-    const std::uint32_t unpB_tile_size = 0) {
-    constexpr bool is_row_pool = false;
-    constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
-    constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
-    constexpr bool pack_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Pack);
+template <bool transpose = false>
+inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, const std::uint32_t ct_dim = 1) {
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
 
-    configure_unpack_AB<is_fp32_dest_acc_en, is_row_pool, fpu_srnd_en, pack_srnd_en>(
-        unpA_src_format,
-        unpB_src_format,
-        unpA_dst_format,
-        unpB_dst_format,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        within_face_16x16_transpose,
-        unpA_num_faces,
-        unpB_num_faces);
-
-    // Configure tile size in datums
-    const uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
-    const uint32_t unpB_x_end = unpB_num_faces * unpB_face_r_dim * FACE_C_DIM - 1;
-    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+    // UnpA unpacks full tiles
+    constexpr std::uint32_t unpA_x_end = TILE_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1;
+    // UnpB unpacks [{1, 2, 4, 8}, 32] tiles which only have top two faces and only a single face per instruction
+    // so a single instruction only unpacks unpB_face_r_dim rows
+    const std::uint32_t unpB_x_end = unpB_face_r_dim * FACE_C_DIM - 1;
+    TTI_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
 
-    regfile[p_gpr_unpack::TILE_SIZE_A] = unpA_tile_size;
-    regfile[p_gpr_unpack::TILE_SIZE_B] = unpB_tile_size;
-    sync_regfile_write(p_gpr_unpack::TILE_SIZE_B);
+    _llk_unpack_AB_custom_mm_mop_config_(ct_dim);
+
+    // Reset counters here since reset in the execute API is at the end
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-// K-dimension optimized initialization:
-// - transpose = 0 (no transpose)
-// - ct_dim = 1 (column tile dimension is 1, single output tile width)
-// - rt_dim = 1 (row tile dimension is 1, single output tile height)
-// - unpA_partial_face = false (always use full tile unpacking for input A)
-__attribute__((always_inline)) inline void _llk_unpack_AB_custom_mm_init_(
-    const std::uint32_t kt_dim = 1,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpA_num_faces = 4,
-    const std::uint32_t unpB_num_faces = 4,
-    const bool unpB_partial_face = false) {
-    // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
-    // on WH, the unpacker performs both transpose of faces as well as transpose each face.
-    // the former is configured in mop, the latter is configured in cfg register in hw_configure
-    // in large matmul, datacopy will disable the transpose of faces, so we need it turn it back on for matmul.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
-
-    const uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
-    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
-
-    if (unpB_partial_face) {
-        // Do face by face unpacking. Need to program correct face dim
-        // to compute address of the next face
-        config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
-    } else {
-        // Do full tile unpacking. No need to program face dim
-        // as address counter pointing to the face is not incremented
-        const uint32_t unpB_x_end = unpB_num_faces * unpB_face_r_dim * FACE_C_DIM - 1;
-        TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
-    }
-
-    _llk_unpack_AB_custom_mm_mop_config_(unpB_partial_face);
-}
-
-// K-dimension optimized implementation:
-// - ct_dim = 1 (column tile dimension is 1, single output tile width)
-// - rt_dim = 1 (row tile dimension is 1, single output tile height)
-// - MOP loops kt_dim times, unpacking both SrcA and SrcB with address increments
-// - unpA_partial_face = false (always use full tile unpacking for input A)
+template <bool read_transposed = false>
 inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -282,73 +185,61 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_index_b,
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
-    const std::uint32_t kt_dim = 1) {
-    // In0/InA -> srcB (supports partial face)
-    // In1/InB -> srcA
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim = 1) {
+    volatile uint* cfg = get_cfg_pointer();
 
-    volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
+    const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
+    const std::uint32_t inner_increment = read_transposed ? tile_size_a : ct_dim * tile_size_a;
 
-    std::uint32_t offset_address_a = tile_size_a * tile_index_a;
-    std::uint32_t offset_address_b = tile_size_b * tile_index_b;
+    std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
+    std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
 
-    std::uint32_t address_a = base_address_a + offset_address_a;
-    std::uint32_t address_b = base_address_b + offset_address_b;
+    // Wait for all contexts to be free
+    wait_for_next_context(1);
+    reset_config_context();
 
-    // Need to reset counters and update SrcB base address for each superloop over 128 kt_dim
-    // I guess its due to some counters being overflowed
-    for (std::uint32_t i = 0; i < kt_dim; i += 128) {
-        std::uint32_t superloop_kt_dim = kt_dim - i > 128 ? 128 : kt_dim - i;
-        std::uint32_t num_loops = superloop_kt_dim / 16;
-        std::uint32_t remaining_kt = superloop_kt_dim % 16;
+    // Program SrcB address once, its updated using counters for up to 256 kt_dim
+    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
 
-        // Wait for all contexts to be free
-        wait_for_next_context(1);
-        reset_config_context();
+    // We can issue mop only once for up to 256 kt_dim
+    TT_MOP(0, (kt_dim / 2) - 1, 0);
 
-        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
-        TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
-        // Configure SrcB base address, once per call as we use counters for SrcB
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_a + (i * tile_size_a);
-
-        // Unpack 16 tiles per loop, run 16 mop iterations and risc does 16 unrolled address updates 8 cnxt0 + 8 cnxt1
-        for (std::uint32_t j = 0; j < num_loops; j++) {
-            TTI_MOP(0, 15, 0xAAAA);
+    if (ct_dim == 1) {
 #pragma GCC unroll 8
-            for (std::uint32_t k = 0; k < 8; k++) {
-                wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
-                address_b += tile_size_b;
-                semaphore_post(semaphore::UNPACK_SYNC);
-                wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
-                address_b += tile_size_b;
-                semaphore_post(semaphore::UNPACK_SYNC);
-            }
+        for (std::uint32_t k = 0; k < kt_dim; k += 2) {
+            wait_for_next_context(2);
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+            address_a += inner_increment;
+            semaphore_post(semaphore::UNPACK_SYNC);
+            wait_for_next_context(2);
+            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+            address_a += inner_increment;
+            semaphore_post(semaphore::UNPACK_SYNC);
         }
-
-        // Do any remaining kt_dim % 16 iterations, run mop remaining_kt times and risc does similar address updates
-        if (remaining_kt != 0) {
-            TT_MOP(0, remaining_kt - 1, 0xAAAA);
-            for (std::uint32_t j = 0; j < remaining_kt / 2; j++) {
+    } else {
+        for (std::uint32_t k = 0; k < kt_dim; k++) {
+            std::uint32_t block_start_address = address_a;
+#pragma GCC unroll 8
+            for (std::uint32_t ct = 0; ct < ct_dim; ct += 2) {
                 wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
-                address_b += tile_size_b;
+                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = block_start_address;
+                block_start_address += block_increment;
                 semaphore_post(semaphore::UNPACK_SYNC);
                 wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
-                address_b += tile_size_b;
-                semaphore_post(semaphore::UNPACK_SYNC);
-            }
-            // Last address update if odd number of remaining kt_dim only hits context 0
-            if ((remaining_kt % 2) != 0) {
-                wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
+                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = block_start_address;
+                block_start_address += block_increment;
                 semaphore_post(semaphore::UNPACK_SYNC);
             }
+            address_a += inner_increment;
         }
     }
 
     // Wait for all contexts to be free
     wait_for_next_context(1);
     reset_config_context();
+
+    // Reset counters at the end
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }

@@ -6,12 +6,10 @@
 
 #define ELTWISE_OP_TYPE EltwiseBinaryType::ELWADD  // TODO(AP): temporary - refactor
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api.h"
-
-namespace NAMESPACE {
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
 
 #ifdef TRISC_MATH
 #include <cstdint>
@@ -19,7 +17,7 @@ namespace NAMESPACE {
 #include "llk_math_binary_api.h"
 #include "llk_math_unary_datacopy_api.h"
 
-void math_main() {
+void core_agnostic_main() {
     uint32_t per_core_num_blocks = get_compile_time_arg_val(0);
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
@@ -53,7 +51,7 @@ void math_main() {
 #include "llk_unpack_AB_api.h"
 #include "llk_unpack_untilize_api.h"
 
-void unpack_main() {
+void core_agnostic_main() {
     uint32_t per_core_num_blocks = get_compile_time_arg_val(0);
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
@@ -66,7 +64,11 @@ void unpack_main() {
             llk_unpack_untilize_init(0);
             llk_wait_tiles(0, per_core_block_c_tiles);
             llk_unpack_untilize(0, per_core_block_c_tiles);
+#ifdef ARCH_BLACKHOLE
             llk_unpack_untilize_uninit(0);
+#else
+            llk_unpack_untilize_uninit();
+#endif
             llk_pop_tiles(0, per_core_block_c_tiles);
             llk_pop_tiles(1, per_core_block_c_tiles);
 
@@ -88,12 +90,12 @@ void unpack_main() {
 #include "llk_pack_common.h"
 #include "llk_pack.h"
 
-void pack_main() {
+void core_agnostic_main() {
     uint32_t per_core_num_blocks = get_compile_time_arg_val(0);
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
     llk_pack_init();
-    llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16);
+    llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     llk_pack_dest_init<DST_ACCUM_MODE, false>();
 
     for (uint32_t block = 0; block < per_core_num_blocks; block++) {
@@ -118,4 +120,8 @@ void pack_main() {
 }
 #endif
 
-}  // namespace NAMESPACE
+void kernel_main() {
+#if defined(TRISC_MATH) || defined(TRISC_UNPACK) || defined(TRISC_PACK)
+    core_agnostic_main();
+#endif
+}

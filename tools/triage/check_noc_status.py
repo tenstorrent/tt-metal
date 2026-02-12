@@ -23,6 +23,8 @@ from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, log_check_location, run_script
+from ttexalens.umd_device import TimeoutDeviceRegisterError
+
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
@@ -87,6 +89,8 @@ def check_noc_status(
         try:
             reg_val = read_register(location=location, register=reg, noc_id=noc_id)
             var_val = fw_elf.get_global(var, loc_mem_access)[noc_id]
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception as e:
             message += "    " + str(e) + "\n"
             passed = False

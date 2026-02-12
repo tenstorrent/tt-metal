@@ -186,10 +186,21 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
     // compute
     uint32_t single_sblock_size_wh = single_block_size * single_block_size / single_sblock_size;
     uint32_t single_sblock_size_cliff_col_wh = single_block_size_cliff_col * single_block_size / single_sblock_size;
+
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
     bool use_pack_kernel = true;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         use_pack_kernel = false;
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     }
     if (!core_range.empty()) {
         CreateKernel(
@@ -200,7 +211,9 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_sblock_size_wh, single_sblock_size, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_sblock_size_wh, single_sblock_size, third_dim},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
@@ -211,7 +224,9 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff_row) {
         CreateKernel(
@@ -222,7 +237,9 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim},
+                .defines = compute_kernel_defines});
     }
 
     if (has_cliff_col) {
@@ -234,7 +251,9 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_sblock_size_cliff_col_wh, single_sblock_size, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_sblock_size_cliff_col_wh, single_sblock_size, third_dim},
+                .defines = compute_kernel_defines});
     }
 
     // RUNTIME ARGS

@@ -3,16 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
 #include "experimental/circular_buffer.h"
 
 #ifndef BCAST_ROW_IDX
 #define BCAST_ROW_IDX 0
 #endif
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #ifndef BCAST_OP_INIT
@@ -56,4 +55,3 @@ void MAIN {
     cb16.push_back(onetile);
     cb1.pop_front(onetile);
 }
-}  // namespace NAMESPACE

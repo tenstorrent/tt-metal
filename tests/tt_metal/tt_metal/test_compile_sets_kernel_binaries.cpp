@@ -253,7 +253,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                         BuildEnvManager::get_instance()
                             .get_kernel_build_state(device->build_id(), programmable_core_index, dm_class_idx, 1)
                             .get_target_out_path(kernel_name);
-                    auto load_type = (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)
+                    auto load_type = (device->arch() == tt::ARCH::WORMHOLE_B0)
                                          ? ll_api::memory::Loading::CONTIGUOUS
                                          : ll_api::memory::Loading::CONTIGUOUS_XIP;
                     const ll_api::memory& ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, load_type);

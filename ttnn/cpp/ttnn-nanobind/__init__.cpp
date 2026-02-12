@@ -29,7 +29,6 @@
 #include "ttnn-nanobind/types.hpp"
 
 #include "ttnn/core.hpp"
-// #include "ttnn/deprecated/tt_lib/csrc/operations/primary/module.hpp"
 #include "ttnn/distributed/distributed_nanobind.hpp"
 #include "ttnn/graph/graph_nanobind.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"

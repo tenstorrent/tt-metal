@@ -44,9 +44,7 @@ def mesh_device_fixture():
     ttnn.SetDefaultDevice(device)
 
     device_name = "Unknown"
-    if ttnn.device.is_grayskull(device):
-        device_name = "grayskull"
-    elif ttnn.device.is_wormhole_b0(device):
+    if ttnn.device.is_wormhole_b0(device):
         device_name = "wormhole_b0"
     elif ttnn.device.is_blackhole(device):
         device_name = "blackhole"

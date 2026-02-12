@@ -52,7 +52,7 @@ The Models team is focused on developing the following models, optimizing them f
 |-------|----------|-----------|-------|-----------------|-----|---------------------|-------------------------------|
 | 32 | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 223 | 15.4 | 20 | 492.8 | [v0.62.0-rc25](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-rc25) | [e7c329b](https://github.com/tenstorrent/vllm/tree/e7c329b1664f8591ae8b4269bed9690726e52a24/tt_metal) |
 
-### [Whisper (distil-large-v3)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)
+### [Whisper (distil-large-v3)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/audio/whisper)
 | Batch | Hardware | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S | TT-Metalium Release |
 |-------|----------|-----------|-------|-----------------|-----|---------------------|
 | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 163       | 105.0  | 45           | 105.0   | [v0.65.0-dev20251208](https://github.com/tenstorrent/tt-metal/tree/v0.65.0-dev20251208) |
@@ -196,21 +196,22 @@ Inspector provides insights into host runtime. It logs necessary data for invest
 
 ## Latest Releases
 
-| Release | Release Date | FW Version |
-|:---------:|:--------------:|:------------:|
-| 0.65.0 | ETA Dec 15, 2025 | 19.2.0 |
-| [0.64.5](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.5) | Dec  1, 2025 | 18.12.0 |
-| [0.64.4](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.4) | Nov 24, 2025 | 18.12.0 |
-| [0.64.3](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.3) | Nov 14, 2025 | 18.12.0 |
-| [0.64.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.0) | Oct 29, 2025 | 18.12.0 |
-| [0.63.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.63.0) | Sep 22, 2025 | 18.8.0 |
-| [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 | 18.6.0 |
-| 0.61.0  | Skipped | - |
-| [0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1) | Jul 22, 2025 | 18.6.0 |
-| [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 | - |
-| [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 | - |
-| [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 | - |
-| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  | - |
+| Release | Release Date | FW Version | KMD Version | SMI Version |
+|:---------:|:--------------:|:------------:|:--------:|:--------:|
+| 0.66.0 | ETA Jan 30, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
+| [0.65.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.65.0) | Dec 15, 2025 | 19.2.0 | 2.5.0 | 3.0.38 |
+| [0.64.5](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.5) | Dec  1, 2025 | 18.12.0 | 2.4.1 | 3.0.32 |
+| [0.64.4](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.4) | Nov 24, 2025 | 18.12.0 | 2.4.1 | 3.0.32 |
+| [0.64.3](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.3) | Nov 14, 2025 | 18.12.0 | 2.4.1 | 3.0.32 |
+| [0.64.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.0) | Oct 29, 2025 | 18.12.0 | 2.4.1 | 3.0.32 |
+| [0.63.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.63.0) | Sep 22, 2025 | 18.8.0 | 2.3.0 | 3.0.28 |
+| [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 | 18.6.0 | 2.0.0 | 3.0.20 |
+| 0.61.0 | Skipped | - | - | - |
+| [0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1) | Jul 22, 2025 | 18.6.0 | 2.0.0 | 3.0.20 |
+| [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 | - | - | - |
+| [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 | - | - | - |
+| [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 | - | - | - |
+| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  | - | - | - |
 
 Visit the [releases](https://github.com/tenstorrent/tt-metal/tree/main/releases) folder for details on releases, release notes, and estimated release dates.
 

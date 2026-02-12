@@ -29,6 +29,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
+#include "api/debug/assert.h"
 
 #if !defined(KERNEL_BUILD)
 // This file uses noc_mode, which isn't defined in the firmware build.
@@ -107,7 +108,12 @@ bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) { return (uintptr_t)&rta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) {
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+    ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < rta_count, DebugAssertRtaOutOfBounds);
+#endif
+    return (uintptr_t)&rta_l1_base[arg_idx];
+}
 
 // clang-format off
 /**
@@ -121,7 +127,12 @@ static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) { return (uintptr_t)&rta
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uintptr_t get_common_arg_addr(int arg_idx) { return (uintptr_t)&crta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_common_arg_addr(int arg_idx) {
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+    ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < crta_count, DebugAssertCrtaOutOfBounds);
+#endif
+    return (uintptr_t)&crta_l1_base[arg_idx];
+}
 
 // clang-format off
 /**
@@ -1490,18 +1501,29 @@ FORCE_INLINE uint32_t get_semaphore(uint32_t semaphore_id) {
 inline void noc_semaphore_set_remote(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, uint8_t noc = noc_index) {
     WAYPOINT("NSSW");
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, 4);
+
+    constexpr uint32_t size_bytes = 4;
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size_bytes);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_SET_REMOTE,
+        src_local_l1_addr,
+        dst_noc_addr,
+        size_bytes,
+        NOC_UNICAST_WRITE_VC,
+        /*posted=*/false,
+        noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr,
-        4 /* size in bytes */,
+        size_bytes,
         NOC_UNICAST_WRITE_VC,
         false,
         false,
         1,
-        true);
+        /*multicast_path_reserve=*/true,
+        /*posted=*/false);
     WAYPOINT("NSSD");
 }
 
@@ -1540,18 +1562,31 @@ inline void noc_semaphore_set_multicast(
     bool linked = false,
     uint8_t noc = noc_index) {
     WAYPOINT("NSNW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
+
+    constexpr uint32_t size_bytes = 4;
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
+
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(NOC_MULTICAST_WRITE_VC, linked);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_SET_MULTICAST,
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        size_bytes,
+        NOC_MULTICAST_WRITE_VC,
+        /*posted=*/false,
+        noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr_multicast,
-        4 /*size in bytes*/,
+        size_bytes,
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
         num_dests,
-        true /* multicast_path_reserve */);
+        /*multicast_path_reserve=*/true,
+        /*posted=*/false);
     WAYPOINT("NSND");
 }
 // clang-format off
@@ -1589,18 +1624,30 @@ inline void noc_semaphore_set_multicast_loopback_src(
     bool linked = false,
     uint8_t noc = noc_index) {
     WAYPOINT("NSLW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
+
+    constexpr uint32_t size_bytes = 4;
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
+
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(NOC_MULTICAST_WRITE_VC, linked);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_SET_MULTICAST,
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        size_bytes,
+        NOC_MULTICAST_WRITE_VC,
+        /*posted=*/false,
+        noc);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr_multicast,
-        4 /*size in bytes*/,
+        size_bytes,
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
         num_dests,
-        true /* multicast_path_reserve */);
+        /*multicast_path_reserve=*/true);
     WAYPOINT("NSLD");
 }
 
@@ -2128,6 +2175,52 @@ FORCE_INLINE void noc_semaphore_inc(
         posted /*posted*/,
         MEM_NOC_ATOMIC_RET_VAL_ADDR);
     WAYPOINT("NSID");
+}
+
+// clang-format off
+/**
+ * The Tensix core executing this function call initiates an atomic increment
+ * (with 32-bit wrap) to a rectangular destination grid. The destinations are
+ * specified using a uint64_t encoding referencing an on-chip grid of nodes
+ * located at NOC coordinate range (x_start,y_start,x_end,y_end) and a local
+ * address created using *get_noc_multicast_addr* function. This L1 memory
+ * address is used as a semaphore of size 4 Bytes, as a synchronization mechanism.
+ *
+ * With this API, the multicast sender cannot be part of the multicast
+ * destinations.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                                                              | Type     | Valid Range                                | Required |
+ * |----------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | addr                       | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | incr                       | The value to increment by                                                | uint32_t | Any uint32_t value                         | True     |
+ * | num_dests                  | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                   | True     |
+ * | noc_id                     | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
+ * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked)         | bool     | true or false                              | False    |
+ */
+// clang-format on
+template <bool posted = false>
+FORCE_INLINE void noc_semaphore_inc_multicast(
+    uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index) {
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, NOC_MULTICAST_WRITE_VC, posted, noc_id);
+
+    WAYPOINT("NIMW");
+    DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, addr, 4);
+    DEBUG_INSERT_DELAY(TransactionAtomic);
+    noc_fast_multicast_atomic_increment<noc_mode>(
+        noc_id,
+        write_at_cmd_buf,
+        addr,
+        NOC_MULTICAST_WRITE_VC,
+        incr,
+        31 /*wrap*/,
+        false /*linked*/,
+        num_dests,
+        /*multicast_path_reserve=*/true,
+        posted);
+    WAYPOINT("NIMD");
 }
 
 inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {

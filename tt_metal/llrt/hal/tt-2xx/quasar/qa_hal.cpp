@@ -80,8 +80,7 @@ public:
         } else {
             flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_DM_KERNEL_BASE);  // this is for legacy kernels
             flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
-            flags += fmt::format(
-                "-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
+            flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
             flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
             flags +=
                 fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE + (params.processor_id * MEM_DM_LOCAL_SIZE));
@@ -168,7 +167,6 @@ public:
         // TODO: Use correct tt-qsr cpu options #32893
         std::string cflags =
             params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensixbh ";
-        cflags += "-mno-tt-tensix-optimize-replay ";
         cflags += "-fno-extern-tls-init ";
         cflags += "-ftls-model=local-exec ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&

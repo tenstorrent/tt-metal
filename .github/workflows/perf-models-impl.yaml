@@ -75,111 +75,111 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal
+          commands: pytest models/demos/falcon7b_common/tests -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' && (inputs.model == 'all' || inputs.model == 'falcon7b') }}
       - name: Run vanilla_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/vanilla_unet/tests/ -m models_performance_bare_metal
+          commands: pytest models/demos/vision/segmentation/vanilla_unet/tests/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'vanilla_unet') }}
       - name: Run functional_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/experimental/functional_unet/tests -m models_performance_bare_metal --timeout=480
+          commands: pytest models/experimental/functional_unet/tests -m models_performance_bare_metal --timeout=480
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'functional_unet') }}
       - name: Run stable_diffusion model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
+          commands: pytest models/demos/vision/generative/stable_diffusion/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_performance_bare_metal --timeout=480
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'stable_diffusion') }}
       # Disabled until the test is fixed; issue #35263
       # - name: Run sentence_bert model_perf test
       #   timeout-minutes: ${{ matrix.test-info.timeout }}
       #   uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
       #   with:
-      #     commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/sentence_bert/tests/perf/ -m models_performance_bare_metal
+      #     commands: pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/sentence_bert/tests/perf/ -m models_performance_bare_metal
       #   if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'sentence_bert') }}
       - name: Run resnet50 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/resnet50/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal
+          commands: pytest models/demos/vision/classification/resnet50/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'resnet50') }}
 
       - name: Run bert_tiny model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/wormhole/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
+          commands: pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'bert_tiny') }}
 
       - name: Run distilbert model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal
+          commands: pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'distilbert') }}
       - name: Run segformer model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/segformer/tests/perf/ -m models_performance_bare_metal
+          commands: pytest models/demos/vision/segmentation/segformer/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'segformer') }}
       - name: Run metal_BERT_large_11 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/metal_BERT_large_11/tests/ -m models_performance_bare_metal
+          commands: pytest models/demos/metal_BERT_large_11/tests/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'metal_BERT_large_11') }}
 
       - name: Run mobilenetv2 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/mobilenetv2/tests/perf/ -m models_performance_bare_metal
+          commands: pytest models/demos/vision/classification/mobilenetv2/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'mobilenetv2') }}
       - name: Run vgg_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vgg_unet/tests/ -m models_performance_bare_metal
+          commands: pytest models/demos/vision/segmentation/vgg_unet/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'vgg_unet') }}
 
       - name: Run swin_v2 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/experimental/swin_v2/tests/perf/ -m models_performance_bare_metal
+          commands: pytest models/experimental/swin_v2/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'swin_v2') }}
       - name: Run swin_s model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/experimental/swin_s/tests/perf/ -m models_performance_bare_metal
+          commands: pytest models/experimental/swin_s/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'swin_s') }}
 
       - name: Run vovnet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/experimental/vovnet/tests/perf/ -m models_performance_bare_metal
+          commands: pytest models/experimental/vovnet/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'vovnet') }}
 
       - name: Run ufld_v2 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/ufld_v2/tests/perf/ -m models_performance_bare_metal
+          commands: pytest models/demos/vision/segmentation/ufld_v2/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'ufld_v2') }}
       # Disabled until the test is fixed Issue: #35171
       # - name: Run efficientnetb0 model_perf test
       #   timeout-minutes: ${{ matrix.test-info.timeout }}
       #   uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
       #   with:
-      #     commands: pytest -n auto models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal
+      #     commands: pytest models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal
       #   if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'efficientnetb0') }}
       - name: Merge all the generated reports
         timeout-minutes: 10

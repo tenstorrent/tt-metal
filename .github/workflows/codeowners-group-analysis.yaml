@@ -514,7 +514,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          sparse-checkout: .github/CODEOWNERS
+          sparse-checkout-cone-mode: false
 
       - name: Get PR changed files
         id: get-files
@@ -1415,6 +1417,9 @@ jobs:
               "@tenstorrent/metalium-developers-ops-data-movement")
                 echo "S09QQRK1CF8"
                 ;;
+              "@tenstorrent/metalium-developers-eltwise")
+                echo "S0ABKSS1D3R"
+                ;;
               *)
                 echo ""  # No Slack group available
                 ;;
@@ -1909,6 +1914,9 @@ jobs:
               "@tenstorrent/metalium-developers-ops-data-movement")
                 echo "S09QQRK1CF8"
                 ;;
+              "@tenstorrent/metalium-developers-eltwise")
+                echo "S0ABKSS1D3R"
+                ;;
               *)
                 echo ""  # No Slack group available
                 ;;
@@ -2119,8 +2127,29 @@ jobs:
 
               if [ -n "$SLACK_GROUP_ID" ]; then
                 echo "Team $team has Slack group: $SLACK_GROUP_ID"
-                SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
-                echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
+
+                # Special handling for metalium-developers-eltwise - only ping group if none of the 3 key members approved
+                if [ "$team" = "@tenstorrent/metalium-developers-eltwise" ]; then
+                  ELTWISE_KEY_MEMBERS="dchenTT mateusznowakTT cmaryanTT"
+                  ELTWISE_APPROVED=false
+                  for key_member in $ELTWISE_KEY_MEMBERS; do
+                    if echo "$APPROVED_REVIEWERS" | grep -q "$key_member"; then
+                      echo "✅ Key eltwise member $key_member has approved, skipping group ping"
+                      ELTWISE_APPROVED=true
+                      break
+                    fi
+                  done
+
+                  if [ "$ELTWISE_APPROVED" = "false" ]; then
+                    echo "⚠️  No key eltwise member approved yet, adding Slack group ping"
+                    SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
+                    echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
+                  fi
+                else
+                  # Standard behavior for other teams with Slack groups
+                  SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
+                  echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
+                fi
               else
                 echo "Team $team has no Slack group, using individual selection"
                 # Select individuals from team
@@ -2318,6 +2347,7 @@ jobs:
           # Check if we have any owners to ping
           if [ -n "$SELECTED_OWNERS" ]; then
             # Get full names for selected owners and build ping message
+            # NOTE: Do NOT use GitHub mention syntax [@username] as it subscribes users to the PR
             PING_MESSAGE="Hi"
             IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
             OWNER_COUNT=${#SELECTED_ARRAY[@]}
@@ -2331,9 +2361,9 @@ jobs:
                                "$USER_API" 2>/dev/null)
                 USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                 if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                  PING_MESSAGE="$PING_MESSAGE $USER_NAME [@$owner]"
+                  PING_MESSAGE="$PING_MESSAGE $USER_NAME (@$owner)"
                 else
-                  PING_MESSAGE="$PING_MESSAGE [@$owner]"
+                  PING_MESSAGE="$PING_MESSAGE (@$owner)"
                 fi
 
                 # Add comma if not the last owner
@@ -2357,7 +2387,7 @@ jobs:
               fi
             fi
 
-            PING_MESSAGE="$PING_MESSAGE, this PR **[""$PR_TITLE""](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME [@$PR_AUTHOR_LOGIN] needs your approval/review to merge this."
+            PING_MESSAGE="$PING_MESSAGE, this PR **[""$PR_TITLE""](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN) needs your approval/review to merge this."
 
             if [ "$PING_OWNERS" = "true" ]; then
               # Create new ping comment
@@ -2386,6 +2416,7 @@ jobs:
 
               if [ "$HTTP_STATUS" = "201" ]; then
                 echo "✅ Ping comment created successfully for PR #$PR_NUMBER"
+                echo "📋 Pinged users: $SELECTED_OWNERS"
               else
                 echo "❌ ERROR: Failed to create ping comment (HTTP $HTTP_STATUS)"
                 echo "Response body: $RESPONSE_BODY"
@@ -2458,6 +2489,9 @@ jobs:
                 ;;
               "@tenstorrent/metalium-developers-ops-data-movement")
                 echo "S09QQRK1CF8"
+                ;;
+              "@tenstorrent/metalium-developers-eltwise")
+                echo "S0ABKSS1D3R"
                 ;;
               *)
                 echo ""  # No Slack group available
@@ -2792,6 +2826,8 @@ jobs:
             if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
               SLACK_TS=$(echo "$SLACK_RESPONSE" | jq -r '.ts')
               echo "✅ Successfully sent Slack notification to channel $SLACK_CHANNEL (message ts: $SLACK_TS)"
+              echo "📋 Notified users: $SELECTED_OWNERS"
+              echo "📋 Notified groups: $SELECTED_SLACK_GROUPS"
             else
               SLACK_ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "Unknown error"')
               echo "❌ Failed to send Slack notification: $SLACK_ERROR"
