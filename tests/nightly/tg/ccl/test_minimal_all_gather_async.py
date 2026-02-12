@@ -712,10 +712,7 @@ def test_all_gather_wan(
     ttnn.synchronize_device(mesh_device)
     signpost("stop")
     profiler.end("all-gather-async-trace")
-    time_taken = profiler.get_duration("all-gather-async-trace") - profiler.get_duration(
-        "all-gather-async-trace-warmup"
-    )
-    effective_iter = num_iters - warmup_iters
+    time_taken = profiler.get_duration("all-gather-async-trace")
     logger.info(f"Time taken e2e: {time_taken} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
+    logger.info(f"Time per iter e2e: {time_taken / num_iters} s")
+    logger.info(f"Time per iter e2e: {time_taken / num_iters * 1e6} us")
