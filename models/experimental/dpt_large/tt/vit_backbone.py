@@ -162,6 +162,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                     device=self.tt_device,
                     output_mem=memcfg,
                     program_config=self.tt_prog_cfg,
+                    allow_cpu_fallback=bool(getattr(self.config, "allow_cpu_fallback", True)),
                 )
                 for i in range(self.config.num_hidden_layers)
             ]

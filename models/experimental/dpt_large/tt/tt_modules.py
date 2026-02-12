@@ -259,6 +259,7 @@ class TTAttention:
         device,
         output_mem: Optional[ttnn.MemoryConfig] = None,
         program_config=None,
+        allow_cpu_fallback: bool = True,
     ):
         # Fused QKV weights: stack [Q;K;V] along out_dim
         # Keep the raw torch weights around for a host-based attention path.
@@ -299,6 +300,7 @@ class TTAttention:
         # Persist knobs so callers can tune memory/program behavior.
         self.output_mem = output_mem
         self.program_config = program_config
+        self.allow_cpu_fallback = bool(allow_cpu_fallback)
         # Pre-create TTNN projection weights for device-side output matmul
         try:
             # Use transposed weights to avoid transpose_b flag during linear
@@ -389,7 +391,9 @@ class TTAttention:
             # Merge heads back to [B, N, C]
             merged = ttnn.transformer.concatenate_heads(ctx_tt)
             ctx = merged
-        except Exception:
+        except Exception as exc:
+            if not self.allow_cpu_fallback:
+                raise RuntimeError("TTAttention device path failed and CPU fallback is disabled") from exc
             # Fallback to host path (slow), preserving correctness
             x_host = x.cpu()
             if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
@@ -435,6 +439,8 @@ class TTAttention:
             if len(getattr(out_tt4, "shape", [])) == 4:
                 out = ttnn.reshape(out_tt4, (B, N, C))
         else:
+            if not self.allow_cpu_fallback:
+                raise RuntimeError("TTAttention projection weights unavailable and CPU fallback is disabled")
             out_host = torch.nn.functional.linear(
                 (ctx.cpu().to_torch() if hasattr(ctx, "cpu") else ctx).to(dtype=torch.float32),
                 self.proj_w.to(dtype=torch.float32),
@@ -450,10 +456,21 @@ class TTAttention:
 
 
 class TTMLP:
-    def __init__(self, fc1_w, fc1_b, fc2_w, fc2_b, device, output_mem=None, program_config=None):
+    def __init__(
+        self,
+        fc1_w,
+        fc1_b,
+        fc2_w,
+        fc2_b,
+        device,
+        output_mem=None,
+        program_config=None,
+        allow_cpu_fallback: bool = True,
+    ):
         self.device = device
         self.output_mem = output_mem
         self.program_config = program_config
+        self.allow_cpu_fallback = bool(allow_cpu_fallback)
         # Host fallback linears kept for safety
         self._fc1_host = TTLinear(
             fc1_w, fc1_b, device, output_mem=output_mem, fast_gelu=True, program_config=program_config
@@ -495,7 +512,9 @@ class TTMLP:
             y1 = ttnn.gelu(y1)
             y2 = ttnn.linear(y1, self.w2_tt, bias=self.b2_tt, dtype=ttnn.bfloat16, memory_config=memcfg)
             return y2 if len(shape) == 4 else ttnn.reshape(y2, (B, N, self.w2_tt.shape[-1]))
-        except Exception:
+        except Exception as exc:
+            if not self.allow_cpu_fallback:
+                raise RuntimeError("TTMLP device path failed and CPU fallback is disabled") from exc
             # Host fallback path (keeps parity)
             x = self._fc1_host(x, **mm_opts)
             x = self._fc2_host(x, **mm_opts)
@@ -513,6 +532,7 @@ class TTTransformerBlock:
         device,
         output_mem: Optional[ttnn.MemoryConfig] = None,
         program_config=None,
+        allow_cpu_fallback: bool = True,
     ):
         q_w = state_dict[f"{base}.attention.attention.query.weight"]
         q_b = state_dict[f"{base}.attention.attention.query.bias"]
@@ -547,8 +567,18 @@ class TTTransformerBlock:
             device,
             output_mem=output_mem,
             program_config=program_config,
+            allow_cpu_fallback=allow_cpu_fallback,
         )
-        self.mlp = TTMLP(fc1_w, fc1_b, fc2_w, fc2_b, device, output_mem=output_mem, program_config=program_config)
+        self.mlp = TTMLP(
+            fc1_w,
+            fc1_b,
+            fc2_w,
+            fc2_b,
+            device,
+            output_mem=output_mem,
+            program_config=program_config,
+            allow_cpu_fallback=allow_cpu_fallback,
+        )
 
     def __call__(self, x: ttnn.Tensor, **mm_opts) -> ttnn.Tensor:
         h = self.ln1(x)
