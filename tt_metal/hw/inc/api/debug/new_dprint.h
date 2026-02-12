@@ -85,8 +85,7 @@
         /* For indexed placeholders, validate no index exceeds argument count */                                       \
         static_assert(                                                                                                 \
             !dprint_detail::checks::has_indexed_placeholders(format) ||                                                \
-                dprint_detail::checks::get_max_index(format) <                                                         \
-                    static_cast<int>(dprint_detail::helpers::count_arguments(__VA_ARGS__)),                            \
+                dprint_detail::checks::get_max_index(format) < dprint_detail::helpers::count_arguments(__VA_ARGS__),   \
             "Placeholder index exceeds number of arguments");                                                          \
         /* For indexed placeholders, validate all arguments are referenced */                                          \
         static_assert(                                                                                                 \
@@ -110,22 +109,25 @@
         dprint_detail::locking::acquire_lock();                                                                        \
         /* Get dprint buffer*/                                                                                         \
         volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer = get_new_debug_print_buffer();                       \
-        /* TODO: Check if we need to wrap buffer and wait for enough space in it */                                    \
+        /* Check if we need to wrap buffer and wait for enough space in it */                                          \
+        constexpr auto message_size = dprint_detail::serialization::get_total_message_size(__VA_ARGS__);               \
+        dprint_detail::locking::wait_for_space(dprint_buffer, message_size);                                           \
         /* Generate dprint message header */                                                                           \
         dprint_detail::structures::DPrintHeader header = {};                                                           \
         header.is_kernel = NEW_DPRINT_IS_KERNEL;                                                                       \
         header.risc_id = PROCESSOR_INDEX;                                                                              \
+        header.message_payload = message_size - sizeof(header); /* Payload size does not include header itself */      \
         static_assert(                                                                                                 \
             dprint_info_index <= dprint_detail::structures::DPrintHeader::max_info_id_value,                           \
             "Too many DPRINT calls, exceeds limit");                                                                   \
         header.info_id = dprint_info_index;                                                                            \
         auto header_value = header.value;                                                                              \
         /* Serialize message */                                                                                        \
-        auto dprint_buffer_ptr = dprint_buffer->data + dprint_buffer->aux.wpos;                                        \
+        auto dprint_buffer_ptr = &(dprint_buffer->data[0]) + dprint_buffer->aux.wpos;                                  \
         dprint_detail::formatting::dprint_type<decltype(header_value)>::serialize(dprint_buffer_ptr, 0, header_value); \
         dprint_detail::serialization::serialize_arguments(dprint_buffer_ptr, __VA_ARGS__);                             \
         /* Move write pointer in dprint buffer */                                                                      \
-        dprint_buffer->aux.wpos += dprint_detail::serialization::get_total_message_size(__VA_ARGS__);                  \
+        dprint_buffer->aux.wpos += message_size;                                                                       \
         /* Release buffer lock */                                                                                      \
         dprint_detail::locking::release_lock();                                                                        \
     }
@@ -979,12 +981,62 @@ void acquire_lock() {
 void release_lock() {
     volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();
 
+    asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Release lock by setting to 0
+    asm volatile("" ::: "memory");
 }
 
 void initialize_lock() {
     volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();
+    asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Ensure lock starts in free state
+    asm volatile("" ::: "memory");
+}
+
+void wait_for_space(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, uint32_t message_size) {
+    // Check if we are wrapped around
+    if (dprint_buffer->aux.wpos > dprint_buffer->aux.rpos) {
+        // We are writing in front of the read position. Check if we need to wrap around.
+        if (dprint_buffer->aux.wpos + message_size >= sizeof(dprint_buffer->data)) {
+            // There is not enough space for our message until end of buffer.
+            // Check if we should add wrap around message in the buffer.
+            if (dprint_buffer->aux.wpos <
+                sizeof(dprint_buffer->data) - sizeof(dprint_detail::structures::DPrintHeader::value)) {
+                // We can fit a wrap around message, write it now so reader can process it while we wait for space.
+                dprint_detail::structures::DPrintHeader wrap_header = {};
+                wrap_header.is_kernel = 0;
+                wrap_header.risc_id = 0;
+                wrap_header.message_payload = 0;
+                wrap_header.info_id = dprint_detail::structures::DPrintHeader::max_info_id_value;
+                auto value = wrap_header.value;
+                *reinterpret_cast<dprint_buffer_ptr<decltype(value)>>(dprint_buffer->data + dprint_buffer->aux.wpos) =
+                    value;
+            }
+            // Wrap around to the beginning of the buffer and continue waiting for space there.
+            dprint_buffer->aux.wpos = 0;
+        } else {
+            // There is enough space in the buffer.
+            return;
+        }
+    }
+
+    // Check if there is enough space between wpos and rpos
+    if (dprint_buffer->aux.wpos < dprint_buffer->aux.rpos) {
+        // Wrapped around, check if there is enough space between wpos and rpos
+        WAYPOINT("DPW");
+        while (dprint_buffer->aux.wpos < dprint_buffer->aux.rpos &&
+               dprint_buffer->aux.rpos < dprint_buffer->aux.wpos + message_size) {
+            invalidate_l1_cache();
+#if defined(COMPILE_FOR_ERISC)
+            internal_::risc_context_switch();
+#endif
+            // If we've closed the device, we've now disabled printing on it, don't hang.
+            if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                return;
+            };  // wait for host to catch up to wpos with it's rpos
+        }
+        WAYPOINT("DPD");
+    }
 }
 
 }  // namespace locking
@@ -1015,11 +1067,14 @@ void serialize_arguments(volatile tt_l1_ptr uint8_t* dprint_buffer, Args&&... ar
 }
 
 template <typename... Args>
-uint32_t get_total_message_size(Args&&...) {
+constexpr uint32_t get_total_message_size(Args&&...) {
     constexpr auto type_infos = formatting::get_types_info<Args...>();
     uint32_t total_size = sizeof(dprint_detail::structures::DPrintHeader::value);  // Start with header size
-    for (const auto& info : type_infos) {
-        total_size += info.size_in_bytes;
+    for (size_t i = 0; i < sizeof...(Args); ++i) {
+        total_size += type_infos[i].size_in_bytes;
+    }
+    if (total_size % 4 != 0) {
+        total_size += 4 - (total_size % 4);  // Pad to next multiple of 4 bytes
     }
     return total_size;
 }

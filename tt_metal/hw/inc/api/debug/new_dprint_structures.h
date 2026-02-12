@@ -17,18 +17,19 @@ struct DPrintStringInfo {
 } __attribute__((packed));
 
 struct DPrintHeader {
-    static constexpr uint16_t max_info_id_value = 1023;
+    static constexpr uint16_t max_info_id_value = 65535;
     union {
         struct {
             uint8_t is_kernel : 1;  // 0 = firmware, 1 = kernel
             uint8_t risc_id : 5;    // 0-31 risc id (supporting quasar)
-            uint16_t info_id : 10;  // Index into .dprint_strings_info (max 1024 entries)
+            uint16_t message_payload : 10;  // Message payload size (<1024 bytes)
+            uint16_t info_id : 16;          // Index into .dprint_strings_info (max 65536 entries)
         } __attribute__((packed));
-        uint16_t value;
+        uint32_t value;
     };
 } __attribute__((packed));
 
-static_assert(sizeof(DPrintHeader) == sizeof(uint16_t));
+static_assert(sizeof(DPrintHeader) == sizeof(uint32_t));
 
 }  // namespace structures
 
