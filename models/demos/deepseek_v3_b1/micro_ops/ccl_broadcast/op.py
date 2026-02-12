@@ -45,7 +45,6 @@ class DeepseekMinimalBroadcast:
         cluster_axis=0,
         secondary_cluster_axis=None,
         num_links=1,
-        using_persistent_buffers=True,
     ):
         """
         Execute broadcast operation using generic_op.
@@ -57,7 +56,6 @@ class DeepseekMinimalBroadcast:
             cluster_axis: Primary axis for broadcast (default 0)
             secondary_cluster_axis: Secondary axis for dual-axis broadcast (optional)
             num_links: Number of links to use (default 1)
-            using_persistent_buffers: Whether to use persistent buffers (default True)
         Returns:
             Output tensor with broadcast data on all devices
         """
@@ -145,7 +143,6 @@ class DeepseekMinimalBroadcast:
 
                 # Determine if this device has secondary axis connections
                 has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
-                has_reverse_secondary_connection = is_secondary_sender
 
                 # Calculate mcast distances
                 start_distance_forward = 1 if num_targets_forward > 0 else 0
@@ -162,7 +159,6 @@ class DeepseekMinimalBroadcast:
                     ("core_noc_x", core_noc_x),
                     ("core_noc_y", core_noc_y),
                     ("is_secondary_sender", 1 if is_secondary_sender else 0),
-                    ("is_active_broadcaster", 1 if (is_sender or is_secondary_sender) else 0),
                 ]
 
                 # Writer named compile-time args
@@ -177,12 +173,10 @@ class DeepseekMinimalBroadcast:
                     ("core_noc_y", core_noc_y),
                     ("is_secondary_sender", 1 if is_secondary_sender else 0),
                     ("has_secondary_target", 1 if has_secondary_target else 0),
-                    ("has_reverse_secondary_connection", 1 if has_reverse_secondary_connection else 0),
                     ("start_distance_in_hops_forward", start_distance_forward),
                     ("range_hops_forward", range_hops_forward),
                     ("start_distance_in_hops_backward", start_distance_backward),
                     ("range_hops_backward", range_hops_backward),
-                    ("using_persistent_buffers", 1 if using_persistent_buffers else 0),
                 ]
 
                 union_named_compile_time_args = []
@@ -209,11 +203,6 @@ class DeepseekMinimalBroadcast:
                 if has_secondary_target:
                     secondary_coord = ttnn.MeshCoordinate(row, 1)  # Other column
                     dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-
-                # Reverse secondary connection (for secondary sender back to sender)
-                if has_reverse_secondary_connection:
-                    sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
-                    dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
 
                 num_connections = len(dst_nodes)
 

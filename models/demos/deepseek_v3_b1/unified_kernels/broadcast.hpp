@@ -48,8 +48,7 @@ struct Broadcast {
         uint32_t isSender,
         uint32_t coreNocX,
         uint32_t coreNocY,
-        uint32_t isSecondarySender,
-        uint32_t isActiveBroadcaster>
+        uint32_t isSecondarySender>
     struct ReaderCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t packet_size_in_pages = packetSizeInPages;
@@ -58,7 +57,6 @@ struct Broadcast {
         static constexpr uint32_t core_noc_x = coreNocX;
         static constexpr uint32_t core_noc_y = coreNocY;
         static constexpr uint32_t is_secondary_sender = isSecondarySender;
-        static constexpr uint32_t is_active_broadcaster = isActiveBroadcaster;
     };
 
     struct ReaderArgs {
@@ -78,12 +76,10 @@ struct Broadcast {
         uint32_t coreNocY,
         uint32_t isSecondarySender,
         uint32_t hasSecondaryTarget,
-        uint32_t hasReverseSecondaryConnection,
         uint32_t startDistanceInHopsForward,
         uint32_t rangeHopsForward,
         uint32_t startDistanceInHopsBackward,
-        uint32_t rangeHopsBackward,
-        uint32_t usingPersistentBuffers>
+        uint32_t rangeHopsBackward>
     struct WriterCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t packet_size_in_pages = packetSizeInPages;
@@ -95,12 +91,10 @@ struct Broadcast {
         static constexpr uint32_t core_noc_y = coreNocY;
         static constexpr uint32_t is_secondary_sender = isSecondarySender;
         static constexpr uint32_t has_secondary_target = hasSecondaryTarget;
-        static constexpr uint32_t has_reverse_secondary_connection = hasReverseSecondaryConnection;
         static constexpr uint32_t start_distance_in_hops_forward = startDistanceInHopsForward;
         static constexpr uint32_t range_hops_forward = rangeHopsForward;
         static constexpr uint32_t start_distance_in_hops_backward = startDistanceInHopsBackward;
         static constexpr uint32_t range_hops_backward = rangeHopsBackward;
-        static constexpr uint32_t using_persistent_buffers = usingPersistentBuffers;
     };
     struct WriterArgs {
         uint32_t tensor_address0;
@@ -169,12 +163,12 @@ struct Broadcast {
                 auto fused_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 // Allocate separate route for secondary axis unicast (if applicable)
                 auto secondary_route_id = CTArgs::has_secondary_target ? PacketHeaderPool::allocate_header_n(1) : 0;
-                // Allocate route for reverse secondary connection (secondary sender -> primary sender)
-                auto reverse_secondary_route_id =
-                    CTArgs::has_reverse_secondary_connection ? PacketHeaderPool::allocate_header_n(1) : 0;
+
                 tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
-                open_connections(fabric_connection, args.num_connections, arg_for_fab);
+                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
+                    open_connections(fabric_connection, args.num_connections, arg_for_fab);
+                }
 
                 uint8_t starts[] = {
                     static_cast<uint8_t>(CTArgs::start_distance_in_hops_forward),
@@ -200,49 +194,6 @@ struct Broadcast {
                     safe_get_noc_addr(args.barrier_sem_noc0_x, args.barrier_sem_noc0_y, args.barrier_sem, 0);
                 uint64_t secondary_sync_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(args.barrier_sem_noc0_x, args.barrier_sem_noc0_y, args.secondary_sync_sem, 0);
-
-                // Secondary axis barrier between primary sender and secondary sender
-                // Both devices send an atomic inc to each other and wait
-                if constexpr (!CTArgs::using_persistent_buffers) {
-                    if constexpr (CTArgs::has_secondary_target || CTArgs::has_reverse_secondary_connection) {
-                        auto& secondary_slot = fabric_connection.get(secondary_connection_idx);
-                        auto route_id = CTArgs::has_secondary_target ? secondary_route_id : reverse_secondary_route_id;
-                        volatile PACKET_HEADER_TYPE* sec_sync_header = PacketHeaderPool::header_table[route_id].first;
-                        fabric_set_unicast_route(fabric_connection, sec_sync_header, secondary_connection_idx);
-
-                        // Send atomic inc to the other device's secondary sync semaphore
-                        fabric_unicast_noc_unicast_atomic_inc(
-                            &secondary_slot.sender,
-                            sec_sync_header,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{secondary_sync_sem_noc_addr_in_pkt, 1},
-                            1);
-
-                        // Wait for the other device's atomic inc on secondary_sync_sem
-                        volatile tt_l1_ptr uint32_t* sync_sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.secondary_sync_sem);
-                        noc_semaphore_wait_min(sync_sem_ptr, 1);
-                        noc_semaphore_set(sync_sem_ptr, 0);
-                    }
-
-                    if (!CTArgs::is_sender) {
-                        // Now do the column-wise barrier (primary axis sync)
-                        // do it for the sender later to overlap with data sending
-                        fabric_multicast_noc_unicast_atomic_inc_set_state<
-                            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-                            fabric_connection,
-                            sem_route_id,
-                            starts,
-                            ranges,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
-                        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                            fabric_connection,
-                            sem_route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-                        noc_semaphore_wait_min(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.barrier_sem), num_total_targets);
-                        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.barrier_sem), 0);
-                    }
-                }
 
                 if (CTArgs::is_sender) {
                     uint32_t num_pages_to_read =
@@ -274,23 +225,6 @@ struct Broadcast {
                             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                                 dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
                             1);  // 1 hop to secondary sender
-                    }
-                    if constexpr (!CTArgs::using_persistent_buffers) {
-                        // Now do the column-wise barrier (primary axis sync)
-                        fabric_multicast_noc_unicast_atomic_inc_set_state<
-                            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-                            fabric_connection,
-                            sem_route_id,
-                            starts,
-                            ranges,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
-                        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                            fabric_connection,
-                            sem_route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-                        noc_semaphore_wait_min(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.barrier_sem), num_total_targets);
-                        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.barrier_sem), 0);
                     }
                     fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
                         UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
@@ -375,7 +309,9 @@ struct Broadcast {
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr), 0);
                     }
                 }
-                close_connections(fabric_connection);
+                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
+                    close_connections(fabric_connection);
+                }
 
                 noc_async_write_barrier();
             }
