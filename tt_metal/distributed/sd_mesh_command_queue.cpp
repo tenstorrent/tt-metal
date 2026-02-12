@@ -5,6 +5,7 @@
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -63,7 +64,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }
-
+    wait_for_cores_idle();
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 

@@ -115,7 +115,7 @@ void py_module_types(nb::module_& mod) {
                     page_size);
                 uint32_t num_writes = data_span.size() / page_size;
                 for (uint32_t i = 0; i < num_writes; i++) {
-                    self.write(data_span.data() + i * page_size, 1);
+                    self.write(data_span.data() + (i * page_size), 1);
                 }
             },
             nb::arg("tensor"),
