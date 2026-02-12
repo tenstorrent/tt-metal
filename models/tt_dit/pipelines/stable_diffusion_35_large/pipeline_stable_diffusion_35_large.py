@@ -512,9 +512,11 @@ class StableDiffusion3Pipeline:
             tt_latents_step_list = []
             for i, submesh_device in enumerate(self.submesh_devices):
                 tt_prompt_embeds = ttnn.from_torch(
-                    prompt_embeds[i].unsqueeze(0).unsqueeze(0)
-                    if self.dit_parallel_config.cfg_parallel.factor == 2
-                    else prompt_embeds,
+                    (
+                        prompt_embeds[i].unsqueeze(0).unsqueeze(0)
+                        if self.dit_parallel_config.cfg_parallel.factor == 2
+                        else prompt_embeds
+                    ),
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
                     device=submesh_device if not traced else None,
@@ -526,9 +528,11 @@ class StableDiffusion3Pipeline:
                 )
 
                 tt_pooled_prompt_embeds = ttnn.from_torch(
-                    pooled_prompt_embeds[i].unsqueeze(0).unsqueeze(0).unsqueeze(0)
-                    if self.dit_parallel_config.cfg_parallel.factor == 2
-                    else pooled_prompt_embeds,
+                    (
+                        pooled_prompt_embeds[i].unsqueeze(0).unsqueeze(0).unsqueeze(0)
+                        if self.dit_parallel_config.cfg_parallel.factor == 2
+                        else pooled_prompt_embeds
+                    ),
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
                     device=submesh_device if not traced else None,

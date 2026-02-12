@@ -469,9 +469,11 @@ class Flux1Pipeline:
                 )
 
                 tt_pooled_prompt_embeds = ttnn.from_torch(
-                    pooled_prompt_embeds[i : i + 1]
-                    if self._parallel_config.cfg_parallel.factor == 2
-                    else pooled_prompt_embeds,
+                    (
+                        pooled_prompt_embeds[i : i + 1]
+                        if self._parallel_config.cfg_parallel.factor == 2
+                        else pooled_prompt_embeds
+                    ),
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
                     device=submesh_device if not traced else None,
@@ -612,9 +614,9 @@ class Flux1Pipeline:
                                 fill_value=sigma_difference,
                                 layout=ttnn.TILE_LAYOUT,
                                 dtype=ttnn.bfloat16,
-                                device=submesh_device
-                                if not traced
-                                else None,  # Not used in trace region, can be on device always.
+                                device=(
+                                    submesh_device if not traced else None
+                                ),  # Not used in trace region, can be on device always.
                             )
                             tt_sigma_difference_list.append(tt_sigma_difference)
 
