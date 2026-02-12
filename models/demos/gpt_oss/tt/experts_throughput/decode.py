@@ -51,14 +51,14 @@ def _apply_swiglu(
     ttnn.deallocate(up)
 
     # Compute gate_alpha = gate * alpha
-    gate_alpha = ttnn.mul(gate_clamped, alpha)
+    gate_alpha = ttnn.mul(gate_clamped, alpha, fast_and_approximate_mode=True)
 
     # Compute gate_sigmoid = sigmoid(gate_alpha)
-    gate_sigmoid = ttnn.sigmoid(gate_alpha)
+    gate_sigmoid = ttnn.sigmoid(gate_alpha, fast_and_approximate_mode=True)
     ttnn.deallocate(gate_alpha)
 
     # Compute glu = gate * gate_sigmoid
-    glu = ttnn.mul(gate_clamped, gate_sigmoid, memory_config=memory_config)
+    glu = ttnn.mul(gate_clamped, gate_sigmoid, memory_config=memory_config, fast_and_approximate_mode=True)
     ttnn.deallocate(gate_clamped)
     ttnn.deallocate(gate_sigmoid)
 
@@ -66,7 +66,7 @@ def _apply_swiglu(
     up_clamped = ttnn.add(up_clamped, 1.0, output_tensor=up_clamped)
 
     # Multiply: result = up * glu
-    result = ttnn.mul(up_clamped, glu, memory_config=memory_config)
+    result = ttnn.mul(up_clamped, glu, memory_config=memory_config, fast_and_approximate_mode=True)
     ttnn.deallocate(up_clamped)
     ttnn.deallocate(glu)
 
@@ -372,7 +372,9 @@ def decode_forward(
     ttnn.deallocate(topk_weights_rm)
 
     # Weighted sum: sum_k(expert_output_k * routing_weight_k)
-    weighted_output = ttnn.mul(post_combine, topk_weights_reshaped, memory_config=memory_config)
+    weighted_output = ttnn.mul(
+        post_combine, topk_weights_reshaped, memory_config=memory_config, fast_and_approximate_mode=True
+    )
     ttnn.deallocate(post_combine)
     ttnn.deallocate(topk_weights_reshaped)
 
