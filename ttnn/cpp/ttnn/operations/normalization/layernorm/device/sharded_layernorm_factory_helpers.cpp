@@ -1114,12 +1114,15 @@ CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const
         idx.height_index = 0;
         idx.width_index = core_idx;
     } else {
+        // In the non-mcast 1d case, core coordinates come from the shard spec grid which already has
+        // the grid offset embedded. Subtract it to get 0-based grid-relative indices.
+        CoreCoord offset = ctx.grid.grid_offset.value_or(CoreCoord{0, 0});
         if (ctx.grid.row_wise) {
-            idx.height_index = core.y;
-            idx.width_index = core.x;
+            idx.height_index = core.y - offset.y;
+            idx.width_index = core.x - offset.x;
         } else {
-            idx.height_index = core.x;
-            idx.width_index = core.y;
+            idx.height_index = core.x - offset.x;
+            idx.width_index = core.y - offset.y;
         }
     }
 
