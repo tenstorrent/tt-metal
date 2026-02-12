@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_gpr_map.h"
 #include "internal/debug/fw_debug.h"
-#include "llk_param_structs.h"
 
 #ifdef UCK_CHLKC_MATH
 // clang-format off
