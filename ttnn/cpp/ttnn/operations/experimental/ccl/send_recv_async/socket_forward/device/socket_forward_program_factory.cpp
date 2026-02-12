@@ -86,7 +86,7 @@ ttnn::device_operation::CachedProgram<SocketForwardSharedVariables> SocketForwar
     TT_FATAL(
         fwd_link_indices.size() > 1, "Single core multi link version of SocketForward only supports multiple links.");
     TT_FATAL(bwd_link_indices.size(), "No link indices found from downstream to upstream core in SocketForward.");
-    uint32_t num_fwd_links = 2;
+    uint32_t num_fwd_links = 1;
     uint32_t num_bwd_links = 1;
 
     auto fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();

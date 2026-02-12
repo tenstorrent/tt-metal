@@ -126,7 +126,7 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest4) {
     auto recv_logical_coord = CoreCoord(0, 0);
     auto copy_logical_coord = CoreCoord(0, 0);
 
-    constexpr uint32_t XFER_SIZE = 14 * 1024;
+    constexpr uint32_t XFER_SIZE = 7 * 1024;
     auto socket_fifo_size = XFER_SIZE * 16;
 
     auto start_device_coord = distributed::MeshCoordinate(0, 0);
@@ -182,14 +182,14 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest4) {
     distributed::SocketConfig socket_config_34 = distributed::SocketConfig({socket_connection_34}, socket_mem_config);
 
     auto input_tensor_spec = TensorSpec(
-        ttnn::Shape({1, 1, 1, 3584}),
+        ttnn::Shape({1, 1, 1, 1792}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
     const auto output_tensor_spec = TensorSpec(
-        ttnn::Shape({1, 1, 1, 3584}),
+        ttnn::Shape({1, 1, 1, 1792}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),

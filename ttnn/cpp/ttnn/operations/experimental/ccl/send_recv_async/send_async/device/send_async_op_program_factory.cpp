@@ -82,7 +82,7 @@ SendAsyncMeshWorkloadFactory::create_at(
 
     auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
     TT_FATAL(link_indices.size() > 1, "Single core multi link version of SendAsync only supports multiple links");
-    uint32_t num_links = 2;
+    uint32_t num_links = 1;
 
     uint32_t fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 

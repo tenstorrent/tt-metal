@@ -18,7 +18,6 @@ constexpr uint32_t socket_block_size = get_compile_time_arg_val(1);
 constexpr uint32_t aligned_partial_packet_size = get_compile_time_arg_val(2);
 constexpr uint32_t whole_packet_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_whole_packets_link_0 = get_compile_time_arg_val(4);
-constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(5);
 constexpr uint32_t credit_address = get_compile_time_arg_val(6);
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
@@ -50,8 +49,8 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-    tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2 =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    // tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2 =
+    //     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     // This kernel relies on three fabric headers stored in fabric_packet_header_cb:
     //  - downstream_data_packet_header: Used for issuing writes to downstream data cores
@@ -67,12 +66,13 @@ void kernel_main() {
 
     upstream_fabric_connection.open();
     downstream_fabric_connection.open();
-    downstream_fabric_connection_2.open();
+    // downstream_fabric_connection_2.open();
 
     SocketSenderInterface send_socket = create_sender_socket_interface(send_socket_config_addr);
     SocketReceiverInterface recv_socket = create_receiver_socket_interface(recv_socket_config_addr);
 
     set_sender_socket_page_size(send_socket, socket_block_size);
+    DPRINT << "FWD SOCKET BLOCK SIZE " << socket_block_size << ENDL();
     set_receiver_socket_page_size(recv_socket, socket_block_size);
     // Only one downstream in this op
     sender_downstream_encoding downstream_enc = get_downstream_encoding(send_socket, 0);
@@ -92,17 +92,14 @@ void kernel_main() {
     uint64_t remote_credit_addr =
         get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, credit_address);
     volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_address);
-    DPRINT << "socket forward waiting for credit" << ENDL();
     while (*credit_addr == 0) {
         invalidate_l1_cache();
     }
-    DPRINT << "socket forward received credit" << ENDL();
     downstream_data_packet_header_addr->to_noc_unicast_atomic_inc(
         NocUnicastAtomicIncCommandHeader{remote_credit_addr, 1});
     downstream_fabric_connection.wait_for_empty_write_slot();
     downstream_fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
-    DPRINT << "socket forward sent credit downstream" << ENDL();
     // Done handshake
 
     for (uint32_t i = 0; i < 100; ++i) {
@@ -120,38 +117,49 @@ void kernel_main() {
         // Forward data to downstream
         // interleave acks
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
+            {
+                DeviceZoneScopedN("fwd per iter write link 0");
+                write_data_to_remote_core_with_ack(
+                    downstream_fabric_connection,
+                    downstream_data_packet_header_addr,
+                    l1_read_addr,
+                    dst_addr,
+                    downstream_bytes_sent_noc_addr,
+                    whole_packet_size);
+                dst_addr += whole_packet_size;
+                DPRINT << "Socket sent " << whole_packet_size << " bytes" << ENDL();
+                l1_read_addr += whole_packet_size;
+            }
+
+            // {
+            //     DeviceZoneScopedN("fwd per iter write link 1");
+            //     write_data_to_remote_core_with_ack(
+            //         downstream_fabric_connection_2,
+            //         downstream_data_packet_header_addr_2,
+            //         l1_read_addr,
+            //         dst_addr,
+            //         downstream_bytes_sent_noc_addr,
+            //         whole_packet_size);
+            //     dst_addr += whole_packet_size;
+            //     l1_read_addr += whole_packet_size;
+            // }
+            {
+                DeviceZoneScopedN("fwd l1 flush");
+                noc_async_writes_flushed();
+            }
+        }
+
+        if constexpr (aligned_partial_packet_size) {
+            DeviceZoneScopedN("fwd aligned write");
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection,
                 downstream_data_packet_header_addr,
                 l1_read_addr,
                 dst_addr,
                 downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection_2,
-                downstream_data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-
-            noc_async_writes_flushed();
-        }
-
-        if constexpr (aligned_partial_packet_size) {
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection_2,
-                downstream_data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
                 aligned_partial_packet_size);
         }
+
         // Notify Upstream and Downstream that data has been consumed or produced
         {
             DeviceZoneScopedN("socket push pages");
@@ -171,12 +179,10 @@ void kernel_main() {
                     upstream_bytes_acked_noc_addr);
             }
         }
-        DPRINT << "socket forward on latency it: " << BF16(i) << ENDL();
     }
-    DPRINT << "socket forward performed latency tests" << ENDL();
     update_socket_config(send_socket);
     update_socket_config(recv_socket);
     upstream_fabric_connection.close();
     downstream_fabric_connection.close();
-    downstream_fabric_connection_2.close();
+    // downstream_fabric_connection_2.close();
 }

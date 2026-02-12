@@ -57,8 +57,8 @@ void kernel_main() {
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection_2 =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    // tt::tt_fabric::WorkerToFabricEdmSender fabric_connection_2 =
+    //     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
@@ -75,13 +75,14 @@ void kernel_main() {
             get_write_ptr(fabric_packet_header_cb_id) + 2 * sizeof(PACKET_HEADER_TYPE));
 
     fabric_connection.open();
-    fabric_connection_2.open();
+    // fabric_connection_2.open();
     upstream_fabric_connection.open();
     // Create Socket Interface
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
 
     set_sender_socket_page_size(sender_socket, socket_block_size);
+    DPRINT << "SEND SOCKET BLOCK SIZE " << socket_block_size << ENDL();
     set_receiver_socket_page_size(receiver_socket, socket_block_size);
 
     // Only one downstream in this op
@@ -112,7 +113,6 @@ void kernel_main() {
     // This allows us to accurately measure loopback latency
 
     // 1. Send credit downstream
-    DPRINT << "Send async sent credit downstream" << ENDL();
     uint64_t remote_credit_addr =
         get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, credit_address);
     volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_address);
@@ -121,11 +121,9 @@ void kernel_main() {
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     // 2. Wait for credit from producer of this kernel
-    DPRINT << "Send async waiting for credit " << ENDL();
     while (*credit_addr == 0) {
         invalidate_l1_cache();
     }
-    DPRINT << "Send async received credit " << ENDL();
     // Measure roundtrip latency: Time it takes for the data to be picked up from L1 + pipeline latency
     uint32_t measurement_addr = credit_address;
     auto l1_read_addr = get_read_ptr(data_cb_id);
@@ -135,7 +133,9 @@ void kernel_main() {
 
         // interleave acks
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
+            // Socket send on a single link the entire packet size
             {
+                DeviceZoneScopedN("sender per iter write link 0");
                 write_data_to_remote_core_with_ack(
                     fabric_connection,
                     data_packet_header_addr,
@@ -143,29 +143,33 @@ void kernel_main() {
                     dst_addr,
                     downstream_bytes_sent_noc_addr,
                     whole_packet_size);
+                DPRINT << "Initially Sent " << whole_packet_size << " BYTES" << ENDL();
                 dst_addr += whole_packet_size;
                 l1_read_addr += whole_packet_size;
             }
 
+            // {
+            //     DeviceZoneScopedN("sender per iter write link 1");
+            //     write_data_to_remote_core_with_ack(
+            //         fabric_connection_2,
+            //         data_packet_header_addr_2,
+            //         l1_read_addr,
+            //         dst_addr,
+            //         downstream_bytes_sent_noc_addr,
+            //         whole_packet_size);
+            //     dst_addr += whole_packet_size;
+            //     l1_read_addr += whole_packet_size;
+            // }
             {
-                write_data_to_remote_core_with_ack(
-                    fabric_connection_2,
-                    data_packet_header_addr_2,
-                    l1_read_addr,
-                    dst_addr,
-                    downstream_bytes_sent_noc_addr,
-                    whole_packet_size);
-                dst_addr += whole_packet_size;
-                l1_read_addr += whole_packet_size;
+                DeviceZoneScopedN("sender l1 flush");
+                noc_async_writes_flushed();
             }
-
-            noc_async_writes_flushed();
         }
 
         if constexpr (aligned_partial_packet_size) {
             write_data_to_remote_core_with_ack(
-                fabric_connection_2,
-                data_packet_header_addr_2,
+                fabric_connection,
+                data_packet_header_addr,
                 l1_read_addr,
                 dst_addr,
                 downstream_bytes_sent_noc_addr,
@@ -205,14 +209,11 @@ void kernel_main() {
         uint64_t latency = end_timestamp - start_timestamp;
         *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(measurement_addr) = latency;
         measurement_addr += sizeof(uint64_t);
-
-        DPRINT << "Send async on latency it: " << BF16(i) << ENDL();
     }
-    DPRINT << "Send async Completed latency recordings" << ENDL();
 
     update_socket_config(sender_socket);
     update_socket_config(receiver_socket);
     fabric_connection.close();
-    fabric_connection_2.close();
+    // fabric_connection_2.close();
     upstream_fabric_connection.close();
 }

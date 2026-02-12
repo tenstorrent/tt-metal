@@ -233,6 +233,7 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
     volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_sent_addr);
     uint32_t bytes_recv;
+    DPRINT << "Waiting for " << num_bytes << " bytes" << ENDL();
     do {
         invalidate_l1_cache();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
@@ -299,12 +300,9 @@ FORCE_INLINE void fabric_socket_notify_sender_stateful(
     uint64_t upstream_bytes_acked_noc_addr) {
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
-    DPRINT << "unicast_addr" << ENDL();
     fabric_connection.wait_for_empty_write_slot();
-    DPRINT << "empty write slot" << ENDL();
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
-    DPRINT << "send payload" << ENDL();
 }
 #endif
 
