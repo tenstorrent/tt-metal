@@ -4,6 +4,10 @@
 
 #include "ttnn/async_runtime.hpp"
 
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory_pin.hpp>
+
 #include "ttnn/distributed/api.hpp"
 
 using namespace tt::tt_metal;
@@ -14,11 +18,41 @@ void write_buffer(
     QueueId cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<BufferRegion>& region) {
     auto* mesh_device = dst.device();
     TT_FATAL(mesh_device, "Tensor must be on device");
-    auto& cq = mesh_device->mesh_command_queue(*cq_id);
-    auto device_tensors = ttnn::distributed::get_device_tensors(dst);
-    for (size_t i = 0; i < device_tensors.size(); i++) {
-        tt::tt_metal::copy_to_device(cq, static_cast<std::byte*>(src.at(i).get()), device_tensors[i], region);
+    TT_FATAL(dst.storage_type() == StorageType::DEVICE, "Destination tensor must be on device");
+
+    const auto& device_storage = dst.device_storage();
+    const auto& coords = device_storage.coords;
+    TT_FATAL(
+        src.size() == coords.size(),
+        "Number of source buffers ({}) must match number of device shards ({})",
+        src.size(),
+        coords.size());
+
+    auto mesh_buffer = device_storage.mesh_buffer;
+    TT_FATAL(mesh_buffer != nullptr, "Destination tensor must have allocated buffer");
+
+    // Determine the size of each shard
+    const size_t shard_size_bytes =
+        region.has_value() ? region->size : dst.tensor_spec().compute_packed_buffer_size_bytes();
+
+    // Create a DistributedHostBuffer with HostBuffers borrowing from the user's memory
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device->shape());
+    for (size_t i = 0; i < coords.size(); i++) {
+        const auto& coord = coords[i];
+        const auto& user_buffer = src[i];
+
+        distributed_host_buffer.emplace_shard(coord, [&]() {
+            // Create a MemoryPin from the shared_ptr to keep the user's data alive
+            MemoryPin pin(user_buffer);
+            // Create a Span pointing to the user's data
+            tt::stl::Span<std::byte> span(static_cast<std::byte*>(user_buffer.get()), shard_size_bytes);
+            // Create a HostBuffer that borrows the user's memory
+            return HostBuffer(span, std::move(pin));
+        });
     }
+
+    auto& cq = mesh_device->mesh_command_queue(*cq_id);
+    cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
 }
 
 void read_buffer(
@@ -31,11 +65,43 @@ void read_buffer(
     TT_ASSERT(src_offset == 0, "src_offset is not supported");
     auto* mesh_device = src.device();
     TT_FATAL(mesh_device, "Tensor must be on device");
-    auto& cq = mesh_device->mesh_command_queue(*cq_id);
-    auto device_tensors = ttnn::distributed::get_device_tensors(src);
-    for (size_t i = 0; i < device_tensors.size(); i++) {
-        tt::tt_metal::copy_to_host(cq, device_tensors[i], static_cast<std::byte*>(dst.at(i).get()), region, blocking);
+    TT_FATAL(src.storage_type() == StorageType::DEVICE, "Source tensor must be on device");
+
+    const auto& device_storage = src.device_storage();
+    const auto& coords = device_storage.coords;
+    TT_FATAL(
+        dst.size() == coords.size(),
+        "Number of destination buffers ({}) must match number of device shards ({})",
+        dst.size(),
+        coords.size());
+
+    auto mesh_buffer = device_storage.mesh_buffer;
+    TT_FATAL(mesh_buffer != nullptr, "Source tensor must have allocated buffer");
+
+    // Determine the size of each shard
+    const size_t shard_size_bytes =
+        region.has_value() ? region->size : src.tensor_spec().compute_packed_buffer_size_bytes();
+
+    // Create a DistributedHostBuffer with HostBuffers borrowing from the user's memory
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device->shape());
+    for (size_t i = 0; i < coords.size(); i++) {
+        const auto& coord = coords[i];
+        const auto& user_buffer = dst[i];
+
+        distributed_host_buffer.emplace_shard(coord, [&]() {
+            // Create a MemoryPin from the shared_ptr to keep the user's data alive
+            MemoryPin pin(user_buffer);
+            // Create a Span pointing to the user's data
+            tt::stl::Span<std::byte> span(static_cast<std::byte*>(user_buffer.get()), shard_size_bytes);
+            // Create a HostBuffer that borrows the user's memory
+            return HostBuffer(span, std::move(pin));
+        });
     }
+
+    auto& cq = mesh_device->mesh_command_queue(*cq_id);
+    // Convert coords to unordered_set for the API
+    std::unordered_set<distributed::MeshCoordinate> shard_coords(coords.begin(), coords.end());
+    cq.enqueue_read(mesh_buffer, distributed_host_buffer, shard_coords, blocking);
 }
 
 void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq) { cq.finish(); }
