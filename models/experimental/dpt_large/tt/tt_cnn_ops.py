@@ -95,7 +95,25 @@ def _nchw_to_nhwc(x):
 
 def _nhwc_to_nchw(x_nhwc, b: int, h: int, w: int, c: int):
     _require_ttnn()
-    _shape4(x_nhwc)
+    x_nhwc = _to_row_major(x_nhwc)
+    x_nhwc = _ensure_interleaved(x_nhwc)
+    s_b, s1, s2, s3 = _shape4(x_nhwc)
+    if s_b != int(b):
+        raise RuntimeError(
+            f"Unexpected TT NHWC batch dimension: got {tuple(x_nhwc.shape)} expected batch={int(b)}"
+        )
+
+    exp_h, exp_w, exp_c = int(h), int(w), int(c)
+    if (s1, s2, s3) == (exp_h, exp_w, exp_c):
+        pass
+    elif (s1, s2, s3) == (1, exp_h * exp_w, exp_c):
+        x_nhwc = ttnn.reshape(x_nhwc, (int(b), exp_h, exp_w, exp_c))
+    elif (s1, s2, s3) == (exp_h * exp_w, 1, exp_c):
+        x_nhwc = ttnn.reshape(x_nhwc, (int(b), exp_h, exp_w, exp_c))
+    else:
+        raise RuntimeError(
+            f"Unexpected TT NHWC logical shape: got {tuple(x_nhwc.shape)} expected {(int(b), exp_h, exp_w, exp_c)}"
+        )
     return ttnn.permute(x_nhwc, (0, 3, 1, 2))
 
 
