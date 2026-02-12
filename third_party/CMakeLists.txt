@@ -380,3 +380,60 @@ CPMAddPackage(
         capnproto_capture_this.patch
         capnproto_pthread.patch
 )
+
+if(BUILD_MOBILENET_LIBTORCH)
+    ####################################################################################################################
+    # libtorch : https://pytorch.org/
+    ####################################################################################################################
+    CPMAddPackage(
+        NAME libtorch
+        VERSION 2.7.1+cpu
+        URL
+            https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
+        DOWNLOAD_ONLY ON
+        PATCHES
+            ${PROJECT_SOURCE_DIR}/models/experimental/mobilenet/mobilenetv2_cpp/aten.patch
+    )
+
+    if(libtorch_ADDED)
+        find_library(LIBC10_LIB NAMES c10 PATHS "${libtorch_SOURCE_DIR}/lib" NO_DEFAULT_PATH)
+        find_library(TORCH_CPU_LIB NAMES torch_cpu PATHS "${libtorch_SOURCE_DIR}/lib" NO_DEFAULT_PATH)
+
+        add_library(libtorch INTERFACE)
+        add_library(torch::torch ALIAS libtorch)
+        target_include_directories(
+            libtorch
+            SYSTEM
+            INTERFACE
+                ${libtorch_SOURCE_DIR}/include
+                ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
+        )
+
+        if(LIBC10_LIB AND TORCH_CPU_LIB)
+            add_library(torch_c10 UNKNOWN IMPORTED GLOBAL)
+            set_target_properties(
+                torch_c10
+                PROPERTIES
+                    IMPORTED_LOCATION
+                        "${LIBC10_LIB}"
+            )
+
+            add_library(torch_cpu_lib UNKNOWN IMPORTED GLOBAL)
+            set_target_properties(
+                torch_cpu_lib
+                PROPERTIES
+                    IMPORTED_LOCATION
+                        "${TORCH_CPU_LIB}"
+            )
+
+            target_link_libraries(
+                libtorch
+                INTERFACE
+                    torch_c10
+                    torch_cpu_lib
+            )
+        else()
+            message(WARNING "Could not find libc10 or libtorch_cpu in ${libtorch_SOURCE_DIR}/lib")
+        endif()
+    endif()
+endif()
