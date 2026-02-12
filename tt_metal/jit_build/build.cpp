@@ -475,29 +475,25 @@ void JitBuildState::compile_one(
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
-    // log file and dephash file can be renamed after compilation, but the .o file
+    // log file can be renamed after compilation, but the .o file
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
+    // The .d file is kept for the write phase (consumed by build() to update DependencyCache).
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
-    jit_build::utils::FileRenamer dephash_file(obj_path + ".dephash");
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_file.path());
-    fs::remove(temp_d_path);  // .d file not needed after hash is written
-}
-
-bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
-    return MetalContext::instance().rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
-           !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
 size_t JitBuildState::compile(
-    const string& out_dir, const JitBuildSettings* settings, jit_build::utils::FileGroupRenamer& renamer) const {
+    const string& out_dir,
+    const JitBuildSettings* settings,
+    jit_build::utils::FileGroupRenamer& renamer,
+    const jit_build::DependencyCache::TargetMask& stale_mask) const {
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        if (need_compile(out_dir, this->objs_[i])) {
+        if (stale_mask.test(i)) {
             launch_build_step(
                 [this, &out_dir, settings, i, obj_temp_path = renamer.generate_temp_path(i)]() {
                     this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i], obj_temp_path);
@@ -514,11 +510,6 @@ size_t JitBuildState::compile(
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
     return events.size();
-}
-
-bool JitBuildState::need_link(const string& out_dir) const {
-    std::string elf_path = out_dir + this->target_name_ + ".elf";
-    return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
@@ -542,13 +533,8 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     // Append user args
     cmd += fmt::format("-{} ", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_);
 
-    // Elf file has dependencies other than object files:
-    // 1. Linker script
-    // 2. Weakened firmware elf (for kernels)
-    std::vector<std::string> link_deps = {this->linker_script_};
     if (!this->is_fw_) {
         std::string weakened = weakened_firmware_name();
-        link_deps.push_back(weakened);
         if (!this->firmware_is_kernel_object_) {
             cmd += "-Wl,--just-symbols=";
         }
@@ -568,14 +554,6 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
         build_failure(this->target_name_, "link", cmd, log_file.path());
-    }
-    jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
-    std::ofstream hash_file(dephash_file.path());
-    jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
-    hash_file.close();
-    if (hash_file.fail()) {
-        // Don't leave incomplete hash file
-        std::filesystem::remove(dephash_file.path());
     }
 }
 
@@ -636,6 +614,23 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
     fs::create_directories(out_dir);
+
+    const size_t elf_idx = this->objs_.size();
+    const string elf_target = this->target_name_ + ".elf";
+
+    // Phase 1: Load dependency cache and find stale targets
+    string dephash_path = out_dir + "dephash";
+    std::vector<std::string> current_targets(this->objs_.begin(), this->objs_.end());
+    current_targets.push_back(elf_target);
+
+    jit_build::DependencyCache cache(dephash_path, current_targets);
+
+    bool force = MetalContext::instance().rtoptions().get_force_jit_compile();
+    auto stale_mask = force ? jit_build::DependencyCache::TargetMask{}.set()  // all bits set
+                            : cache.find_stale_targets(out_dir);
+
+    // Phase 2: Compile & Link
+    jit_build::ParsedDependencies new_deps;
     {
         // object files will be created at unique names and renamed after linking
         std::vector<std::string> obj_paths;
@@ -645,14 +640,51 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
         }
         jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
 
-        if (compile(out_dir, settings, renamer) > 0 || need_link(out_dir)) {
+        size_t compiled = compile(out_dir, settings, renamer, stale_mask);
+
+        // If any objects were recompiled, the elf must be re-linked
+        if (compiled > 0) {
+            stale_mask.set(elf_idx);
+        }
+
+        if (stale_mask.test(elf_idx)) {
             string link_objs = fmt::format("{} {} ", this->extra_link_objs_, fmt::join(renamer.paths(), " "));
             link(out_dir, settings, link_objs);
             if (this->is_fw_) {
                 weaken(out_dir);
             }
+            // Elf depends on linker script and (for kernels) weakened firmware
+            std::vector<std::string> elf_deps = {this->linker_script_};
+            if (!this->is_fw_) {
+                elf_deps.push_back(weakened_firmware_name());
+            }
+            new_deps[elf_target] = std::move(elf_deps);
         }
+
+        // Collect new_deps from .d files while renamer is alive (temp paths accessible).
+        for (size_t i = 0; i < this->objs_.size(); ++i) {
+            if (stale_mask.test(i)) {
+                // The .d file was generated by compile_one at the temp path.
+                // renamer.paths()[i] is the temp path for recompiled objects.
+                fs::path d_path = renamer.paths()[i];
+                d_path.replace_extension("d");
+                std::ifstream d_file(d_path);
+                if (d_file.is_open()) {
+                    auto parsed = jit_build::parse_dependency_file(d_file);
+                    // The .d file's target key is the temp .o path; just grab the deps.
+                    if (!parsed.empty()) {
+                        new_deps[this->objs_[i]] = std::move(parsed.begin()->second);
+                    }
+                }
+                // Clean up the .d file
+                fs::remove(d_path);
+            }
+        }
+        // renamer destroyed here: .o files renamed to final names
     }
+
+    // Phase 3: Update cache and write dephash (after .o files are in place)
+    cache.write_updated(dephash_path, stale_mask, out_dir, new_deps);
 
     // `extract_zone_src_locations` must be called every time, because it writes to a global file
     // that gets cleared in each run.

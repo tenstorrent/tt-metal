@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/hal_types.hpp>
+#include "jit_build/depend.hpp"
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -130,18 +131,17 @@ protected:
     // Used when JitBuildSettings is not provided
     std::string default_linker_opt_level_;
 
-    bool need_compile(const std::string& out_dir, const std::string& obj) const;
     size_t compile(
         const std::string& out_dir,
         const JitBuildSettings* settings,
-        jit_build::utils::FileGroupRenamer& renamer) const;
+        jit_build::utils::FileGroupRenamer& renamer,
+        const jit_build::DependencyCache::TargetMask& stale_mask) const;
     void compile_one(
         const std::string& out_dir,
         const JitBuildSettings* settings,
         const std::string& src,
         const std::string& obj,
         const std::string& obj_temp_path) const;
-    bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
     std::string weakened_firmware_name() const;

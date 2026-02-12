@@ -10,6 +10,8 @@
 #include <fstream>
 #include <istream>
 #include <iterator>
+#include <unordered_map>
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::jit_build {
@@ -69,109 +71,250 @@ uint64_t hash_file_content(std::istream& file) {
 
 }  // namespace
 
-void write_dependency_hashes(
-    const ParsedDependencies& dependencies,
-    const std::string& out_dir,
-    const std::string& obj,
-    std::ostream& hash_file) {
-    auto iter = dependencies.find(obj);
-    if (iter == dependencies.end()) {
-        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, no dependencies found for {}.", obj);
-        hash_file.setstate(std::ios::badbit);
+// ---------------------------------------------------------------------------
+// DependencyCache
+// ---------------------------------------------------------------------------
+
+DependencyCache::DependencyCache(const std::string& dephash_path, const std::vector<std::string>& current_targets) :
+    targets_(current_targets) {
+    TT_FATAL(
+        current_targets.size() <= MAX_TARGETS,
+        "Too many targets ({}) for DependencyCache (max {})",
+        current_targets.size(),
+        MAX_TARGETS);
+
+    // Build name -> index map for current targets (stored as member for reuse in update())
+    for (size_t i = 0; i < targets_.size(); ++i) {
+        target_index_[targets_[i]] = i;
+    }
+
+    std::ifstream in(dephash_path);
+    if (!in.is_open()) {
+        log_debug(tt::LogBuildKernels, "Dependency cache file {} does not exist.", dephash_path);
         return;
     }
-    for (const auto& dep : iter->second) {
-        // Need to handle two cases:
-        // 1. file is an absolute path
-        // 2. file is a path relative to out_dir
+
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+
+        // Parse: dep_path \t hash \t target1 \t target2 ...
+        // Use tab-delimited parsing (NOT >>), because paths may contain spaces.
+        size_t pos = 0;
+
+        // dep_path
+        size_t tab = line.find('\t', pos);
+        if (tab == std::string::npos) {
+            log_warning(tt::LogBuildKernels, "Malformed dephash file {}, discarding cache.", dephash_path);
+            entries_.clear();
+            return;
+        }
+        std::string dep_path = line.substr(pos, tab - pos);
+        pos = tab + 1;
+
+        // hash
+        tab = line.find('\t', pos);
+        if (tab == std::string::npos) {
+            log_warning(tt::LogBuildKernels, "Malformed dephash file {}, discarding cache.", dephash_path);
+            entries_.clear();
+            return;
+        }
+        uint64_t hash = 0;
+        try {
+            hash = std::stoull(line.substr(pos, tab - pos));
+        } catch (...) {
+            log_warning(tt::LogBuildKernels, "Malformed dephash file {}, discarding cache.", dephash_path);
+            entries_.clear();
+            return;
+        }
+        pos = tab + 1;
+
+        // targets
+        TargetMask mask;
+        while (pos < line.size()) {
+            tab = line.find('\t', pos);
+            std::string tgt;
+            if (tab == std::string::npos) {
+                tgt = line.substr(pos);
+                pos = line.size();
+            } else {
+                tgt = line.substr(pos, tab - pos);
+                pos = tab + 1;
+            }
+            if (!tgt.empty()) {
+                auto it = target_index_.find(tgt);
+                if (it != target_index_.end()) {
+                    mask.set(it->second);
+                }
+                // Targets not in current_targets are silently dropped
+            }
+        }
+
+        if (mask.any()) {
+            entries_.push_back({std::move(dep_path), hash, mask});
+        }
+    }
+}
+
+DependencyCache::TargetMask DependencyCache::find_stale_targets(const std::string& out_dir) const {
+    // A target is stale if ANY of its deps changed/disappeared, or it has no deps, or its
+    // output file doesn't exist.  Start with nothing stale, then set bits for bad deps.
+    TargetMask stale;
+
+    if (entries_.empty()) {
+        // No cached entries means everything is stale
+        return TargetMask{}.set();
+    }
+
+    // Track which targets have at least one dep entry
+    TargetMask has_deps;
+
+    for (const auto& entry : entries_) {
+        has_deps |= entry.target_mask;
+
+        // Hash the dependency file
+        std::ifstream dep_file(entry.dep_path, std::ios::binary);
+        if (!dep_file.is_open()) {
+            // Dependency file deleted -- all its targets are stale
+            log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", entry.dep_path);
+            stale |= entry.target_mask;
+            continue;
+        }
+
+        uint64_t current_hash = hash_file_content(dep_file);
+        if (current_hash != entry.hash) {
+            log_debug(
+                tt::LogBuildKernels,
+                "Need to JIT build because file {} has changed. Old hash: {} new hash: {}",
+                entry.dep_path,
+                entry.hash,
+                current_hash);
+            stale |= entry.target_mask;
+            continue;
+        }
+
+        // Hash matches -- nothing to do; target stays non-stale for this dep.
+    }
+
+    // Targets with no deps in cache are stale
+    stale |= ~has_deps;
+
+    // Also check that the output files actually exist
+    for (size_t i = 0; i < targets_.size(); ++i) {
+        if (!stale.test(i) && !std::filesystem::exists(out_dir + targets_[i])) {
+            log_debug(
+                tt::LogBuildKernels, "Need to JIT build because output {} does not exist.", out_dir + targets_[i]);
+            stale.set(i);
+        }
+    }
+
+    return stale;
+}
+
+void DependencyCache::write_updated(
+    const std::string& dephash_path,
+    const TargetMask& recompiled_mask,
+    const std::string& out_dir,
+    const ParsedDependencies& new_deps) {
+    // Step 1: Clear recompiled bits from all entries
+    for (auto& entry : entries_) {
+        entry.target_mask &= ~recompiled_mask;
+    }
+
+    // Step 2: Drop entries where target_mask is empty
+    entries_.erase(
+        std::remove_if(entries_.begin(), entries_.end(), [](const DepEntry& e) { return e.target_mask.none(); }),
+        entries_.end());
+
+    // Step 3: Build temporary map from dep_path -> index for find-or-create
+    std::unordered_map<std::string, size_t> dep_index;
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        dep_index[entries_[i].dep_path] = i;
+    }
+
+    // Helper: resolve path to absolute, hash the file.
+    // Returns false if the file cannot be read.
+    auto resolve_and_hash = [&](const std::string& dep, std::string& abs_out, uint64_t& hash_out) -> bool {
         std::filesystem::path dep_path(dep);
         if (dep_path.is_relative()) {
             dep_path = out_dir / dep_path;
         }
-        std::ifstream dep_file(dep_path, std::ios::binary);
-        auto hash = hash_file_content(dep_file);
-        if (dep_file.fail() && !dep_file.eof()) {
-            log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep);
-            hash_file.setstate(std::ios::badbit);
-            return;
+        abs_out = dep_path.string();
+        std::ifstream f(abs_out, std::ios::binary);
+        if (!f.is_open()) {
+            log_warning(tt::LogBuildKernels, "Cannot hash dependency file {}.", abs_out);
+            return false;
         }
-        // Always write absolute path to the hash file, so when reading back we don't need to
-        // worry about relative paths
-        hash_file << dep_path << '\t' << hash << '\n';
-    }
-}
+        hash_out = hash_file_content(f);
+        return true;
+    };
 
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path) {
-    std::filesystem::path obj_path = obj;
-    if (obj_path.is_relative()) {
-        obj_path = out_dir / obj_path;
+    // Step 4: For each target in new_deps, add its dependency entries
+    for (const auto& [target_name, dep_paths] : new_deps) {
+        auto tgt_it = target_index_.find(target_name);
+        if (tgt_it == target_index_.end()) {
+            log_warning(
+                tt::LogBuildKernels, "write_updated(): target '{}' not in current target list, skipping.", target_name);
+            continue;
+        }
+        size_t tgt_idx = tgt_it->second;
+
+        for (const auto& dep : dep_paths) {
+            std::string abs_dep;
+            uint64_t hash = 0;
+            if (!resolve_and_hash(dep, abs_dep, hash)) {
+                // Cannot hash a dependency -- delete stale dephash so next build rebuilds everything
+                std::filesystem::remove(dephash_path);
+                return;
+            }
+
+            auto it = dep_index.find(abs_dep);
+            if (it != dep_index.end()) {
+                // Existing entry -- set the target bit and refresh hash
+                auto& entry = entries_[it->second];
+                entry.target_mask.set(tgt_idx);
+                entry.hash = hash;
+            } else {
+                // New entry
+                TargetMask mask;
+                mask.set(tgt_idx);
+                dep_index[abs_dep] = entries_.size();
+                entries_.push_back({std::move(abs_dep), hash, mask});
+            }
+        }
     }
-    std::filesystem::path dep_path = obj_path;
-    dep_path.replace_extension(".d");
-    std::ofstream hash_file(hash_path);
-    if (!hash_file.is_open()) {
-        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path);
+
+    // Step 5: Write to a temporary file, then atomically rename
+    jit_build::utils::FileRenamer renamer(dephash_path);
+    std::ofstream out(renamer.path());
+    if (!out.is_open()) {
+        log_warning(tt::LogBuildKernels, "Cannot write dependency cache to {}.", renamer.path());
+        std::filesystem::remove(dephash_path);
         return;
     }
-    std::ifstream dep_file(dep_path);
-    if (!dep_file.is_open()) {
-        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for reading.", dep_path.string());
-        hash_file.setstate(std::ios::badbit);
-    } else {
-        auto dependencies = parse_dependency_file(dep_file);
-        write_dependency_hashes(dependencies, out_dir, obj, hash_file);
-    }
-    hash_file.close();
-    if (hash_file.fail()) {
-        // Don't leave incomplete hash file
-        std::filesystem::remove(hash_path);
-    }
-}
 
-bool dependencies_up_to_date(std::istream& hash_file) {
-    size_t count = 0;
-    std::filesystem::path dep;
-    while (hash_file >> dep) {
-        uint64_t recorded_hash{};
-        hash_file >> recorded_hash;
-        if (hash_file.fail()) {
-            log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
-            return false;
+    for (const auto& entry : entries_) {
+        if (entry.target_mask.none()) {
+            continue;
         }
-        std::ifstream dep_file(dep, std::ios::binary);
-        if (!dep_file.is_open()) {
-            // It is a valid case that a dependency file no longer exists, for example a header file is no longer used.
-            log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep.string());
-            return false;
+        out << entry.dep_path << '\t' << entry.hash;
+        for (size_t i = 0; i < targets_.size(); ++i) {
+            if (entry.target_mask.test(i)) {
+                out << '\t' << targets_[i];
+            }
         }
-        auto dep_hash = hash_file_content(dep_file);
-        if (dep_hash != recorded_hash) {
-            log_debug(
-                tt::LogBuildKernels,
-                "Need to JIT build because file {} has changed.  Old hash: {} new hash: {}",
-                dep.string(),
-                recorded_hash,
-                dep_hash);
-            return false;
-        }
-        ++count;
+        out << '\n';
     }
-    if (!hash_file.eof()) {
-        log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
-        return false;
+    out.close();
+    if (out.fail()) {
+        // I/O error -- delete the partial file so the renamer has nothing to rename
+        log_warning(tt::LogBuildKernels, "I/O error writing dependency cache, discarding.");
+        std::filesystem::remove(renamer.path());
+        std::filesystem::remove(dephash_path);
     }
-    // "No dependencies" means "always rebuild".  This shouldn't happen with a properly generated dependency file.
-    return count > 0;
-}
-
-bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj) {
-    std::filesystem::path hash_path = std::filesystem::path(out_dir) / (obj + ".dephash");
-    std::ifstream hash_file(hash_path);
-    if (!hash_file.is_open()) {
-        log_debug(tt::LogBuildKernels, "Dependency hash file {} does not exist.", hash_path.string());
-        return false;
-    }
-    return dependencies_up_to_date(hash_file);
+    // renamer destructor atomically renames temp -> dephash_path (no-op if temp was deleted)
 }
 
 }  // namespace tt::jit_build
