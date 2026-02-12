@@ -380,7 +380,7 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
-    const Tensor& v = attrs.use_mla ? tensors.k : tensors.v.value_or(tensors.k);
+    const Tensor& v = tensors.v.value_or(tensors.k);
 
     const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
@@ -398,7 +398,8 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
         v,
         tensors.attn_mask,
         page_table_for_hash,
-        tensors.attention_sink);
+        tensors.attention_sink,
+        attrs.use_mla);
     return hash;
 }
 

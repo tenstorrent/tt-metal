@@ -200,6 +200,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
     const std::optional<ttnn::Tensor>& attn_mask,
     bool is_causal,
     std::optional<float> scale,
@@ -215,7 +216,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
-        std::nullopt,  // V is implied by K in MLA mode
+        input_tensor_v,  // V is implied by K in MLA mode
         attn_mask,
         std::nullopt,  // page_table
         std::nullopt,  // attention_sink

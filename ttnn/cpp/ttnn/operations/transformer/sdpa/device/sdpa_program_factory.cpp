@@ -57,7 +57,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
-    const auto& input_tensor_v = operation_attributes.use_mla ? tensor_args.k : tensor_args.v.value_or(tensor_args.k);
+    const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
     const auto& output_tensor = tensor_return_value;
     const auto& attn_mask = tensor_args.attn_mask;
     const auto& page_table = tensor_args.page_table;
@@ -71,6 +71,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     auto program_config = operation_attributes.program_config;
     const bool use_mla = operation_attributes.use_mla;
+    const bool mla_kv_overlap = use_mla && !tensor_args.v.has_value();
     const uint32_t head_dim_v = operation_attributes.head_dim_v.value_or(input_tensor_q.logical_shape()[3]);
     const auto& sliding_window_size = operation_attributes.sliding_window_size;
 
@@ -88,8 +89,17 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.logical_shape();
+    const auto& v_shape = input_tensor_v.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
     const uint32_t NKH = k_shape[1];
+    const uint32_t NVH = v_shape[1];
+
+    // In flash mla prefill, we have to support the case where NKH != NVH
+    // We are calling op with the following shapes:
+    // q - [B, NHQ, Sq, DH_qk]
+    // k - [B, 1, Sk, DH_qk]
+    // v - [B, NVH, Sk, DH_v]
+    // k head is in latent space, and is reused accross all q heads
 
     // Paged cache parameters when in chunked mode
     const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
@@ -145,8 +155,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NQH: {}", NQH);
-
-    log_debug(tt::LogOp, "Sq: {}", Sq);
+    log_debug(tt::LogOp, "NVH: {}", NVH);
     log_debug(tt::LogOp, "Sk: {}", Sk);
     log_debug(tt::LogOp, "padded_Sq: {}", padded_Sq);
     log_debug(tt::LogOp, "padded_Sk: {}", padded_Sk);
@@ -214,7 +223,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     auto* q_buffer = input_tensor_q.buffer();
     auto* k_buffer = input_tensor_k.buffer();
-    auto* v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
+    auto* v_buffer = input_tensor_v.buffer();
     auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
     auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
 
@@ -356,6 +365,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       B,
                                                       NQH,
                                                       NKH,
+                                                      NVH,
                                                       Sqt,
                                                       Skt,
                                                       valid_Sqt,
@@ -375,7 +385,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       (uint32_t)is_chunked,
                                                       block_size_t,
                                                       page_table_stick_size,
-                                                      (std::uint32_t)use_attention_sink};
+                                                      (std::uint32_t)use_attention_sink,
+                                                      (std::uint32_t)use_mla,
+                                                      (std::uint32_t)mla_kv_overlap};
 
     // Placeholder semaphore IDs for KV chain forwarding (will be filled later if enabled)
     // Add these BEFORE TensorAccessorArgs to keep indexing consistent with kernel expectations
@@ -522,12 +534,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    tt::DataFormat v_df;
-    if (use_mla) {
-        v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    } else {
-        v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    }
+    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat mask_df = attn_mask.has_value()
                                  ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
                                  : tt::DataFormat::Bfp4_b;
@@ -1011,13 +1018,12 @@ void SDPAProgramFactory::override_runtime_arguments(
 
     const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
     const bool is_chunked = operation_attributes.chunk_start_idx.has_value() || flexible_chunked;
-    const bool use_mla = operation_attributes.use_mla;
     std::size_t q_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
 
     auto *q_buffer = tensor_args.q.buffer();
     auto *k_buffer = tensor_args.k.buffer();
-    auto *v_buffer = use_mla ? tensor_args.k.buffer() : tensor_args.v.value_or(tensor_args.k).buffer();
+    auto* v_buffer = tensor_args.v.value_or(tensor_args.k).buffer();
     auto *mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
     auto *attention_sink_buffer =
         tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;
