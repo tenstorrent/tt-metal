@@ -41,11 +41,26 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     uint32_t input_tile_size = tt::tile_size(act_df);
     uint32_t output_tile_size = tt::tile_size(out_df);
 
-    // TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
+    // For TILE layout, input_tile_size != output_tile_size is supported (e.g., BFLOAT8_B <-> BFLOAT16).
+    // The number of tiles stays the same; only the bytes per tile changes.
+    if (input_tile_size != output_tile_size) {
+        TT_FATAL(
+            (input.layout() == Layout::TILE && output.layout() == Layout::TILE),
+            "TypecastShardedProgramFactory requires TILE layout when input and output tile sizes differ "
+            "(input_tile_size={}, output_tile_size={}).",
+            input_tile_size,
+            output_tile_size);
+    }
 
     uint32_t num_tile_per_core = 0;
 
-    if (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B) {
+    // Use dimension-based tile count if either input or output is block format
+    bool is_block_format =
+        (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B ||
+         output.dtype() == DataType::BFLOAT8_B || output.dtype() == DataType::BFLOAT4_B);
+
+    if (is_block_format) {
+        // For block formats, calculate tile count based on element dimensions
         uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
         uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
