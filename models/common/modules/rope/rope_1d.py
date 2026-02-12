@@ -31,7 +31,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.tensor_utils import TILE_SIZE, get_rot_transformation_mat
 from models.common.utility_functions import nearest_32
-from ttnn import replicate_tensor_to_mesh_mapper
 
 # =============================================================================
 # Config dataclass
@@ -495,7 +494,7 @@ def prepare_rot_idxs(
             position_idxs,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=replicate_tensor_to_mesh_mapper(device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(device),
         )
     else:
         rot_idxs = ttnn.as_tensor(
@@ -504,7 +503,7 @@ def prepare_rot_idxs(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate_tensor_to_mesh_mapper(device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(device),
         )
 
     return rot_idxs
