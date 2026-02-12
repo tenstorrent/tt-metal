@@ -72,11 +72,12 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_iters)]
 
     ##### Input setup #####
-    # Input: replicated on all devices (same activations on every device)
-    # Weight: unique per device (sharded along dim 0 so each device gets different weights)
-    # Each device computes a different MM output, making the reduce-scatter non-trivial.
+    # Input (activations): replicated on all devices (same activations on every device)
+    # Weight: unique per device. Shape [num_devices, 1, K, N] where dim 0 is the device-shard
+    #   dimension (not batch) — ShardTensor2dMesh splits it so each device gets [1, 1, K, N].
+    #   This makes each device compute a different MM output, giving the reduce-scatter real work.
     input_shape = [1, 1, M, K]
-    weight_shape_global = [num_devices, 1, K, N]  # dim 0 sharded across devices
+    weight_shape_global = [num_devices, 1, K, N]  # dim 0 is device-shard dimension
 
     logger.info(f"Input shape per device: {input_shape}")
     logger.info(f"Weight shape per device: [1, 1, {K}, {N}]")
@@ -116,7 +117,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             memory_config=mem_config_input,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        # Weight: sharded along dim 0 so each device gets unique weights
+        # Weight: dim 0 sharded across devices so each device gets unique [1, 1, K, N] weights
         weight_tensor_mesh = ttnn.from_torch(
             torch_weight_global,
             device=mesh_device,
@@ -278,15 +279,28 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "M, K, N, dim, num_workers_per_link, layout, input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, chunk_width_in_mm_blocks",
     [
-        # RS geometry matches experimental_strided_toy_3_correctness_check_3:
-        #   mm_cores_y=2, mm_block_ht=2, mm_block_wt=2, mm_N_block_wt=2, cwimb=1
-        # MM grid = CoreCoord(8, 2) satisfies minimal_matmul's >=2x2 requirement.
-        # MM output = [1, 1, 128, 512], RS scatter dim=3, RS output = [1, 1, 128, 64] per device.
-        # slice_Wt = 512/32/8 = 2, divisible by mm_N_block_wt=2.
+        # RS geometry: mm_cores_y=2, mm_block_ht=2, mm_block_wt=2, mm_N_block_wt=2, cwimb=1
+        # Based on experimental_strided_toy_3_correctness_check_3
+        # MM output = [1, 1, 128, 512], slice_Wt=2
         (128, 256, 512, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 64, 64, 1, 1, ttnn.CoreCoord(8, 2), 1),
+        # RS geometry: mm_cores_y=2, mm_block_ht=2, mm_block_wt=2, mm_N_block_wt=4, cwimb=1
+        # Based on experimental_strided_toy_2 adapted to mm_cores_y=2
+        # MM output = [1, 1, 128, 1024], slice_Wt=4
+        (128, 256, 1024, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 64, 64, 1, 1, ttnn.CoreCoord(8, 2), 1),
+        # RS geometry: mm_cores_y=2, mm_block_ht=4, mm_block_wt=4, mm_N_block_wt=8, cwimb=2
+        # Based on experimental_strided_toy_4_correctness_check_2
+        # MM output = [1, 1, 512, 2048], slice_Wt=8
+        (512, 512, 2048, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 128, 128, 128, 1, 1, ttnn.CoreCoord(8, 2), 2),
+        # RS geometry: mm_cores_y=2, mm_block_ht=2, mm_block_wt=2, mm_N_block_wt=10, cwimb=4
+        # Based on experimental_strided_toy_4_correctness_check_3
+        # MM output = [1, 1, 512, 2560], slice_Wt=10
+        (512, 256, 2560, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 64, 64, 1, 1, ttnn.CoreCoord(8, 2), 4),
     ],
     ids=[
-        "match_strided_toy3_check3",
+        "small_Nwt2_cwimb1",
+        "medium_Nwt4_cwimb1",
+        "large_Nwt8_cwimb2",
+        "large_Nwt10_cwimb4",
     ],
 )
 @pytest.mark.parametrize(
