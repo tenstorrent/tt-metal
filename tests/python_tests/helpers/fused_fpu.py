@@ -124,7 +124,7 @@ class MatmulFpu(Fpu):
     ) -> str:
         stage = operation.stage_id
         batch_size = operation.batch_size
-        math_fidelity = operation.math_fidelity.value
+        math_fidelity = operation.math_fidelity.cpp_enum_value
         ct_dim = operation.ct_dim
         transpose = "true" if compute_unit.unpack_transpose_faces.value else "false"
 
@@ -150,7 +150,7 @@ class MatmulFpu(Fpu):
         batch_size = operation.batch_size
         ct_dim = operation.ct_dim
         kt_dim = operation.kt_dim
-        math_fidelity = operation.math_fidelity.value
+        math_fidelity = operation.math_fidelity.cpp_enum_value
 
         if batch_size == ct_dim:
             rt_dim = 1
@@ -224,7 +224,7 @@ class EltwiseFpu(Fpu):
         compute_unit: "ComputeNode",
     ) -> str:
         stage = operation.stage_id
-        math_fidelity = operation.math_fidelity.value
+        math_fidelity = operation.math_fidelity.cpp_enum_value
         op = self.operation.cpp_enum_value
         num_faces = operation.num_faces
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
@@ -243,7 +243,7 @@ class EltwiseFpu(Fpu):
         tile_idx: int,
     ) -> str:
         stage = operation.stage_id
-        math_fidelity = operation.math_fidelity.value
+        math_fidelity = operation.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.value
         op = self.operation.cpp_enum_value
         num_faces = operation.num_faces
@@ -357,7 +357,7 @@ class ReduceFpu(Fpu):
         compute_unit: "ComputeNode",
     ) -> str:
         stage = operation.stage_id
-        math_fidelity = operation.math_fidelity.value
+        math_fidelity = operation.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.value
         pool_type_cpp = f"PoolType::{self.pool.value}"
         reduce_dim_cpp = self.reduce_dim()
@@ -374,7 +374,7 @@ class ReduceFpu(Fpu):
         compute_unit: "ComputeNode",
         tile_idx: int,
     ) -> str:
-        math_fidelity = operation.math_fidelity.value
+        math_fidelity = operation.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.value
         num_faces = operation.num_faces
         pool_type_cpp = f"PoolType::{self.pool.value}"
