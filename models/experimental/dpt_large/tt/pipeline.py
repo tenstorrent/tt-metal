@@ -204,7 +204,10 @@ class DPTTTPipeline:
                     depth_t = torch.as_tensor(depth)
                 else:
                     t0 = time.perf_counter()
-                    feats = self.backbone(pv.to(self.device), return_tt=True)
+                    # In perf-neck mode, request TT token maps/features so the neck can stay on device.
+                    # In non-perf mode, keep backbone outputs on host to preserve the reference behavior.
+                    return_tt_backbone = bool(getattr(self.config, "tt_perf_neck", False))
+                    feats = self.backbone(pv.to(self.device), return_tt=return_tt_backbone)
                     backbone_ms += (time.perf_counter() - t0) * 1000.0
 
                     t1 = time.perf_counter()

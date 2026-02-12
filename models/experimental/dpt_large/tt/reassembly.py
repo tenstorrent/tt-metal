@@ -15,7 +15,6 @@ from .tt_cnn_ops import (
     TTConv2dCached,
     TTConvTranspose2dCached,
     ensure_tt_device_tensor,
-    tt_canonicalize_nchw_spatial,
 )
 
 
@@ -129,12 +128,6 @@ class DPTReassembleLayerTT(nn.Module):
                 expected_input_hw=expected_input_hw,
                 expected_output_hw=expected_output_hw,
             )
-            if expected_output_hw is not None:
-                x = tt_canonicalize_nchw_spatial(
-                    x,
-                    expected_hw=expected_output_hw,
-                    op_name="dpt_reassembly.tt_resize",
-                )
             return x
 
         x = self.projection(x)
@@ -224,6 +217,124 @@ class DPTReassembly(nn.Module):
 
         # TT conv caches for the 3x3 convs.
         self._tt_convs = [None for _ in range(len(self.convs))]
+        # Lazy per-stage readout caches for TT device readout ("project" path).
+        self._tt_readout_cache: List[Optional[dict]] = [None for _ in range(len(self.config.neck_hidden_sizes))]
+
+    def _tt_readout_to_nchw(
+        self,
+        *,
+        stage_idx: int,
+        tokens,
+        fmap_hw: tuple[int, int],
+        ttnn,
+    ):
+        """
+        Attempt to execute DPT readout on device.
+
+        Returns:
+            TT tensor [B, C, H, W] on success, or raises to trigger host fallback.
+        """
+        if self.tt_device is None:
+            raise RuntimeError("TT device is not available for TT readout")
+        if not isinstance(tokens, ttnn.Tensor):
+            raise TypeError("Expected TT tokens")
+
+        H, W = int(fmap_hw[0]), int(fmap_hw[1])
+        shape = tuple(int(v) for v in tuple(getattr(tokens, "shape", ())))
+        if len(shape) == 4:
+            B, one, Np1, C = shape
+            if one != 1:
+                raise RuntimeError(f"Unexpected TT token shape: {shape}")
+            tokens_tt4 = tokens
+        elif len(shape) == 3:
+            B, Np1, C = shape
+            tokens_tt4 = ttnn.reshape(tokens, (int(B), 1, int(Np1), int(C)))
+        else:
+            raise RuntimeError(f"Unexpected TT token rank: {shape}")
+
+        Np1 = int(Np1)
+        C = int(C)
+        if Np1 <= 1:
+            raise RuntimeError(f"Unexpected token sequence length: {Np1}")
+        if int(H) * int(W) != (Np1 - 1):
+            raise RuntimeError(f"Token length mismatch: tokens={Np1 - 1} vs fmap={int(H) * int(W)}")
+
+        # CLS at position 0, patch tokens at 1..Np1-1
+        cls_tt4 = ttnn.slice(tokens_tt4, (0, 0, 0, 0), (int(B), 1, 1, int(C)))  # [B,1,1,C]
+        patch_tt4 = ttnn.slice(tokens_tt4, (0, 0, 1, 0), (int(B), 1, int(Np1), int(C)))  # [B,1,N,C]
+
+        if self.readout_type == "add":
+            # Broadcast cls across the sequence dimension.
+            try:
+                cls_rep = ttnn.expand(cls_tt4, [-1, -1, int(Np1 - 1), -1])
+            except Exception:
+                cls_rep = ttnn.repeat(cls_tt4, [1, 1, int(Np1 - 1), 1])
+            out_tt4 = ttnn.add(patch_tt4, cls_rep)
+        elif self.readout_type == "project":
+            if self.readout_projects is None:
+                raise RuntimeError("Readout projects are not initialized")
+            cache = self._tt_readout_cache[stage_idx]
+            if cache is None:
+                proj = self.readout_projects[stage_idx]
+                linear = proj[0]
+                w_full = linear.weight.detach()
+                b_full = linear.bias.detach()
+                if w_full.shape[1] != 2 * int(C) or w_full.shape[0] != int(C):
+                    raise RuntimeError(f"Unexpected readout weight shape: {tuple(w_full.shape)}")
+                w_patch = w_full[:, : int(C)]
+                w_cls = w_full[:, int(C) :]
+                cache = {
+                    "w_patch_tt": ttnn.from_torch(
+                        torch.transpose(w_patch, -1, -2).contiguous(),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.tt_device,
+                    ),
+                    "w_cls_tt": ttnn.from_torch(
+                        torch.transpose(w_cls, -1, -2).contiguous(),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.tt_device,
+                    ),
+                    "b_tt": ttnn.from_torch(
+                        b_full.contiguous(),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=self.tt_device,
+                    ),
+                    "act": "gelu" if self.hidden_act == "gelu" else "relu",
+                }
+                self._tt_readout_cache[stage_idx] = cache
+
+            memcfg = ttnn.DRAM_MEMORY_CONFIG
+            patch_proj = ttnn.linear(
+                patch_tt4,
+                cache["w_patch_tt"],
+                bias=cache["b_tt"],
+                dtype=ttnn.bfloat16,
+                memory_config=memcfg,
+            )
+            cls_proj = ttnn.linear(
+                cls_tt4,
+                cache["w_cls_tt"],
+                bias=None,
+                dtype=ttnn.bfloat16,
+                memory_config=memcfg,
+            )
+            try:
+                cls_rep = ttnn.expand(cls_proj, [-1, -1, int(Np1 - 1), -1])
+            except Exception:
+                cls_rep = ttnn.repeat(cls_proj, [1, 1, int(Np1 - 1), 1])
+            out_tt4 = ttnn.add(patch_proj, cls_rep)
+            if cache["act"] == "gelu":
+                out_tt4 = ttnn.gelu(out_tt4)
+            else:
+                out_tt4 = ttnn.relu(out_tt4)
+        else:
+            raise ValueError(f"Unsupported readout_type: {self.readout_type}")
+
+        nhwc = ttnn.reshape(out_tt4, (int(B), int(H), int(W), int(C)))
+        return ttnn.permute(nhwc, (0, 3, 1, 2))
 
     # ------------------------------------------------------------------ weight loading
     def load_from_hf_state_dict(self, state_dict: Dict[str, torch.Tensor]):
@@ -278,6 +389,10 @@ class DPTReassembly(nn.Module):
             `fusion_hidden_size` channels.
         """
         outputs: List[torch.Tensor] = []
+        try:
+            import ttnn  # type: ignore
+        except Exception:
+            ttnn = None
 
         # Map selected backbone outputs to stage indices 0..len(neck_hidden_sizes)-1.
         max_idx = max(0, self.config.num_hidden_layers - 1)
@@ -292,7 +407,38 @@ class DPTReassembly(nn.Module):
             if hasattr(feats, "tokens") and feats.tokens is not None:
                 tokens = feats.tokens.get(layer_idx + 1, None)
 
-            if tokens is not None and self.readout_projects is not None:
+            # Prefer a device-side readout when token maps are already on device.
+            if (
+                ttnn is not None
+                and tokens is not None
+                and isinstance(tokens, ttnn.Tensor)
+                and self.tt_device is not None
+                and bool(getattr(self.config, "tt_perf_neck", False))
+            ):
+                try:
+                    hidden_state = self._tt_readout_to_nchw(
+                        stage_idx=stage_idx,
+                        tokens=tokens,
+                        fmap_hw=(int(H), int(W)),
+                        ttnn=ttnn,
+                    )
+                except Exception:
+                    hidden_state = None
+            else:
+                hidden_state = None
+
+            if hidden_state is None and tokens is not None and self.readout_projects is not None:
+                # Host fallback readout (reference behavior). If token maps are on
+                # device but TT readout failed, convert back to torch here to
+                # preserve correctness.
+                if ttnn is not None and isinstance(tokens, ttnn.Tensor):
+                    tokens_host = tokens.cpu()
+                    if hasattr(tokens_host, "layout") and tokens_host.layout == ttnn.TILE_LAYOUT:
+                        tokens_host = tokens_host.to(ttnn.ROW_MAJOR_LAYOUT)
+                    tokens_host = tokens_host.to_torch()
+                    if tokens_host.dim() == 4 and tokens_host.shape[1] == 1:
+                        tokens_host = tokens_host[:, 0, :, :]
+                    tokens = tokens_host
                 # tokens: [B, N+1, C] with CLS at position 0
                 cls_token = tokens[:, 0]  # [B, C]
                 patch_tokens = tokens[:, 1:]  # [B, N, C]
@@ -303,54 +449,43 @@ class DPTReassembly(nn.Module):
                     # should not happen when backbone and neck are aligned.
                     size = int(torch.sqrt(torch.tensor(N, dtype=torch.float32)))
                     H = W = size
-                hidden_state = patch_tokens.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
-
                 if self.readout_type == "project":
-                    feature_shape = hidden_state.shape  # [B, C, H, W]
-                    # Flatten spatial dims: [B, H*W, C]
-                    hidden_flat = hidden_state.flatten(2).permute(0, 2, 1)
+                    hidden_flat = patch_tokens  # [B, H*W, C]
                     readout = cls_token.unsqueeze(1).expand_as(hidden_flat)
                     # Concatenate token and readout and project.
                     proj_in = torch.cat((hidden_flat, readout), dim=-1)  # [B, H*W, 2C]
                     proj = self.readout_projects[stage_idx]
                     # Ensure dtype matches the projection weights (typically float32).
                     proj_in = proj_in.to(dtype=proj[0].weight.dtype)
-                    hidden_proj = proj(proj_in)  # [B, H*W, C]
-                    hidden_state = hidden_proj.permute(0, 2, 1).reshape(feature_shape)
+                    hidden_flat = proj(proj_in)  # [B, H*W, C]
                 elif self.readout_type == "add":
-                    feature_shape = hidden_state.shape
-                    hidden_flat = hidden_state.flatten(2)
-                    hidden_flat = hidden_flat + cls_token.unsqueeze(-1)
-                    hidden_state = hidden_flat.reshape(feature_shape)
+                    hidden_flat = patch_tokens + cls_token.unsqueeze(1)
                 else:
                     raise ValueError(f"Unsupported readout_type: {self.readout_type}")
-            else:
+                hidden_state = hidden_flat.permute(0, 2, 1).reshape(B, C, H, W).contiguous()
+            elif hidden_state is None:
                 # Fallback: use the already-reshaped fmap when tokens/CLS are
                 # not available (e.g., in pure shape tests).
                 hidden_state = fmap
 
             # Optional: push into TT device path post-readout to keep conv/resize on device.
             # For TT runs, all reassembly stages stay on device.
-            try:
-                import ttnn  # type: ignore
-
-                if (
-                    self.tt_device is not None
-                    and (
-                        getattr(self.config, "tt_device_reassembly", False)
-                        or getattr(self.config, "tt_perf_neck", False)
-                    )
-                    and self.reassemble_layers[stage_idx].prefers_device_path()
-                    and not isinstance(hidden_state, ttnn.Tensor)
-                ):
-                    hidden_state = ttnn.from_torch(
-                        hidden_state,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        device=self.tt_device,
-                    )
-            except Exception:
-                pass
+            if (
+                ttnn is not None
+                and self.tt_device is not None
+                and (
+                    getattr(self.config, "tt_device_reassembly", False)
+                    or getattr(self.config, "tt_perf_neck", False)
+                )
+                and self.reassemble_layers[stage_idx].prefers_device_path()
+                and not isinstance(hidden_state, ttnn.Tensor)
+            ):
+                hidden_state = ttnn.from_torch(
+                    hidden_state,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.tt_device,
+                )
 
             # Reassemble to per-scale channels and resolution.
             x = self.reassemble_layers[stage_idx](
@@ -371,13 +506,6 @@ class DPTReassembly(nn.Module):
                 and isinstance(x, ttnn.Tensor)
                 and self.tt_device is not None
             ):
-                expected_out_hw = self.reassemble_layers[stage_idx].expected_output_hw((int(H), int(W)))
-                if expected_out_hw is not None:
-                    x = tt_canonicalize_nchw_spatial(
-                        x,
-                        expected_hw=expected_out_hw,
-                        op_name=f"dpt_reassembly.stage{stage_idx}",
-                    )
                 # Lazily materialize TT conv for this stage.
                 if self._tt_convs[stage_idx] is None:
                     self._tt_convs[stage_idx] = TTConv2dCached.from_conv(conv)

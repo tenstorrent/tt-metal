@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 
@@ -24,10 +24,11 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class ViTBackboneOutputs:
-    features: Dict[int, torch.Tensor]  # layer index -> B x C x H x W
+    # Values may be torch.Tensor (CPU path) or ttnn.Tensor (TT encoder + return_tt=True).
+    features: Dict[int, Any]  # layer index -> [B, C, H, W]
     # Optional token-level representations (including CLS) for each layer,
     # keyed by the same 1-based layer index as `features`.
-    tokens: Optional[Dict[int, torch.Tensor]] = None
+    tokens: Optional[Dict[int, Any]] = None
 
 
 class DPTViTBackboneTTNN(torch.nn.Module):
@@ -82,6 +83,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         self.tt_patch = None
         self.tt_blocks = []
         self._attn_mask_cache = {}
+        self._pos_embed_cache = {}
         self.used_tt_encoder_last_forward: bool = False
         # TTNN defaults to l1_small_size=0 in some runtimes, which can force
         # kernels down slow fallback paths or fail allocation in conv/halo ops.
@@ -153,10 +155,16 @@ class DPTViTBackboneTTNN(torch.nn.Module):
     # ------------------------------------------------------------------ backbone implementations
     def _pos_embed_for_hw(self, h_patches: int, w_patches: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
         """Resize checkpoint positional embeddings to the runtime patch grid."""
+        cache_key = (int(h_patches), int(w_patches), dtype, str(device))
+        cached = self._pos_embed_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         pos_embed = self.tt_pos_embed.to(dtype=dtype, device=device)
         target_patches = int(h_patches) * int(w_patches)
         target_seq = target_patches + 1
         if pos_embed.shape[1] == target_seq:
+            self._pos_embed_cache[cache_key] = pos_embed
             return pos_embed
 
         cls_pos = pos_embed[:, :1, :]
@@ -182,7 +190,9 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 align_corners=False,
             ).transpose(1, 2)
 
-        return torch.cat([cls_pos, patch_pos_resized], dim=1)
+        resized = torch.cat([cls_pos, patch_pos_resized], dim=1)
+        self._pos_embed_cache[cache_key] = resized
+        return resized
 
     def _forward_cpu_backbone(self, pixel_values: torch.Tensor, return_tt: bool = False) -> ViTBackboneOutputs:
         """Reference CPU backbone using HF DPT encoder."""
@@ -220,9 +230,6 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             # Fallback to CPU backbone if TT is unavailable or misconfigured.
             return self._forward_cpu_backbone(pixel_values, return_tt=return_tt)
 
-        patch = self.config.patch_size
-        h_out = self.config.image_size // patch
-
         # Pixel input: torch [B, C, H, W] -> TT tensor.
         tt_in = ttnn.from_torch(
             pixel_values,
@@ -239,6 +246,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
         x_torch = x_host.to_torch()  # [B, C, H_out, W_out]
         B, C, H, W = x_torch.shape
+        h_out, w_out = int(H), int(W)
         patch_tokens = x_torch.reshape(B, C, H * W).permute(0, 2, 1)  # [B, N, C]
 
         cls = self.tt_cls_token.expand(B, -1, -1)  # [B, 1, C]
@@ -258,6 +266,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             layout=ttnn.TILE_LAYOUT,
             device=self.tt_device,
         )
+        # Keep [B,1,N,C] through encoder blocks to reduce per-layer reshapes.
+        tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(tokens_torch.shape[1]), int(tokens_torch.shape[2])))
 
         mm_opts = self.tt_layer_cfg.matmul_opts(seq_len=tokens_torch.shape[1]) if self.tt_layer_cfg else {}
         if pad_seq and orig_len < tokens_torch.shape[1]:
@@ -280,35 +290,93 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             tokens_tt = blk(tokens_tt, **mm_opts)
             hidden_states_tt.append(tokens_tt)
 
-        feats: Dict[int, torch.Tensor] = {}
-        token_maps: Dict[int, torch.Tensor] = {}
+        feats: Dict[int, Any] = {}
+        token_maps: Dict[int, Any] = {}
 
         max_idx = max(0, int(self.config.num_hidden_layers) - 1)
         safe_layers = [min(max(int(i), 0), max_idx) for i in self.config.output_layers]
         for idx in safe_layers:
             # +1 offset because hidden_states_tt[0] holds embeddings.
             h_tt = hidden_states_tt[idx + 1]
-            h_host = h_tt.cpu()
-            if hasattr(h_host, "layout") and h_host.layout == ttnn.TILE_LAYOUT:
-                h_host = h_host.to(ttnn.ROW_MAJOR_LAYOUT)
-            tokens_layer = h_host.to_torch()  # [B, N+1, C]
-            if pad_seq:
-                tokens_layer = unpad_tokens_3d(tokens_layer, orig_len)
-            token_maps[idx + 1] = tokens_layer
-
-            patch_tokens = tokens_layer[:, 1:, :]  # drop CLS
-            B, N, C = patch_tokens.shape
-            feat_torch = patch_tokens.transpose(1, 2).reshape(B, C, h_out, h_out)
-
             if return_tt:
-                tt_feat = ttnn.from_torch(
-                    feat_torch,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.tt_device,
-                )
-                feats[idx + 1] = tt_feat
+                try:
+                    tokens_tt4 = h_tt
+                    shape = tuple(int(v) for v in tuple(getattr(tokens_tt4, "shape", ())))
+                    if len(shape) == 3:
+                        b, n, c = shape
+                        tokens_tt4 = ttnn.reshape(tokens_tt4, (int(b), 1, int(n), int(c)))
+                        shape = (int(b), 1, int(n), int(c))
+                    if len(shape) != 4 or int(shape[1]) != 1:
+                        raise RuntimeError(f"Unexpected TT token shape: {shape}")
+
+                    b, _one, n_total, c = shape
+                    if pad_seq and int(orig_len) < int(n_total):
+                        tokens_tt4 = ttnn.slice(
+                            tokens_tt4,
+                            (0, 0, 0, 0),
+                            (int(b), 1, int(orig_len), int(c)),
+                        )
+                        n_total = int(orig_len)
+                    token_maps[idx + 1] = tokens_tt4
+
+                    # Drop CLS (position 0) and reshape patch tokens -> NCHW feature map on device.
+                    if n_total <= 1:
+                        raise RuntimeError(f"Unexpected token sequence length: {n_total}")
+                    patch_tt4 = ttnn.slice(
+                        tokens_tt4,
+                        (0, 0, 1, 0),
+                        (int(b), 1, int(n_total), int(c)),
+                    )  # [B,1,H*W,C]
+                    n_patches = int(n_total) - 1
+                    if n_patches != int(h_out) * int(w_out):
+                        raise RuntimeError(
+                            f"Unexpected patch count: got {n_patches}, expected {int(h_out) * int(w_out)}"
+                        )
+                    nhwc = ttnn.reshape(patch_tt4, (int(b), int(h_out), int(w_out), int(c)))
+                    feats[idx + 1] = ttnn.permute(nhwc, (0, 3, 1, 2))
+                except Exception:
+                    # Conservative fallback: materialize tokens/features on host to
+                    # keep correctness if runtime reshape/slice semantics change.
+                    h_host = h_tt.cpu()
+                    if hasattr(h_host, "layout") and h_host.layout == ttnn.TILE_LAYOUT:
+                        h_host = h_host.to(ttnn.ROW_MAJOR_LAYOUT)
+                    tokens_layer = h_host.to_torch()
+                    if tokens_layer.dim() == 4:
+                        if tokens_layer.shape[1] != 1:
+                            raise RuntimeError(f"Unexpected TT token shape: {tuple(tokens_layer.shape)}")
+                        tokens_layer = tokens_layer[:, 0, :, :]
+                    elif tokens_layer.dim() != 3:
+                        raise RuntimeError(f"Unexpected token rank from TT backbone: {tuple(tokens_layer.shape)}")
+                    if pad_seq:
+                        tokens_layer = unpad_tokens_3d(tokens_layer, orig_len)
+                    token_maps[idx + 1] = tokens_layer
+
+                    patch_tokens = tokens_layer[:, 1:, :]  # drop CLS
+                    B, N, C = patch_tokens.shape
+                    if N != int(h_out) * int(w_out):
+                        raise RuntimeError(f"Unexpected patch token length: {N} vs {int(h_out) * int(w_out)}")
+                    feats[idx + 1] = patch_tokens.transpose(1, 2).reshape(B, C, int(h_out), int(w_out))
             else:
+                h_host = h_tt.cpu()
+                if hasattr(h_host, "layout") and h_host.layout == ttnn.TILE_LAYOUT:
+                    h_host = h_host.to(ttnn.ROW_MAJOR_LAYOUT)
+                tokens_layer = h_host.to_torch()
+                if tokens_layer.dim() == 4:
+                    # Encoder blocks keep [B,1,N,C] in TT fast path.
+                    if tokens_layer.shape[1] != 1:
+                        raise RuntimeError(f"Unexpected TT token shape: {tuple(tokens_layer.shape)}")
+                    tokens_layer = tokens_layer[:, 0, :, :]
+                elif tokens_layer.dim() != 3:
+                    raise RuntimeError(f"Unexpected token rank from TT backbone: {tuple(tokens_layer.shape)}")
+                if pad_seq:
+                    tokens_layer = unpad_tokens_3d(tokens_layer, orig_len)
+                token_maps[idx + 1] = tokens_layer
+
+                patch_tokens = tokens_layer[:, 1:, :]  # drop CLS
+                B, N, C = patch_tokens.shape
+                if N != int(h_out) * int(w_out):
+                    raise RuntimeError(f"Unexpected patch token length: {N} vs {int(h_out) * int(w_out)}")
+                feat_torch = patch_tokens.transpose(1, 2).reshape(B, C, int(h_out), int(w_out))
                 feats[idx + 1] = feat_torch
 
         return ViTBackboneOutputs(features=feats, tokens=token_maps)
