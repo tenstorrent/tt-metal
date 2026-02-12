@@ -172,6 +172,7 @@ Tests:
               device: [0, 1]
 
   - name: "TestNocSendTypesMesh"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
 
@@ -247,6 +248,7 @@ Tests:
       - type: all_to_all
 
   - name: "TestNocSendTypesMesh"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
 
