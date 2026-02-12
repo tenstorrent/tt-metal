@@ -126,10 +126,11 @@ def main():
         device=str(args.device),
         allow_cpu_fallback=False,
         enable_tt_device=True,
-        tt_device_reassembly=True,
+        # Keep reassembly on host; run fusion/head on TT device.
+        tt_device_reassembly=False,
         tt_device_fusion=True,
         tt_perf_encoder=True,
-        tt_perf_neck=True,
+        tt_perf_neck=False,
     )
 
     with DPTTTPipeline(config=cfg_tt, pretrained=bool(args.pretrained), device="cpu") as tt:

@@ -77,10 +77,12 @@ def main():
         device=args.device,
         allow_cpu_fallback=not use_tt,
         enable_tt_device=use_tt,
-        tt_device_reassembly=use_tt,
+        # Profiling on N300 shows host-side reassembly + TT fusion is
+        # currently the fastest parity-safe path.
+        tt_device_reassembly=False,
         tt_device_fusion=use_tt,
         tt_perf_encoder=use_tt,
-        tt_perf_neck=use_tt,
+        tt_perf_neck=False,
     )
 
     tt_pipeline = None

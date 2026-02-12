@@ -20,7 +20,7 @@ def _ensure_tt_device_tensor(x, tt_device, ttnn):
         return x
     if not isinstance(x, ttnn.Tensor):
         if torch.is_tensor(x):
-            return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=tt_device)
+            return torch_to_tt_tensor_rm(x, tt_device, put_on_device=True)
         return x
     try:
         if x.storage_type() == ttnn.StorageType.DEVICE:
@@ -34,7 +34,7 @@ def _ensure_tt_device_tensor(x, tt_device, ttnn):
         if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
             x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
         x_torch = x_host.to_torch()
-        return ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=tt_device)
+        return torch_to_tt_tensor_rm(x_torch, tt_device, put_on_device=True)
 
 
 def _tt_relu_with_fallback(hidden_state, tt_device, ttnn):
@@ -504,14 +504,7 @@ class DPTDepthEstimationHeadTT(nn.Module):
                     new_states.append(_ensure_tt_device_tensor(x, self.tt_device, ttnn))
                 else:
                     try:
-                        new_states.append(
-                            ttnn.from_torch(
-                                x,
-                                dtype=ttnn.bfloat16,
-                                layout=ttnn.ROW_MAJOR_LAYOUT,
-                                device=self.tt_device,
-                            )
-                        )
+                        new_states.append(torch_to_tt_tensor_rm(x, self.tt_device, put_on_device=True))
                     except Exception:
                         new_states.append(x)
             hidden_states = new_states

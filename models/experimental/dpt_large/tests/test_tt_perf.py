@@ -48,10 +48,10 @@ def test_tt_pipeline_perf_smoke(tmp_path):
         device=_runtime_device_name(),
         allow_cpu_fallback=False,
         enable_tt_device=True,
-        tt_device_reassembly=True,
+        tt_device_reassembly=False,
         tt_device_fusion=True,
         tt_perf_encoder=True,
-        tt_perf_neck=True,
+        tt_perf_neck=False,
     )
 
     with DPTTTPipeline(config=cfg_tt, pretrained=False, device="cpu") as tt_pipe:
