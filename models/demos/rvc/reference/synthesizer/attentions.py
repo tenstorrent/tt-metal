@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from rvc.synthesizer.modules import LayerNorm
+from models.demos.rvc.reference.synthesizer.modules import LayerNorm
 
 
 class Encoder(nn.Module):

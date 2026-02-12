@@ -7,14 +7,15 @@ import numpy as np
 import parselmouth
 import torch
 import torch.nn.functional as F
-import torchcrepe
+
+# import torchcrepe
 from safetensors.torch import load_file
 from scipy import signal
 
-from rvc.audio import load_audio
-from rvc.configs.config import Config
-from rvc.synthesizer.models import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
-from rvc.vc.utils import load_hubert
+from models.demos.rvc.reference.audio import load_audio
+from models.demos.rvc.reference.configs.config import Config
+from models.demos.rvc.reference.synthesizer.models import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
+from models.demos.rvc.reference.vc.utils import load_hubert
 
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)
 
@@ -124,7 +125,6 @@ class Pipeline:
         num: str = "48k",
         config: Config | None = None,
     ):
-
         hubert_cfg_path, hubert_path = _get_hubert_paths()
         if not os.path.exists(hubert_path):
             raise FileNotFoundError("hubert_path not found.")
@@ -320,7 +320,8 @@ class Pipeline:
                     t
                     - self.t_query
                     + np.where(
-                        audio_sum[t - self.t_query : t + self.t_query] == audio_sum[t - self.t_query : t + self.t_query].min()
+                        audio_sum[t - self.t_query : t + self.t_query]
+                        == audio_sum[t - self.t_query : t + self.t_query].min()
                     )[0][0]
                 )
 
