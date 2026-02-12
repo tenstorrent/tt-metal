@@ -90,12 +90,26 @@ class MLP:
     def __call__(self, hidden_states, is_decode):
         """Forward pass: route -> experts
         Args:
-            hidden_states: Input tensor [batch, seq_len, hidden_size]
+            hidden_states: Input tensor [1, batch_size, seq_len, hidden_size]
         Returns:
-            Expert output tensor [batch, seq_len, hidden_size]
+            Expert output tensor [1, batch_size, seq_len, hidden_size]
         """
+        original_shape = hidden_states.shape
+        batch_size = original_shape[1]
+
+        # For batched prefill, flatten batch*seq into seq dim for router and experts
+        if batch_size > 1 and not is_decode:
+            seq_len = original_shape[2]
+            hidden_size = original_shape[3]
+            hidden_states = ttnn.reshape(hidden_states, [1, 1, batch_size * seq_len, hidden_size])
+
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode
         )
+
+        # Reshape back to original batched shape
+        if batch_size > 1 and not is_decode:
+            expert_output = ttnn.reshape(expert_output, original_shape)
+
         return expert_output

@@ -46,6 +46,134 @@ from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import determine_device_name
 
 
+def batched_prefill_forward(
+    model,
+    model_args,
+    tokens,
+    page_table,
+    kv_cache,
+    prompt_lens,
+    mesh_device,
+    batch_size=32,
+):
+    """
+    Process users in sub-batches of batch_size for batched forward passes.
+
+    Users are grouped by row (users_per_row = batch_size). Each sub-batch
+    belongs to one mesh row and the page_table is padded so only that row
+    writes to its KV cache.
+
+    Args:
+        model: TT model instance (list with single model for DP=1)
+        model_args: Model arguments (list)
+        tokens: Input tokens [num_users, max_seq_len]
+        page_table: Page table for all users [num_users, num_pages]
+        kv_cache: KV cache (list of caches per model)
+        prompt_lens: Actual prompt lengths tensor for each user
+        mesh_device: Mesh device
+        batch_size: Users per sub-batch (should be users_per_row)
+
+    Returns:
+        output_logits: torch.Tensor [num_users, 1, vocab_size]
+    """
+    num_users = tokens.shape[0]
+    vocab_size = model_args[0].vocab_size
+    output_logits = torch.zeros(num_users, 1, vocab_size)
+    model_instance = model[0]
+    model_kv_cache = kv_cache[0]
+    num_rows = mesh_device.shape[0]
+    users_per_row = num_users // num_rows
+
+    for row_idx in range(num_rows):
+        start_user = row_idx * users_per_row
+        end_user = (row_idx + 1) * users_per_row
+        sub_batch_users = list(range(start_user, end_user))
+
+        # All users should have the same padded seq_len
+        seq_len = int(prompt_lens[start_user])
+        padded_seq_len = get_padded_prefill_len(seq_len)
+
+        # Prepare batched tokens [users_per_row, padded_seq_len]
+        batch_tokens = torch.zeros(users_per_row, padded_seq_len, dtype=torch.long)
+        last_token_indices = []
+        for local_idx, uid in enumerate(sub_batch_users):
+            user_seq_len = int(prompt_lens[uid])
+            batch_tokens[local_idx, :user_seq_len] = tokens[uid, :user_seq_len]
+            last_token_indices.append(user_seq_len - 1)
+
+        # Create padded page table: only target row has valid entries
+        sub_page_table = page_table[start_user:end_user]  # [users_per_row, pages_per_user]
+        pages_per_user = sub_page_table.shape[1]
+        total_pages = users_per_row * pages_per_user
+        page_table_padded = torch.ones((num_rows, total_pages), dtype=torch.int32) * -1
+        page_table_padded[row_idx, :] = sub_page_table.reshape(1, -1)
+
+        # Create tt page_table: shard across rows
+        tt_page_table = ttnn.from_torch(
+            page_table_padded,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_device.shape),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        # Embed tokens
+        flat_tokens = batch_tokens.reshape(1, 1, 1, -1)
+        tt_tokens = ttnn.from_torch(flat_tokens, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tokens_embd = ttnn.embedding(
+            tt_tokens, model_instance.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+        )
+        tt_tokens.deallocate(True)
+        if len(tokens_embd.shape) == 3:
+            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+        # Reshape to [1, batch, seq, hidden]
+        tokens_embd = ttnn.reshape(tokens_embd, [1, users_per_row, padded_seq_len, -1])
+
+        # RoPE matrices (per-user seq_len, not total)
+        rot_mats_global = [
+            model_instance.rope_setup.cos_matrix_prefill[:, :, :padded_seq_len, :],
+            model_instance.rope_setup.sin_matrix_prefill[:, :, :padded_seq_len, :],
+        ]
+
+        # Forward pass
+        logits = model_instance.ttnn_prefill_forward(
+            x=tokens_embd,
+            rot_mats_global=rot_mats_global,
+            page_table=tt_page_table,
+            chunk_page_table=None,
+            kv_cache=model_kv_cache,
+            user_id=0,
+            get_last_token=-1,
+        )
+
+        # Extract per-user last-token logits
+        for local_idx, uid in enumerate(sub_batch_users):
+            last_token_idx = last_token_indices[local_idx]
+
+            user_logits = ttnn.slice(
+                logits,
+                (0, local_idx, 0, 0),
+                (1, local_idx + 1, logits.shape[2], logits.shape[3]),
+            )
+
+            get_last_token = (last_token_idx // 32) * 32
+            user_logits = ttnn.slice(
+                user_logits,
+                (0, 0, get_last_token, 0),
+                (1, 1, get_last_token + 32, user_logits.shape[-1]),
+            )
+            user_logits = ttnn.untilize(user_logits, use_multicore=True)
+
+            tt_output_tensor = ttnn.get_device_tensors(user_logits)[0]
+            torch_logits = ttnn.to_torch(tt_output_tensor)
+            token_pos_in_window = last_token_idx % 32
+            output_logits[uid, 0, :] = torch_logits[0, 0, token_pos_in_window, :vocab_size]
+
+        logits.deallocate(True)
+
+    return output_logits
+
+
 def create_long_context_page_table(
     global_batch_size: int,
     mesh_rows: int,
@@ -572,34 +700,67 @@ def test_gpt_oss_demo(
             logger.info(f"Prefill finished for {num_real_users} real users")
             logger.info(f"First generated token (user 0): '{tokenizer.decode(prefilled_token[0])}'")
         else:
-            # Standard batch prefill (matching tt_transformers)
-            logger.info("Starting prefill warmup...")
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            generator.prefill_forward_text(
-                input_tokens_prefill_pt[:1],
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                enable_trace=enable_prefill_trace,
-                warmup_prefill=False,
-            )
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            logger.info("Finished prefill warmup")
+            # Batched prefill - process users in groups for faster execution
+            use_batched_prefill = users_row_sharded  # Test batched prefill
+            if use_batched_prefill:
+                logger.info("Starting batched prefill (compile)...")
+                profiler.start(f"compile_prefill", iteration=batch_idx)
+                # Warmup: compile kernels with single user (standard path)
+                generator.prefill_forward_text(
+                    input_tokens_prefill_pt[:1],
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=False,
+                    warmup_prefill=False,
+                )
+                profiler.end(f"compile_prefill", iteration=batch_idx)
+                logger.info("Finished batched prefill warmup")
 
-            logger.info(f"Starting prefill...")
-            profiler.start(f"inference_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
-                input_tokens_prefill_pt,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                enable_trace=enable_prefill_trace,
-                warmup_prefill=False,  # we can warmup prefill ourselves above if we want to
-            )
-            prefilled_token = torch.argmax(logits, dim=-1)
-            profiler.end(f"inference_prefill", iteration=batch_idx)
-            logger.info(f"Prefill finished")
-            logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
+                logger.info(f"Starting batched prefill...")
+                profiler.start(f"inference_prefill", iteration=batch_idx)
+                logits = batched_prefill_forward(
+                    model,
+                    model_args,
+                    input_tokens_prefill_pt,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    mesh_device=mesh_device,
+                )
+                prefilled_token = torch.argmax(logits, dim=-1)
+                profiler.end(f"inference_prefill", iteration=batch_idx)
+                logger.info(f"Batched prefill finished")
+                logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
+            else:
+                # Standard sequential prefill with tracing
+                logger.info("Starting prefill warmup...")
+                profiler.start(f"compile_prefill", iteration=batch_idx)
+                generator.prefill_forward_text(
+                    input_tokens_prefill_pt[:1],
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=enable_prefill_trace,
+                    warmup_prefill=False,
+                )
+                profiler.end(f"compile_prefill", iteration=batch_idx)
+                logger.info("Finished prefill warmup")
+
+                logger.info(f"Starting prefill...")
+                profiler.start(f"inference_prefill", iteration=batch_idx)
+                logits = generator.prefill_forward_text(
+                    input_tokens_prefill_pt,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=enable_prefill_trace,
+                    warmup_prefill=False,
+                )
+                prefilled_token = torch.argmax(logits, dim=-1)
+                profiler.end(f"inference_prefill", iteration=batch_idx)
+                logger.info(f"Prefill finished")
+                logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
 
         # Initialize generation state like tt_transformers
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]

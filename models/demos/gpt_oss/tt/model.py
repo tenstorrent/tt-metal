@@ -481,9 +481,14 @@ class Model:
         if global_user_id is None:
             global_user_id = 0
 
-        # Embed the tokens
+        # Track batch structure from original tokens
         if tokens.dim() == 2:
-            tokens = tokens.reshape(1, 1, 1, -1)
+            input_batch_size = tokens.shape[0]
+            per_user_seq_len = tokens.shape[1]
+            tokens = tokens.reshape(1, 1, 1, -1)  # Flatten for embedding
+        else:
+            input_batch_size = 1
+            per_user_seq_len = tokens.shape[-1]
 
         device = None if trace_enabled else self.mesh_device
 
@@ -497,8 +502,12 @@ class Model:
             if len(tokens_embd.shape) == 3:
                 tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
-        seq_len = tokens.shape[-1] if trace_enabled else tokens_embd.shape[-2]
+            # Reshape to [1, batch, seq_len, hidden] for batch>1
+            if input_batch_size > 1:
+                tokens_embd = ttnn.reshape(tokens_embd, [1, input_batch_size, per_user_seq_len, -1])
+
+        # Prepare rotation matrices - use per-user seq_len (not total flattened len)
+        seq_len = tokens.shape[-1] if trace_enabled else per_user_seq_len
         rot_mats_global = [
             self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
             self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
@@ -509,8 +518,35 @@ class Model:
         tt_page_table = None
         tt_chunk_page_table = None
         if page_table is not None:
-            if self.users_row_sharded and page_table.shape[0] > 1:
-                # Multi-user prefill: shard page table across rows
+            if self.users_row_sharded and input_batch_size > 1:
+                # Batched prefill with row-sharding: create padded flat page table
+                # Each row gets valid page entries only for its users, -1 for others
+                # This matches the llama TG batched prefill pattern
+                import torch as _torch
+
+                num_rows = self.mesh_device.shape[0]
+                users_per_row = input_batch_size // num_rows
+                pages_per_user = page_table.shape[1]
+                total_pages = pages_per_user * input_batch_size
+                page_table_padded = _torch.ones((num_rows, total_pages), dtype=_torch.int32) * -1
+                for row_idx in range(num_rows):
+                    start_user = row_idx * users_per_row
+                    end_user = (row_idx + 1) * users_per_row
+                    start_page = start_user * pages_per_user
+                    end_page = end_user * pages_per_user
+                    page_table_padded[row_idx, start_page:end_page] = page_table[start_user:end_user].reshape(1, -1)
+
+                tt_page_table = ttnn.from_torch(
+                    page_table_padded,
+                    device=device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
+                    ),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+            elif self.users_row_sharded and page_table.shape[0] > 1:
+                # Multi-user prefill (non-batched): shard page table across rows
                 tt_page_table = ttnn.from_torch(
                     page_table,
                     device=device,
