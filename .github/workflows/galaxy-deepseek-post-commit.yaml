@@ -93,7 +93,7 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           # Running only decode and prefill-128 tests with HF weights
-          pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers and (decode or prefill-128)" --timeout 600 --durations=0
+          pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers and (mode_decode or mode_prefill_seq_128)" --timeout 600 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
