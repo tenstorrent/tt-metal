@@ -177,22 +177,17 @@ class DPTPreActResidualLayerTT(nn.Module):
             residual = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             # Device ReLU with fallback to host
             hidden_state = _tt_relu_with_fallback(residual, self.tt_device, ttnn)
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
 
             hidden_state = self._tt_convolution(1, hidden_state)
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             hidden_state = self._tt_batch_norm(1, hidden_state)
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
 
             # Device ReLU with fallback to host
             hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
 
             hidden_state = self._tt_convolution(2, hidden_state)
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             hidden_state = self._tt_batch_norm(2, hidden_state)
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             # residual add on device
+            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             return ttnn.add(hidden_state, residual)
 
         residual = hidden_state
@@ -276,21 +271,16 @@ class DPTFeatureFusionLayerTT(nn.Module):
                         mode="bilinear",
                         align_corners=False,
                     )
-                    residual = _ensure_tt_device_tensor(residual, self.tt_device, ttnn)
                 residual_out = self.residual_layer1(residual)
-                residual_out = _ensure_tt_device_tensor(residual_out, self.tt_device, ttnn)
-                hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
                 hidden_state = ttnn.add(hidden_state, residual_out)
 
             hidden_state = self.residual_layer2(hidden_state)
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             hidden_state = fallback_ops.interpolate(
                 hidden_state,
                 scale_factor=2,
                 mode="bilinear",
                 align_corners=self.align_corners,
             )
-            hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             hidden_state = self._tt_projection(hidden_state)
             hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             return hidden_state
@@ -465,7 +455,6 @@ class DPTDepthEstimationHeadTT(nn.Module):
         conv0 = self.head[0]
         tt_conv0 = self._tt_conv_for(0, conv0)
         hidden_state = tt_conv0(hidden_state)
-        hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
 
         # Upsample
         hidden_state = fallback_ops.interpolate(
@@ -474,48 +463,19 @@ class DPTDepthEstimationHeadTT(nn.Module):
             mode="bilinear",
             align_corners=True,
         )
-        hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
 
         # Conv to 32 channels + device ReLU
         conv1 = self.head[2]
         tt_conv1 = self._tt_conv_for(2, conv1)
         hidden_state = tt_conv1(hidden_state)
-        hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
-        try:
-            hidden_state = ttnn.relu(hidden_state)
-        except Exception:
-            # Fallback to host relu if ttnn.relu is unavailable
-            x_host = hidden_state.cpu()
-            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-            x_torch = x_host.to_torch()
-            x_torch = torch.relu(x_torch)
-            hidden_state = ttnn.from_torch(
-                x_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.tt_device,
-            )
+        hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
 
         # Final 1x1 conv to depth + device ReLU
         conv2 = self.head[4]
         tt_conv2 = self._tt_conv_for(4, conv2)
         hidden_state = tt_conv2(hidden_state)
+        hidden_state = _tt_relu_with_fallback(hidden_state, self.tt_device, ttnn)
         hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
-        try:
-            hidden_state = ttnn.relu(hidden_state)
-        except Exception:
-            x_host = hidden_state.cpu()
-            if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-                x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-            x_torch = x_host.to_torch()
-            x_torch = torch.relu(x_torch)
-            hidden_state = ttnn.from_torch(
-                x_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.tt_device,
-            )
 
         return hidden_state
 

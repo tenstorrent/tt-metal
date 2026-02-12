@@ -32,6 +32,18 @@ def _save_depth_color(depth: np.ndarray, path: str):
     img.save(path)
 
 
+def _stage_breakdown_to_seconds(stage_breakdown_ms: dict | None) -> dict:
+    if not isinstance(stage_breakdown_ms, dict):
+        return {}
+    converted = {}
+    for key, value in stage_breakdown_ms.items():
+        if isinstance(value, (int, float)) and key.endswith("_ms"):
+            converted[key[: -len("_ms")] + "_s"] = float(value) / 1000.0
+        else:
+            converted[key] = value
+    return converted
+
+
 def main():
     parser = argparse.ArgumentParser("DPT-Large TTNN runner")
     parser.add_argument("--image", type=str, default=None, help="Path to a single image.")
@@ -112,22 +124,35 @@ def main():
         latency_ms_mean = float(np.mean(timings))
         latency_ms_std = float(np.std(timings))
         fps = 1000.0 / latency_ms_mean if latency_ms_mean > 0 else 0.0
+        inference_time_s = latency_ms_mean / 1000.0
+        inference_time_std_s = latency_ms_std / 1000.0
+        throughput_iter_per_s = (1.0 / inference_time_s) if inference_time_s > 0 else 0.0
+        first_run_s = (float(timings[0]) / 1000.0) if len(timings) > 0 else inference_time_s
+        compile_time_s = max(first_run_s - inference_time_s, 0.0)
         perf = dict(
             mode="tt" if use_tt else "cpu",
             latency_ms_mean=latency_ms_mean,
             latency_ms_std=latency_ms_std,
             total_ms=latency_ms_mean,
             fps=fps,
+            inference_time_s=inference_time_s,
+            inference_time_std_s=inference_time_std_s,
+            throughput_iter_per_s=throughput_iter_per_s,
+            first_run_s=first_run_s,
+            compile_time_s=compile_time_s,
             device=args.device,
             dtype="bfloat16",
             input_h=args.image_size,
             input_w=args.image_size,
             batch_size=1,
+            model_name="dpt-large",
+            setting=f"{'tt' if use_tt else 'cpu'}-{args.image_size}x{args.image_size}-b1",
             modules=["backbone", "reassembly", "fusion_head"] if use_tt else ["cpu_fallback"],
         )
         # Attach last per-stage timing breakdown from the TT pipeline when available.
         if use_tt and tt_pipeline is not None and getattr(tt_pipeline, "last_perf", None) is not None:
             perf["stage_breakdown_ms"] = tt_pipeline.last_perf
+            perf["stage_breakdown_s"] = _stage_breakdown_to_seconds(tt_pipeline.last_perf)
 
         if args.dump_depth:
             Path(args.dump_depth).parent.mkdir(parents=True, exist_ok=True)
@@ -153,8 +178,13 @@ def main():
             dtype="bfloat16",
             mode=perf.get("mode", "unknown"),
             latency_ms=perf.get("total_ms", 0),
+            inference_time_s=perf.get("inference_time_s", 0.0),
+            throughput_iter_per_s=perf.get("throughput_iter_per_s", 0.0),
+            first_run_s=perf.get("first_run_s", 0.0),
+            compile_time_s=perf.get("compile_time_s", 0.0),
             fps=perf.get("fps", 0),
             stage_breakdown_ms=perf.get("stage_breakdown_ms", {}),
+            stage_breakdown_s=perf.get("stage_breakdown_s", {}),
         )
 
         if args.dump_perf:

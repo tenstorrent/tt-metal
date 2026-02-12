@@ -120,6 +120,12 @@ class DPTReassembleLayerTT(nn.Module):
             )
         return self._tt_resize_conv(x)
 
+    def prefers_device_path(self) -> bool:
+        # Upsample stages currently rely on host ConvTranspose2d parity.
+        # Keep those stages on host until the fusion boundary to avoid
+        # redundant host<->device round-trips.
+        return self.factor <= 1
+
     def forward(self, x):
         # x: torch.Tensor or ttnn.Tensor of shape [B, hidden_size, H, W] / TT layout.
         try:
@@ -326,7 +332,9 @@ class DPTReassembly(nn.Module):
                 # not available (e.g., in pure shape tests).
                 hidden_state = fmap
 
-            # Optional: push into TT device path post-readout to keep conv/resize on device
+            # Optional: push into TT device path post-readout to keep conv/resize on device.
+            # Stages that rely on host ConvTranspose2d stay on host here and are
+            # materialized on device once at fusion ingress.
             try:
                 import ttnn  # type: ignore
                 from models.common.utility_functions import torch_to_tt_tensor_rm
@@ -337,6 +345,7 @@ class DPTReassembly(nn.Module):
                         getattr(self.config, "tt_device_reassembly", False)
                         or getattr(self.config, "tt_perf_neck", False)
                     )
+                    and self.reassemble_layers[stage_idx].prefers_device_path()
                     and not isinstance(hidden_state, ttnn.Tensor)
                 ):
                     hidden_state = ttnn.from_torch(
