@@ -31,8 +31,13 @@
 
 namespace tt::tt_metal {
 
+enum class DFBPorCType : uint8_t { DM, TENSIX };
+
 void run_dfb_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, experimental::dfb::DataflowBufferConfig& dfb_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    experimental::dfb::DataflowBufferConfig& dfb_config,
+    DFBPorCType producer_type,
+    DFBPorCType consumer_type) {
     Program program = CreateProgram();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -47,43 +52,66 @@ void run_dfb_program(
 
     CoreCoord logical_core = CoreCoord(0, 0);
 
+    dfb_config.producer_risc_mask = 0;
+    dfb_config.consumer_risc_mask = 0;
+
     uint32_t num_entries_per_producer = dfb_config.num_entries / dfb_config.num_producers;
     std::vector<uint32_t> producer_cta = {(uint32_t)in_buffer->address(), num_entries_per_producer};
     tt::tt_metal::TensorAccessorArgs(in_buffer).append_to(producer_cta);
-    auto producer_kernel = experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
-        logical_core,
-        experimental::quasar::QuasarDataMovementConfig{
-            .num_processors_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
+
+    KernelHandle producer_kernel;
+    if (producer_type == DFBPorCType::DM) {
+        producer_kernel = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+            logical_core,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_processors_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
+        auto producer_quasar = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(
+            program.impl().get_kernel(producer_kernel));
+        const auto& producer_dms = producer_quasar->get_dm_processors();
+        for (DataMovementProcessor dm : producer_dms) {
+            dfb_config.producer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
+        }
+    } else {
+        producer_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+            logical_core,
+            ComputeConfig{.compile_args = producer_cta});
+        dfb_config.producer_risc_mask = 0x10;
+    }
 
     uint32_t num_entries_per_consumer = dfb_config.cap == ::experimental::AccessPattern::STRIDED
                                             ? dfb_config.num_entries / dfb_config.num_consumers
                                             : dfb_config.num_entries;
-    std::vector<uint32_t> consumer_cta = {(uint32_t)out_buffer->address(), num_entries_per_consumer};
+    std::vector<uint32_t> consumer_cta = {
+        (uint32_t)out_buffer->address(),
+        num_entries_per_consumer,
+        (uint32_t)dfb_config.cap == ::experimental::AccessPattern::BLOCKED};
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(consumer_cta);
-    auto consumer_kernel = experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
-        logical_core,
-        experimental::quasar::QuasarDataMovementConfig{
-            .num_processors_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
 
-    auto producer_quasar = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(
-        program.impl().get_kernel(producer_kernel));
-    auto consumer_quasar = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(
-        program.impl().get_kernel(consumer_kernel));
-    TT_FATAL(producer_quasar && consumer_quasar, "DFB test kernels must be QuasarDataMovementKernel");
-    const auto& producer_dms = producer_quasar->get_dm_processors();
-    const auto& consumer_dms = consumer_quasar->get_dm_processors();
-
-    dfb_config.producer_risc_mask = 0;
-    for (DataMovementProcessor dm : producer_dms) {
-        dfb_config.producer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
-    }
-    dfb_config.consumer_risc_mask = 0;
-    for (DataMovementProcessor dm : consumer_dms) {
-        dfb_config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
+    KernelHandle consumer_kernel;
+    if (consumer_type == DFBPorCType::DM) {
+        consumer_kernel = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
+            logical_core,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_processors_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
+        auto consumer_quasar = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(
+            program.impl().get_kernel(consumer_kernel));
+        const auto& consumer_dms = consumer_quasar->get_dm_processors();
+        for (DataMovementProcessor dm : consumer_dms) {
+            dfb_config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
+        }
+    } else {
+        consumer_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
+            logical_core,
+            ComputeConfig{.compile_args = consumer_cta});
+        dfb_config.consumer_risc_mask = 0x10;
     }
 
     log_info(
@@ -123,7 +151,7 @@ void run_dfb_program(
     EXPECT_EQ(input, output);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx1S) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -136,10 +164,26 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx1S) {
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4S) {
+TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 1,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = ::experimental::AccessPattern::STRIDED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
+}
+
+TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -152,10 +196,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4S) {
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1S) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -168,10 +212,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1S) {
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4S) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -184,10 +228,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4S) {
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4S) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -200,10 +244,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4S) {
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2S) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -216,10 +260,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2S) {
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4B) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -232,10 +276,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4B) {
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1B) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -248,10 +292,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1B) {
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4B) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -264,10 +308,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4B) {
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2B) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -280,10 +324,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2B) {
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4B) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -296,7 +340,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4B) {
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
-    run_dfb_program(this->devices_.at(0), config);
+    run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
 }  // end namespace tt::tt_metal

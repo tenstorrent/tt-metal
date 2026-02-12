@@ -13,6 +13,8 @@
 #ifndef COMPILE_FOR_TRISC
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
 #include "experimental/noc.h"
+#else
+#include "internal/tt-2xx/quasar/tile_counters.h"
 #endif
 
 #include "experimental/lock.h"
@@ -36,7 +38,10 @@ public:
         PackedTileCounter packed_tc = g_dfb_interface[logical_dfb_id_].packed_tile_counter[counter_idx_];
         uint8_t tc_id = get_counter_id(packed_tc);
 #ifdef COMPILE_FOR_TRISC
-#error "Not implemented"
+        uint16_t entries_freed;
+        do {
+            entries_freed = tile_counters[tc_id].f.acked;
+        } while (entries_freed < num_entries);
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
         while (llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
@@ -49,7 +54,7 @@ public:
         PackedTileCounter packed_tc = local_dfb_interface.packed_tile_counter[counter_idx_];
         uint8_t tc_id = get_counter_id(packed_tc);
 #ifdef COMPILE_FOR_TRISC
-#error "Not implemented"
+        tile_counters[tc_id].f.posted = num_entries;
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
         llk_intf_inc_posted(tensix_id, tc_id, num_entries);
@@ -70,7 +75,10 @@ public:
         PackedTileCounter packed_tc = g_dfb_interface[logical_dfb_id_].packed_tile_counter[counter_idx_];
         uint8_t tc_id = get_counter_id(packed_tc);
 #ifdef COMPILE_FOR_TRISC
-#error "Not implemented"
+        uint16_t entries_received;
+        do {
+            entries_received = tile_counters[tc_id].f.posted;
+        } while (entries_received < num_entries);
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
         DPRINT << "wait_front: tensix_id: " << static_cast<uint32_t>(tensix_id)
@@ -87,7 +95,7 @@ public:
         PackedTileCounter packed_tc = local_dfb_interface.packed_tile_counter[counter_idx_];
         uint8_t tc_id = get_counter_id(packed_tc);
 #ifdef COMPILE_FOR_TRISC
-#error "Not implemented"
+        tile_counters[tc_id].f.acked = num_entries;
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
         llk_intf_inc_acked(tensix_id, tc_id, num_entries);
@@ -114,19 +122,21 @@ public:
     // also that there are no interrupts remaining...
     void finish() {
         LocalDFBInterface& local_dfb_interface = g_dfb_interface[logical_dfb_id_];
-#ifndef COMPILE_FOR_TRISC
         bool all_acked = false;
         while (!all_acked) {
             all_acked = true;
             for (uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
                 PackedTileCounter packed_tc = local_dfb_interface.packed_tile_counter[i];
                 uint8_t tc_id = get_counter_id(packed_tc);
+#ifdef COMPILE_FOR_TRISC
+                all_acked = all_acked && (tile_counters[tc_id].f.posted == 0);
+#else
                 uint8_t tensix_id = get_tensix_id(packed_tc);
                 all_acked &=
                     (fast_llk_intf_read_acked(tensix_id, tc_id) == fast_llk_intf_read_posted(tensix_id, tc_id));
+#endif
             }
         }
-#endif
     }
 
     uint32_t get_write_ptr() const {
