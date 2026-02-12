@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <compute_kernel_api/eltwise_binary_sfpu.h>
@@ -15,7 +15,6 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 // ----------------------------------------------------------------------
 // SwiGLU Forward Compute Kernel with Packer L1 Accumulation
@@ -40,12 +39,10 @@ constexpr auto cb_input_idx = tt::CBIndex::c_0;
 constexpr auto cb_w1_idx = tt::CBIndex::c_1;
 constexpr auto cb_w2_idx = tt::CBIndex::c_2;
 constexpr auto cb_w3_idx = tt::CBIndex::c_3;
-// CBs with intermediate computations - L1 acc eliminates partial CBs
-// c_4 and c_5 are no longer used (were cb_xw1_partial, cb_xw3_partial)
+// CBs with intermediate computations (L1 acc accumulates directly into these)
 constexpr auto cb_xw1_idx = tt::CBIndex::c_6;  // (X @ W1)[r, :] - L1 acc target
 constexpr auto cb_xw3_idx = tt::CBIndex::c_7;  // (X @ W3)[r, :] - L1 acc target
 constexpr auto cb_m_idx = tt::CBIndex::c_8;    // M[r, k_block]
-// c_9 is no longer used (was cb_y_partial)
 // CB with output data
 constexpr auto cb_y_idx = tt::CBIndex::c_10;  // Y[r, c_block] - L1 acc target
 

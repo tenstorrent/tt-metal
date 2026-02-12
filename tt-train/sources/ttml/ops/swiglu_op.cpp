@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,7 +39,6 @@ autograd::TensorPtr swiglu(
         auto sigmoid_linear1 = ttnn::sigmoid(linear1);                            // sigmoid(x @ w1)
         auto swished = ttnn::multiply(linear1, sigmoid_linear1);                  // silu(x @ w1)
         auto gated = ttnn::multiply(swished, gate);                               // silu(x @ w1) * (x @ w3)
-        auto projected = ttnn_fixed::matmul(gated, w2->get_value());              // gated @ w2
 
         // Backward through final matmul: dL_dgated = dL_dout @ w2^T
         auto dL_dgated = ttnn_fixed::matmul(dL_dout, w2->get_value(), false, true);
