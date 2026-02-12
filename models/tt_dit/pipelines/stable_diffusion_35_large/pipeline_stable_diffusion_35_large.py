@@ -173,17 +173,14 @@ class StableDiffusion3Pipeline:
                 padding_config=padding_config,
             )
 
-            if not cache.initialize_from_cache(
+            cache.load_model(
                 tt_model=tt_transformer,
-                torch_state_dict=torch_transformer.state_dict(),
+                get_torch_state_dict=torch_transformer.state_dict,
                 model_name="stable-diffusion-3.5-large",
                 subfolder="transformer",
                 parallel_config=self.dit_parallel_config,
                 mesh_shape=tuple(submesh_device.shape),
-                dtype="bf16",
-            ):
-                logger.info("Loading transformer weights from PyTorch state dict")
-                tt_transformer.load_state_dict(torch_transformer.state_dict())
+            )
 
             self.transformers.append(tt_transformer)
             ttnn.synchronize_device(submesh_device)
