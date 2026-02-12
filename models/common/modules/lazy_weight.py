@@ -182,6 +182,7 @@ class LazyWeight:
 
         # source
         # todo)) add better fingerprinting for the source tensor to enable cache invalidation when the source tensor changes; for now, use shape.
+        #        maybe a sampled hash (on, say, first N bytes) would be a good solution --> needs testing! --> test_rope_1d.py is a good test case with differring rope_theta values
         parts.append(f"srcshape_{'_'.join(str(dim) for dim in self.source.shape)}")
 
         # dtype

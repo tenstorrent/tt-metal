@@ -5,7 +5,12 @@ import pytest
 import torch
 
 import ttnn
-from models.common.tensor_utils import pad_dim_to_size, pad_to_shape, parse_shard_dims_from_mesh_mapper_config
+from models.common.tensor_utils import (
+    get_rot_transformation_mat,
+    pad_dim_to_size,
+    pad_to_shape,
+    parse_shard_dims_from_mesh_mapper_config,
+)
 
 
 def test_pad_dim_to_size():
@@ -144,6 +149,32 @@ def test_parse_shard_dims_from_mesh_mapper_config():
     assert parse_shard_dims_from_mesh_mapper_config(config6) == []
 
 
+def test_get_rot_transformation_mat_tile_size():
+    """Verify decode transformation matrix is TILE_SIZE x TILE_SIZE with correct pattern."""
+    mat = get_rot_transformation_mat(dhead=32)
+    assert mat.shape == (1, 1, 32, 32)
+    # Permutation pattern: even→odd = +1, odd→even = -1
+    assert mat[0, 0, 0, 1].item() == 1.0
+    assert mat[0, 0, 1, 0].item() == -1.0
+    assert mat[0, 0, 2, 3].item() == 1.0
+    assert mat[0, 0, 3, 2].item() == -1.0
+    # Diagonal is zero
+    assert mat[0, 0, 0, 0].item() == 0.0
+    assert mat[0, 0, 1, 1].item() == 0.0
+
+
+def test_get_rot_transformation_mat_large():
+    """Verify the matrix works for arbitrary dhead (e.g., head_dim=128 for prefill)."""
+    mat = get_rot_transformation_mat(dhead=128)
+    assert mat.shape == (1, 1, 128, 128)
+    # Pattern extends to last pair
+    assert mat[0, 0, 126, 127].item() == 1.0
+    assert mat[0, 0, 127, 126].item() == -1.0
+    # Off-pattern entries are zero
+    assert mat[0, 0, 0, 2].item() == 0.0
+    assert mat[0, 0, 0, 3].item() == 0.0
+
+
 if __name__ == "__main__":
     test_pad_dim_to_size()
     print("  ✓ test_pad_dim_to_size")
@@ -165,5 +196,11 @@ if __name__ == "__main__":
 
     test_parse_shard_dims_from_mesh_mapper_config()
     print("  ✓ test_parse_shard_dims_from_mesh_mapper_config")
+
+    test_get_rot_transformation_mat_tile_size()
+    print("  ✓ test_get_rot_transformation_mat_tile_size")
+
+    test_get_rot_transformation_mat_large()
+    print("  ✓ test_get_rot_transformation_mat_large")
 
     print("\nAll tensor_utils tests passed! ✓")
