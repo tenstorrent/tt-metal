@@ -196,9 +196,37 @@ struct MeshDeviceOperationAdapter {
     static tt::stl::hash::hash_t compute_mesh_workload_hash(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args) {
-        // Hash the program hash and the tensor coordinates the workload is targeting.
-        auto hash = compute_program_hash(attrs, tensor_args);
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value) {
+        // Three-tier hash logic:
+        //  1. If the operation provides a custom compute_program_hash, use it.
+        //  2. If all factories are ProgramDescriptorFactoryConcept, auto-derive
+        //     from create_descriptor + compute_program_descriptor_hash.
+        //  3. Otherwise, fall back to the default hash of type + attrs + tensor_args.
+        tt::stl::hash::hash_t hash;
+
+        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+            hash = DeviceOperation::compute_program_hash(attrs, tensor_args);
+        } else if constexpr ([]<typename... Ts>(std::variant<Ts...>*) {
+                                 return (ProgramDescriptorFactoryConcept<Ts> && ...);
+                             }(static_cast<program_factory_t*>(nullptr))) {
+            // All factories are descriptor-based: auto-hash from the descriptor's
+            // compile-time parts (kernel sources, core ranges, compile-time args,
+            // defines, CB configs).  Runtime args are excluded automatically.
+            auto factory = DeviceOperation::select_program_factory(attrs, tensor_args);
+            hash = std::visit(
+                [&](auto& f) -> tt::stl::hash::hash_t {
+                    using F = std::decay_t<decltype(f)>;
+                    auto desc = F::create_descriptor(attrs, tensor_args, tensor_return_value);
+                    return tt::tt_metal::compute_program_descriptor_hash(desc);
+                },
+                factory);
+        } else {
+            hash = tt::stl::hash::hash_objects_with_default_seed(
+                tt::stl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
+        }
+
+        // Combine with the mesh coordinates the workload is targeting.
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
             ttsl::hash::hash_combine(hash, coord);
         }
