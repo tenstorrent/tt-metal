@@ -151,13 +151,14 @@ template <
     std::uint32_t full_ct_dim = block_ct_dim,
     bool diagonal = false,
     bool narrow_row = false /* unused */,
-    std::uint32_t row_num_datums = TILE_C_DIM /* unused */>
+    std::uint32_t row_num_datums = TILE_C_DIM /* unused */,
+    bool dense = false>
 inline void llk_pack_untilize_init(
     std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
     static_assert(diagonal == false && "Diagonal packing is not supported for BH!");
     const std::uint32_t output_id = get_output_id(output);
 
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, dense>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 }
 
@@ -172,7 +173,8 @@ template <
     bool diagonal = false,
     bool narrow_row = false /* unused */,
     std::uint32_t row_num_datums = TILE_C_DIM /* unused */,
-    uint32_t tile_dst_ct_offset = 0>
+    uint32_t tile_dst_ct_offset = 0,
+    bool dense = false>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
     std::uint32_t output,
@@ -190,7 +192,7 @@ inline void llk_pack_untilize(
             16;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
             pack_tile_addr,
             pack_dst_format[output_id],
             face_r_dim,
