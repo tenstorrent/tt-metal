@@ -54,7 +54,7 @@ inline void calculate_unary_max_min(uint value) {
 
 template <bool IS_UNSIGNED = false>
 sfpi_inline void load_value_param_int(uint value) {
-    // if msb(value) == IS_UNSIGNED ? 0 : 1, we need to invert for SFPSWAP to work
+    // if msb(value) == (IS_UNSIGNED ? 0 : 1), we need to invert for SFPSWAP to work
     sfpi::vConstIntPrgm0 = IS_UNSIGNED ^ ((int)value >= 0) ? value : ~value;
 }
 
@@ -119,12 +119,12 @@ inline void calculate_unary_max_min_int32(uint value) {
         //
         // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
         //
-        // t | Load | Simple                  | MAD | Round | Store |
-        // - | ---- | ----------------------- | --- | ----- | ----- |
-        // 0 | [a]  |                         |     |       |       |
-        // 1 | nop  | swap_minmax([a], not_v) |     |       |       |
-        // 0 | ...  |                         |     |       |       |
-        // 1 | ...  |                         |     |       | [a]   |
+        // t | Load | Simple              | MAD | Round | Store |
+        // - | ---- | ------------------- | --- | ----- | ----- |
+        // 0 | [a]  |                     |     |       |       |
+        // 1 | nop  | swap_minmax([a], v) |     |       |       |
+        // 0 | ...  |                     |     |       |       |
+        // 1 | ...  |                     |     |       | [a]   |
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
