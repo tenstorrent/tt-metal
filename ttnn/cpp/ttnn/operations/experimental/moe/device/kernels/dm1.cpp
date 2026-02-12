@@ -85,8 +85,9 @@ void kernel_main() {
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     constexpr uint32_t source_width_tiles = 20;  // token segments/core are all padded up to 20
     const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
-
-    const uint32_t width_tile_base = detail::accumulate(moe_ring::W2_TILES_PER_CORE_A, ring_core_id);
+    const uint32_t width_tile_base = detail::accumulate(moe_ring::W2_TILES_PER_CORE_B, ring_core_id);
+    constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;  // 12/4 = 3
+    const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -241,10 +242,6 @@ void kernel_main() {
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
 
-                    noc_async_posted_writes_flushed(1);
-
-                    noc_async_posted_atomic_barrier(1);
-
                     if (++shard_row == max_tokens_per_height_shard) {
                         ++dest_height_shard;
                         shard_row = 0;
@@ -255,8 +252,13 @@ void kernel_main() {
             }
             noc_async_posted_writes_flushed(1);
             cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
-
-            source_buffer_iter = !source_buffer_iter;
         }
+    }
+
+    for (uint32_t y = 0; y < height_shard_dim; ++y) {
+        uint32_t idx = combine_core_x + y * width_shard_dim;
+        uint64_t dest_sem_noc_addr =
+            get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], semaphore_addr);
+        noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
     }
 }

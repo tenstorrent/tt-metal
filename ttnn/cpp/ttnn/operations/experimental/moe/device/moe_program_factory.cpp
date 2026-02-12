@@ -175,6 +175,19 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
+    const ttnn::CoreRangeSet output_shard_core_range_set(operation_attributes.output_shard_cores);
+    auto combine_dm1_kernel_handle = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/combine_dm1.cpp",
+        output_shard_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_1});
+
+    // Create semaphore on combine cores for source->combine completion signaling.
+    // The dm1 kernel uses get_semaphore(ring_semaphore_id) to compute the remote address,
+    // so the combine cores need a semaphore at the same ID.
+    const uint32_t combine_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_shard_core_range_set, 0);
+
     // Create semaphores for ring synchronization between cores
     // Each core will have a semaphore that its predecessor will signal
     const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
@@ -255,6 +268,11 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
 
         log_debug(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
+    }
+
+    const std::vector<uint32_t> combine_runtime_args = {combine_semaphore_id};
+    for (const auto& core : output_shard_cores) {
+        tt::tt_metal::SetRuntimeArgs(program, combine_dm1_kernel_handle, core, combine_runtime_args);
     }
 
     return cached_program_t{
