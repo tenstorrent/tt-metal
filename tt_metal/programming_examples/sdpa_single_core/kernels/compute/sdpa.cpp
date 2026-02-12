@@ -279,8 +279,12 @@ void exp_tile_first_column(uint32_t idst) {
 // Set 2: QKT@V + SALAD phase (matmul, pack, rescale steps)
 // Enable sets independently; Tracy has a ~250 marker limit per run.
 
-#define SDPA_PROFILING_SET_1
-#define SDPA_PROFILING_SET_2
+// Toggle: interleave drain sub_exp with split matmul for first QKT@V row.
+// Requires sbh=1, kt_num_subblocks=2. Overlaps EXP (SFPU) with matmul (FPU).
+#define OVERLAP_DRAIN_WITH_MATMUL
+
+// #define SDPA_PROFILING_SET_1
+// #define SDPA_PROFILING_SET_2
 
 #ifdef SDPA_PROFILING_SET_1
 #define SDPA_DeviceZoneScopedN_1(name) DeviceZoneScopedN(name)
@@ -818,36 +822,108 @@ void sdpa_inner_loop(
                 DeviceZoneScopedN("Softmax(Q@KT)@V");
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
-                // Drain: interleave sub_exp for last Q@KT row with first QKT@V matmul
+#ifdef OVERLAP_DRAIN_WITH_MATMUL
+                // Interleaved path: overlap drain EXP (SFPU) with split matmul (FPU)
+                // for q_subblock==0 only. EXP runs on pack thread while matmul runs on math thread.
                 if (q_subblock == 0) {
-                    MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << ENDL());
-                    for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-                        sub_exp_block_bcast_cols_inplace<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
-                            alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
-                    }
-                    cb_push_back(alias_cur_sum, Sq_chunk_t);
-                }
+                    constexpr uint32_t half_inner = qktv_in0_block_w / 2;
+                    static_assert(kt_num_subblocks == 2, "Overlap drain requires kt_num_subblocks==2");
 
-                uint32_t v_index_offset = 0;
-                for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                    // 1. sub_exp drain pass 1 (kt=0): SUB on FPU, then EXP on SFPU
+                    MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=0" << ENDL());
+                    sub_exp_block_bcast_cols_inplace<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                        alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 0);
+
+                    // 2. matmul first half (inner 0..half_inner-1) — FPU overlaps with EXP(kt=0) on SFPU
                     {
-                        SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
-                        blocked_matmul_and_pack<
-                            false,
-                            qktv_subblock_w,
-                            qktv_subblock_h,
-                            qktv_in0_block_w,
-                            head_dim_t,
-                            head_dim_t>(
-                            cb_qkt_im,
-                            cb_v_in,
-                            alias_cur_out,
-                            qktv_in0_index_offset,
-                            v_index_offset,
-                            q_subblock,
-                            v_subblock * qktv_subblock_w);
+                        uint32_t v_index_offset = 0;
+                        for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                            SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack H1");
+                            blocked_matmul_and_pack<
+                                false,
+                                qktv_subblock_w,
+                                qktv_subblock_h,
+                                half_inner,
+                                head_dim_t,
+                                head_dim_t>(
+                                cb_qkt_im,
+                                cb_v_in,
+                                alias_cur_out,
+                                qktv_in0_index_offset,
+                                v_index_offset,
+                                0,
+                                v_subblock * qktv_subblock_w);
+                            v_index_offset += qktv_subblock_w;
+                        }
                     }
-                    v_index_offset += qktv_subblock_w;
+
+                    // 3. sub_exp drain pass 2 (kt=1): SUB on FPU, then EXP on SFPU
+                    MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=1" << ENDL());
+                    sub_exp_block_bcast_cols_inplace<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                        alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 1);
+                    cb_push_back(alias_cur_sum, Sq_chunk_t);
+
+                    // 4. matmul second half (inner half_inner..block_w-1) with L1 accumulate
+                    //    FPU overlaps with EXP(kt=1) on SFPU
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                    {
+                        uint32_t v_index_offset = 0;
+                        for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                            SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack H2");
+                            blocked_matmul_and_pack<
+                                false,
+                                qktv_subblock_w,
+                                qktv_subblock_h,
+                                half_inner,
+                                head_dim_t,
+                                head_dim_t>(
+                                cb_qkt_im,
+                                cb_v_in,
+                                alias_cur_out,
+                                qktv_in0_index_offset + half_inner,
+                                half_inner * head_dim_t + v_index_offset,
+                                0,
+                                v_subblock * qktv_subblock_w);
+                            v_index_offset += qktv_subblock_w;
+                        }
+                    }
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                } else
+#endif
+                {
+                    // Original path: drain (if q==0) + full matmul (all q)
+#ifndef OVERLAP_DRAIN_WITH_MATMUL
+                    if (q_subblock == 0) {
+                        MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << ENDL());
+                        for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                            sub_exp_block_bcast_cols_inplace<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                                alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
+                        }
+                        cb_push_back(alias_cur_sum, Sq_chunk_t);
+                    }
+#endif
+
+                    uint32_t v_index_offset = 0;
+                    for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                        {
+                            SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
+                            blocked_matmul_and_pack<
+                                false,
+                                qktv_subblock_w,
+                                qktv_subblock_h,
+                                qktv_in0_block_w,
+                                head_dim_t,
+                                head_dim_t>(
+                                cb_qkt_im,
+                                cb_v_in,
+                                alias_cur_out,
+                                qktv_in0_index_offset,
+                                v_index_offset,
+                                q_subblock,
+                                v_subblock * qktv_subblock_w);
+                        }
+                        v_index_offset += qktv_subblock_w;
+                    }
                 }
 
                 {
