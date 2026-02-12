@@ -368,11 +368,6 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->noc_y_id_translate_table_ = {};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
-
-    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
-        // No checks
-        return true;
-    };
 }
 
 }  // namespace tt::tt_metal
