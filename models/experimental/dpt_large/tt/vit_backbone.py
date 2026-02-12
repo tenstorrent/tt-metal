@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -100,8 +101,13 @@ class DPTViTBackboneTTNN(torch.nn.Module):
 
             # Use config.device for TT accelerator selection so the host can remain on CPU.
             if self.config.enable_tt_device and self.config.device != "cpu":
-                # `fallback_ops` conversion wrappers expect MeshDevice-based tensors.
-                if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape"):
+                use_mesh_device = (
+                    str(os.environ.get("DPT_TT_USE_MESH_DEVICE", "1")).strip().lower()
+                    not in {"0", "false", "no"}
+                )
+                # Prefer mesh device by default, but keep a single-device escape hatch
+                # for perf bring-up experiments on cards exposing multi-chip meshes.
+                if use_mesh_device and hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape"):
                     try:
                         self.tt_device = ttnn.open_mesh_device(
                             mesh_shape=ttnn.MeshShape(1, 1),
@@ -124,7 +130,14 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                                 l1_small_size=self._tt_l1_small_size,
                             )
                 else:
-                    self.tt_device = ttnn.open_device(device_id=0, l1_small_size=self._tt_l1_small_size)
+                    try:
+                        self.tt_device = ttnn.open_device(
+                            device_id=0,
+                            l1_small_size=self._tt_l1_small_size,
+                            num_command_queues=self._tt_num_command_queues,
+                        )
+                    except Exception:
+                        self.tt_device = ttnn.open_device(device_id=0, l1_small_size=self._tt_l1_small_size)
                 try:
                     ttnn.SetDefaultDevice(self.tt_device)
                 except Exception:
