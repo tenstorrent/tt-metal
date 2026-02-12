@@ -129,6 +129,9 @@ def build_test_matrix(tests, enabled_skus, sku_config):
         # Determine which of this test's SKUs are enabled
         matching_skus = [s for s in test_skus if s in enabled_skus]
 
+        # Append SKU to name when the same test runs on more than one SKU
+        append_sku_to_name = len(matching_skus) > 1
+
         for sku_name in matching_skus:
             sku_test_config = test_skus[sku_name]
 
@@ -142,6 +145,8 @@ def build_test_matrix(tests, enabled_skus, sku_config):
             entry["sku"] = sku_name
             entry["timeout"] = sku_test_config.get("timeout", 0)
             entry["runs_on"] = sku_config[sku_name].get("runs_on", [])
+            if append_sku_to_name:
+                entry["name"] = f"{test_name} [{sku_name}]"
             for key, value in sku_test_config.items():
                 if key != "timeout" and value is not None:
                     entry[key] = value
