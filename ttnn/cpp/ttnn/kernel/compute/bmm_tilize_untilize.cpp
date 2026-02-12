@@ -5,10 +5,10 @@
 #include <cstdint>
 
 #include "internal/mod_div_lib.h"
-#include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
@@ -27,36 +27,27 @@
 
 inline void kernel_sleep(uint32_t loop_count = 1000) { for (volatile uint32_t i = 0; i < loop_count; ++i); }
 
-inline void tilize_in(
-    uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    // UNPACK(( kernel_sleep(100) ));
-    UNPACK((llk_unpack_reconfig_data_format(1, 0, 0, 0)));
-    MATH((llk_math_reconfig_data_format(1, 0, 0, 0)));
-    tilize_init(in_cb_id, in_block_w, out_cb_id);
-    for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
-        for (uint32_t h = 0; h < in_subblock_h; ++h) {
-            cb_wait_front(in_cb_id, in_block_w);
-            cb_reserve_back(out_cb_id, in_block_w);
-            tilize_block(in_cb_id, in_block_w, out_cb_id);
-            cb_push_back(out_cb_id, in_block_w);
-            cb_pop_front(in_cb_id, in_block_w);
-        }
-    }
-    tilize_uninit_with_dt(0, 1, out_cb_id);
+template <uint32_t in_cb_id, uint32_t out_cb_id>
+inline void tilize_in(uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks) {
+    compute_kernel_lib::tilize<
+        in_cb_id,
+        out_cb_id,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(
+        in_block_w, in_num_subblocks * in_subblock_h);
 }  // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
 #ifndef FUSE_BIAS
 
+template <uint32_t out_block_w, uint32_t reblock_cb_id, uint32_t out_cb_id>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
-    uint32_t out_block_w,
-    uint32_t interm_cb_id,
-    uint32_t reblock_cb_id,
-    uint32_t out_cb_id) {
+    uint32_t interm_cb_id) {
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 
@@ -82,13 +73,7 @@ inline void reblock_and_untilize(
         cb_push_back(reblock_cb_id, out_block_w);
 
         // Untilize
-        untilize_init(reblock_cb_id);
-        cb_wait_front(reblock_cb_id, out_block_w);
-        cb_reserve_back(out_cb_id, out_block_w);
-        untilize_block(reblock_cb_id, out_block_w, out_cb_id);
-        cb_pop_front(reblock_cb_id, out_block_w);
-        cb_push_back(out_cb_id, out_block_w);
-        untilize_uninit(reblock_cb_id);
+        compute_kernel_lib::untilize<out_block_w, reblock_cb_id, out_cb_id>(1);
 
         within_block_index += out_subblock_w;
     }
@@ -115,7 +100,7 @@ void kernel_main() {
     uint32_t in0_subblock_h = get_compile_time_arg_val(4);
     uint32_t in1_num_subblocks = get_compile_time_arg_val(5);    // outer column block size (in inner column blocks)
     uint32_t in1_block_num_tiles = get_compile_time_arg_val(6);  // out_subblock_w*in0_block_w* in1_num_subblocks;
-    uint32_t in1_block_w = get_compile_time_arg_val(7);          // out_subblock_w*in1_num_subblocks
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(7);  // out_subblock_w*in1_num_subblocks
     // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
     volatile uint32_t in0_num_blocks_h = get_compile_time_arg_val(8);
     volatile uint32_t in0_num_blocks_w = get_compile_time_arg_val(9);
@@ -126,7 +111,7 @@ void kernel_main() {
     bool tilize_in0 = get_compile_time_arg_val(14);
     bool untilize_out = get_compile_time_arg_val(15);
 
-    uint32_t out_block_w = in1_block_w;
+    constexpr uint32_t out_block_w = in1_block_w;
     bool spill = in0_num_blocks_w > 1;
 
     // CB indices
@@ -155,8 +140,8 @@ void kernel_main() {
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
-                    tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-                    mm_init_short(tilized_in0_cb_id, in1_cb_id);
+                    tilize_in<in0_cb_id, tilized_in0_cb_id>(in0_subblock_h, in0_block_w, in0_num_subblocks);
+                    mm_init_short_with_dt(tilized_in0_cb_id, in1_cb_id, in0_cb_id);
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
@@ -256,15 +241,12 @@ void kernel_main() {
                     if (last_out && untilize_out) {
                         reconfig_data_format(
                             untilize_mode_final_matmul_partials_cb, untilize_mode_final_matmul_partials_cb);
-                        reblock_and_untilize(
+                        reblock_and_untilize<out_block_w, untilize_mode_reblock_cb, out_cb_id>(
                             in1_num_subblocks,
                             out_subblock_num_tiles,
                             out_subblock_h,
                             out_subblock_w,
-                            out_block_w,
-                            untilize_mode_final_matmul_partials_cb,
-                            untilize_mode_reblock_cb,
-                            out_cb_id);
+                            untilize_mode_final_matmul_partials_cb);
                         mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                         reconfig_data_format(in1_cb_id, in0_cb_id);
                     }  // last_out
