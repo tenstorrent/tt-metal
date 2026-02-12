@@ -2,131 +2,196 @@
 # This file defines groupings with pods and clusters for testing higher-level matching
 
 groupings {
-  name: "trays"
-  items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 },
-    { asic_location: ASIC_LOCATION_5 },
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
+  custom_name: "trays"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 5 asic_location: ASIC_LOCATION_6 },
+    { id: 6 asic_location: ASIC_LOCATION_7 },
+    { id: 7 asic_location: ASIC_LOCATION_8 }
   ]
+  row_major_mesh {
+    dims: [2, 4]
+    dim_types: [LINE, LINE]
+    num_connections: 2
+  }
 }
 
 groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 2 } }  # Each mesh = 2 trays, 16 ASICs
+  custom_name: "meshes"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "trays" } },  # Each mesh = 2 trays, 16 ASICs
+    { id: 1 grouping_ref { custom_name: "trays" } }
   ]
+  row_major_mesh {
+    dims: [1, 2]
+    dim_types: [LINE, LINE]
+    num_connections: 2
+  }
 }
 
 groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 1 } }  # Each mesh = 1 tray, 8 ASICs
+  custom_name: "meshes"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "trays" } }  # Each mesh = 1 tray, 8 ASICs
   ]
 }
 
 # Pods groupings - different configurations
 groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Pod with 2 meshes
+  custom_name: "pods"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Pod with 2 meshes
+    { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 3 } }  # Pod with 3 meshes
+  custom_name: "pods"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Pod with 3 meshes
+    { id: 1 grouping_ref { custom_name: "meshes" } },
+    { id: 2 grouping_ref { custom_name: "meshes" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 4 } }  # Pod with 4 meshes
+  custom_name: "pods"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Pod with 4 meshes
+    { id: 1 grouping_ref { custom_name: "meshes" } },
+    { id: 2 grouping_ref { custom_name: "meshes" } },
+    { id: 3 grouping_ref { custom_name: "meshes" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 # Clusters groupings - different configurations
 groupings {
-  name: "clusters"
-  items: [
-    { grouping_ref { grouping_name: "pods" count: 2 } }  # Cluster with 2 pods
+  custom_name: "clusters"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "pods" } },  # Cluster with 2 pods
+    { id: 1 grouping_ref { custom_name: "pods" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "clusters"
-  items: [
-    { grouping_ref { grouping_name: "pods" count: 3 } }  # Cluster with 3 pods
+  custom_name: "clusters"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "pods" } },  # Cluster with 3 pods
+    { id: 1 grouping_ref { custom_name: "pods" } },
+    { id: 2 grouping_ref { custom_name: "pods" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 # Mixed composition: superpods with both meshes and pods
 groupings {
-  name: "superpods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } },
-    { grouping_ref { grouping_name: "pods" count: 1 } }  # Superpod with 2 meshes + 1 pod
+  custom_name: "superpods"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },
+    { id: 1 grouping_ref { custom_name: "meshes" } },
+    { id: 2 grouping_ref { custom_name: "pods" } }  # Superpod with 2 meshes + 1 pod
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "superpods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 1 } },
-    { grouping_ref { grouping_name: "pods" count: 4 } }  # Superpod with 1 mesh + 4 pods
+  custom_name: "superpods"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },
+    { id: 1 grouping_ref { custom_name: "pods" } },
+    { id: 2 grouping_ref { custom_name: "pods" } },
+    { id: 3 grouping_ref { custom_name: "pods" } },
+    { id: 4 grouping_ref { custom_name: "pods" } }  # Superpod with 1 mesh + 4 pods
   ]
+  all_to_all { num_connections: 2 }
 }
 
 # Widgets groupings - same composition as pods but different name (for testing name independence)
 groupings {
-  name: "widgets"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Widget with 2 meshes (same as pods)
+  custom_name: "widgets"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Widget with 2 meshes (same as pods)
+    { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "widgets"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 3 } }  # Widget with 3 meshes (same as pods)
+  custom_name: "widgets"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Widget with 3 meshes (same as pods)
+    { id: 1 grouping_ref { custom_name: "meshes" } },
+    { id: 2 grouping_ref { custom_name: "meshes" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "widgets"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 5 } }  # Widget with 5 meshes (for closest fit test)
+  custom_name: "widgets"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Widget with 5 meshes (for closest fit test)
+    { id: 1 grouping_ref { custom_name: "meshes" } },
+    { id: 2 grouping_ref { custom_name: "meshes" } },
+    { id: 3 grouping_ref { custom_name: "meshes" } },
+    { id: 4 grouping_ref { custom_name: "meshes" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 # Additional meshes configurations for various test scenarios
 groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 4 } }  # Each mesh = 4 trays, 32 ASICs
+  custom_name: "meshes"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "trays" } },  # Each mesh = 4 trays, 32 ASICs
+    { id: 1 grouping_ref { custom_name: "trays" } },
+    { id: 2 grouping_ref { custom_name: "trays" } },
+    { id: 3 grouping_ref { custom_name: "trays" } }
   ]
+  row_major_mesh {
+    dims: [1, 4]
+    dim_types: [LINE, RING]
+    num_connections: 2
+  }
 }
 
 # Hosts grouping for tests that need it
 groupings {
-  name: "hosts"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 4 } }  # Each host = 4 trays, 32 ASICs
+  custom_name: "hosts"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "trays" } },  # Each host = 4 trays, 32 ASICs
+    { id: 1 grouping_ref { custom_name: "trays" } },
+    { id: 2 grouping_ref { custom_name: "trays" } },
+    { id: 3 grouping_ref { custom_name: "trays" } }
   ]
+  row_major_mesh {
+    dims: [1, 4]
+    dim_types: [LINE, RING]
+    num_connections: 2
+  }
 }
 
 # Additional meshes grouping for 128 ASIC meshes (4 hosts)
 groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 4 } }  # Each mesh = 4 hosts, 128 ASICs
+  custom_name: "meshes"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "hosts" } },  # Each mesh = 4 hosts, 128 ASICs
+    { id: 1 grouping_ref { custom_name: "hosts" } },
+    { id: 2 grouping_ref { custom_name: "hosts" } },
+    { id: 3 grouping_ref { custom_name: "hosts" } }
   ]
+  row_major_mesh {
+    dims: [1, 4]
+    dim_types: [LINE, RING]
+    num_connections: 2
+  }
 }
 
 # Top-level groupings for FABRIC graph instances (composition-based matching)
@@ -138,22 +203,93 @@ groupings {
 # This ensures the grouping has 3 * 4 hosts = 12 hosts = 384 ASICs
 # Used for triple_pod_16x8 test which needs 3 meshes with 128 ASICs each
 groupings {
-  name: "top"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 12 } }  # Top with 3 meshes (3 * 4 hosts = 12 hosts = 384 ASICs)
+  custom_name: "top"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "hosts" } },  # Top with 3 meshes (3 * 4 hosts = 12 hosts = 384 ASICs)
+    { id: 1 grouping_ref { custom_name: "hosts" } },
+    { id: 2 grouping_ref { custom_name: "hosts" } },
+    { id: 3 grouping_ref { custom_name: "hosts" } },
+    { id: 4 grouping_ref { custom_name: "hosts" } },
+    { id: 5 grouping_ref { custom_name: "hosts" } },
+    { id: 6 grouping_ref { custom_name: "hosts" } },
+    { id: 7 grouping_ref { custom_name: "hosts" } },
+    { id: 8 grouping_ref { custom_name: "hosts" } },
+    { id: 9 grouping_ref { custom_name: "hosts" } },
+    { id: 10 grouping_ref { custom_name: "hosts" } },
+    { id: 11 grouping_ref { custom_name: "hosts" } }
   ]
+  row_major_mesh {
+    dims: [3, 4]
+    dim_types: [LINE, RING]
+    num_connections: 2
+  }
 }
 
 groupings {
-  name: "top"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 48 } }  # Top with 48 meshes
+  custom_name: "top"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Top with 48 meshes
+    { id: 1 grouping_ref { custom_name: "meshes" } },
+    { id: 2 grouping_ref { custom_name: "meshes" } },
+    { id: 3 grouping_ref { custom_name: "meshes" } },
+    { id: 4 grouping_ref { custom_name: "meshes" } },
+    { id: 5 grouping_ref { custom_name: "meshes" } },
+    { id: 6 grouping_ref { custom_name: "meshes" } },
+    { id: 7 grouping_ref { custom_name: "meshes" } },
+    { id: 8 grouping_ref { custom_name: "meshes" } },
+    { id: 9 grouping_ref { custom_name: "meshes" } },
+    { id: 10 grouping_ref { custom_name: "meshes" } },
+    { id: 11 grouping_ref { custom_name: "meshes" } },
+    { id: 12 grouping_ref { custom_name: "meshes" } },
+    { id: 13 grouping_ref { custom_name: "meshes" } },
+    { id: 14 grouping_ref { custom_name: "meshes" } },
+    { id: 15 grouping_ref { custom_name: "meshes" } },
+    { id: 16 grouping_ref { custom_name: "meshes" } },
+    { id: 17 grouping_ref { custom_name: "meshes" } },
+    { id: 18 grouping_ref { custom_name: "meshes" } },
+    { id: 19 grouping_ref { custom_name: "meshes" } },
+    { id: 20 grouping_ref { custom_name: "meshes" } },
+    { id: 21 grouping_ref { custom_name: "meshes" } },
+    { id: 22 grouping_ref { custom_name: "meshes" } },
+    { id: 23 grouping_ref { custom_name: "meshes" } },
+    { id: 24 grouping_ref { custom_name: "meshes" } },
+    { id: 25 grouping_ref { custom_name: "meshes" } },
+    { id: 26 grouping_ref { custom_name: "meshes" } },
+    { id: 27 grouping_ref { custom_name: "meshes" } },
+    { id: 28 grouping_ref { custom_name: "meshes" } },
+    { id: 29 grouping_ref { custom_name: "meshes" } },
+    { id: 30 grouping_ref { custom_name: "meshes" } },
+    { id: 31 grouping_ref { custom_name: "meshes" } },
+    { id: 32 grouping_ref { custom_name: "meshes" } },
+    { id: 33 grouping_ref { custom_name: "meshes" } },
+    { id: 34 grouping_ref { custom_name: "meshes" } },
+    { id: 35 grouping_ref { custom_name: "meshes" } },
+    { id: 36 grouping_ref { custom_name: "meshes" } },
+    { id: 37 grouping_ref { custom_name: "meshes" } },
+    { id: 38 grouping_ref { custom_name: "meshes" } },
+    { id: 39 grouping_ref { custom_name: "meshes" } },
+    { id: 40 grouping_ref { custom_name: "meshes" } },
+    { id: 41 grouping_ref { custom_name: "meshes" } },
+    { id: 42 grouping_ref { custom_name: "meshes" } },
+    { id: 43 grouping_ref { custom_name: "meshes" } },
+    { id: 44 grouping_ref { custom_name: "meshes" } },
+    { id: 45 grouping_ref { custom_name: "meshes" } },
+    { id: 46 grouping_ref { custom_name: "meshes" } },
+    { id: 47 grouping_ref { custom_name: "meshes" } }
   ]
+  row_major_mesh {
+    dims: [6, 8]
+    dim_types: [LINE, RING]
+    num_connections: 2
+  }
 }
 
 groupings {
-  name: "top"
-  items: [
-    { grouping_ref { grouping_name: "clusters" count: 3 } }  # Top with 3 clusters (for multiple cluster test)
+  custom_name: "top"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "clusters" } },  # Top with 3 clusters (for multiple cluster test)
+    { id: 1 grouping_ref { custom_name: "clusters" } },
+    { id: 2 grouping_ref { custom_name: "clusters" } }
   ]
+  all_to_all { num_connections: 2 }
 }
