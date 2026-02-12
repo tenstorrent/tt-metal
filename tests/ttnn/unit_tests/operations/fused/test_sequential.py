@@ -3352,3 +3352,194 @@ class TestShardedSequentialFusion:
         passing, pcc = comp_pcc(golden, result, pcc=0.98)
         print(f"Block_ht=1 sharded RMS->RMS PCC: {pcc:.6f}")
         assert passing, f"Block_ht=1 sharded RMS->RMS PCC: {pcc}"
+
+
+# =============================================================================
+# Cross-Op Compilation Tests
+# =============================================================================
+
+
+class TestCrossOpCompilation:
+    """Verify that merging pre-main from different ops produces compilable kernels.
+
+    These tests read REAL kernel source files from different operations,
+    process them through the pre-main merging pipeline, construct complete
+    fused kernel sources with an empty kernel_main(), create
+    ProgramDescriptors, and verify JIT compilation succeeds via
+    ttnn.generic_op().
+
+    The kernel_main() bodies are empty -- we are only testing that the
+    merged pre-main (includes, defines, helpers, namespaces) forms a
+    valid C++ translation unit that the RISC-V compiler accepts.
+    """
+
+    # Kernel source file paths (compute kernels)
+    KERNEL_PATHS = {
+        "layernorm": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
+        "rmsnorm_post": "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather.cpp",
+        "matmul": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+        "batchnorm": "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp",
+        "untilize": "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/common.cpp",
+        "eltwise_sfpu": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
+        "typecast": "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
+    }
+
+    @staticmethod
+    def _read_and_process(kernel_path, defines=None):
+        """Read a kernel source file and process through the pipeline."""
+        import os
+        from models.experimental.ops.descriptors.sequential import (
+            _inline_local_includes,
+            _resolve_ifdef_directives,
+        )
+
+        with open(kernel_path, "r") as f:
+            source = f.read()
+
+        kernel_dir = os.path.dirname(os.path.abspath(kernel_path))
+        source = _inline_local_includes(source, kernel_dir)
+        source = _resolve_ifdef_directives(source, defines or set())
+        return source
+
+    @staticmethod
+    def _build_fused_source(sources_with_indices):
+        """Build a complete compilable fused source from processed phase sources."""
+        from models.experimental.ops.descriptors.sequential import (
+            _collect_includes,
+            _collect_defines,
+            _collect_all_pre_main_code,
+        )
+
+        all_sources = [s for _, s in sources_with_indices]
+        includes = _collect_includes(all_sources)
+        defines = _collect_defines(all_sources)
+        pre_main, _ = _collect_all_pre_main_code(sources_with_indices)
+
+        lines = [
+            "// Auto-generated fused compute kernel - compilation test",
+            "",
+        ]
+        lines.extend(defines)
+        lines.append("")
+        lines.extend(includes)
+        lines.append("")
+        if pre_main.strip():
+            lines.append(pre_main)
+            lines.append("")
+        lines.append("void kernel_main() {}")
+        lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _compile_source(device, source):
+        """Compile a kernel source by creating a ProgramDescriptor and dispatching."""
+        core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+
+        kernel = ttnn.KernelDescriptor()
+        kernel.kernel_source = source
+        kernel.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+        kernel.core_ranges = core
+        kernel.config = ttnn.ComputeConfigDescriptor()
+
+        # Minimal CB so the program has something to bind
+        # Use constructor overload that accepts ttnn.DataType and converts to tt::DataFormat
+        cb = ttnn.CBDescriptor()
+        fmt = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.DataType.BFLOAT16, page_size=2048)
+        cb.total_size = 2048
+        cb.core_ranges = core
+        cb.format_descriptors = [fmt]
+
+        desc = ttnn.ProgramDescriptor()
+        desc.kernels = [kernel]
+        desc.cbs = [cb]
+
+        dummy_in = ttnn.from_torch(
+            torch.zeros(1, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        dummy_out = ttnn.from_torch(
+            torch.zeros(1, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        ttnn.generic_op([dummy_in, dummy_out], desc)
+
+    def test_compile_layernorm_plus_matmul(self, device):
+        """LN compute (namespace aliases + ALWI) + matmul (using declaration)."""
+        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["matmul"])
+        source = self._build_fused_source([(0, s0), (1, s1)])
+        self._compile_source(device, source)
+
+    def test_compile_layernorm_plus_batchnorm(self, device):
+        """LN compute (short ALWI) + batchnorm (13-param ALWI helper)."""
+        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
+        source = self._build_fused_source([(0, s0), (1, s1)])
+        self._compile_source(device, source)
+
+    def test_compile_layernorm_plus_untilize(self, device):
+        """LN compute (complex pre-main) + untilize (constexpr helper)."""
+        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["untilize"])
+        source = self._build_fused_source([(0, s0), (1, s1)])
+        self._compile_source(device, source)
+
+    def test_compile_rmsnorm_post_plus_layernorm(self, device):
+        """rmsnorm_post (multi-line ACQ/REL) + LN (single-line ACQ/REL).
+
+        Tests signature-based dedup: both define ACQ() and REL() differently.
+        """
+        s0 = self._read_and_process(self.KERNEL_PATHS["rmsnorm_post"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        source = self._build_fused_source([(0, s0), (1, s1)])
+        self._compile_source(device, source)
+
+    def test_compile_matmul_plus_batchnorm(self, device):
+        """matmul (minimal pre-main) + batchnorm (long ALWI)."""
+        s0 = self._read_and_process(self.KERNEL_PATHS["matmul"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
+        source = self._build_fused_source([(0, s0), (1, s1)])
+        self._compile_source(device, source)
+
+    def test_compile_layernorm_plus_eltwise_sfpu(self, device):
+        """LN compute + eltwise unary SFPU (many API includes)."""
+        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["eltwise_sfpu"])
+        source = self._build_fused_source([(0, s0), (1, s1)])
+        self._compile_source(device, source)
+
+    def test_compile_layernorm_plus_typecast(self, device):
+        """LN compute + typecast (eltwise unary typecast)."""
+        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["typecast"])
+        source = self._build_fused_source([(0, s0), (1, s1)])
+        self._compile_source(device, source)
+
+    def test_compile_three_phase_matmul_ln_batchnorm(self, device):
+        """3-phase: matmul + LN + batchnorm."""
+        s0 = self._read_and_process(self.KERNEL_PATHS["matmul"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        s2 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
+        source = self._build_fused_source([(0, s0), (1, s1), (2, s2)])
+        self._compile_source(device, source)
+
+    def test_compile_three_phase_ln_untilize_sfpu(self, device):
+        """3-phase: LN + untilize + eltwise SFPU."""
+        s0 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["untilize"])
+        s2 = self._read_and_process(self.KERNEL_PATHS["eltwise_sfpu"])
+        source = self._build_fused_source([(0, s0), (1, s1), (2, s2)])
+        self._compile_source(device, source)
+
+    def test_compile_four_phase_max_diversity(self, device):
+        """4-phase: matmul + LN + batchnorm + untilize (max diversity)."""
+        s0 = self._read_and_process(self.KERNEL_PATHS["matmul"])
+        s1 = self._read_and_process(self.KERNEL_PATHS["layernorm"])
+        s2 = self._read_and_process(self.KERNEL_PATHS["batchnorm"])
+        s3 = self._read_and_process(self.KERNEL_PATHS["untilize"])
+        source = self._build_fused_source([(0, s0), (1, s1), (2, s2), (3, s3)])
+        self._compile_source(device, source)

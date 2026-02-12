@@ -1146,79 +1146,102 @@ class TestIsGlobalVarBlock:
 
 
 class TestCollectAllPreMainCode:
-    """Tests for robust pre-main merging across phases."""
+    """Tests for robust pre-main merging across phases.
+
+    Functions and global variables are prefixed with phaseN_ for ALL phases
+    (including phase 0) to avoid redefinition errors.  Shared items like
+    namespace blocks and using declarations are deduped.
+    """
 
     def _make_source(self, pre_main_body: str) -> str:
         """Wrap pre-main code in a minimal kernel source."""
         return f"{pre_main_body}\n\nvoid kernel_main() {{\n    // body\n}}\n"
 
-    def test_single_phase(self):
-        """Single phase returns its pre-main."""
+    def test_single_phase_functions_prefixed(self):
+        """Single phase: functions get phase0_ prefix."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        source = self._make_source("ALWI void ACQ() { acquire_dst(); }")
+        result, names = _collect_all_pre_main_code([(0, source)])
+        assert "phase0_ACQ" in result
+        assert names == {0: ["ACQ"]}
+
+    def test_single_phase_shared_items_no_prefix(self):
+        """Single phase: namespace aliases and using declarations NOT prefixed."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
         source = self._make_source("namespace g = norm;")
-        result = _collect_all_pre_main_code([(0, source)])
+        result, names = _collect_all_pre_main_code([(0, source)])
         assert "namespace g = norm;" in result
+        assert 0 not in names  # no phase-specific items
 
-    def test_identical_phases_dedup(self):
-        """Identical pre-main from two phases is deduped."""
+    def test_identical_functions_both_prefixed(self):
+        """Identical function from two phases: both emitted with distinct prefixes."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
         source = self._make_source("namespace g = norm;\n\nALWI void ACQ() { acquire_dst(); }")
-        result = _collect_all_pre_main_code([(0, source), (1, source)])
-        # Should appear only once
-        assert result.count("ACQ") == 1
+        result, names = _collect_all_pre_main_code([(0, source), (1, source)])
+        # Namespace alias: deduped (shared)
         assert result.count("namespace g = norm") == 1
+        # Function: each phase gets its own prefixed copy
+        assert "phase0_ACQ" in result
+        assert "phase1_ACQ" in result
+        assert names[0] == ["ACQ"]
+        assert names[1] == ["ACQ"]
 
-    def test_different_helpers_both_kept(self):
-        """Different helper functions from different ops are both kept."""
+    def test_different_helpers_both_prefixed(self):
+        """Different helper functions from different ops are both prefixed."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
         source0 = self._make_source("ALWI void helper_a() { return; }")
         source1 = self._make_source("ALWI void helper_b() { return; }")
-        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
-        assert "helper_a" in result
-        assert "helper_b" in result
+        result, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        assert "phase0_helper_a" in result
+        assert "phase1_helper_b" in result
 
-    def test_same_signature_different_body_deduped(self):
-        """Same function signature but different body: first wins."""
+    def test_same_signature_different_body_both_emitted(self):
+        """Same function signature but different body: both emitted with prefixes."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
         source0 = self._make_source("inline void process() {\n    int x = 1;\n}")
         source1 = self._make_source("inline void process() {\n    int x = 2;\n}")
-        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
-        # First wins
+        result, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        # Both versions kept with phase prefixes
+        assert "phase0_process" in result
+        assert "phase1_process" in result
         assert "int x = 1" in result
-        assert "int x = 2" not in result
+        assert "int x = 2" in result
 
-    def test_global_vars_phase_prefixed(self):
-        """Global variables from phase N>0 get phase-prefixed."""
+    def test_global_vars_all_phases_prefixed(self):
+        """Global variables from ALL phases get phase-prefixed."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
         source0 = self._make_source("uint32_t counter = 0;")
         source1 = self._make_source("uint32_t counter = 0;")
-        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
-        assert "uint32_t counter = 0;" in result
+        result, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        assert "uint32_t phase0_counter = 0;" in result
         assert "uint32_t phase1_counter = 0;" in result
+        assert "counter" in names[0]
+        assert "counter" in names[1]
 
     def test_namespace_blocks_deduped_by_signature(self):
-        """Namespace blocks with same name are deduped."""
+        """Namespace blocks with same name are deduped (shared)."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
         ns_block = "namespace my_ns {\n" "using T = uint32_t;\n" "inline void f() { return; }\n" "}  // namespace my_ns"
         source0 = self._make_source(ns_block)
         source1 = self._make_source(ns_block)
-        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        result, _ = _collect_all_pre_main_code([(0, source0), (1, source1)])
         # The opening "namespace my_ns {" should appear exactly once
         assert result.count("namespace my_ns {") == 1
 
     def test_different_namespaces_both_kept(self):
-        """Different namespace blocks are both kept."""
+        """Different namespace blocks are both kept (shared, not prefixed)."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
         source0 = self._make_source("namespace ns_a {\ninline void fa() { return; }\n}")
         source1 = self._make_source("namespace ns_b {\ninline void fb() { return; }\n}")
-        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        result, _ = _collect_all_pre_main_code([(0, source0), (1, source1)])
         assert "ns_a" in result
         assert "ns_b" in result
 
@@ -1235,40 +1258,609 @@ class TestCollectAllPreMainCode:
             "uint32_t state = 0;\n\n"
             "ALWI void extra() { return; }"
         )
-        result = _collect_all_pre_main_code([(0, source0), (1, source1)])
-        # Alias: deduped
+        result, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        # Alias: deduped (shared)
         assert result.count("namespace g = norm") == 1
-        # Function: deduped
-        assert result.count("ACQ") == 1
-        # Global var: phase 0 + prefixed phase 1
-        assert "uint32_t state = 0;" in result
+        # Function ACQ: both phases prefixed
+        assert "phase0_ACQ" in result
+        assert "phase1_ACQ" in result
+        # Global var: both phases prefixed
+        assert "uint32_t phase0_state = 0;" in result
         assert "uint32_t phase1_state = 0;" in result
-        # Extra function from phase 1: included
-        assert "extra" in result
+        # Extra function from phase 1: prefixed
+        assert "phase1_extra" in result
+        # Phase names include both functions and globals
+        assert set(names[0]) == {"ACQ", "state"}
+        assert set(names[1]) == {"ACQ", "state", "extra"}
 
-    def test_empty(self):
-        """Empty input returns empty string."""
+    def test_phase_names_returned(self):
+        """phase_names dict correctly tracks all prefixed names per phase."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
-        assert _collect_all_pre_main_code([]) == ""
+        source0 = self._make_source("ALWI void ACQ() { acquire_dst(); }\n\nuint32_t x = 1;")
+        source1 = self._make_source("ALWI void REL() { release_dst(); }\n\nfloat y = 2.0;")
+        _, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        assert set(names[0]) == {"ACQ", "x"}
+        assert set(names[1]) == {"REL", "y"}
+
+    def test_empty(self):
+        """Empty input returns empty string and empty dict."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        result, names = _collect_all_pre_main_code([])
+        assert result == ""
+        assert names == {}
 
     def test_block_comments_stripped(self):
         """Block comments in pre-main are stripped before processing."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
         source = self._make_source("/**\n * @brief Helper\n */\n" "ALWI void helper() { return; }")
-        result = _collect_all_pre_main_code([(0, source)])
+        result, _ = _collect_all_pre_main_code([(0, source)])
         assert "@brief" not in result
-        assert "helper" in result
+        assert "phase0_helper" in result
 
     def test_pragma_stripped(self):
         """#pragma directives are stripped from pre-main."""
         from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
 
         source = self._make_source("#pragma once\n\nnamespace g = norm;")
-        result = _collect_all_pre_main_code([(0, source)])
+        result, _ = _collect_all_pre_main_code([(0, source)])
         assert "#pragma" not in result
         assert "namespace g = norm" in result
+
+
+class TestCrossOpPreMainStress:
+    """Stress tests for pre-main merging with diverse real-world kernel patterns.
+
+    Each test simulates fusing compute kernels from different ops by running
+    realistic kernel source through the pre-main merging pipeline and verifying
+    structural validity of the output.
+    """
+
+    # ---------------------------------------------------------------
+    # Realistic kernel source templates (mimicking actual op kernels)
+    # ---------------------------------------------------------------
+
+    # layernorm compute: namespace aliases + short ALWI helpers + inlined numeric.h
+    LAYERNORM_COMPUTE = """\
+#include <cstdint>
+#define REDUCE_OP PoolType::SUM
+#define REDUCE_DIM ReduceDim::REDUCE_ROW
+#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
+#define BCAST_DIM BroadcastType::COL
+#include "compute_kernel_api.h"
+#include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/layernorm.h"
+#include <tt-metalium/constants.hpp>
+
+namespace generic = norm::kernel_util::generic;
+namespace kutil = norm::kernel_util;
+namespace numeric = kutil::compute::numeric;
+namespace policies = kutil::compute::policies;
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+void kernel_main() {
+    uint32_t NCHt = get_arg_val<uint32_t>(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    ACQ();
+    REL();
+}
+"""
+
+    # rmsnorm_post_allgather compute: same REDUCE defines, multi-line ACQ/REL
+    RMSNORM_POST_COMPUTE = """\
+#include <cstdint>
+#define REDUCE_OP PoolType::SUM
+#define REDUCE_DIM ReduceDim::REDUCE_ROW
+#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
+#define BCAST_DIM BroadcastType::COL
+#include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/layernorm.h"
+
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
+
+void kernel_main() {
+    uint32_t NCHt = get_arg_val<uint32_t>(0);
+    ACQ();
+    REL();
+}
+"""
+
+    # matmul compute: minimal pre-main, just a using declaration
+    MATMUL_COMPUTE = """\
+#include <cstdint>
+#include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/tile_move_copy.h"
+
+using std::uint32_t;
+
+// matmul C=A*B using dims MK*KN = MN (row major order)
+void kernel_main() {
+    constexpr int onetile = 1;
+    int dst_tile_index = 0;
+}
+"""
+
+    # batchnorm compute: ALWI helper with many params, moreh_common include
+    BATCHNORM_COMPUTE = """\
+#include "compute_kernel_api/eltwise_binary.h"
+#include <cstdint>
+
+ALWI void batchnorm_bcast_tiles(
+    uint32_t cb_bcast,
+    uint32_t cb_other,
+    uint32_t freq,
+    uint32_t tile_start,
+    uint32_t cb_batch_var,
+    uint32_t cb_eps,
+    uint32_t cb_den,
+    uint32_t cb_weight,
+    uint32_t cb_bias,
+    uint32_t cb_tmp_1,
+    uint32_t cb_output_0,
+    uint32_t weight_has,
+    uint32_t bias_has) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+    uint32_t weight_has_value = weight_has;
+    uint32_t bias_has_value = bias_has;
+    auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
+    cb_reserve_back(cb_den, onetile);
+    cb_wait_front(cb_batch_var, onetile);
+    tile_regs_acquire();
+    tile_regs_commit();
+    tile_regs_wait();
+    tile_regs_release();
+    cb_pop_front(cb_batch_var, onetile);
+    cb_push_back(cb_den, onetile);
+}
+
+void kernel_main() {
+    batchnorm_bcast_tiles(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 1);
+}
+"""
+
+    # eltwise binary_ng compute: ALWI process_tile with macros + inlined utils
+    ELTWISE_BINARY_COMPUTE = """\
+#include <cstdint>
+#include "compute_kernel_api/eltwise_binary.h"
+
+#define IS_EMPTY(...) 0
+#define PROCESS_ACTIVATIONS(op, i) /* noop */
+#define HAS_ACTIVATIONS(op) 0
+#define BCAST_OP LHS
+#define OTHER_OP RHS
+#define BCAST_OP_0 LHS
+#define BCAST_OP_1 RHS
+
+ALWI void process_tile(
+    tt::CBIndex cb_pre_lhs,
+    tt::CBIndex cb_post_lhs,
+    tt::CBIndex cb_pre_rhs,
+    tt::CBIndex cb_post_rhs,
+    tt::CBIndex cb_out,
+    uint32_t freq,
+    uint32_t tile_start,
+    uint32_t num_tiles_per_cycle) {
+    using namespace ckernel;
+    cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
+    cb_reserve_back(cb_out, num_tiles_per_cycle);
+    tile_regs_acquire();
+    tile_regs_commit();
+    tile_regs_wait();
+    tile_regs_release();
+    cb_push_back(cb_out, num_tiles_per_cycle);
+}
+
+void kernel_main() {
+    process_tile(0, 1, 2, 3, 4, 8, 0, 1);
+}
+"""
+
+    # untilize compute: constexpr helper function
+    UNTILIZE_COMPUTE = """\
+#include <cstdint>
+
+constexpr uint32_t compute_num_blocks_per_column(uint32_t per_core_block_tile_cnt, uint32_t max_bct) {
+    for (uint32_t bct = max_bct; bct >= 1; --bct) {
+        if (per_core_block_tile_cnt % bct == 0) {
+            return per_core_block_tile_cnt / bct;
+        }
+    }
+    return 1;
+}
+
+void kernel_main() {
+    constexpr uint32_t n = compute_num_blocks_per_column(8, 4);
+}
+"""
+
+    # groupnorm compute: no pre-main (everything inside kernel_main)
+    GROUPNORM_COMPUTE = """\
+#include <cstdint>
+#define REDUCE_OP PoolType::SUM
+#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
+#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
+#define BCAST_DIM BroadcastType::COL
+#include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/bcast.h"
+
+void kernel_main() {
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+}
+"""
+
+    # eltwise unary sfpu: no pre-main, many includes
+    ELTWISE_SFPU_COMPUTE = """\
+#include <cstdint>
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/eltwise_unary/trigonometry.h"
+
+void kernel_main() {
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+}
+"""
+
+    # numeric.h inlined (simplified): nested namespace with template functions
+    NUMERIC_INLINED_COMPUTE = """\
+#include <cstdint>
+#include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include <type_traits>
+#include <array>
+
+namespace policies = norm::kernel_util::compute::policies;
+namespace generic = norm::kernel_util::generic;
+
+namespace norm::kernel_util::compute::numeric {
+
+namespace detail {
+
+constexpr uint32_t dst0 = 0;
+
+inline void scale_dest(uint32_t dst, uint32_t scalar) {
+    binop_with_scalar_tile_init();
+    mul_unary_tile(dst, scalar);
+}
+
+template <typename Block>
+inline void reduce_block(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, const Block& block) {
+    constexpr uint32_t onetile = 1;
+    reduce_init_delta<false>(cb_in, cb_scaler);
+    cb_wait_front(cb_scaler, onetile);
+    cb_reserve_back(cb_out, onetile);
+    tile_regs_acquire();
+    tile_regs_commit();
+    tile_regs_wait();
+    tile_regs_release();
+    cb_push_back(cb_out, onetile);
+    reduce_revert_delta(cb_in);
+}
+
+}  // namespace detail
+}  // namespace norm::kernel_util::compute::numeric
+
+namespace generic = norm::kernel_util::generic;
+namespace kutil = norm::kernel_util;
+namespace numeric = kutil::compute::numeric;
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+void kernel_main() {
+    ACQ();
+    REL();
+}
+"""
+
+    # Kernel with global/static variables in pre-main
+    GLOBALS_COMPUTE = """\
+#include <cstdint>
+
+static uint32_t phase_counter = 0;
+volatile uint32_t sync_flag = 0;
+constexpr uint32_t MAX_TILES = 64;
+
+ALWI void reset_state() {
+    phase_counter = 0;
+    sync_flag = 0;
+}
+
+void kernel_main() {
+    reset_state();
+    phase_counter++;
+}
+"""
+
+    # Kernel with Doxygen block comments (should be stripped)
+    DOXYGEN_COMPUTE = """\
+#include <cstdint>
+#include "compute_kernel_api/eltwise_binary.h"
+
+/**
+ * @brief Compute two-stage NOC addresses for distributed reduce.
+ * @tparam row_major Whether cores are indexed row-major
+ * @tparam N Number of remote workers
+ * @param addrs Array to populate
+ * @param x Starting X coordinate
+ */
+template <bool row_major, uint32_t N>
+inline void compute_noc_addrs(uint32_t* addrs, uint32_t x, uint32_t y) {
+    for (uint32_t i = 0; i < N; ++i) {
+        addrs[i] = x + i;
+    }
+}
+
+/**
+ * @file Short helper
+ */
+ALWI void sync() { /* noop */ }
+
+void kernel_main() {
+    uint32_t addrs[4];
+    compute_noc_addrs<true, 4>(addrs, 0, 0);
+    sync();
+}
+"""
+
+    # ---------------------------------------------------------------
+    # Structural validation helpers
+    # ---------------------------------------------------------------
+
+    @staticmethod
+    def _assert_balanced_braces(code: str, label: str = ""):
+        """Verify all braces are balanced in the merged code."""
+        depth = 0
+        for i, ch in enumerate(code):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            assert depth >= 0, f"Unbalanced '}}' at position {i} in {label}"
+        assert depth == 0, f"Unclosed '{{' (depth={depth}) in {label}"
+
+    @staticmethod
+    def _assert_no_orphaned_doxygen(code: str, label: str = ""):
+        """Verify no orphaned Doxygen artifacts (from broken block comment stripping)."""
+        for lineno, line in enumerate(code.split("\n"), 1):
+            stripped = line.strip()
+            # Orphaned Doxygen line starts with * but is not inside a block comment
+            assert not (
+                stripped.startswith("* @") or stripped == "*/"
+            ), f"Orphaned Doxygen artifact at line {lineno} in {label}: {stripped!r}"
+
+    @staticmethod
+    def _assert_no_duplicate_functions(code: str, label: str = ""):
+        """Check that no function signature appears more than once."""
+        import re
+
+        # Match function-like declarations: type name(...)
+        sigs = re.findall(
+            r"(?:ALWI|inline|FORCE_INLINE|constexpr)\s+\w+\s+(\w+)\s*\(",
+            code,
+        )
+        seen = {}
+        for sig in sigs:
+            seen[sig] = seen.get(sig, 0) + 1
+        dupes = {k: v for k, v in seen.items() if v > 1}
+        assert not dupes, f"Duplicate function signatures in {label}: {dupes}"
+
+    def _merge_sources(self, *sources):
+        """Run sources through the pre-main merging pipeline."""
+        from models.experimental.ops.descriptors.sequential import _collect_all_pre_main_code
+
+        indexed = list(enumerate(sources))
+        result, _ = _collect_all_pre_main_code(indexed)
+        return result
+
+    def _validate(self, result: str, label: str):
+        """Run all structural validations."""
+        self._assert_balanced_braces(result, label)
+        self._assert_no_orphaned_doxygen(result, label)
+        self._assert_no_duplicate_functions(result, label)
+
+    # ---------------------------------------------------------------
+    # Test 1: layernorm + matmul (namespace aliases vs using decl)
+    # ---------------------------------------------------------------
+    def test_layernorm_plus_matmul(self):
+        """Fuse layernorm (aliases + ALWI) with matmul (using decl, minimal)."""
+        result = self._merge_sources(self.LAYERNORM_COMPUTE, self.MATMUL_COMPUTE)
+        self._validate(result, "LN+matmul")
+        # LN pre-main content (shared items)
+        assert "namespace generic = norm::kernel_util::generic;" in result
+        assert "namespace kutil = norm::kernel_util;" in result
+        # LN functions get phase0_ prefix
+        assert "phase0_ACQ" in result
+        assert "phase0_REL" in result
+        # Matmul pre-main content (shared item)
+        assert "using std::uint32_t;" in result
+
+    # ---------------------------------------------------------------
+    # Test 2: layernorm + batchnorm (short helpers vs long helper)
+    # ---------------------------------------------------------------
+    def test_layernorm_plus_batchnorm(self):
+        """Fuse layernorm (short ACQ/REL) with batchnorm (13-param ALWI)."""
+        result = self._merge_sources(self.LAYERNORM_COMPUTE, self.BATCHNORM_COMPUTE)
+        self._validate(result, "LN+batchnorm")
+        assert "phase0_ACQ" in result
+        assert "phase1_batchnorm_bcast_tiles" in result
+        # Shared items
+        assert "namespace generic" in result
+
+    # ---------------------------------------------------------------
+    # Test 3: layernorm + eltwise binary_ng (aliases vs macro-heavy)
+    # ---------------------------------------------------------------
+    def test_layernorm_plus_eltwise_binary(self):
+        """Fuse layernorm (namespace aliases) with eltwise binary (macros + process_tile)."""
+        result = self._merge_sources(self.LAYERNORM_COMPUTE, self.ELTWISE_BINARY_COMPUTE)
+        self._validate(result, "LN+eltwise_binary")
+        assert "phase0_ACQ" in result
+        assert "phase1_process_tile" in result
+        assert "namespace generic" in result
+
+    # ---------------------------------------------------------------
+    # Test 4: rmsnorm_post + groupnorm (same REDUCE defines, different ACQ/REL)
+    # ---------------------------------------------------------------
+    def test_rmsnorm_post_plus_groupnorm(self):
+        """Fuse rmsnorm_post (multi-line ACQ/REL) with groupnorm (no pre-main)."""
+        result = self._merge_sources(self.RMSNORM_POST_COMPUTE, self.GROUPNORM_COMPUTE)
+        self._validate(result, "rmsnorm+groupnorm")
+        # rmsnorm pre-main has multi-line ACQ/REL, prefixed with phase0_
+        assert "phase0_ACQ" in result
+        assert "tile_regs_acquire" in result
+        assert "tile_regs_release" in result
+        # groupnorm has no pre-main, so nothing new added
+
+    # ---------------------------------------------------------------
+    # Test 5: layernorm + untilize (aliases + helpers vs constexpr function)
+    # ---------------------------------------------------------------
+    def test_layernorm_plus_untilize(self):
+        """Fuse layernorm (complex) with untilize (constexpr helper function)."""
+        result = self._merge_sources(self.LAYERNORM_COMPUTE, self.UNTILIZE_COMPUTE)
+        self._validate(result, "LN+untilize")
+        assert "phase0_ACQ" in result
+        assert "phase1_compute_num_blocks_per_column" in result
+
+    # ---------------------------------------------------------------
+    # Test 6: rmsnorm_post + layernorm (conflicting ACQ/REL signatures)
+    # ---------------------------------------------------------------
+    def test_rmsnorm_post_plus_layernorm(self):
+        """Fuse rmsnorm_post (multi-line ACQ/REL) with layernorm (single-line ACQ/REL).
+
+        Both define ACQ() and REL() with different bodies. Per-phase prefixing
+        gives each its own version, avoiding silent drops or redefinition errors.
+        """
+        result = self._merge_sources(self.RMSNORM_POST_COMPUTE, self.LAYERNORM_COMPUTE)
+        self._validate(result, "rmsnorm+LN")
+        # rmsnorm's multi-line version (phase 0)
+        assert "phase0_ACQ" in result
+        assert "tile_regs_acquire" in result
+        # layernorm's single-line version (phase 1) — now kept with its own prefix
+        assert "phase1_ACQ" in result
+        assert "acquire_dst" in result
+        # Namespace aliases from LN should still be present (shared)
+        assert "namespace generic" in result
+
+    # ---------------------------------------------------------------
+    # Test 7: 3-phase: layernorm + batchnorm + eltwise binary
+    # ---------------------------------------------------------------
+    def test_three_phase_ln_batchnorm_eltwise(self):
+        """Three-phase fusion: LN + batchnorm + eltwise binary."""
+        result = self._merge_sources(
+            self.LAYERNORM_COMPUTE,
+            self.BATCHNORM_COMPUTE,
+            self.ELTWISE_BINARY_COMPUTE,
+        )
+        self._validate(result, "LN+batchnorm+eltwise")
+        assert "phase0_ACQ" in result
+        assert "phase1_batchnorm_bcast_tiles" in result
+        assert "phase2_process_tile" in result
+        assert "namespace generic" in result
+
+    # ---------------------------------------------------------------
+    # Test 8: 4-phase: matmul + layernorm + batchnorm + untilize
+    # ---------------------------------------------------------------
+    def test_four_phase_diverse_ops(self):
+        """Four-phase fusion with maximally diverse ops."""
+        result = self._merge_sources(
+            self.MATMUL_COMPUTE,
+            self.LAYERNORM_COMPUTE,
+            self.BATCHNORM_COMPUTE,
+            self.UNTILIZE_COMPUTE,
+        )
+        self._validate(result, "matmul+LN+batchnorm+untilize")
+        # matmul (shared item)
+        assert "using std::uint32_t;" in result
+        # LN (shared + prefixed)
+        assert "namespace generic" in result
+        assert "phase1_ACQ" in result
+        # batchnorm
+        assert "phase2_batchnorm_bcast_tiles" in result
+        # untilize
+        assert "phase3_compute_num_blocks_per_column" in result
+
+    # ---------------------------------------------------------------
+    # Test 9: Inlined numeric.h namespace + Doxygen + globals
+    # ---------------------------------------------------------------
+    def test_complex_inlined_header_plus_doxygen_plus_globals(self):
+        """Complex inlined namespace (numeric.h) + Doxygen comments + globals.
+
+        Exercises: nested namespaces, block comment stripping, global
+        variable prefixing for all phases, template function dedup.
+        """
+        result = self._merge_sources(
+            self.NUMERIC_INLINED_COMPUTE,
+            self.DOXYGEN_COMPUTE,
+            self.GLOBALS_COMPUTE,
+        )
+        self._validate(result, "numeric+doxygen+globals")
+        # numeric.h namespace block (shared)
+        assert "norm::kernel_util::compute::numeric" in result
+        assert "scale_dest" in result
+        assert "reduce_block" in result
+        # Doxygen comments should be stripped
+        assert "@brief" not in result
+        assert "@tparam" not in result
+        assert "@param" not in result
+        # Doxygen kernel's template function should be present (in namespace, shared)
+        assert "compute_noc_addrs" in result
+        # Globals: ALL phases prefixed
+        assert "phase2_phase_counter" in result
+        assert "phase2_sync_flag" in result
+
+    # ---------------------------------------------------------------
+    # Test 10: 5-phase stress: all different ops
+    # ---------------------------------------------------------------
+    def test_five_phase_maximum_diversity(self):
+        """Five-phase fusion with maximum op diversity.
+
+        Exercises every pre-main pattern simultaneously: namespace aliases,
+        using declarations, ALWI short/long helpers, constexpr functions,
+        template functions, nested namespaces, global variables, Doxygen.
+        """
+        result = self._merge_sources(
+            self.LAYERNORM_COMPUTE,  # aliases + short ACQ/REL
+            self.BATCHNORM_COMPUTE,  # long ALWI helper
+            self.ELTWISE_BINARY_COMPUTE,  # ALWI process_tile
+            self.UNTILIZE_COMPUTE,  # constexpr helper
+            self.GLOBALS_COMPUTE,  # globals + ALWI reset_state
+        )
+        self._validate(result, "5-phase-stress")
+
+        # Phase 0 (LN): namespace aliases (shared) and helpers (prefixed)
+        assert "namespace generic = norm::kernel_util::generic;" in result
+        assert "phase0_ACQ" in result
+        assert "phase0_REL" in result
+
+        # Phase 1 (batchnorm): long helper function (prefixed)
+        assert "phase1_batchnorm_bcast_tiles" in result
+
+        # Phase 2 (eltwise binary): process_tile (prefixed)
+        assert "phase2_process_tile" in result
+
+        # Phase 3 (untilize): constexpr function (prefixed)
+        assert "phase3_compute_num_blocks_per_column" in result
+
+        # Phase 4 (globals): prefixed global variables + helper
+        assert "phase4_phase_counter" in result
+        assert "phase4_sync_flag" in result
+        assert "phase4_reset_state" in result
 
 
 if __name__ == "__main__":
