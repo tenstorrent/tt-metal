@@ -116,6 +116,7 @@ jobs:
       matrix-cpp-tests: ${{ steps.parse.outputs.matrix-cpp-tests }}
       matrix-sd-fd-tests: ${{ steps.parse.outputs.matrix-sd-fd-tests }}
       matrix-tutorials: ${{ steps.parse.outputs.matrix-tutorials }}
+      matrix-tt-train-tests: ${{ steps.parse.outputs.matrix-tt-train-tests }}
       matrix-wormhole-only: ${{ steps.parse.outputs.matrix-wormhole-only }}
       matrix-blackhole-only: ${{ steps.parse.outputs.matrix-blackhole-only }}
     steps:
@@ -219,6 +220,18 @@ jobs:
             matrix_tutorials=$(add_entry "$matrix_tutorials" "blackhole" "P100")
           fi
           echo "matrix-tutorials=$matrix_tutorials" >> $GITHUB_OUTPUT
+
+          # Matrix for tt-train-cpp-unit-tests (N150, N300, P100a, P150b)
+          matrix_tt_train='[]'
+          if [[ "$run_wormhole" == "true" ]]; then
+            matrix_tt_train=$(add_entry "$matrix_tt_train" "wormhole_b0" "N150")
+            matrix_tt_train=$(add_entry "$matrix_tt_train" "wormhole_b0" "N300")
+          fi
+          if [[ "$run_blackhole" == "true" ]]; then
+            matrix_tt_train=$(add_entry "$matrix_tt_train" "blackhole" "P100a")
+            matrix_tt_train=$(add_entry "$matrix_tt_train" "blackhole" "P150b")
+          fi
+          echo "matrix-tt-train-tests=$matrix_tt_train" >> $GITHUB_OUTPUT
 
           # Matrix for wormhole-only jobs (N150)
           matrix_wh='[]'
@@ -412,12 +425,12 @@ jobs:
     needs: [build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_cpp_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
+      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}

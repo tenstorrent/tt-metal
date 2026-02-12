@@ -16,8 +16,6 @@
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/tensor.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -704,10 +702,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch_2Heads_1Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 1024U,
@@ -721,10 +715,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     SDPATestConfig config{
         .batch_size = 16U,
         .sequence_length = 1024U,

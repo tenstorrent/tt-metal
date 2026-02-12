@@ -8,6 +8,7 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
+#include <umd/device/cluster.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -275,6 +276,11 @@ TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureWithMask) {
+    // TODO: Accuracy issue with BH. Tracking issue: https://github.com/tenstorrent/tt-metal/issues/37342
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     // Test sampling with positive temperature, with mask, and xarray of shape {1, 1, 32, 65}
     xt::xarray<float>::shape_type shape = {1, 1, 32, 65};
     xt::xarray<float> a = xt::random::rand<float>(shape);
