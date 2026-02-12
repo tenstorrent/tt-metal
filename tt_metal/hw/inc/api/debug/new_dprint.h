@@ -98,8 +98,6 @@
                 dprint_detail::checks::count_placeholders(format) ==                                                   \
                     dprint_detail::helpers::count_arguments(__VA_ARGS__),                                              \
             "Number of {} placeholders must match number of arguments");                                               \
-        /* TODO: In case we decide to optimize write into dprint buffer, we might want to reorder arguments. This */   \
-        /* will influence serialization and format update. Server side will remain the same.*/                         \
         /* Update format to include all necessary data */                                                              \
         constexpr auto updated_format =                                                                                \
             dprint_detail::formatting::update_format_string_from_args(format, __VA_ARGS__);                            \
