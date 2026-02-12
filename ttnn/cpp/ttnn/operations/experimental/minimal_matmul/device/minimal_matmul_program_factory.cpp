@@ -655,13 +655,14 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
                 in0_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
             // Strided reduce scatter signal info from the signaler
+            // Order must match OpSignaler constructor: cores first, then sem, then mcast
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
-            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
-            in0_args.push_back(1);  // mcast_signal_op_cores
             for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
                 in0_args.push_back(static_cast<uint32_t>(noc_core.x));
                 in0_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
+            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
+            in0_args.push_back(1);  // mcast_signal_op_cores
         }
         if (in1_idx == 0) {
             // in0 sender
@@ -702,13 +703,14 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
                 in1_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
             // Strided reduce scatter signal info from the signaler
+            // Order must match OpSignaler constructor: cores first, then sem, then mcast
             in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
-            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
-            in1_args.push_back(1);  // mcast_signal_op_cores
             for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
                 in1_args.push_back(static_cast<uint32_t>(noc_core.x));
                 in1_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
+            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
+            in1_args.push_back(1);  // mcast_signal_op_cores
         }
         if (in0_idx == 0) {
             // in1 sender
