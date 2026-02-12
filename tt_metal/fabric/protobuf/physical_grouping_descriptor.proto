@@ -24,62 +24,85 @@ package tt.tt_fabric.proto;
 // RULE 3: GROUPING REFERENCES (documented in comments, needs runtime check)
 //   - GroupingReference.grouping_name MUST reference a grouping that exists in groupings
 //
-// RULE 4: COUNT VALIDATION (documented in comments, type constraints)
-//   - If Grouping.name == "meshes": GroupingReference.count >= 1 (meshes can have 1 item)
-//   - If Grouping.name != "meshes":
-//     * If grouping has only one item: GroupingReference.count >= 2
-//     * If grouping has multiple items: each GroupingReference.count >= 1
-//     * Total logical items (expanded counts) must be >= 2
-//   - ENFORCED BY: uint32 type (ensures non-negative)
+// RULE 4: INSTANCE COUNT VALIDATION (documented in comments, type constraints)
+//   - If Grouping.name == "meshes": at least 1 instance required
+//   - Otherwise: at least 2 instances required
+//   - ENFORCED BY: repeated Instance instances (must be non-empty)
 //
-// RULE 5: GROUPING STRUCTURE (ENFORCED BY SCHEMA STRUCTURE - repeated oneof)
-//   - Each Grouping contains a list of items
-//   - Each item can be either an ASIC location OR a grouping reference (enforced by oneof)
-//   - ENFORCED BY: repeated GroupingItem items, where GroupingItem has oneof { asic_location | grouping_ref }
+// RULE 5: GROUPING STRUCTURE (ENFORCED BY SCHEMA STRUCTURE - repeated Instance)
+//   - Each Grouping contains a list of instances
+//   - Each instance must have a unique id and can be either an ASIC location OR a grouping reference (enforced by oneof)
+//   - ENFORCED BY: repeated Instance instances, where Instance has oneof { asic_location | grouping_ref }
 //   - Can mix ASIC locations and grouping references in the same grouping
 //
 // Example textproto:
+//   # Using predefined keywords (preset_name)
 //   groupings {
-//     name: "trays"
-//     items: [
-//       { asic_location: ASIC_LOCATION_1 },
-//       { asic_location: ASIC_LOCATION_2 },
+//     preset_name: TRAY_1
+//     instances: [
+//       { id: 0 asic_location: ASIC_LOCATION_1 },
+//       { id: 1 asic_location: ASIC_LOCATION_2 },
 //       # ... through ASIC_LOCATION_8
 //     ]
 //   }
 //   groupings {
-//     name: "hosts"
-//     items: [
-//       {
-//         grouping_ref {
-//           grouping_name: "trays"
-//           count: 4
-//         }
-//       }
+//     preset_name: MESH
+//     instances: [
+//       { id: 0 grouping_ref { preset_name: TRAY_1 } },
+//       { id: 1 grouping_ref { preset_name: TRAY_2 } }
+//     ]
+    //     row_major_mesh {
+    //       dims: [2, 1]
+    //       dim_types: [LINE, LINE]
+    //       num_connections: 2
+    //     }
+//   }
+//   # Using custom names
+//   groupings {
+//     custom_name: "hosts"
+//     instances: [
+//       { id: 0 grouping_ref { custom_name: "trays" } }
 //     ]
 //   }
 //   groupings {
-//     name: "meshes"
-//     items: [
-//       {
-//         grouping_ref {
-//           grouping_name: "hosts"
-//           count: 1
-//         }
-//       }
+//     custom_name: "meshes"
+//     instances: [
+//       { id: 0 grouping_ref { custom_name: "hosts" } },
+//       { id: 1 grouping_ref { custom_name: "hosts" } },
+//       { id: 2 grouping_ref { custom_name: "hosts" } },
+//       { id: 3 grouping_ref { custom_name: "hosts" } },
+//       { id: 4 grouping_ref { custom_name: "hosts" } },
+//       { id: 5 grouping_ref { custom_name: "hosts" } },
+//       { id: 6 grouping_ref { custom_name: "hosts" } },
+//       { id: 7 grouping_ref { custom_name: "hosts" } }
 //     ]
+    //     row_major_mesh {
+    //       dims: [2, 4]
+    //       dim_types: [LINE, RING]  # LINE and RING are enum values nested in RowMajorMeshConnection
+    //       num_connections: 2
+    //     }
 //   }
 //   groupings {
-//     name: "pods"
-//     items: [
-//       {
-//         grouping_ref {
-//           grouping_name: "meshes"
-//           count: 2
-//         }
-//       }
+//     custom_name: "pods"
+//     instances: [
+//       { id: 0 grouping_ref { custom_name: "meshes" } },
+//       { id: 1 grouping_ref { custom_name: "meshes" } }
 //     ]
+    //     all_to_all { num_connections: 2 }
 //   }
+    //   # Mixing preset keywords and custom names
+    //   groupings {
+    //     custom_name: "custom_group"
+    //     instances: [
+    //       { id: 0 grouping_ref { preset_name: MESH } },
+    //       { id: 1 grouping_ref { custom_name: "meshes" } }
+    //     ]
+    //     custom {
+    //       connections: [
+    //         { src_instance: 0 dst_instance: 1 num_connections: 2 }
+    //       ]
+    //     }
+    //   }
 
 // ASIC Location - predefined constants for ASIC positions 1-8 within a tray
 // These enum values are always available for use in grouping definitions
@@ -98,85 +121,163 @@ enum AsicLocation {
     ASIC_LOCATION_8 = 8;
 }
 
-// Reference to another grouping with a count
-// VALIDATION:
-//   - grouping_name: MUST reference an existing Grouping.name in the PhysicalGroupings.groupings list
-//   - count: Minimum value depends on the referencing grouping:
-//     * If referencing grouping name == "meshes": count >= 1
-//     * Otherwise: count >= 2
-message GroupingReference {
-    // Name of the grouping being referenced (e.g., "hosts", "meshes", "halftray")
-    // VALIDATION: Must match at least one Grouping.name in PhysicalGroupings.groupings
-    // Forward references are allowed (can reference a grouping defined later in the file)
-    string grouping_name = 1;
-
-    // Number of units from that grouping
-    // VALIDATION:
-    //   - If parent Grouping.name == "meshes": count >= 1 (meshes can have 1 item)
-    //   - Otherwise: count >= 2 (all other groupings must have at least 2 items)
-    //   - Type uint32 ensures non-negative values
-    uint32 count = 2;
+// Predefined grouping keywords - special reserved names for preset groups
+enum GroupingKeyword {
+    GROUPING_KEYWORD_UNSPECIFIED = 0;
+    TRAY_1 = 1;
+    TRAY_2 = 2;
+    TRAY_3 = 3;
+    TRAY_4 = 4;
+    HOSTS = 5;
+    MESH = 6;
 }
 
-// A single item in a grouping definition - can be either an ASIC location or a grouping reference
-// This allows mixing ASIC locations and grouping references in the same grouping
-message GroupingItem {
-    // Item type - EXACTLY ONE must be set (enforced by oneof)
-    oneof item {
-        // Single ASIC location enum value
-        // VALIDATION:
-        //   - Must use values from AsicLocation enum (ASIC_LOCATION_1 through ASIC_LOCATION_8)
-        //   - ASIC_LOCATION_UNSPECIFIED (0) should not be used
-        AsicLocation asic_location = 1;
+// Reference to another grouping (without count - instances are explicitly instantiated)
+// VALIDATION:
+//   - grouping_name: MUST reference an existing Grouping.name in the PhysicalGroupings.groupings list
+message GroupingReference {
+    // Name of the grouping being referenced - can be either a predefined keyword or a custom name
+    // VALIDATION: Must match at least one Grouping.name in PhysicalGroupings.groupings
+    // Forward references are allowed (can reference a grouping defined later in the file)
+    oneof grouping_name {
+        // Predefined keyword (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
+        GroupingKeyword preset_name = 1;
 
-        // Reference to another grouping with count
-        // VALIDATION:
-        //   - GroupingReference.grouping_name must reference an existing Grouping.name
-        //   - GroupingReference.count must satisfy:
-        //     * If parent Grouping.name == "meshes": count >= 1
-        //     * Otherwise: count >= 2
-        GroupingReference grouping_ref = 2;
+        // Custom grouping name (e.g., "hosts", "meshes", "pods", "superpods", "halftray")
+        string custom_name = 2;
     }
+}
+
+// A single instance in a grouping - represents one unit
+// Note: Topology is defined in the connections section, not on individual instances
+message Instance {
+    // Unique identifier for this instance within the grouping (used for connections)
+    // VALIDATION: Must be unique within the grouping's instances list
+    uint32 id = 1;
+
+    // Instance type - EXACTLY ONE must be set (enforced by oneof)
+    oneof instance_type {
+        // Single ASIC location enum value
+        AsicLocation asic_location = 2;
+
+        // Reference to another grouping
+        GroupingReference grouping_ref = 3;
+    }
+}
+
+// All-to-all connection - every instance connects to every other instance
+message AllToAllConnection {
+    // Number of connections between each pair of instances
+    uint32 num_connections = 1;
+}
+
+// Row-major mesh connection - instances arranged in a grid with mesh connectivity
+message RowMajorMeshConnection {
+    // Dimension type - defines wrap behavior for a dimension in row-major mesh
+    enum DimType {
+        INVALID_DIM_TYPE = 0;
+        LINE = 1;  // No wrap-around (endpoints not connected)
+        RING = 2;  // Wrap-around (endpoints connected, forming a ring)
+    }
+
+    // Dimensions of the mesh (e.g., [2, 4] for a 2x4 grid)
+    repeated int32 dims = 1;
+
+    // Per-dimension types (LINE or RING) - must match length of dims
+    // If omitted or shorter than dims, missing entries default to LINE
+    repeated DimType dim_types = 2;
+
+    // Number of connections per edge in the mesh
+    uint32 num_connections = 3;
+}
+
+// Custom connection - explicit connection between specific instances
+message CustomConnection {
+    // Source instance index (0-based, refers to instances list)
+    uint32 src_instance = 1;
+
+    // Destination instance index (0-based, refers to instances list)
+    uint32 dst_instance = 2;
+
+    // Number of connections from src to dst
+    uint32 num_connections = 3;
+}
+
+// Custom connections - list of explicit connections between specific instances
+message CustomConnections {
+    // List of custom connections
+    repeated CustomConnection connections = 1;
 }
 
 // A single grouping definition
 // VALIDATION RULES (encoded in schema structure):
-//   1. name: REQUIRED (non-empty string)
-//      - If name == "meshes": This grouping is REQUIRED to exist in PhysicalGroupings.groupings
+//   1. name: REQUIRED (exactly one of preset_name or custom_name must be set)
+//      - If custom_name == "meshes": This grouping is REQUIRED to exist in PhysicalGroupings.groupings
 //      - Same name can appear multiple times (multiple Grouping messages with same name)
-//   2. items: List of grouping items (ASIC locations and/or grouping references)
+//   2. instances: List of instances (ASIC locations and/or grouping references)
 //      - Can mix ASIC locations and grouping references in the same grouping
 //      - Must be non-empty
-//   3. grouping_ref: Each GroupingReference.count must satisfy Rule 4
+//   3. connections: Optional connection specification
+//      - If omitted, instances are not connected
+//      - If all_to_all or row_major_mesh: applies to all instances
+//      - If custom: can have multiple custom connections
 message Grouping {
-    // Name of this grouping (e.g., "meshes", "pods", "halftray", "trays", "hosts")
+    // Name of this grouping - can be either a predefined keyword or a custom name
     // VALIDATION:
-    //   - REQUIRED: Non-empty string
-    //   - If name == "meshes": This grouping MUST exist (at least one Grouping with this name)
+    //   - REQUIRED: Exactly one of preset_name (keyword) or custom_name must be set
+    //   - If custom_name == "meshes": This grouping MUST exist (at least one Grouping with this name)
     //   - Multiple Grouping messages can have the same name (allowed for custom groupings)
-    //   - Examples: "meshes", "pods", "superpods", "clusters", "halftray", "trays", "hosts"
-    string name = 1;
+    //   - Examples: preset_name: MESH, custom_name: "pods", custom_name: "superpods"
+    oneof name {
+        // Predefined keyword (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
+        GroupingKeyword preset_name = 1;
 
-    // List of grouping items - each item can be either an ASIC location or a grouping reference
-    // This allows mixing ASIC locations and grouping references in the same grouping
+        // Custom grouping name (e.g., "meshes", "pods", "superpods", "clusters", "halftray", "trays", "hosts")
+        string custom_name = 2;
+    }
+
+    // List of instances - each instance must have a unique ID and can be either an ASIC location or a grouping reference
+    // Note: Topology is defined in the connections section, not on individual instances
     // VALIDATION:
     //   - Must be non-empty
-    //   - Each item must have exactly one of: asic_location or grouping_ref (enforced by oneof)
-    // Example for trays: [ASIC_LOCATION_1, ASIC_LOCATION_2, ..., ASIC_LOCATION_8]
-    // Example for meshes: [grouping_ref { grouping_name: "hosts", count: 4 }]
-    // Example for superpods: [grouping_ref { grouping_name: "pods", count: 2 }, grouping_ref { grouping_name: "meshes", count: 4 }]
-    repeated GroupingItem items = 2;
+    //   - Each instance must have a unique id within this grouping
+    //   - Each instance must have exactly one of: asic_location or grouping_ref (enforced by oneof)
+    //   - If custom_name == "meshes": at least 1 instance required
+    //   - Otherwise: at least 2 instances required
+    // Example for trays: [Instance { id: 0 asic_location: ASIC_LOCATION_1 }, ...]
+    // Example for meshes: [Instance { id: 0 grouping_ref { grouping_name: "hosts" } }, ...]
+    // Example for pods: [Instance { id: 0 grouping_ref { grouping_name: "meshes" } }, Instance { id: 1 grouping_ref { grouping_name: "meshes" } }]
+    repeated Instance instances = 2;
+
+    // Connection specification - defines how instances connect and their topology
+    // This is separate from instances - connections reference instance IDs
+    // Topology (mesh dimensions, dimension types) is defined here, not on individual instances
+    // Optional - if omitted, instances are not connected
+    // VALIDATION:
+    //   - Exactly one connection type can be specified (enforced by oneof)
+    //   - Custom connections must reference valid instance IDs (src_instance and dst_instance must exist in instances)
+    //   - For row_major_mesh: dims product must equal number of instances
+    oneof connection {
+        // All-to-all connectivity - every instance connects to every other instance
+        AllToAllConnection all_to_all = 3;
+
+        // Row-major mesh connectivity - instances arranged in a grid
+        RowMajorMeshConnection row_major_mesh = 4;
+
+        // Custom explicit connections - list of edges between specific instances
+        CustomConnections custom = 5;
+    }
 }
 
 // Top-level message containing all groupings
 // VALIDATION RULES:
-//   1. groupings: Must contain at least one Grouping with name == "meshes"
+//   1. groupings: Must contain at least one Grouping with custom_name == "meshes"
 //   2. Multiple Grouping messages can have the same name (explicitly allowed)
 //   3. All GroupingReference.grouping_name values must reference a Grouping.name in this list
 message PhysicalGroupings {
     // List of all groupings
     // VALIDATION:
-    //   - Must contain at least one Grouping with name == "meshes" (REQUIRED)
+    //   - Must contain at least one Grouping with custom_name == "meshes" (REQUIRED)
     //   - Can contain multiple Grouping messages with the same name (allowed)
     //   - Order does not matter (forward references are allowed)
     //   - Each Grouping must satisfy the validation rules in the Grouping message
