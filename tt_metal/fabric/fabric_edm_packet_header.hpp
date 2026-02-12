@@ -316,7 +316,7 @@ static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader siz
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
 static_assert(
     sizeof(NocUnicastScatterAtomicIncFusedCommandHeader) == 32,
-    "NocUnicastScatterAtomicIncFusedCommandHeader size is not 29 bytes");
+    "NocUnicastScatterAtomicIncFusedCommandHeader size is not 32 bytes");
 static_assert(
     sizeof(NocUnicastInlineWriteCommandHeader) == 16, "NocUnicastInlineWriteCommandHeader size is not 16 bytes");
 static_assert(sizeof(NocUnicastAtomicIncCommandHeader) == 16, "NocUnicastAtomicIncCommandHeader size is not 16 bytes");
@@ -650,8 +650,10 @@ public:
 
         this->command_fields.unicast_scatter_write.chunk_count = chunk_count;
 
-        // Set destination addresses for the unicast write chunks and semaphore
+        // Set destination addresses and chunk encodings for the unicast write chunks
+        uint8_t chunk_encodings = 0;
         for (uint8_t i = 0; i < unicast_write_chunk_count; i++) {
+            // NoC Address
             const auto noc_address_components =
                 get_noc_address_components(noc_unicast_scatter_atomic_inc_fused_command_header.noc_address[i]);
             const auto noc_addr = safe_get_noc_addr(
@@ -660,7 +662,12 @@ public:
                 noc_address_components.second,
                 edm_to_local_chip_noc);
             this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
+            // Chunk Encoding
+            set_chunk_encoding(chunk_encodings, NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE, i);
         }
+
+        // Set the semaphore increment chunk destination address and chunk encoding
+        // NoC Address
         const auto semaphore_noc_address_components =
             get_noc_address_components(noc_unicast_scatter_atomic_inc_fused_command_header.semaphore_noc_address);
         const auto semaphore_noc_addr = safe_get_noc_addr(
@@ -669,10 +676,18 @@ public:
             semaphore_noc_address_components.second,
             edm_to_local_chip_noc);
         this->command_fields.unicast_scatter_write.noc_address[chunk_count - 1] = semaphore_noc_addr;
-        // Set the rest of the chunks to 0
-        for (uint8_t i = chunk_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
-            this->command_fields.unicast_scatter_write.noc_address[i] = 0;
-        }
+        // Chunk Encoding
+        static_assert(
+            NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH ==
+                NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH + 1,
+            "Fused unicast scatter write header assumes that CHUNK_ENCODING_SEMINC_FLUSH = "
+            "CHUNK_ENCODING_SEMINC_NO_FLUSH + 1");
+        const NocScatterWriteChunkEncoding seminc_chunk_encoding = static_cast<NocScatterWriteChunkEncoding>(
+            NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH +
+            noc_unicast_scatter_atomic_inc_fused_command_header.flush);
+        set_chunk_encoding(chunk_encodings, seminc_chunk_encoding, chunk_count - 1);
+
+        this->command_fields.unicast_scatter_write.chunk_encoding = chunk_encodings;
 
         // Set the chunk sizes for the unicast write chunks and semaphore
         // There will always be at least 2 unicast write chunks, and the last chunk's chunk size is implicit based on
@@ -694,22 +709,14 @@ public:
         // Place the semaphore increment chunk size in the last chunk
         this->command_fields.unicast_scatter_write.chunk_size[chunk_count - 1] =
             noc_unicast_scatter_atomic_inc_fused_command_header.val;
-        // Set the rest of the chunks to 0
-        for (uint8_t i = chunk_count; i < (NOC_SCATTER_WRITE_MAX_CHUNKS - 1); i++) {
-            this->command_fields.unicast_scatter_write.chunk_size[i] = 0;
-        }
 
-        // Set chunk encodings for each chunk
-        uint8_t chunk_encodings = 0;
-        for (uint8_t i = 0; i < unicast_write_chunk_count; i++) {
-            set_chunk_encoding(chunk_encodings, NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE, i);
+        // Set unused NoC addresses and chunk sizes to 0
+        for (uint8_t i = chunk_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+            this->command_fields.unicast_scatter_write.noc_address[i] = 0;
+            if (i < (NOC_SCATTER_WRITE_MAX_CHUNKS - 1)) {
+                this->command_fields.unicast_scatter_write.chunk_size[i] = 0;
+            }
         }
-        const NocScatterWriteChunkEncoding seminc_chunk_encoding =
-            (noc_unicast_scatter_atomic_inc_fused_command_header.flush
-                 ? NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH
-                 : NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH);
-        set_chunk_encoding(chunk_encodings, seminc_chunk_encoding, chunk_count - 1);
-        this->command_fields.unicast_scatter_write.chunk_encoding = chunk_encodings;
 
         this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
 #else
