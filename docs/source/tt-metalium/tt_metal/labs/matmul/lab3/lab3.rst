@@ -490,6 +490,14 @@ After this barrier the sender calls ``cb_pop_front`` to free the CB entry for th
 This preserves the usual CB producer-consumer protocol by ensuring that multicast data has been sent before any
 tile data is overwritten.
 
+Another thing worth noting is that ``noc_semaphore_set_multicast`` takes a pointer to a value to be multicast.
+The NOC hardware does a 4-byte read from that address and multicasts those 4 bytes to the receiver cores.
+We could pass a pointer to any memory location that holds ``VALID`` (e.g. a pointer to a ``uint32_t``) and
+pass that as the source. Instead of using an arbitrary value, we use the ``tile_sent`` semaphore, which is
+already allocated and otherwise unused on the sender. This avoids the need for an additional variable and
+makes the code more resilient to any future changes to sempahore's internal representation (e.g., if in the
+future semaphores hold more than 4 bytes).
+
 It is worth noting that NoC supports other more complex modes of operation, where the order of completion of commands may not match
 the order of their issuance. In such cases, it may be necessary to add an additional ``noc_async_write_barrier()`` after the tile multicast
 data to ensure that the semaphore set command is issued only after the data transfer completes.
@@ -588,7 +596,8 @@ In this exercise, you will intentionally introduce errors into the multicast sen
 and use the Tenstorrent watcher and DPRINT to help diagnose the problem.
 This is intended to give you hands-on experience with debugging tools for distributed NoC and semaphore issues
 in a controlled environment.
-Perform the following steps:
+
+Perform the following steps to complete the exercise:
 
 #. If you haven't already done so, from the root of the ``tt-metal`` repository, run the build script ``./build_metal.sh``.
 
@@ -696,7 +705,7 @@ Perform the following steps:
    | `k_ids: 5\|6\|7\|7\|7`   | Kernel IDs              | BRISC=5, NCRISC=6, TRISC0/1/2=7                          |
    +--------------------------+-------------------------+----------------------------------------------------------+
 
-   Kernels are idntified through their IDs, and mapping between kernel IDs and source file names is listed
+   Kernels are identified through their IDs, and mapping between kernel IDs and source file names is listed
    at the end of each dump section.
    Idle cores where the program hasn't created any kernels can easily be identified by their ``k_ids`` fields all set to 0.
 
@@ -709,60 +718,45 @@ Perform the following steps:
    However, in more complex cases, we may need to add additional instrumentation to the kernels to help us diagnose the problem.
    This could be either by adding additional waypoints, or by adding DPRINT statements to the code.
 
-In this exercise we have intentionally introduced NoC issues and then used Watcher to analyze the resulting behavior.
+#. Revert the receiver change by uncommenting the ``noc_semaphore_inc`` line in ``mcast_receiver.cpp``.
+   Reset the device using ``tt-smi -r``, then rerun the multicast example
+   with Watcher disabled and confirm that it completes successfully without hanging.
+
+In this exercise you have intentionally introduced NoC issues and then used Watcher to analyze the resulting behavior.
 Taken together, Watcher, waypoints, and DPRINTs provide a powerful set of tools for debugging NoC-related bugs
 in TT-Metalium multicast and multi-core programs.
 
 
-
-
-
-
-You may have noticed that the sender core doesn't specify any compute or writer kernels.
-While this is acceptable, it is not the most efficient way to use the sender core.
-In a real application, the sender core would also perform computation and writeback.
-
-Therefore, exercise ...
-
-
-Note that in this example the sender core only multicasts data; it does not currently run the same compute pipeline as receivers.
-You will change that in Exercise 1.
-
-
-
-
-
-
-
-
-Exercise ?: Extending the Standalone Multicast Example
+Exercise 2: Extending the Standalone Multicast Example
 ******************************************************
 
-In the provided example, the sender core only forwards data, while receivers perform the copy and writeback. In this exercise you will:
+You may have noticed that the sender core in the multicast example program doesn't specify any compute or writer kernels.
+While this is acceptable, it is not the most efficient use of the sender core resources as most of the core is idle.
+In a real application, the sender core would also perform computation and writeback.
+In this exercise you will extend the example program so that the sender core also participates in the same computation
+as the receiver cores.
 
-1. Build and run the example to verify it works as is.
-2. Extend it so that **the sender core also participates in the same computation**, using the same multicast data.
-3. Update the host side verification to include the sender's results.
+Perform the following steps to complete the exercise:
 
-Step 1: Build and run the base example
-======================================
+#. Start by copying the files from the ``lab_multicast`` directory into a new directory (e.g. ``lab3_exercise2``),
+   and rename the copied ``lab_eltwise_binary.cpp`` file to match the directory name (e.g. ``lab1_matmul.cpp``).
 
-1. Build the example host program and kernels, following the same pattern as in Labs 1 and 2.
-2. Run the executable.
-3. Confirm that:
-   * The program completes without errors.
-   * All receiver cores pass the verification step.
-   * Log messages indicate successful multicast and correct number of tiles.
+#. Update all ``CreateKernel`` calls to point to kernel source files in the new directory.
 
-You should see output similar to:
+#. Update ``CMakeLists.txt`` files in the new directory and in the parent directory to include the new executable,
+   then build and run the new program to confirm that it works as expected.
 
-.. code-block:: text
+#. Update the host program to include the sender core in the core range when creating the compute and writer kernels.
+   Observe that the compute and writer kernels themselves do not need to change at all.
 
-   [PASS] Receiver 1 received correct tensor (400 tiles)
-   [PASS] Receiver 2 received correct tensor (400 tiles)
-   [PASS] Receiver 3 received correct tensor (400 tiles)
-   [PASS] All 3 receivers received correct tensor data
-   Test Passed
+#. Update the host program to pass runtime arguments to the writer kernel for all cores in the core range,
+   including the sender core.
+
+#. Update ``output_data`` and related variables to account for the additional copy from the sender core.
+   Make sure that each core writes to a unique region of the output tensor.
+
+
+#. Make sure the output indicates correct number of receiver cores and output tiles.
 
 Step 2: Have the sender core also compute on the data
 =====================================================
@@ -818,7 +812,7 @@ Follow these steps to complete the exercise:
    * The sender already uses ``c_in0`` to hold input tiles.
    * For the compute and writer kernels, ensure they are created to run on:
      * All cores that should produce output (including the sender).
-   * Make sure ``c_out0`` (or the CB used for output tiles) exists and has the same size on the sender as on receivers.
+   * Make sure the CB used for output tiles exists and has the same size on the sender as on receivers.
 
 High level pseudocode for host side changes:
 
