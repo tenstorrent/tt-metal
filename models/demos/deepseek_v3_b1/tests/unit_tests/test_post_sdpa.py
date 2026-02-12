@@ -40,7 +40,22 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-@pytest.mark.parametrize("num_devices", [1, 2], ids=["single_device", "multi_device"])
+@pytest.mark.parametrize(
+    "num_devices, mesh_device, device_params",
+    [
+        (1, (1, 1), {}),
+        (
+            2,
+            (2, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(15232),
+            },
+        ),
+    ],
+    ids=["single_device", "multi_device"],
+    indirect=["mesh_device", "device_params"],
+)
 @pytest.mark.parametrize(
     "M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype",
     [
@@ -48,17 +63,6 @@ def create_fabric_router_config(max_payload_size):
     ],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)  # Open full mesh, create submesh
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
 @pytest.mark.parametrize("fuse_residual_add", [False, True])
 @pytest.mark.parametrize("ccl_enabled", [True, False], ids=["ccl_on", "ccl_off"])
 def test_post_sdpa(

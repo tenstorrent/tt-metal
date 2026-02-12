@@ -710,6 +710,7 @@ class PostSDPA:
                         fp32_dest_acc_en=fp32_dest_acc_en,
                         dst_full_sync_en=fp32_dest_acc_en,
                     ),
+                    defines=[("SKIP_CCL", "1")] if not ccl_enabled else [],
                     unified_compile_time_core_descriptors=[
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_matmul1_core",
