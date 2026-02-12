@@ -668,4 +668,48 @@ inline std::array<pack_counters_t, NUM_PACKERS> read_pack_counters()
     return config_vec;
 }
 
+enum class PackerProgramType
+{
+    ProgramByTile,
+    ProgramByFace,
+};
+
+/**
+ * Checks whether all packers' config and counters match the expected formats and face dimension.
+ *
+ * @param pack_src_format   Expected input data format for all packers
+ * @param pack_dst_format   Expected output data format for all packers
+ * @param face_r_dim       Expected face row dimension (pack_reads_per_xy_plane) (default FACE_R_DIM)
+ * @param nop_count        Number of nop operations to ensure configuration writes complete (default 10)
+ * @return true if all packer configurations match the expected values, false otherwise
+ */
+template <PackerProgramType program_type = PackerProgramType::ProgramByTile>
+inline bool are_packers_configured_correctly(
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t nop_count = 10)
+{
+    // Ensure configuration writes complete before subsequent operations
+    tensix_sync();
+    for (std::uint32_t i = 0; i < nop_count; i++)
+    {
+        asm volatile("nop");
+    }
+
+    const std::array<pack_config_t, NUM_PACKERS> config_vec     = read_pack_config();
+    const std::array<pack_counters_t, NUM_PACKERS> counters_vec = read_pack_counters();
+
+    for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
+    {
+        const std::uint32_t pack_src_format_i         = config_vec[i].in_data_format;
+        const std::uint32_t pack_dst_format_i         = config_vec[i].out_data_format;
+        const std::uint32_t pack_reads_per_xy_plane_i = counters_vec[i].pack_reads_per_xy_plane;
+        const bool isDataFormatCorrect                = (pack_src_format_i == pack_src_format && pack_dst_format_i == pack_dst_format);
+        const bool isFaceRDimCorrect                  = (program_type == PackerProgramType::ProgramByTile) ? true : (pack_reads_per_xy_plane_i == face_r_dim);
+        if (!isDataFormatCorrect || !isFaceRDimCorrect)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace ckernel::packer
