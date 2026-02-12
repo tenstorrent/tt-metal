@@ -126,9 +126,8 @@ void kernel_main() {
     open_connections(fabric_connection, num_connections, arg_for_fab);
 
     // pre-populate packet headers
-    // auto unicast_scatter_write_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    // auto unicast_sem_inc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto unicast_scatter_write_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto unicast_sem_inc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
 
     uint8_t unicast_num_hops[] = {static_cast<uint8_t>(1)};
 
@@ -137,37 +136,25 @@ void kernel_main() {
         pre_op_barrier_semaphore_noc0_x, pre_op_barrier_semaphore_noc0_y, pre_op_barrier_semaphore, 0);
     fabric_unicast_noc_unicast_atomic_inc(
         fabric_connection,
-        unicast_route_id,  // unicast sem inc route id
+        unicast_sem_inc_route_id,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_address, 1, false},
         unicast_num_hops);
 
     // set state for op semaphore
     uint64_t op_semaphore_noc_address = safe_get_noc_addr(op_semaphore_noc0_x, op_semaphore_noc0_y, op_semaphore, 0);
-    fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<UnicastFusedScatterWriteAtomicIncUpdateMask::All>(
+    fabric_unicast_noc_unicast_atomic_inc_set_state<UnicastAtomicIncUpdateMask::All>(
         fabric_connection,
-        unicast_route_id,
+        unicast_sem_inc_route_id,
         unicast_num_hops,
-        tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader(
-            {0, 0},                              // unicast write noc addresses
-            op_semaphore_noc_address,            // semaphore noc address
-            {static_cast<uint16_t>(page_size)},  // first chunk size
-            1,                                   // semaphore increment value
-            true                                 // flush
-            ),
-        page_size * 2);
-    // fabric_unicast_noc_unicast_atomic_inc_set_state<UnicastAtomicIncUpdateMask::All>(
-    //     fabric_connection,
-    //     unicast_sem_inc_route_id,
-    //     unicast_num_hops,
-    //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_address, 1, true});
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_address, 1, true});
 
-    // // set state for scatter write
-    // fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::All>(
-    //     fabric_connection,
-    //     unicast_scatter_write_route_id,
-    //     unicast_num_hops,
-    //     NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
-    //     page_size * 2);
+    // set state for scatter write
+    fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::All>(
+        fabric_connection,
+        unicast_scatter_write_route_id,
+        unicast_num_hops,
+        NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
+        page_size * 2);
 
     // execute pre op barrier wait phase
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
@@ -244,35 +231,22 @@ void kernel_main() {
                 // op hardcoded for each worker handling even multiple of 2 tiles, so always use scatter_write
                 cb_wait_front(reduced_cb_id, tile_granularity);
                 size_t intermediate_slice_l1_read_addr = get_read_ptr(reduced_cb_id);
-                // Only update the write dst addresses, the rest is already set above and will be ignored
-                fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state<
-                    UnicastFusedScatterWriteAtomicIncUpdateMask::WriteDstAddrs>(
+                fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                     fabric_connection,
-                    unicast_route_id,
+                    unicast_scatter_write_route_id,
                     intermediate_slice_l1_read_addr,
-                    tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader(
+                    NocUnicastScatterCommandHeader(
                         {intermediate_slice_noc_address_one, intermediate_slice_noc_address_two},
-                        op_semaphore_noc_address,            // ignored
-                        {static_cast<uint16_t>(page_size)},  // ignored
-                        1,                                   // ignored
-                        true                                 // ignored
-                        ));
-                // fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                //     fabric_connection,
-                //     unicast_scatter_write_route_id,
-                //     intermediate_slice_l1_read_addr,
-                //     NocUnicastScatterCommandHeader(
-                //         {intermediate_slice_noc_address_one, intermediate_slice_noc_address_two},
-                //         {static_cast<uint16_t>(page_size)}));
+                        {static_cast<uint16_t>(page_size)}));
 
                 noc_async_writes_flushed();
                 cb_pop_front(reduced_cb_id, tile_granularity);
 
-                // // TODO: #35925 fuse with data packet after support is added by fabric team
-                // fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
-                //     fabric_connection,
-                //     unicast_sem_inc_route_id,
-                //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_address, 1, true});
+                // TODO: #35925 fuse with data packet after support is added by fabric team
+                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
+                    fabric_connection,
+                    unicast_sem_inc_route_id,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_address, 1, true});
             }
         } else {
             while (tiles_read < tiles_to_read) {
