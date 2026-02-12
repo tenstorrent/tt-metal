@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
@@ -183,10 +182,7 @@ def tt_upsample_nchw(
     # TTNN bilinear interpolation follows align_corners=False semantics. For
     # DPT paths that require align_corners=True, execute an exact host
     # interpolation and convert back to TT tensor to preserve numerical parity.
-    # Opt-in env switch for perf experiments: keep op on-device and accept
-    # approximate align_corners behavior.
-    approx_align_corners = os.environ.get("DPT_TT_APPROX_ALIGN_CORNERS", "0") == "1"
-    if mode == "bilinear" and align_corners is True and not approx_align_corners:
+    if mode == "bilinear" and align_corners is True:
         x_torch = ttnn.to_torch(x).to(dtype=torch.float32)
         y_torch = torch.nn.functional.interpolate(
             x_torch,
