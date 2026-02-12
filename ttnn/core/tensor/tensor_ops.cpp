@@ -251,7 +251,7 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
 
     auto infer_output_memory_config = [](const MemoryConfig& input_memory_config,
                                          const tt::tt_metal::Shape& output_padded_shape) -> MemoryConfig {
-        if (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (input_memory_config.is_sharded()) {
             auto shard_spec = input_memory_config.shard_spec().value();
             auto shard_volume = shard_spec.numel();
             shard_spec.shape[1] = output_padded_shape[-1];  // update output shard to match new shard width
@@ -275,10 +275,10 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
             output_memory_config,
             new_logical_shape,
             new_padded_shape));
-
     // TODO (#25340): Review tensor topology logic for reshape
     auto output = std::visit(
-        [&input_tensor, &new_spec, &new_logical_shape, &new_padded_shape](auto&& storage) -> Tensor {
+        [&input_tensor, &new_spec, &new_logical_shape, &new_padded_shape, &output_memory_config](
+            auto&& storage) -> Tensor {
             using T = std::decay_t<decltype(storage)>;
             const auto& tensor = input_tensor;
 
@@ -287,54 +287,46 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                 if (input_tensor.layout() != Layout::ROW_MAJOR) {
                     return Tensor(std::move(device_storage), new_spec, tensor.tensor_topology());
                 }
-                if (tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+                if (!tensor.memory_config().is_sharded()) {
                     auto* device_buffer = device_storage.get_buffer();
-                    const auto& tensor_spec = tensor.tensor_spec();
-                    auto page_size_bytes = tensor_spec.compute_page_size_bytes();
+                    auto page_size_bytes = new_spec.compute_page_size_bytes();
                     device_buffer->set_page_size(page_size_bytes);
                     return Tensor(std::move(device_storage), new_spec, tensor.tensor_topology());
                 }
 
-                auto* device_buffer = device_storage.get_buffer();
-                tt::tt_metal::ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
+                tt::tt_metal::ShardSpec new_shard_spec = output_memory_config.shard_spec().value();
+                std::array<uint32_t, 2> shard_page_shape = {1, new_shard_spec.shape[1]};
+                std::array<uint32_t, 2> tensor2d_shape_in_pages = {
+                    new_spec.physical_shape().height() / shard_page_shape[0],
+                    new_spec.physical_shape().width() / shard_page_shape[1]};
+                tt::tt_metal::ShardSpecBuffer new_shard_spec_buffer =
+                    tt::tt_metal::ShardSpecBuffer(new_shard_spec, shard_page_shape, tensor2d_shape_in_pages);
 
-                auto shard_spec = shard_spec_buffer.tensor_shard_spec;
-                auto shard_shape = shard_spec.shape;
+                tt::tt_metal::Shape tensor_shape_pages(tensor2d_shape_in_pages);
+                tt::tt_metal::Shape shard_shape_pages(new_shard_spec_buffer.shape_in_pages());
+                tt::tt_metal::BufferDistributionSpec new_buffer_dist_spec = tt::tt_metal::BufferDistributionSpec(
+                    tensor_shape_pages, shard_shape_pages, new_shard_spec.grid, new_shard_spec.orientation);
 
-                uint32_t mul_div;
-                if (new_logical_shape[-1] == 0 || shard_shape[1] == 0) {
-                    mul_div = 0;
-                } else {
-                    mul_div = new_logical_shape[-1] > shard_shape[1] ? (new_logical_shape[-1] / shard_shape[1])
-                                                                     : (shard_shape[1] / new_logical_shape[-1]);
-                }
+                auto device_local_config = device_storage.mesh_buffer->device_local_config();
+                auto& sharding_args = device_local_config.sharding_args;
+                tt::tt_metal::BufferShardingArgs new_sharding_args(
+                    new_buffer_dist_spec, new_shard_spec_buffer, sharding_args.buffer_layout());
 
-                shard_spec.shape[0] =
-                    new_logical_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
-                shard_spec.shape[1] = new_logical_shape[-1];
+                tt::tt_metal::distributed::DeviceLocalBufferConfig new_device_config = {
+                    .page_size = new_spec.compute_page_size_bytes(),
+                    .buffer_type = device_local_config.buffer_type,
+                    .sharding_args = new_sharding_args,
+                    .bottom_up = device_local_config.bottom_up};
 
-                MemoryConfig mem_config = input_tensor.memory_config().with_shard_spec(shard_spec);
+                auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+                    device_storage.mesh_buffer->global_config(),
+                    new_device_config,
+                    device_storage.mesh_buffer->device(),
+                    device_storage.mesh_buffer->address());
+                tt::tt_metal::DeviceStorage view_storage(
+                    view_mesh_buffer, device_storage.coords, device_storage.get_mesh_buffer());
 
-                auto upd_spec = tt::tt_metal::TensorSpec(
-                    new_logical_shape,
-                    TensorLayout::fromPaddedShape(
-                        input_tensor.dtype(),
-                        input_tensor.tensor_spec().page_config(),
-                        mem_config,
-                        new_logical_shape,
-                        new_padded_shape));
-
-                shard_spec_buffer.page_shape = {1, new_logical_shape[-1]};
-                shard_spec_buffer.tensor2d_shape_in_pages = {
-                    upd_spec.physical_shape().height() / shard_spec_buffer.page_shape[0],
-                    upd_spec.physical_shape().width() / shard_spec_buffer.page_shape[1]};
-                shard_spec_buffer.set_shard_spec(shard_spec);
-                device_buffer->set_shard_spec(shard_spec_buffer);
-
-                auto page_size_bytes = upd_spec.compute_page_size_bytes();
-                device_buffer->set_page_size(page_size_bytes);
-
-                return Tensor(std::move(device_storage), upd_spec, tensor.tensor_topology());
+                return Tensor(view_storage, new_spec, tensor.tensor_topology());
 
             } else if constexpr (std::is_same_v<T, tt::tt_metal::HostStorage>) {
                 return Tensor(tensor.storage(), new_spec, tensor.tensor_topology());

@@ -39,14 +39,19 @@ private:
 struct DeviceStorage {
     std::vector<distributed::MeshCoordinate> coords;
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
+    std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer;
 
     DeviceStorage() = default;
     DeviceStorage(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_);
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+        std::vector<distributed::MeshCoordinate> coords_,
+        std::shared_ptr<distributed::MeshBuffer> root_buffer_ = nullptr);
 
     Buffer* get_buffer() const;
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
-
+    const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
+    void deallocate_root_mesh_buffer();
+    void reset_root_mesh_buffer();
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
 

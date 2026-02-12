@@ -135,10 +135,10 @@ void Tensor::deallocate_impl(bool force) {
             tt::stl::overloaded{
                 [](HostStorage&) {},
                 [this, force, &can_deallocate](DeviceStorage& storage) {
-                    if (can_deallocate(storage.mesh_buffer, force)) {
-                        storage.mesh_buffer->deallocate();
+                    if (can_deallocate(storage.get_root_mesh_buffer(), force)) {
+                        storage.deallocate_root_mesh_buffer();
                     }
-                    storage.mesh_buffer.reset();
+                    storage.reset_root_mesh_buffer();
                 }},
             this->tensor_attributes->get_storage());
     }
