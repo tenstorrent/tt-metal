@@ -340,7 +340,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         program,
         shard_cores,
         output_page_size,
-        output_pages / shard_cores.size(),
+        output_pages / shard_cores.num_cores(),
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype()),
         output_tensor.buffer());
     tt::tt_metal::CBHandle sharded_output_cb_handle = std::get<1>(output_cb);

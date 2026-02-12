@@ -377,20 +377,22 @@ def get_moe_compute_result(
                 tt_expert_scores = ttnn.to_memory_config(
                     tt_expert_scores_buffers[layer_id], memory_config=expert_scores_mem_config
                 )
+            import pdb
 
+            pdb.set_trace()
             # run the op
             (
-                l1_per_expert_total_tokens_output_tensor,
-                l1_expert_activation_output_tensor,
-                l1_e_t_output_tensor,
-                l1_output_tensor,  # 1,2,32,7168
+                l1_per_expert_total_tokens_output_tensor,  # 1, 4 (MeshDevice)
+                l1_expert_activation_output_tensor,  # 1, 4104 (MeshDevice)
+                l1_e_t_output_tensor,  # 2, 2052 (MeshDevice)
+                l1_output_tensor,  # 1,2,32,7168 (MeshDevice)
             ) = ttnn.experimental.moe_compute(
-                tt_sparse_buffer,  # 1, 128, 7168 (1, num_tokens, hidden_size)
-                tt_expert_indices,  # 1, 128, 1 (1, num_tokens, selected_experts_k)
-                tt_expert_scores,  # 1, 128, 1 (1, num_tokens, selected_experts_k)
-                tt_expert_mapping,  # 16, 32 (num_devices, experts)
-                tt_w0_w1,  # 1, 12, 1, 2, 3, 7168, 128
-                tt_w2,  # 1, 12, 1, 2, 5, 2240, 128
+                tt_sparse_buffer,  # 1, 512, 7168 (MeshDevice)
+                tt_expert_indices,  # 1, 512, 1 (MeshDevice)
+                tt_expert_scores,  # 1, 512, 1 (MeshDevice)
+                tt_expert_mapping,  # 16, 32 (MeshDevice)
+                tt_w0_w1,  # 1, 12, 1, 2, 3, 7168, 128 (MeshDevice)
+                tt_w2,  # 1, 12, 1, 2, 5, 2240, 128 (MeshDevice)
                 layer_id=layer_id,  # 0
                 cluster_axis=cluster_axis,  # 1
             )
@@ -550,7 +552,8 @@ def test_forward_pass(
         if isinstance(output_tensor, (list, tuple)):
             output_tensor = output_tensor[0]
         # (16, 2, 32, 7168) -> sum over experts -> (16, 32, 7168) -> (1, 512, 7168)
-        tt_output_torch = output_tensor.sum(dim=1).reshape(1, num_tokens, hf_config.hidden_size)
+        # import pdb; pdb.set_trace()
+        tt_output_torch = output_tensor  # .sum(dim=1).reshape(1, num_tokens, hf_config.hidden_size)
         reference_flat = reference_output.reshape(1, -1, reference_output.shape[-1])
         _pcc_passed, pcc_val = comp_pcc(tt_output_torch, reference_flat, 0.98)
         assert_hidden_dim_pcc(tt_output_torch, reference_flat, 0.98)

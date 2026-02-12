@@ -673,7 +673,9 @@ class DeepseekV3MoEInferTest(nn.Module):
         identity = hidden_states
         orig_shape = hidden_states.shape
         topk_idx, topk_weight = self.gate(hidden_states)
-        topk_weight = torch.ones_like(topk_weight)
+        if topk_weight.shape[1] == 1:
+            # if k is 1, the weight is not 1 here. So we set it to 1.
+            topk_weight = torch.ones_like(topk_weight)
         # num_tokens, 1; both
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         flat_topk_idx = topk_idx.view(-1)
@@ -706,7 +708,6 @@ class DeepseekV3MoEInferTest(nn.Module):
             outputs.append(expert_out)
             start_idx = end_idx
         # end
-
         outs = torch.cat(outputs, dim=0) if len(outputs) else sorted_tokens.new_empty(0)
 
         new_x = torch.empty_like(outs)
