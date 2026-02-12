@@ -94,7 +94,8 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/vision/generative/stable_diffusion/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_performance_bare_metal --timeout=480
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'stable_diffusion') }}
+        # Disabled on blackhole until the test is fixed; issue #37617
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && matrix.test-info.arch != 'blackhole' && (inputs.model == 'all' || inputs.model == 'stable_diffusion') }}
       # Disabled until the test is fixed; issue #35263
       # - name: Run sentence_bert model_perf test
       #   timeout-minutes: ${{ matrix.test-info.timeout }}
