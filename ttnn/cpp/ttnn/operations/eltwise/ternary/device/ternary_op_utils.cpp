@@ -289,9 +289,9 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             }
             break;
         case TernaryOpType::LERP:
-            // LERP will use lerp_tile_init and lerp_tile functions (to be implemented)
             defines["TERNARY_SFPU_OP_INIT"] = "lerp_tile_init";
-            defines["TERNARY_SFPU_OP_FUNC"] = "lerp_tile";
+            defines["TERNARY_SFPU_OP_FUNC"] =
+                (dtype == DataType::FLOAT32) ? "lerp_tile<DataFormat::Float32>" : "lerp_tile<DataFormat::Float16_b>";
             break;
         case TernaryOpType::ADDCMUL:
             defines["TERNARY_SFPU_OP_INIT"] = "addcmul_tile_init";
