@@ -302,6 +302,7 @@ class DPTTTPipeline:
         self.last_perf = {
             "mode": "tt",
             "execution_mode": requested_exec_mode,
+            "effective_execution_mode": requested_exec_mode,
             "requested_execution_mode": requested_exec_mode,
             "num_images": 1,
             "preprocess_ms": 0.0,
@@ -311,6 +312,8 @@ class DPTTTPipeline:
             "normalize_ms": None,
             "total_ms": total_ms,
             "fallback_counts": PERF_COUNTERS.snapshot(),
+            "full_trace_unavailable_reason": self._full_trace_unavailable_reason,
+            "fusion_trace_unavailable_reason": self._fusion_trace_unavailable_reason,
         }
 
         return depth_t.cpu().numpy()
@@ -335,6 +338,8 @@ class DPTTTPipeline:
         if requested_exec_mode not in {"eager", "trace", "trace_2cq"}:
             raise ValueError(f"Unsupported tt_execution_mode={requested_exec_mode!r}")
         effective_exec_mode = requested_exec_mode
+        if requested_exec_mode in {"trace", "trace_2cq"} and self._full_trace_unavailable_reason is not None:
+            effective_exec_mode = "eager"
 
         with torch.no_grad():
             for pv in preprocessed:
@@ -360,6 +365,8 @@ class DPTTTPipeline:
 
                     t2 = time.perf_counter()
                     depth = self._forward_fusion_head(pyramid, execution_mode=effective_exec_mode)
+                    if requested_exec_mode in {"trace", "trace_2cq"} and self._fusion_trace_unavailable_reason is not None:
+                        effective_exec_mode = "eager"
                     fusion_head_ms += (time.perf_counter() - t2) * 1000.0
                     # depth may be a TT tensor, torch tensor, or numpy array; ensure
                     # we normalize and return a float32 torch tensor.
@@ -386,6 +393,7 @@ class DPTTTPipeline:
         self.last_perf = {
             "mode": "tt",
             "execution_mode": effective_exec_mode,
+            "effective_execution_mode": effective_exec_mode,
             "requested_execution_mode": requested_exec_mode,
             "num_images": len(preprocessed),
             "preprocess_ms": preprocess_ms,
@@ -395,6 +403,8 @@ class DPTTTPipeline:
             "normalize_ms": normalize_ms,
             "total_ms": total_ms,
             "fallback_counts": PERF_COUNTERS.snapshot(),
+            "full_trace_unavailable_reason": self._full_trace_unavailable_reason,
+            "fusion_trace_unavailable_reason": self._fusion_trace_unavailable_reason,
         }
 
         return outputs
