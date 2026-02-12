@@ -18,6 +18,10 @@ constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 // Program ID FIFO size
 constexpr uint32_t PROGRAM_ID_FIFO_SIZE = 32;
 
+// Real-time profiler is only functional on Blackhole due to HW constraints.
+// On other architectures, all functions compile to no-ops.
+#if defined(ARCH_BLACKHOLE)
+
 // Append a program ID to the circular buffer.
 // Returns true if successful, false if the buffer is full.
 FORCE_INLINE
@@ -121,3 +125,24 @@ void set_program_id(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
         mailbox->kernel_end_b.id = id;
     }
 }
+
+#else  // !ARCH_BLACKHOLE — real-time profiler compiled out as no-ops
+
+FORCE_INLINE
+bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t) { return false; }
+
+FORCE_INLINE
+bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t*) { return false; }
+
+FORCE_INLINE
+void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t*, bool) {}
+
+FORCE_INLINE
+RealtimeProfilerState signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t*) {
+    return REALTIME_PROFILER_STATE_IDLE;
+}
+
+FORCE_INLINE
+void set_program_id(volatile tt_l1_ptr realtime_profiler_msg_t*) {}
+
+#endif  // ARCH_BLACKHOLE

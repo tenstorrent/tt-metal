@@ -143,8 +143,10 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
 
 // Signal the real-time profiler core and switch the ping-pong buffer state.
 // Wraps the state-switching logic from realtime_profiler.hpp with dispatch_s-specific NOC signaling.
+// Only functional on Blackhole; compiled out on other architectures.
 FORCE_INLINE
 void signal_realtime_profiler_core_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
+#if defined(ARCH_BLACKHOLE)
     DeviceZoneScopedN("signal_realtime_profiler_and_switch");
     RealtimeProfilerState new_state = signal_realtime_profiler_and_switch(mailbox);
 
@@ -154,6 +156,7 @@ void signal_realtime_profiler_core_and_switch(volatile tt_l1_ptr realtime_profil
             get_noc_addr_helper(mailbox->realtime_profiler_core_noc_xy, mailbox->realtime_profiler_mailbox_addr);
         dispatch_s_noc_inline_dw_write(realtime_profiler_addr, static_cast<uint32_t>(new_state), my_noc_index);
     }
+#endif
 }
 
 FORCE_INLINE
@@ -394,6 +397,7 @@ void kernel_main() {
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
+#if defined(ARCH_BLACKHOLE)
                 // Signal local TRISC to terminate
                 realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
                 // Signal remote real-time profiler core to terminate (if configured)
@@ -404,6 +408,7 @@ void kernel_main() {
                     dispatch_s_noc_inline_dw_write(
                         realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
                 }
+#endif
                 done = true;
                 break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);

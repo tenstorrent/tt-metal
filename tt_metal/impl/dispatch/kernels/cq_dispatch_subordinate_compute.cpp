@@ -29,7 +29,9 @@ constexpr uint32_t num_streams_to_monitor = NUM_STREAMS_TO_MONITOR;
 
 namespace NAMESPACE {
 void MAIN {
-#if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+// Real-time profiler stream monitoring is only functional on Blackhole due to HW constraints.
+// On other architectures, TRISC0 exits immediately.
+#if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0 && defined(ARCH_BLACKHOLE)
 
     // Array to track last seen count for each stream
     uint32_t last_counts[num_streams_to_monitor] = {0};
