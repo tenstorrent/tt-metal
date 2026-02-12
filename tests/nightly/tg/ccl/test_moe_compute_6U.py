@@ -889,15 +889,15 @@ def test_moe_compute(
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
     #########################################
 
-    # Drain tilize core is core (5,0) where indices and scores are sharded
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9))})
+    # Drain tilize core is core (6,9) where indices and scores are sharded
+    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))})
 
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
     # Each device gets its own row after sharding, but since it's replicated,
     # we give each device the full tensor and it uses its own row.
     # Expert mapping is constant across all runs.
     expert_mapping = gen_expert_mapping(experts, mesh_shape, cluster_axis)
-    expert_mapping_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    expert_mapping_mem_config = ttnn.L1_MEMORY_CONFIG
     tt_expert_mapping = ttnn.from_torch(
         expert_mapping,
         device=mesh_device,
