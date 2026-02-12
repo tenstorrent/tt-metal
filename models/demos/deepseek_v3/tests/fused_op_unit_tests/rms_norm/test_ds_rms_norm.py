@@ -46,12 +46,16 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
-    ("prefill", 128, "kv_lora_rank"): {"kernel": 7863.044, "op_to_op": 1929896.763},
-    ("decode", 1, "q_lora_rank"): {"kernel": 134, "op_to_op": 0.0},  # TODO
-    ("decode", 1, "kv_lora_rank"): {"kernel": 7690.514, "op_to_op": 1023748.442},
-    ("prefill", 128, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},  # TODO
-    ("prefill", 1024, "kv_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},  # TODO
-    ("prefill", 1024, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},  # TODO
+    ("decode", 1): {"kernel": 30.492, "op_to_op": 754.083},  # Measured: kernel=27.72, op_to_op=685.53
+    ("prefill", 128): {"kernel": 64.911, "op_to_op": 15608.395},  # Measured: kernel=59.01, op_to_op=14189.45
+    ("prefill", 1024, "kv_lora_rank"): {
+        "kernel": 45.244,
+        "op_to_op": 37423.566,
+    },  # Measured: kernel=41.131, op_to_op=34021.424
+    ("prefill", 1024, "q_lora_rank"): {
+        "kernel": 111.938,
+        "op_to_op": 106094.376,
+    },  # Measured: kernel=101.76, op_to_op=96449.43
 }
 
 

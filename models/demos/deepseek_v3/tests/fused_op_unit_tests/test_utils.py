@@ -440,12 +440,135 @@ def collect_device_perf(
         # No operation names - can only provide aggregate totals
         logger.warning("Device perf CSV does not contain operation names - providing aggregate totals only")
 
-        # Apply warmup filtering to the entire dataframe
-        if warmup_iters > 0 and len(df) > warmup_iters:
-            df = df.iloc[warmup_iters:]
+        # CRITICAL FIX: Filter to ONLY traced operations to exclude compile/eager ops
+        # Check if we have trace replay session IDs to filter by
+        if "METAL TRACE REPLAY SESSION ID" in df.columns:
+            # Filter to only rows with trace replay session ID (excludes compile/eager ops)
+            traced_mask = df["METAL TRACE REPLAY SESSION ID"].notna() & (df["METAL TRACE REPLAY SESSION ID"] != "")
+            traced_df = df[traced_mask].copy()
 
-        total_kernel_ns = float(df["DEVICE KERNEL DURATION [ns]"].sum())
-        total_op_to_op_ns = float(df["OP TO OP LATENCY [ns]"].sum())
+            if len(traced_df) > 0:
+                # Count unique trace replay sessions (iterations)
+                num_trace_sessions = traced_df["METAL TRACE REPLAY SESSION ID"].nunique()
+                num_traced_ops = len(traced_df)
+                ops_per_iteration = num_traced_ops / num_trace_sessions
+
+                logger.info(
+                    f"Filtered to {num_traced_ops} traced ops across {num_trace_sessions} iterations "
+                    f"({ops_per_iteration:.0f} ops/iter, excluded {len(df) - num_traced_ops} compile/eager ops)"
+                )
+
+                # Group by iteration and device to calculate per-device metrics
+                # Operations run in PARALLEL across devices, so we need max/avg, not sum!
+                device_iter_metrics = []
+                for session_id in traced_df["METAL TRACE REPLAY SESSION ID"].unique():
+                    session_df = traced_df[traced_df["METAL TRACE REPLAY SESSION ID"] == session_id]
+                    # For each device in this iteration
+                    for device_id in session_df["DEVICE ID"].unique():
+                        device_df = session_df[session_df["DEVICE ID"] == device_id]
+                        device_kernel = float(device_df["DEVICE KERNEL DURATION [ns]"].sum())
+                        device_op_to_op = float(device_df["OP TO OP LATENCY [ns]"].sum())
+                        device_iter_metrics.append(
+                            {
+                                "session": session_id,
+                                "device": device_id,
+                                "kernel_ns": device_kernel,
+                                "op_to_op_ns": device_op_to_op,
+                            }
+                        )
+
+                # Calculate per-iteration metrics using MAX across devices (critical path)
+                per_iter_metrics = []
+                for session_id in traced_df["METAL TRACE REPLAY SESSION ID"].unique():
+                    session_metrics = [m for m in device_iter_metrics if m["session"] == session_id]
+                    max_kernel = max(m["kernel_ns"] for m in session_metrics)
+                    max_op_to_op = max(m["op_to_op_ns"] for m in session_metrics)
+                    per_iter_metrics.append({"kernel_ns": max_kernel, "op_to_op_ns": max_op_to_op})
+
+                # Average across iterations
+                per_iter_kernel_ns = sum(m["kernel_ns"] for m in per_iter_metrics) / len(per_iter_metrics)
+                per_iter_op_to_op_ns = sum(m["op_to_op_ns"] for m in per_iter_metrics) / len(per_iter_metrics)
+
+                # Calculate per-op average (for reference)
+                per_op_kernel_ns = per_iter_kernel_ns / ops_per_iteration
+                per_op_op_to_op_ns = per_iter_op_to_op_ns / ops_per_iteration
+
+                logger.info(
+                    f"Per-iteration totals: kernel={per_iter_kernel_ns/1e3:.2f} us, "
+                    f"op-to-op={per_iter_op_to_op_ns/1e3:.2f} us, "
+                    f"total={(per_iter_kernel_ns + per_iter_op_to_op_ns)/1e3:.2f} us"
+                )
+                logger.info(
+                    f"Per-op averages: kernel={per_op_kernel_ns/1e3:.2f} us, "
+                    f"op-to-op={per_op_op_to_op_ns/1e3:.2f} us, "
+                    f"total={(per_op_kernel_ns + per_op_op_to_op_ns)/1e3:.2f} us"
+                )
+
+                # Return per-iteration totals (for comparison with e2e benchmark)
+                total_kernel_ns = per_iter_kernel_ns
+                total_op_to_op_ns = per_iter_op_to_op_ns
+            else:
+                # No traced operations - this is eager mode
+                # Use GLOBAL CALL COUNT to filter out compile operations
+                logger.info("No traced operations - running in eager mode, filtering by GLOBAL CALL COUNT")
+
+                if "GLOBAL CALL COUNT" in df.columns:
+                    # Filter to operations with call count >= 1024 to skip compile phase
+                    # Compile ops typically have lower call counts
+                    eager_mask = df["GLOBAL CALL COUNT"] >= 1024
+                    eager_df = df[eager_mask].copy()
+
+                    if len(eager_df) > 0:
+                        # Group by device and calculate per-device totals
+                        device_metrics = []
+                        for device_id in eager_df["DEVICE ID"].unique():
+                            device_df = eager_df[eager_df["DEVICE ID"] == device_id]
+                            device_kernel = float(device_df["DEVICE KERNEL DURATION [ns]"].sum())
+                            device_op_to_op = float(device_df["OP TO OP LATENCY [ns]"].sum())
+                            device_metrics.append(
+                                {"device": device_id, "kernel_ns": device_kernel, "op_to_op_ns": device_op_to_op}
+                            )
+
+                        # For parallel operations, use MAX across devices (critical path)
+                        total_kernel_ns_all = max(m["kernel_ns"] for m in device_metrics)
+                        total_op_to_op_ns_all = max(m["op_to_op_ns"] for m in device_metrics)
+
+                        # In eager mode, tests run DEVICE_PERF_ITERS (typically 10) iterations
+                        # We need to divide by this to get per-iteration time
+                        DEVICE_PERF_ITERS = 10  # Standard across all device perf tests
+                        total_kernel_ns = total_kernel_ns_all / DEVICE_PERF_ITERS
+                        total_op_to_op_ns = total_op_to_op_ns_all / DEVICE_PERF_ITERS
+
+                        logger.info(
+                            f"Eager mode: Filtered {len(eager_df)} operations (call count >= 1024) "
+                            f"across {len(device_metrics)} devices, {DEVICE_PERF_ITERS} iterations"
+                        )
+                        logger.info(
+                            f"Total (all iterations): kernel={total_kernel_ns_all/1e3:.2f} us, "
+                            f"op-to-op={total_op_to_op_ns_all/1e3:.2f} us, "
+                            f"total={(total_kernel_ns_all + total_op_to_op_ns_all)/1e3:.2f} us"
+                        )
+                        logger.info(
+                            f"Per-iteration average: kernel={total_kernel_ns/1e3:.2f} us, "
+                            f"op-to-op={total_op_to_op_ns/1e3:.2f} us, "
+                            f"total={(total_kernel_ns + total_op_to_op_ns)/1e3:.2f} us"
+                        )
+                    else:
+                        logger.warning("No operations found with call count >= 1024")
+                        total_kernel_ns = float(df["DEVICE KERNEL DURATION [ns]"].sum())
+                        total_op_to_op_ns = float(df["OP TO OP LATENCY [ns]"].sum())
+                else:
+                    logger.warning("GLOBAL CALL COUNT column not found - using all rows (may include compile ops)")
+                    total_kernel_ns = float(df["DEVICE KERNEL DURATION [ns]"].sum())
+                    total_op_to_op_ns = float(df["OP TO OP LATENCY [ns]"].sum())
+        else:
+            # Fallback: No trace session column, use old behavior but warn
+            logger.warning(
+                "METAL TRACE REPLAY SESSION ID column not found - "
+                "metrics may include compile/eager ops (will be inflated)"
+            )
+            total_kernel_ns = float(df["DEVICE KERNEL DURATION [ns]"].sum())
+            total_op_to_op_ns = float(df["OP TO OP LATENCY [ns]"].sum())
 
         # Create a single aggregate entry (convert to Python float for JSON serialization)
         op_stats["<all_ops_aggregate>"] = {
