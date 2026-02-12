@@ -186,9 +186,10 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
-          # Include workflow file and tool images Dockerfile in hash
-          # Tool images are versioned separately, but changes to Dockerfile.tools
-          # that affect the main build should trigger a rebuild
+          # Include workflow and Dockerfile.tools. The hash script extracts COPY sources from
+          # any Dockerfile passed as extra, so Dockerfile.tools brings in all tool install
+          # scripts (install-sfpi.sh, etc.). When a tool is updated, both tool image tag and
+          # main image hash change, triggering a rebuild.
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml dockerfile/Dockerfile.tools"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
@@ -204,11 +205,10 @@ jobs:
           BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
           echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
-          # Manylinux image copies OpenMPI from the tool image; include install-openmpi.sh
-          # in its tag so that when the OpenMPI build method changes (e.g. git vs tarball,
-          # which changes library SONAMEs), manylinux is rebuilt and the wheel sees the
-          # correct library names.
-          MANYLINUX_EXTRA_FILES="$EXTRA_FILES dockerfile/scripts/install-openmpi.sh"
+          # Manylinux image uses tool images (ccache, mold, sfpi, openmpi). EXTRA_FILES
+          # already includes all tool install scripts, so manylinux hash updates when any
+          # tool changes (e.g. OpenMPI build method change affecting library SONAMEs).
+          MANYLINUX_EXTRA_FILES="$EXTRA_FILES"
           MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $MANYLINUX_EXTRA_FILES)
           echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 

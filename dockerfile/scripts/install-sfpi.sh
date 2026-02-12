@@ -10,6 +10,7 @@
 # Do NOT hardcode version/hash values in this script or in Dockerfile.tools.
 set -euo pipefail
 
+
 INSTALL_DIR="${INSTALL_DIR:-/install}"
 
 # Source SFPI version information from the canonical source files
