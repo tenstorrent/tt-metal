@@ -15,11 +15,11 @@
 #include "profiler.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
-static constexpr uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
+static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -43,7 +43,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
             0, 0, FACE_R_DIM, 4, formats.unpack_src, formats.unpack_dst);
         PROFILER_SYNC();
 
-        for (uint32_t tile = 0; tile < params->TILE_CNT; tile++)
+        for (std::uint32_t tile = 0; tile < params->TILE_CNT; tile++)
         {
             _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                 PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_src, formats.unpack_dst);
@@ -63,7 +63,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         {
             for (int loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (uint32_t tile = 0; tile < params->TILE_CNT; tile++)
+                for (std::uint32_t tile = 0; tile < params->TILE_CNT; tile++)
                 {
                     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                         PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_src, formats.unpack_dst);
@@ -101,7 +101,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(4, formats.math);
 #endif
 
-        for (uint32_t block_tile = 0; block_tile < params->TILE_CNT; block_tile++)
+        for (std::uint32_t block_tile = 0; block_tile < params->TILE_CNT; block_tile++)
         {
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 block_tile, formats.math, formats.math, 4);
@@ -124,11 +124,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
         {
             for (int loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
+                for (std::uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
                 {
-                    uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
+                    std::uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
 
-                    for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
 #ifdef ARCH_BLACKHOLE
                         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
@@ -145,12 +145,12 @@ void run_kernel(const volatile struct RuntimeParams* params)
         {
             for (int loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
+                for (std::uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
                 {
-                    uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
+                    std::uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
 
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                    for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
 #ifdef ARCH_BLACKHOLE
                         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
@@ -202,7 +202,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         {
             for (int loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (uint32_t tile = 0; tile < params->TILE_CNT; tile++)
+                for (std::uint32_t tile = 0; tile < params->TILE_CNT; tile++)
                 {
                     // Left in a loop here since perf measurements are dividing with this TILE_CNT also
 
@@ -214,12 +214,12 @@ void run_kernel(const volatile struct RuntimeParams* params)
         {
             for (int loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
+                for (std::uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
                 {
-                    uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
+                    std::uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
 
                     _llk_packer_wait_for_math_done_();
-                    for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
