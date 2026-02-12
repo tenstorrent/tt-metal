@@ -360,9 +360,11 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         hidden_Wt * 32);
 
     // CB sizing for M-fits-L1 algorithm (full row caching)
-    const uint32_t num_tiles_xw1 = ((hidden_Wt + block_size - 1U) / block_size) * block_size;
-    const uint32_t num_tiles_xw3 = num_tiles_xw1;
-    const uint32_t num_tiles_m = num_tiles_xw1;
+    // Round up to block_size alignment for CB sizing (block alignment invariant)
+    const uint32_t hidden_Wt_rounded_up = ((hidden_Wt + block_size - 1U) / block_size) * block_size;
+    const uint32_t num_tiles_xw1 = hidden_Wt_rounded_up;
+    const uint32_t num_tiles_xw3 = hidden_Wt_rounded_up;
+    const uint32_t num_tiles_m = hidden_Wt_rounded_up;
 
     // W1/W3 CB size: double-buffered batched mcast
     const uint32_t w1_w3_cb_tiles = 2U * block_size * block_size;

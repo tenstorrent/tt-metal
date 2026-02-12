@@ -273,42 +273,6 @@ inline void read_tiles_by_row(
 }
 
 /**
- * Utility: read contiguous tiles in column-major order from DRAM to CB.
- *
- * @param cb_idx Circular buffer index to write to
- * @param addr_gen Address generator for DRAM access
- * @param start_idx Starting tile index in DRAM
- * @param num_tiles_to_read Number of tiles to actually read (may be less than num_tiles_to_push for tail blocks)
- * @param tile_bytes Size of each tile in bytes
- * @param stride Stride between consecutive tiles in column-major order
- * @param num_tiles_to_push Number of tiles to reserve/push in CB (buffer capacity)
- * @param UseBarrier Whether to call noc_async_read_barrier() (compile-time)
- */
-template <bool UseBarrier = true, typename AddrGen>
-inline void read_tiles_by_col(
-    const uint32_t cb_idx,
-    const AddrGen& addr_gen,
-    const uint32_t start_idx,
-    const uint32_t num_tiles_to_read,
-    const uint32_t tile_bytes,
-    const uint32_t stride,
-    const uint32_t num_tiles_to_push) {
-    cb_reserve_back(cb_idx, num_tiles_to_push);
-    uint32_t l1_addr = get_write_ptr(cb_idx);
-    for (uint32_t t = 0; t < num_tiles_to_read; ++t) {
-        uint32_t tile_idx = start_idx + t * stride;
-        noc_async_read_page(tile_idx, addr_gen, l1_addr);
-        l1_addr += tile_bytes;
-    }
-    // Note: If UseBarrier is false, caller must ensure noc_async_read_barrier() is called later as well as
-    // cb_push_back()
-    if constexpr (UseBarrier) {
-        noc_async_read_barrier();
-        cb_push_back(cb_idx, num_tiles_to_push);
-    }
-}
-
-/**
  * Utility: write a block of tiles from CB to DRAM in row-major order.
  *
  * @param cb_idx Circular buffer index to read from
@@ -398,6 +362,22 @@ void print_tile(const uint32_t cb_idx, const uint32_t tile_idx, const bool until
 }
 
 // ----- Multicast synchronization helper functions -----
+
+/**
+ * Configuration for loopback multicast (sender is also a receiver).
+ * Captures the 8 parameters that are constant across all mcast operations
+ * within a kernel. Create once, pass to mcast functions for cleaner call sites.
+ */
+struct McastLoopbackConfig {
+    volatile tt_l1_ptr uint32_t* sender_sem_ptr;
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr;
+    uint32_t receiver_sem_addr;
+    uint32_t noc_start_x;
+    uint32_t noc_start_y;
+    uint32_t noc_end_x;
+    uint32_t noc_end_y;
+    uint32_t num_receivers;  // excluding self
+};
 
 /**
  * Sender side: Wait for N receivers to signal ready, then reset sender semaphore
@@ -621,109 +601,37 @@ inline void mcast_sender_read_batched_rows_and_send_loopback(
 }
 
 /**
- * Complete sender-side multicast operation for batched column reads with padding support.
- * LOOPBACK VERSION: Sender is also a receiver, multicasts to all cores including self.
- *
- * @tparam AddrGen Address generator type
- * @param cb_idx Circular buffer index
- * @param addr_gen Address generator for DRAM reads
- * @param first_col_start Starting tile index of first column
- * @param tiles_per_col Number of tiles per column
- * @param num_cols Number of columns to batch
- * @param valid_tiles_per_col Actual valid tiles per column
- * @param valid_num_cols Actual valid columns
- * @param col_stride Stride between tiles in same column
- * @param tile_bytes Bytes per tile
- * @param sender_sem_ptr Sender semaphore pointer
- * @param receiver_sem_ptr Receiver semaphore pointer (local - sender is also receiver)
- * @param receiver_sem_addr Receiver semaphore L1 address
- * @param noc_start_x NOC start X coordinate
- * @param noc_start_y NOC start Y coordinate
- * @param noc_end_x NOC end X coordinate
- * @param noc_end_y NOC end Y coordinate
- * @param num_receivers_excluding_self Number of receiver cores NOT including the sender
+ * Convenience overload using McastLoopbackConfig struct.
+ * Reduces parameter count from 17 to 10 for cleaner call sites.
  */
 template <typename AddrGen>
-inline void mcast_sender_read_batched_cols_and_send_loopback(
+inline void mcast_sender_read_batched_rows_and_send_loopback(
     const uint32_t cb_idx,
     const AddrGen& addr_gen,
-    const uint32_t first_col_start,
-    const uint32_t tiles_per_col,
-    const uint32_t num_cols,
-    const uint32_t valid_tiles_per_col,
-    const uint32_t valid_num_cols,
-    const uint32_t col_stride,
+    const uint32_t first_row_start,
+    const uint32_t tiles_per_row,
+    const uint32_t num_rows,
+    const uint32_t valid_tiles_per_row,
+    const uint32_t valid_num_rows,
+    const uint32_t row_stride,
     const uint32_t tile_bytes,
-    volatile tt_l1_ptr uint32_t* sender_sem_ptr,
-    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
-    const uint32_t receiver_sem_addr,
-    const uint32_t noc_start_x,
-    const uint32_t noc_start_y,
-    const uint32_t noc_end_x,
-    const uint32_t noc_end_y,
-    const uint32_t num_receivers_excluding_self) {
-    const uint32_t total_tiles = tiles_per_col * num_cols;
-    const uint32_t num_dests_including_self = num_receivers_excluding_self + 1;
-
-    if (num_receivers_excluding_self > 0) {
-        // Multicast path with loopback
-        // CRITICAL: Wait for receivers BEFORE reserving CB to avoid deadlock.
-        mcast_sender_wait_for_receivers(sender_sem_ptr, num_receivers_excluding_self);
-
-        // Now safe to reserve CB space
-        cb_reserve_back(cb_idx, total_tiles);
-        const uint32_t l1_write_addr = get_write_ptr(cb_idx);
-
-        // Read all columns from DRAM
-        uint32_t l1_addr = l1_write_addr;
-        for (uint32_t col = 0; col < num_cols; ++col) {
-            const uint32_t actual_col = (col < valid_num_cols) ? col : (valid_num_cols - 1);
-            for (uint32_t row = 0; row < tiles_per_col; ++row) {
-                const uint32_t actual_row = (row < valid_tiles_per_col) ? row : (valid_tiles_per_col - 1);
-                const uint32_t tile_idx = first_col_start + actual_col + actual_row * col_stride;
-                const uint64_t noc_addr = addr_gen.get_noc_addr(tile_idx);
-                noc_async_read(noc_addr, l1_addr, tile_bytes);
-                l1_addr += tile_bytes;
-            }
-        }
-        noc_async_read_barrier();
-
-        // Multicast with loopback
-        mcast_sender_send_data_loopback(
-            l1_write_addr,
-            noc_start_x,
-            noc_start_y,
-            noc_end_x,
-            noc_end_y,
-            total_tiles * tile_bytes,
-            num_dests_including_self);
-
-        // Signal all including self
-        mcast_sender_signal_receivers_loopback(
-            receiver_sem_ptr,
-            receiver_sem_addr,
-            noc_start_x,
-            noc_start_y,
-            noc_end_x,
-            noc_end_y,
-            num_dests_including_self);
-
-        cb_push_back(cb_idx, total_tiles);
-    } else {
-        // Single-core path
-        cb_reserve_back(cb_idx, total_tiles);
-        uint32_t l1_addr = get_write_ptr(cb_idx);
-        for (uint32_t col = 0; col < num_cols; ++col) {
-            const uint32_t actual_col = (col < valid_num_cols) ? col : (valid_num_cols - 1);
-            for (uint32_t row = 0; row < tiles_per_col; ++row) {
-                const uint32_t actual_row = (row < valid_tiles_per_col) ? row : (valid_tiles_per_col - 1);
-                const uint32_t tile_idx = first_col_start + actual_col + actual_row * col_stride;
-                const uint64_t noc_addr = addr_gen.get_noc_addr(tile_idx);
-                noc_async_read(noc_addr, l1_addr, tile_bytes);
-                l1_addr += tile_bytes;
-            }
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_idx, total_tiles);
-    }
+    const McastLoopbackConfig& cfg) {
+    mcast_sender_read_batched_rows_and_send_loopback(
+        cb_idx,
+        addr_gen,
+        first_row_start,
+        tiles_per_row,
+        num_rows,
+        valid_tiles_per_row,
+        valid_num_rows,
+        row_stride,
+        tile_bytes,
+        cfg.sender_sem_ptr,
+        cfg.receiver_sem_ptr,
+        cfg.receiver_sem_addr,
+        cfg.noc_start_x,
+        cfg.noc_start_y,
+        cfg.noc_end_x,
+        cfg.noc_end_y,
+        cfg.num_receivers);
 }
