@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """
 TTTv2-style MLP module for TG (Galaxy) devices with 2D mesh topology.
 
 Single unified MLP2D class with separate forward methods:
-  - decode_forward(): For decode mode (seq_len <= 32)
-  - prefill_forward(): For prefill mode (seq_len > 32)
+  - decode_forward(): For decode mode
+  - prefill_forward(): For prefill mode
   - forward(x, mode): Dispatcher that calls the appropriate method
 
 Execution paths:
@@ -23,7 +23,14 @@ from typing import Any, Callable, Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
+from models.common.modules.tt_ccl import (
+    CCL_CHUNKS_PER_SYNC,
+    CCL_NUM_BUFFERS_PER_CHANNEL,
+    CCL_NUM_WORKERS_PER_LINK,
+    TT_CCL,
+    default_topology,
+    get_tt_ccl,
+)
 from models.common.tensor_utils import pad_dim_to_size
 from models.common.utility_functions import is_blackhole
 
@@ -37,7 +44,8 @@ class MLP2DConfig:
     """
     Central configuration for MLP2D - the single source of truth for all settings.
 
-    After __post_init__, all None fields are populated with derived defaults.
+    None fields are populated with derived defaults during config resolution
+    (inside ``MLP2D.__init__`` or ``MLP2D.from_config``).
 
     Simple usage (all defaults):
         config = MLP2DConfig(w1, w2, w3)
@@ -162,6 +170,7 @@ class MLP2D(LightweightModule):
         return instance
 
     def load_device_weights(self):
+        """Materialize LazyWeights onto device. Called automatically on first forward; idempotent."""
         if self._device_weights_loaded:
             return
 
@@ -218,9 +227,9 @@ class MLP2D(LightweightModule):
             memory_config=rs_mem_cfg,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=cfg.topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
 
         reduced_tensor = ttnn.experimental.all_gather_async(
@@ -233,9 +242,9 @@ class MLP2D(LightweightModule):
             topology=cfg.topology,
             memory_config=input_mem_cfg,
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
 
         reduced_tensor = ttnn.reshape(reduced_tensor, original_shape)
@@ -259,9 +268,9 @@ class MLP2D(LightweightModule):
             memory_config=memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
 
     def _all_gather_axis1(self, tensor: ttnn.Tensor, memory_config: Any) -> ttnn.Tensor:
@@ -278,9 +287,9 @@ class MLP2D(LightweightModule):
             topology=ttnn.Topology.Linear,
             memory_config=memory_config,
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
 
     def decode_forward(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
@@ -522,15 +531,19 @@ class MLP2D(LightweightModule):
         )
 
         # Get decode program configs from model_config
-        # Note: Handling legacy small dim behavior by setting configs to None if implicit check failed
+        # Note: Handling legacy small dim behavior by setting configs to None if implicit check failed.
+        # TTTv1 TG configs (FF1_3_TG_PROGCFG, FF2_TG_PROGCFG) assume shard layouts that only
+        # work for models with dim >= 8192 (e.g. Llama-70B). Smaller models fall back to TTNN defaults.
+        _MIN_DIM_FOR_TG_DECODE_CONFIGS = 8192
+
         decode_w1_w3_prg_config = model_config.get("FF1_3_TG_PROGCFG")
-        if args.dim < 8192:
+        if args.dim < _MIN_DIM_FOR_TG_DECODE_CONFIGS:
             # TT-Transformers TG FF2 config assumes a specific intermediate sharding that
-            # doesn't match this MLP2D implementation for dim<8192. Let TTNN pick defaults.
+            # doesn't match this MLP2D implementation for small dim. Let TTNN pick defaults.
             decode_w1_w3_prg_config = None
 
         decode_w2_prg_config = model_config.get("FF2_TG_PROGCFG")
-        if args.dim < 8192:
+        if args.dim < _MIN_DIM_FOR_TG_DECODE_CONFIGS:
             decode_w2_prg_config = None
 
         # Memory configs
@@ -539,7 +552,7 @@ class MLP2D(LightweightModule):
         # TT-Transformers config uses shard height 32*4 here; MLP2D tensors are height 32.
         # Passing this into to_memory_config can TT_FATAL on shard-height mismatch.
         ff2_out_reduce_scatter_memcfg = model_config.get("FF2_OUT_REDUCE_SCATTER_MEMCFG")
-        if args.dim < 8192:
+        if args.dim < _MIN_DIM_FOR_TG_DECODE_CONFIGS:
             # Some TT-Transformers configs size this as shard_height=32*cluster_rows (e.g. 256 on 8x4),
             # but MLP2D decode tensors here are height=32. Use the attention-input sharding instead.
             ff2_out_reduce_scatter_memcfg = model_config.get("SHARDED_ATTN_INPUT_MEMCFG")
@@ -633,19 +646,6 @@ class MLP2D(LightweightModule):
 
 
 # todo)) work with the CCL team to find opportunity to simplify this --> e.g., build into TTNN APIs?
-def _default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
-    """Auto-detect CCL topology based on cluster type and device count."""
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
-        # NOTE: we always want to do ring if it is available
-        return ttnn.Topology.Ring
-    elif num_devices > 1:
-        # NOTE: this should be a fallback when the ring is not available
-        return ttnn.Topology.Linear
-    return None
 
 
 def _compute_kernel_config_hifi2_fp16() -> ttnn.WormholeComputeKernelConfig:
@@ -703,7 +703,7 @@ def _resolve_mlp2d_config(config: MLP2DConfig) -> MLP2DConfig:
     # Auto-detect topology
     topology = config.topology
     if config.topology is None:
-        topology = _default_topology(mesh_device)
+        topology = default_topology(mesh_device)
         to_set["topology"] = topology
 
     # --- Phase 2: Dtypes and Tunings ---
