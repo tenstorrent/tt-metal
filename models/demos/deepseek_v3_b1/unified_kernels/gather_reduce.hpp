@@ -19,7 +19,7 @@ namespace deepseek_b1_ops {
 // GatherReduce micro-op
 //
 // Fuses dual-destination gather with pairwise reduction:
-// - 96 matmul sender cores are split into two 48-core halves by logical X.
+// - 96 matmul sender cores are split into two 48-core halves by row-major linear core index.
 // - Half0 senders write 64B pages into half0_dst_cb (CB7) on the receiver core.
 // - Half1 senders write 64B pages into half1_dst_cb (CB8) at matching sender_idx offsets.
 // - Receiver exposes both CBs as 3 x [16,32] tiles each.
@@ -79,15 +79,11 @@ struct GatherReduce {
         uint32_t receiver_semaphore_id;
         uint32_t src_cb;
         uint32_t src_num_pages;
-        uint32_t matmul_half_boundary_col;
-        uint32_t gather_reduce_half0_grid_start_x;
-        uint32_t gather_reduce_half0_grid_start_y;
-        uint32_t gather_reduce_half0_grid_end_x;
-        uint32_t gather_reduce_half0_grid_end_y;
-        uint32_t gather_reduce_half1_grid_start_x;
-        uint32_t gather_reduce_half1_grid_start_y;
-        uint32_t gather_reduce_half1_grid_end_x;
-        uint32_t gather_reduce_half1_grid_end_y;
+        uint32_t gather_reduce_grid_start_x;
+        uint32_t gather_reduce_grid_start_y;
+        uint32_t gather_reduce_grid_end_x;
+        uint32_t gather_reduce_grid_end_y;
+        uint32_t gather_reduce_half_num_cores;
         uint32_t half0_cb_id;
         uint32_t half1_cb_id;
     };
@@ -152,24 +148,15 @@ struct GatherReduce {
             // NCRISC (Sender) - DataMovementProcessor.RISCV_1
             // ================================================================
             if constexpr (IsSenderCore) {
-                bool is_half0 = (my_logical_x_ < args.matmul_half_boundary_col);
-                uint32_t dst_cb_id = is_half0 ? args.half0_cb_id : args.half1_cb_id;
+                const auto half_info = unified_kernels::get_split_half_core_info<true>(
+                    args.gather_reduce_grid_start_x,
+                    args.gather_reduce_grid_start_y,
+                    args.gather_reduce_grid_end_x,
+                    args.gather_reduce_grid_end_y,
+                    args.gather_reduce_half_num_cores);
+                uint32_t dst_cb_id = half_info.is_half0 ? args.half0_cb_id : args.half1_cb_id;
                 uint32_t dst_base_addr = get_write_ptr(dst_cb_id);
-                uint32_t sender_idx = 0;
-                if (is_half0) {
-                    sender_idx = unified_kernels::linear_id_in_grid<true>(
-                        args.gather_reduce_half0_grid_start_x,
-                        args.gather_reduce_half0_grid_start_y,
-                        args.gather_reduce_half0_grid_end_x,
-                        args.gather_reduce_half0_grid_end_y);
-                } else {
-                    sender_idx = unified_kernels::linear_id_in_grid<true>(
-                        args.gather_reduce_half1_grid_start_x,
-                        args.gather_reduce_half1_grid_start_y,
-                        args.gather_reduce_half1_grid_end_x,
-                        args.gather_reduce_half1_grid_end_y);
-                }
-                uint32_t dst_offset = sender_idx * args.data_size_bytes;
+                uint32_t dst_offset = half_info.half_local_idx * args.data_size_bytes;
 
                 uint32_t receiver_semaphore_addr = get_semaphore(args.receiver_semaphore_id);
                 const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);

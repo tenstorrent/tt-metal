@@ -118,15 +118,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_receiver_semaphore_id"),
         get_named_compile_time_arg_val("gather_reduce_src_cb"),
         get_named_compile_time_arg_val("gather_reduce_src_num_pages"),
-        get_named_compile_time_arg_val("matmul_half_boundary_col"),
-        get_named_compile_time_arg_val("gather_reduce_half0_grid_start_x"),
-        get_named_compile_time_arg_val("gather_reduce_half0_grid_start_y"),
-        get_named_compile_time_arg_val("gather_reduce_half0_grid_end_x"),
-        get_named_compile_time_arg_val("gather_reduce_half0_grid_end_y"),
-        get_named_compile_time_arg_val("gather_reduce_half1_grid_start_x"),
-        get_named_compile_time_arg_val("gather_reduce_half1_grid_start_y"),
-        get_named_compile_time_arg_val("gather_reduce_half1_grid_end_x"),
-        get_named_compile_time_arg_val("gather_reduce_half1_grid_end_y"),
+        get_named_compile_time_arg_val("gather_reduce_grid_start_x"),
+        get_named_compile_time_arg_val("gather_reduce_grid_start_y"),
+        get_named_compile_time_arg_val("gather_reduce_grid_end_x"),
+        get_named_compile_time_arg_val("gather_reduce_grid_end_y"),
+        get_named_compile_time_arg_val("gather_reduce_half_num_cores"),
         get_named_compile_time_arg_val("gather_reduce_half0_cb_id"),
         get_named_compile_time_arg_val("gather_reduce_half1_cb_id"),
     };
@@ -411,21 +407,22 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
 
     // Matmul CTArgs type alias (out_w is compile-time for TRISC)
-    constexpr uint32_t matmul_half_boundary_col = get_named_compile_time_arg_val("matmul_half_boundary_col");
+    const auto matmul_half_info = unified_kernels::get_split_half_core_info<true>(
+        get_named_compile_time_arg_val("matmul_grid_start_x"),
+        get_named_compile_time_arg_val("matmul_grid_start_y"),
+        get_named_compile_time_arg_val("matmul_grid_end_x"),
+        get_named_compile_time_arg_val("matmul_grid_end_y"),
+        get_named_compile_time_arg_val("matmul_half_num_cores"));
     constexpr uint32_t matmul_k_offset_half1 = get_named_compile_time_arg_val("matmul_k_offset_half1");
-    bool is_half0 = (my_logical_x_ < matmul_half_boundary_col);
-    uint32_t k_offset = is_half0 ? 0 : matmul_k_offset_half1;
+    uint32_t k_offset = matmul_half_info.is_half0 ? 0 : matmul_k_offset_half1;
 
     using MatmulCTArgs =
         deepseek_b1_ops::KNSlicedMatmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w_per_core")>;
 
     // Matmul compute args (from compile-time args, passed to op as runtime args)
-    constexpr uint32_t matmul_half0_in1 = get_named_compile_time_arg_val("matmul_half0_in1");
-    constexpr uint32_t matmul_half1_in1 = get_named_compile_time_arg_val("matmul_half1_in1");
-    uint32_t matmul_in1 = is_half0 ? matmul_half0_in1 : matmul_half1_in1;
     deepseek_b1_ops::KNSlicedMatmul::ComputeArgs matmul_args{
         get_named_compile_time_arg_val("matmul_in0"),
-        matmul_in1,
+        get_named_compile_time_arg_val("matmul_in1"),
         get_named_compile_time_arg_val("matmul_out"),
         k_offset,
         get_named_compile_time_arg_val("matmul_k_per_core"),
@@ -567,10 +564,7 @@ void kernel_main() {
     }
     if constexpr (Core::is_matmul_core) {
         // Matmul weights
-        constexpr uint32_t matmul_half0_in1 = get_named_compile_time_arg_val("matmul_half0_in1");
-        constexpr uint32_t matmul_half1_in1 = get_named_compile_time_arg_val("matmul_half1_in1");
-        constexpr uint32_t matmul_half_boundary_col = get_named_compile_time_arg_val("matmul_half_boundary_col");
-        uint32_t matmul_in1 = (my_logical_x_ < matmul_half_boundary_col) ? matmul_half0_in1 : matmul_half1_in1;
+        constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
         constexpr uint32_t matmul_k_num_tiles = get_named_compile_time_arg_val("matmul_k_per_core");
         constexpr uint32_t matmul_out_w_per_core = get_named_compile_time_arg_val("matmul_out_w_per_core");
         unified_kernels::setup_sharded_buffer(matmul_in1, matmul_k_num_tiles * matmul_out_w_per_core);

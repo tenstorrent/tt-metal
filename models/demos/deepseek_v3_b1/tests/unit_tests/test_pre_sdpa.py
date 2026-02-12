@@ -181,6 +181,7 @@ def test_pre_sdpa(
     torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
     torch_matmul_weights_half0 = torch_matmul_weights[: matmul_weights_shape[0] // 2, :]
     torch_matmul_weights_half1 = torch_matmul_weights[matmul_weights_shape[0] // 2 :, :]
+    torch_matmul_weights_packed = torch.cat([torch_matmul_weights_half0, torch_matmul_weights_half1], dim=1)
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
     # Matmul2 weights - create unshuffled first, then shuffle for device
@@ -281,53 +282,34 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # Matmul1 weights tensors - split into two explicit K halves
-    # half0 grid: cols 0-5, rows 0-7 (48 cores)
-    # half1 grid: cols 6-11, rows 0-7 (48 cores)
+    # Matmul1 packed weights tensor
+    # Pack [7168, 1536] -> [3584, 3072] by concatenating K-halves across width.
+    # Width-shard over full 96-core grid, giving per-core shard [3584, 32].
     matmul_grid_x = 12
     matmul_grid_y = 8
-    matmul_half0_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul_grid_x // 2 - 1, matmul_grid_y - 1))
-    matmul_half1_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(matmul_grid_x // 2, 0), ttnn.CoreCoord(matmul_grid_x - 1, matmul_grid_y - 1)
-    )
-    num_matmul_half_cores = (matmul_grid_x // 2) * matmul_grid_y
+    matmul_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul_grid_x - 1, matmul_grid_y - 1))
+    num_matmul_cores = matmul_grid_x * matmul_grid_y
     # WIDTH_SHARDED requires shard height == tensor height.
-    # Each half tensor is [3584, 1536], so per-core shard is [3584, 32].
-    matmul_half_shard_shape = (
+    # Packed tensor is [3584, 3072], so per-core shard is [3584, 32].
+    matmul_packed_shard_shape = (
         matmul_weights_shape[0] // 2,
-        matmul_weights_shape[1] // num_matmul_half_cores,
+        (matmul_weights_shape[1] * 2) // num_matmul_cores,
     )
-    matmul_half0_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({matmul_half0_grid}),
-        matmul_half_shard_shape,
+    matmul_packed_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({matmul_grid}),
+        matmul_packed_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    matmul_half1_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({matmul_half1_grid}),
-        matmul_half_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    matmul_half0_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul_half0_shard_spec
-    )
-    matmul_half1_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul_half1_shard_spec
+    matmul_packed_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul_packed_shard_spec
     )
 
-    ttnn_matmul_weights_half0 = ttnn.from_torch(
-        torch_matmul_weights_half0,
+    ttnn_matmul_weights = ttnn.from_torch(
+        torch_matmul_weights_packed,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=matmul_half0_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-    ttnn_matmul_weights_half1 = ttnn.from_torch(
-        torch_matmul_weights_half1,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=matmul_half1_mem_config,
+        memory_config=matmul_packed_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
@@ -602,8 +584,7 @@ def test_pre_sdpa(
         input_tensor_mesh,
         intermediate_tensor_mesh,
         ttnn_gamma,
-        ttnn_matmul_weights_half0,
-        ttnn_matmul_weights_half1,
+        ttnn_matmul_weights,
         ttnn_rmsnorm2_gamma,
         ttnn_matmul2_weights,
         ttnn_matmul3_weights,
@@ -634,8 +615,7 @@ def test_pre_sdpa(
             input_tensor_mesh,
             intermediate_tensor_mesh,
             ttnn_gamma,
-            ttnn_matmul_weights_half0,
-            ttnn_matmul_weights_half1,
+            ttnn_matmul_weights,
             ttnn_rmsnorm2_gamma,
             ttnn_matmul2_weights,
             ttnn_matmul3_weights,
@@ -667,8 +647,7 @@ def test_pre_sdpa(
             input_tensor_mesh,
             intermediate_tensor_mesh,
             ttnn_gamma,
-            ttnn_matmul_weights_half0,
-            ttnn_matmul_weights_half1,
+            ttnn_matmul_weights,
             ttnn_rmsnorm2_gamma,
             ttnn_matmul2_weights,
             ttnn_matmul3_weights,
