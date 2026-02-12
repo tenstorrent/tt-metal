@@ -161,7 +161,6 @@ static Op2DSliceConfig determine_slice_config_internal(
     const std::optional<Op2DSliceConfig> slice_config_,
     const tt::tt_metal::Layout output_layout,
     MeshDevice* device,
-    bool conv_bypass,
     bool is_retry_attempt) {
     if (slice_config_.has_value() && slice_config_.value().num_slices > 0) {
         return slice_config_.value();
@@ -243,7 +242,6 @@ static Op2DSliceConfig determine_slice_config_internal(
                 Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = 0},
                 output_layout,
                 device,
-                conv_bypass,
                 true);  // Mark as retry attempt
         }
         // Switch from height slicing to width slicing and try again.
@@ -254,13 +252,12 @@ static Op2DSliceConfig determine_slice_config_internal(
             Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_WIDTH, .num_slices = 0},
             output_layout,
             device,
-            conv_bypass,
             true);  // Mark as retry attempt
     }
 
     // If we haven't found a valid config, this is fatal
     TT_FATAL(
-        found_valid_config || conv_bypass,
+        found_valid_config,
         "DRAM Auto slice could not find valid slice configuration. Tried up to {} slices for {}-slicing on output "
         "dimension {}. Available L1: {} bytes. Operation requires more memory than available even with maximum "
         "slicing.",
@@ -279,18 +276,16 @@ Op2DSliceConfig determine_slice_config(
     const ttnn::Shape& output_shape,
     const std::optional<Op2DSliceConfig> slice_config_,
     const tt::tt_metal::Layout output_layout,
-    MeshDevice* device,
-    bool conv_bypass) {
+    MeshDevice* device) {
     return determine_slice_config_internal(
-        op_slice_attr, input_shape, output_shape, slice_config_, output_layout, device, conv_bypass, false);
+        op_slice_attr, input_shape, output_shape, slice_config_, output_layout, device, false);
 }
 
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     std::vector<OpSliceAttr::RefTensor>& output_tensors,
     OpSliceAttr* op_slice_attr,
-    const std::optional<Op2DSliceConfig> dram_slice_config_,
-    bool conv_bypass) {
+    const std::optional<Op2DSliceConfig> dram_slice_config_) {
     Op2DSliceConfig dram_slice_config;
 
     tt::tt_metal::Layout output_layout = output_tensors[0].get().layout();
@@ -355,7 +350,7 @@ void run_sliced_op(
             dram_slice_config.slice_type);
     }
     TT_FATAL(
-        dram_slice_config.num_slices <= max_num_slices || conv_bypass,
+        dram_slice_config.num_slices <= max_num_slices,
         "Number of slices ({}) exceeds the maximum allowed ({}) for the given output dimension and alignment.",
         dram_slice_config.num_slices,
         max_num_slices);
