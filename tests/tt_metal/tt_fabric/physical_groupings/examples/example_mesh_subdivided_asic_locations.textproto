@@ -2,74 +2,68 @@
 # This example shows defining a custom grouping called "halftray" multiple times
 # with different ASIC locations, both representing a half tray concept
 
-
-groupings {
-  name: "trays"
-  items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 },
-    { asic_location: ASIC_LOCATION_5 },
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
-  ]
-}
-
-groupings {
-  name: "hosts"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 4 } }
-  ]
-}
-
 # Custom grouping: Half tray - defined multiple times with different ASIC locations
 # Both represent the same "half tray" concept
 groupings {
-  name: "halftray"
-  items: [
-    { asic_location: ASIC_LOCATION_1 },  # Lower half (locations 1-4)
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 }
+  custom_name: "halftray"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },  # Lower half (locations 1-4)
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
+    dim_types: [LINE, LINE]
+    num_connections: 2
+  }
+}
+
+groupings {
+  custom_name: "halftray"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_5 },  # Upper half (locations 5-8)
+    { id: 1 asic_location: ASIC_LOCATION_6 },
+    { id: 2 asic_location: ASIC_LOCATION_7 },
+    { id: 3 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
+    dim_types: [LINE, LINE]
+    num_connections: 2
+  }
+}
+
+groupings {
+  custom_name: "meshes"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "halftray" } }  # Each mesh uses 1 half tray (can be either lower or upper)
   ]
 }
 
 groupings {
-  name: "halftray"
-  items: [
-    { asic_location: ASIC_LOCATION_5 },  # Upper half (locations 5-8)
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
+  custom_name: "pods"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Must have at least 2 instances
+    { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "halftray" count: 1 } }  # Each mesh uses 1 half tray (can be either lower or upper)
+  custom_name: "superpods"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "pods" } },  # Must have at least 2 instances
+    { id: 1 grouping_ref { custom_name: "pods" } }
   ]
+  all_to_all { num_connections: 2 }
 }
 
 groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Must have at least 2 items
+  custom_name: "clusters"
+  instances: [
+    { id: 0 grouping_ref { custom_name: "superpods" } },  # Must have at least 2 instances
+    { id: 1 grouping_ref { custom_name: "superpods" } }
   ]
-}
-
-groupings {
-  name: "superpods"
-  items: [
-    { grouping_ref { grouping_name: "pods" count: 2 } }  # Must have at least 2 items
-  ]
-}
-
-groupings {
-  name: "clusters"
-  items: [
-    { grouping_ref { grouping_name: "superpods" count: 2 } }  # Must have at least 2 items
-  ]
+  all_to_all { num_connections: 2 }
 }
