@@ -530,6 +530,67 @@ initiating the operation in the multicast operation. These functions are ``noc_a
 ``noc_semaphore_set_multicast_loopback_src``.
 
 
+Debugging Hangs with Watcher
+****************************
+
+Given that multicast is a relatively complex operation, it is possible to introduce bugs that are difficult to debug.
+For example, forgetting to update a semaphore, updating semaphores at wrong points in the code, or passing incorrect
+coordinates to NoC APIs can lead to program hanging indefinitely.
+
+The **Watcher** tool in TT-Metalium is a debug facility that instruments firmware and kernels and runs a
+host-side monitoring thread to catch common programming errors and hangs.
+On a fatal error, Watcher stops the program and reports a clear message.
+On a hang, the log shows which kernels and cores were active at the time of the hang.
+
+Watcher can be enabled by setting an environment variable before running your program::
+
+    # Enable Watcher with a 10 second polling interval
+    export TT_METAL_WATCHER=10
+
+The numeric value is the interval, in seconds, between Watcher status dumps. Small values like 1 give very frequent snapshots and
+are convenient while you are developing or chasing a hang, at the cost of extra performance overhead.
+Larger values like 60 or 120 are less intrusive and are better when you only want a periodic heartbeat.
+
+When enabled, Watcher will print messages such as "Watcher checking device 0" to the terminal and write a log file
+(typically in ``generated/watcher/watcher.log``) that summarizes the kernel IDs that were running, as well as the
+last **waypoint** string hit on each RISC-V. Waypoints are short markers you can insert into kernel code to tag key
+positions like "entered main loop" or "finished writing". Various TT-Metalium APIs already encode waypoints into their code.
+For example, if you examine the code for ``noc_semaphore_wait`` in ``tt_metal/hw/inc/api/dataflow/dataflow_api.h``,
+you can observe that it encodes the waypoint "NSW" (for "NoC Semaphore Wait") before waiting on a semaphore and "NSD" (for "NoC Semaphore Done") after.
+
+
+Exercise 1: Using Watcher to Debug NoC Errors and Hangs
+=======================================================
+
+To illustrate how Watcher can be used to debug NoC errors and hangs, we will use the ``lab_multicast`` example program.
+
+
+
+We will illustrate how watcher can hel
+You can introduce a very simple artificial hang by commenting out the call to ``noc_semaphore_inc`` in ``mcast_receiver.cpp``,
+as if you accidentally forgot it.
+
+
+Add waypoints as shown above and run the example with Watcher enabled:
+
+.. code-block:: bash
+
+   export TT_METAL_WATCHER=5
+   ./build/programming_examples/metal_example_lab_eltwise_binary
+
+When it becomes apparent that the program has been running for a long time without indication of progress, terminate it from the host
+(for example with Ctrl+C) and open `generated/watcher/watcher.log` to see the last waypoint before the hang.
+The waypoint field for the compute RISC-V processor should show something like `LOP2`, indicating that execution reached inside
+the main loop but never got as far as `DONE`.
+That strongly suggests a problem in the loop body, such as a missing `cb_pop_front` that prevents progress.
+
+Watcher adds extra checking and bookkeeping code, so it has a nonzero performance and code-size cost.
+Therefore Watcher should be disabled when doing performance benchmarking or production runs.
+
+For more information about the Watcher, refer to https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/watcher.html
+
+
+
 
 
 
