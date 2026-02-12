@@ -31,6 +31,8 @@ class TorchTTNNTensor(torch.Tensor):
 
     @property
     def shape(self):
+        if self.ttnn_distributed_tensor_config is not None and self.ttnn_tensor is not None:
+            return self.ttnn_distributed_tensor_config.get_logical_shape(self.ttnn_tensor.shape)
         return self.elem.shape if self.elem is not None else tuple(int(i) for i in self.ttnn_tensor.shape)
 
     def __mul__(self, other):
