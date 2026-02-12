@@ -5,7 +5,7 @@
 import os
 from os import listdir
 from os.path import isfile, join
-from typing import Optional
+from typing import List, Optional, Union
 
 import jiwer
 import pytest
@@ -152,9 +152,11 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     """
     if generation_params is None:
         generation_params = GenerationParams()
+    # For model loading, use first item if list (language/task are batch-homogeneous)
+    params_for_model = generation_params[0] if isinstance(generation_params, list) else generation_params
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model(
-        model_repo, generation_params.language, generation_params.task
+        model_repo, params_for_model.language, params_for_model.task
     )
     parameters, ttnn_linear_weight, kv_cache, cross_attn_cache = init_conditional_generation_tt_model(
         hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper, max_batch_size=batch_size_per_device
@@ -181,7 +183,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         current_batch,
         stream=False,
         return_perf_metrics=False,
-        generation_params_override: Optional[GenerationParams] = None,
+        generation_params_override: Optional[Union[GenerationParams, List[GenerationParams]]] = None,
     ):
         # Use override if provided, otherwise use the original generation_params
         params = generation_params_override if generation_params_override is not None else generation_params
@@ -722,6 +724,11 @@ def test_demo_for_audio_classification_dataset(
     "prompt",
     [None],
 )
+@pytest.mark.parametrize(
+    "use_per_request_params",
+    [False, True],
+    ids=["single_params", "per_request_params"],
+)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(
     "device_params",
@@ -744,6 +751,7 @@ def test_demo_for_conditional_generation(
     batch_size_per_device,
     stream,
     prompt,
+    use_per_request_params,
     request,
 ):
     # Skip test in CI when using generate_kwargs
@@ -754,16 +762,39 @@ def test_demo_for_conditional_generation(
     ):
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
-    generation_params = GenerationParams(
-        temperatures=temperatures,
-        compression_ratio_threshold=compression_ratio_threshold,
-        logprob_threshold=logprob_threshold,
-        no_speech_threshold=no_speech_threshold,
-        return_timestamps=return_timestamps,
-        language=language,
-        task=task,
-        prompt=prompt,
-    )
+    # Per-request params only apply when batch_size >= 2
+    if use_per_request_params and batch_size_per_device < 2:
+        pytest.skip("Per-request params require batch_size_per_device >= 2")
+
+    # When use_per_request_params, pass a list of different params per request (e.g., return_timestamps)
+    if use_per_request_params:
+        batch_size = batch_size_per_device * mesh_device.get_num_devices()
+        generation_params = []
+        for i in range(batch_size):
+            # Vary return_timestamps per request: even indices get timestamps, odd get plain text
+            params = GenerationParams(
+                temperatures=temperatures,
+                compression_ratio_threshold=compression_ratio_threshold,
+                logprob_threshold=logprob_threshold,
+                no_speech_threshold=no_speech_threshold,
+                return_timestamps=(i % 2 == 0),
+                language=language,
+                task=task,
+                prompt=prompt,
+            )
+            generation_params.append(params)
+    else:
+        generation_params = GenerationParams(
+            temperatures=temperatures,
+            compression_ratio_threshold=compression_ratio_threshold,
+            logprob_threshold=logprob_threshold,
+            no_speech_threshold=no_speech_threshold,
+            return_timestamps=return_timestamps,
+            language=language,
+            task=task,
+            prompt=prompt,
+        )
+
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
         mesh_device,

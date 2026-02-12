@@ -256,7 +256,7 @@ class WhisperGenerator:
     def generate(
         self,
         current_batch,
-        generation_params: Optional[GenerationParams] = None,
+        generation_params: Optional[Union[GenerationParams, List[GenerationParams]]] = None,
         stream_generation=False,
         return_perf_metrics=False,
     ):
@@ -265,7 +265,7 @@ class WhisperGenerator:
 
         Args:
             current_batch: List of (sampling_rate, audio_array) tuples
-            generation_params: Generation parameters
+            generation_params: Single GenerationParams (broadcast to all) or list of per-request generation parameters
             stream_generation: Whether to stream tokens
             return_perf_metrics: Whether to return performance metrics
 
@@ -273,17 +273,33 @@ class WhisperGenerator:
             Generated transcription and metrics
         """
         if generation_params is None:
-            generation_params = GenerationParams()
+            generation_params = [GenerationParams() for _ in range(len(current_batch))]
+        elif not isinstance(generation_params, list):
+            # Single GenerationParams: broadcast to all batch items
+            generation_params = [generation_params] * len(current_batch)
+        elif len(generation_params) != len(current_batch):
+            for i in range(len(generation_params), len(current_batch)):
+                generation_params.append(GenerationParams())
 
-        temperatures = generation_params.temperatures
-        compression_ratio_threshold = generation_params.compression_ratio_threshold
-        logprob_threshold = generation_params.logprob_threshold
-        no_speech_threshold = generation_params.no_speech_threshold
-        return_timestamps = generation_params.return_timestamps
-        language = generation_params.language
-        task = generation_params.task
-        prompt = generation_params.prompt
-        use_trace = generation_params.use_trace
+        temperatures = []
+        compression_ratio_threshold = []
+        logprob_threshold = []
+        no_speech_threshold = []
+        return_timestamps = []
+        language = []
+        task = []
+        prompt = []
+        use_trace = []
+        for params in generation_params:
+            temperatures.append(params.temperatures)
+            compression_ratio_threshold.append(params.compression_ratio_threshold)
+            logprob_threshold.append(params.logprob_threshold)
+            no_speech_threshold.append(params.no_speech_threshold)
+            return_timestamps.append(params.return_timestamps)
+            language.append(params.language)
+            task.append(params.task)
+            prompt.append(params.prompt)
+            use_trace.append(params.use_trace)
 
         # Invalidate cross-attention cache for new generation
         self._invalidate_cross_attn_cache()
@@ -307,7 +323,7 @@ class WhisperGenerator:
         ), "Only batch size (per device) 1 or 2 is supported for inference"
 
         # Calculate audio durations for timestamp capping
-        audio_durations = self._calculate_audio_duration(current_batch) if return_timestamps else None
+        audio_durations = self._calculate_audio_duration(current_batch) if any(return_timestamps) else None
 
         # Compute encoder embeddings
         input_embeds = ttnn_optimized_functional_whisper.preprocess_encoder_inputs(
@@ -331,14 +347,16 @@ class WhisperGenerator:
         ttnn.synchronize_device(self.mesh_device)
         logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
 
-        # Handle both single temperature and temperature list/tuple
-        if isinstance(temperatures, (int, float)):
-            temperatures = [temperatures]
+        # Collect temperatures to try: flatten per-request temps to unique sequence
+        temps_to_try = []
+        for t in temperatures:
+            temps_to_try.extend((t,) if isinstance(t, (int, float)) else t)
+        temps_to_try = list(dict.fromkeys(temps_to_try))  # unique, preserve order
 
         # For streaming mode, skip temperature fallback and quality checks
         # Use only the first temperature and yield tokens immediately
         if stream_generation:
-            temperature = temperatures[0]
+            temperature = temps_to_try[0] if temps_to_try else 0.0
             logger.info(f"Streaming mode: using temperature {temperature}, skipping quality checks")
 
             return self._generate_with_temperature(
@@ -360,7 +378,7 @@ class WhisperGenerator:
         best_output = None
         best_quality_score = float("inf")
 
-        for temperature in temperatures:
+        for temperature in temps_to_try:
             logger.info(f"Trying generation with temperature: {temperature}")
 
             try:
@@ -388,7 +406,10 @@ class WhisperGenerator:
                 # Check quality for each result
                 all_good = True
                 for idx, data in enumerate(result_data):
-                    if return_timestamps:
+                    wants_timestamps = (
+                        return_timestamps[idx] if isinstance(return_timestamps, list) else return_timestamps
+                    )
+                    if wants_timestamps:
                         # For timestamps, extract text from segments for quality check
                         text = " ".join([segment["text"] for segment in data])
                     else:
@@ -406,9 +427,9 @@ class WhisperGenerator:
                         avg_logprob,
                         no_speech_prob,
                         compression_ratio,
-                        logprob_threshold,
-                        compression_ratio_threshold,
-                        no_speech_threshold,
+                        logprob_threshold[idx],
+                        compression_ratio_threshold[idx],
+                        no_speech_threshold[idx],
                     )
 
                     if not is_good:
@@ -426,9 +447,11 @@ class WhisperGenerator:
                 # Track best attempt
                 avg_compression = sum(
                     self._calculate_compression_ratio(
-                        " ".join([segment["text"] for segment in data]) if return_timestamps else data
+                        " ".join([segment["text"] for segment in data])
+                        if (return_timestamps[idx] if isinstance(return_timestamps, list) else return_timestamps)
+                        else data
                     )
-                    for data in result_data
+                    for idx, data in enumerate(result_data)
                 ) / len(result_data)
                 if avg_compression < best_quality_score:
                     best_quality_score = avg_compression
@@ -446,7 +469,7 @@ class WhisperGenerator:
         if best_output is not None:
             return best_output
         else:
-            if return_timestamps:
+            if any(return_timestamps) if isinstance(return_timestamps, list) else return_timestamps:
                 empty_segments = [[] for _ in range(unpadded_batch_size)]
                 if return_perf_metrics:
                     return (
@@ -494,12 +517,25 @@ class WhisperGenerator:
 
         Uses pre-allocated self.encoder_hidden_states instead of a passed encoder_hidden_states parameter.
         """
+        # Normalize list params to single values for decoder prefix (batch-homogeneous)
+        if isinstance(language, list):
+            language = language[0] if language else "en"
+        if isinstance(task, list):
+            task = task[0] if task else "transcribe"
+        if isinstance(prompt, list):
+            prompt = prompt[0] if prompt else None
+        return_timestamps_for_prefix = (
+            any(return_timestamps) if isinstance(return_timestamps, list) else return_timestamps
+        )
+        if isinstance(use_trace, list):
+            use_trace = use_trace[0] if use_trace else True
+
         # Input ids - use forced decoder IDs for translation
         forced_decoder_ids = self.processor.get_decoder_prompt_ids(language=language, task=task)
 
         # Keep forced_decoder_ids as tuples with positions
         # When return_timestamps=True, remove <|notimestamps|> to allow timestamp generation
-        if return_timestamps:
+        if return_timestamps_for_prefix:
             # Remove notimestamps token if present
             forced_decoder_ids = [(pos, tok) for pos, tok in forced_decoder_ids if tok != NOTIMESTAMPS_TOKEN_ID]
         else:
@@ -564,7 +600,7 @@ class WhisperGenerator:
         no_speech_probs = None  # Will be extracted from first frame logits
 
         # Track full token sequences for timestamp extraction
-        full_token_sequences = [[] for _ in range(unpadded_batch_size)] if return_timestamps else None
+        full_token_sequences = [[] for _ in range(unpadded_batch_size)] if return_timestamps_for_prefix else None
 
         # Non-streaming mode: collect all results in a list
         if not streaming:
@@ -649,7 +685,7 @@ class WhisperGenerator:
                     output_ids.append(first_transcription_token)
 
                     # Track full token sequences for timestamp extraction
-                    if return_timestamps:
+                    if return_timestamps_for_prefix:
                         for batch_idx in range(unpadded_batch_size):
                             full_token_sequences[batch_idx].append(first_transcription_token[batch_idx].item())
 
@@ -685,7 +721,7 @@ class WhisperGenerator:
             # Set input_ids to the first transcription token (sampled during prefill)
             input_ids = first_transcription_token[:, None]
         else:
-            # If not using KV cache, reset decode position to 0 and set input_ids to the first transcription token
+            # For KV cache mode without prefill: reset decode position to 0 and set input_ids to the first transcription token
             if self.kv_cache:
                 self._reset_decode_pos(0, unpadded_batch_size)
                 # For KV cache mode without prefill, start with just the first token
@@ -777,7 +813,7 @@ class WhisperGenerator:
                 output_ids.append(next_tokens)
 
                 # Track full token sequences for timestamp extraction
-                if return_timestamps:
+                if return_timestamps_for_prefix:
                     for batch_idx in range(unpadded_batch_size):
                         full_token_sequences[batch_idx].append(next_tokens[batch_idx].item())
 
@@ -861,7 +897,7 @@ class WhisperGenerator:
             no_speech_probs = torch.zeros(input_features.shape[0])
 
         # Process timestamps if requested
-        if return_timestamps and full_token_sequences:
+        if return_timestamps_for_prefix and full_token_sequences:
             # Extract timestamps for each batch item
             segments_with_timestamps = []
             for batch_idx in range(unpadded_batch_size):
@@ -873,18 +909,29 @@ class WhisperGenerator:
                 else:
                     segments_with_timestamps.append([])
 
-            # Yield final result with timestamps (works for both streaming and non-streaming)
+            # Per-item format: segments for items that want timestamps, plain text for others
+            return_timestamps_per_item = (
+                return_timestamps if isinstance(return_timestamps, list) else [return_timestamps] * unpadded_batch_size
+            )
+            final_result = []
+            for batch_idx in range(unpadded_batch_size):
+                if return_timestamps_per_item[batch_idx]:
+                    final_result.append(segments_with_timestamps[batch_idx])
+                else:
+                    final_result.append(" ".join(seg["text"] for seg in segments_with_timestamps[batch_idx]).strip())
+
+            # Yield final result (works for both streaming and non-streaming)
             # For streaming mode, include is_final=True to mark this as the final result
             if return_perf_metrics:
                 if streaming:
-                    yield segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
+                    yield final_result, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
                 else:
-                    yield segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
+                    yield final_result, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
             else:
                 if streaming:
-                    yield segments_with_timestamps, avg_logprob, no_speech_probs, True
+                    yield final_result, avg_logprob, no_speech_probs, True
                 else:
-                    yield segments_with_timestamps, avg_logprob, no_speech_probs
+                    yield final_result, avg_logprob, no_speech_probs
         else:
             if streaming:
                 # For streaming without timestamps, yield final accumulated result
