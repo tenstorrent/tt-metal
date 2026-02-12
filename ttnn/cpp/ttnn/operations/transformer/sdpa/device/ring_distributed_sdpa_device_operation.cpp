@@ -15,12 +15,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-RingDistributedSdpaDeviceOperation::program_factory_t RingDistributedSdpaDeviceOperation::select_program_factory(
-    const RingDistributedSDPAParams&, const RingDistributedSDPAInputs&) {
-    return RingDistributedSdpaMeshWorkloadFactory{};
-}
-
 void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
     std::vector<Tensor> input_tensors = {tensor_args.q, tensor_args.k, tensor_args.v};

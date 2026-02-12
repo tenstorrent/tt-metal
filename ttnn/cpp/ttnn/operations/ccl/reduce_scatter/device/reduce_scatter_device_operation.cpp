@@ -13,11 +13,6 @@
 
 namespace ttnn::operations::ccl {
 
-ReduceScatterDeviceOperation::program_factory_t ReduceScatterDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ReduceScatterProgram{};
-}
-
 void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
@@ -107,9 +102,6 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<ReduceScatterDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -121,8 +113,7 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::operations::ccl

@@ -9,12 +9,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-ConcatenateHeadsDeviceOperation::program_factory_t ConcatenateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return ConcatenateHeadsProgramFactory{};
-}
-
 void ConcatenateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -77,13 +71,8 @@ tt::stl::hash::hash_t ConcatenateHeadsDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<ConcatenateHeadsDeviceOperation>(
-        args.output_mem_config,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_shape.volume());
+        args.output_mem_config, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }

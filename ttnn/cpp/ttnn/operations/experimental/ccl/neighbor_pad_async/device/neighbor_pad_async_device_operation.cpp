@@ -12,12 +12,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-NeighborPadAsyncDeviceOperation::program_factory_t NeighborPadAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return NeighborPadAsyncMeshWorkloadFactory{};
-}
-
 void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.dim < 3, "Error, neighbor pad currently only supports padding non last dim, provided {}", args.dim);
@@ -100,9 +94,6 @@ Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "NeighborPadAsyncDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     return operation::hash_operation<NeighborPadAsyncDeviceOperation>(
         args.dim,
         args.padding_left,
@@ -115,8 +106,7 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.ring_size,
         args.secondary_cluster_axis,
         args.secondary_mesh_shape,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

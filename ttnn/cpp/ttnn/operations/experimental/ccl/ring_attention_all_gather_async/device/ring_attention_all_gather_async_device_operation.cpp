@@ -13,14 +13,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::experimental::prim {
-
-RingAttentionAllGatherAsyncDeviceOperation::program_factory_t
-RingAttentionAllGatherAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    // Only one program factory available
-    return RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory{};
-}
-
 void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensors = tensor_args.input_tensor;
@@ -161,9 +153,6 @@ tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_progra
     auto* mesh_device = tensor_args.input_tensor.at(0).device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsyncDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -172,8 +161,7 @@ tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_progra
         operation_attributes.topology,
         operation_attributes.cluster_axis,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 std::tuple<

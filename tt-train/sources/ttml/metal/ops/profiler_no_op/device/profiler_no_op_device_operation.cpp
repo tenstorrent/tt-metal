@@ -11,11 +11,6 @@
 
 namespace ttml::metal::ops::profiler_no_op::device {
 
-ProfilerNoopOperation::program_factory_t ProfilerNoopOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return ProfilerNoopProgramFactory{};
-}
-
 void ProfilerNoopOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor,
@@ -95,9 +90,8 @@ ttsl::hash::hash_t ProfilerNoopOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     return tt::tt_metal::operation::hash_operation<ProfilerNoopOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.dtype(), input_logical_shape);
 }
 
 }  // namespace ttml::metal::ops::profiler_no_op::device

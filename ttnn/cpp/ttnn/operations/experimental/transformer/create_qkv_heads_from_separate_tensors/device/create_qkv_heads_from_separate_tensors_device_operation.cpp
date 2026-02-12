@@ -216,23 +216,14 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::create_output_tensors(
         create_device_tensor(std::get<1>(output_specs), tensor_args.input_tensor.device()),
         create_device_tensor(std::get<2>(output_specs), tensor_args.input_tensor.device()));
 }
-
-CreateQKVHeadsSeparateTensorsDeviceOperation::program_factory_t
-CreateQKVHeadsSeparateTensorsDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return CreateQKVHeadsSeparateTensorsProgramFactory{};
-}
-
-tt::stl::hash::hash_t CreateQKVHeadsSeparateTensorsDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
+    tt::stl::hash::hash_t
+    CreateQKVHeadsSeparateTensorsDeviceOperation::compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<CreateQKVHeadsSeparateTensorsDeviceOperation>(
         operation_attributes.num_q_heads,
         operation_attributes.num_kv_heads,
         operation_attributes.head_dim,
         operation_attributes.transpose_k_heads,
-        program_factory.index(),
         tensor_args);
 }
 

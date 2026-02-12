@@ -29,16 +29,6 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
     TT_THROW("Invalid subtile broadcast type");
 }
 
-BcastToOperation::program_factory_t BcastToOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input;
-
-    switch (input.layout()) {
-        case Layout::TILE: return BcastToTileFactory{};
-        default: TT_THROW("BcastTo: Unsupported input layout");
-    }
-}
-
 void validate(
     const BcastToOperation::operation_attributes_t& operation_attributes,
     const BcastToOperation::tensor_args_t& tensor_args) {

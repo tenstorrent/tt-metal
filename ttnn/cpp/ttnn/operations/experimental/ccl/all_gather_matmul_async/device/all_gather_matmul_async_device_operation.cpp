@@ -18,12 +18,6 @@
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::experimental::prim {
-
-AllGatherMatmulAsyncDeviceOperation::program_factory_t AllGatherMatmulAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return AllGatherMatmulAsyncMeshWorkloadFactory{};
-}
-
 void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -123,9 +117,6 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsyncDeviceOperation>(
         operation_attributes.all_gather_async_attributes.dim,
         operation_attributes.all_gather_async_attributes.num_links,
@@ -141,8 +132,7 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         operation_attributes.matmul,
         operation_attributes.all_gather_core_grid_offset,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

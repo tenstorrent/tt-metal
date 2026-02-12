@@ -14,12 +14,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-SdpaDecodeDeviceOperation::program_factory_t SdpaDecodeDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return SdpaDecodeProgramFactory{};
-}
-
 void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     bool use_mla = operation_attributes.use_mla.value_or(false);

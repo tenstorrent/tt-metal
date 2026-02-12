@@ -43,10 +43,23 @@ struct MeshDeviceOperationAdapter {
     using tensor_return_value_t = typename DeviceOperation::tensor_return_value_t;
     using program_factory_t = typename DeviceOperation::program_factory_t;
 
-    // Delegate to base operation methods
+    // Early validation: if program_factory_t has more than one variant alternative,
+    // the operation must provide select_program_factory to choose between them.
+    static_assert(
+        HasSelectProgramFactory<DeviceOperation> || std::variant_size_v<program_factory_t> == 1,
+        "DeviceOperation must implement select_program_factory when program_factory_t has more than one type. "
+        "For single-variant program_factory_t, the framework auto-selects it.");
+
+    // Delegate to base operation methods.
+    // Uses the framework helper: if the operation provides select_program_factory, it is called;
+    // otherwise, for single-variant program_factory_t, returns the sole type automatically.
     static program_factory_t select_program_factory(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        return DeviceOperation::select_program_factory(attrs, tensor_args);
+        if constexpr (HasSelectProgramFactory<DeviceOperation>) {
+            return DeviceOperation::select_program_factory(attrs, tensor_args);
+        } else {
+            return program_factory_t{std::variant_alternative_t<0, program_factory_t>{}};
+        }
     }
 
     template <typename... Args>
