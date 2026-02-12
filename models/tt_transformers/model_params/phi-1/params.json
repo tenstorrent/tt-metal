@@ -1,0 +1,19 @@
+{
+  "dim": 2048,
+  "n_layers": 24,
+  "n_heads": 32,
+  "n_kv_heads": 32,
+  "vocab_size": 50295,
+  "ffn_dim_multiplier": 1.0,
+  "multiple_of": 1,
+  "norm_eps": 1e-05,
+  "rope_theta": 10000.0,
+  "use_scaled_rope": false,
+  "rope_scaling_factor": 1.0,
+  "hidden_act": "gelu_new",
+  "intermediate_size": 8192,
+  "max_position_embeddings": 2048,
+  "layer_norm_eps": 1e-05,
+  "tie_word_embeddings": false,
+  "partial_rotary_factor": 0.5
+}
