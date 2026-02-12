@@ -253,21 +253,26 @@ class VectorExportSource(VectorSource):
                             # and is independent of MESH_DEVICE_SHAPE env var
                             skip_for_resources = False
                             if current_machine_info and traced_machine_info and isinstance(traced_machine_info, dict):
-                                required_device_count = traced_machine_info.get("device_count", 1)
-                                required_card_count = traced_machine_info.get("card_count", 1)
+                                # Get the mesh shape from traced config (this is what actually matters)
+                                traced_mesh_shape = traced_machine_info.get("mesh_device_shape")
 
-                                # Get current machine capabilities directly from machine info
-                                current_card_count = current_machine_info.get("card_count", 1)
+                                # Calculate required device count from mesh shape
+                                if isinstance(traced_mesh_shape, list) and len(traced_mesh_shape) == 2:
+                                    required_device_count = traced_mesh_shape[0] * traced_mesh_shape[1]
+                                else:
+                                    # Fallback to device_count if mesh_shape not available
+                                    required_device_count = traced_machine_info.get("device_count", 1)
+
+                                # Get current machine capabilities
                                 current_device_count = current_machine_info.get("device_count", 1)
 
-                                # Skip if vector requires more cards or devices than available
-                                if (
-                                    required_card_count > current_card_count
-                                    or required_device_count > current_device_count
-                                ):
+                                # Skip if vector requires more devices than available
+                                # Use mesh shape product (actual requirement) instead of card_count from trace machine
+                                if required_device_count > current_device_count:
                                     logger.debug(
-                                        f"Skipping vector requiring {required_card_count} cards/{required_device_count} devices "
-                                        f"(current machine has {current_card_count} cards/{current_device_count} devices)"
+                                        f"Skipping vector requiring {required_device_count} devices "
+                                        f"(mesh shape: {traced_mesh_shape}) "
+                                        f"(current machine has {current_device_count} devices)"
                                     )
                                     machine_mismatch_count += 1
                                     skip_for_resources = True
