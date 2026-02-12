@@ -4,6 +4,26 @@
 # Each SKU entry contains:
 #   runs_on: Array of GitHub Actions runner labels that tests for this SKU.
 skus:
+  wh_llmbox:
+    runs_on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-functional
+      - in-service
+
+  wh_llmbox_perf:
+    runs_on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-perf
+      - in-service
+
+  bh_p100:
+    runs_on:
+      - cloud-virtual-machine
+      - P100
+      - in-service
+
   wh_galaxy:
     runs_on:
       - arch-wormhole_b0
@@ -17,3 +37,19 @@ skus:
       - pipeline-functional
       - topology-6u
       - in-service
+
+  wh_n150_civ2:
+    runs_on:
+      - tt-ubuntu-2204-N150-viommu-stable
+
+  wh_n300_civ2:
+    runs_on:
+      - tt-ubuntu-2204-N300-viommu-stable
+
+  wh_llmbox_civ2:
+    runs_on:
+      - tt-ubuntu-2204-N300-llmbox-stable
+
+  bh_p150b_civ2:
+    runs_on:
+      - tt-ubuntu-2204-P150b-stable
