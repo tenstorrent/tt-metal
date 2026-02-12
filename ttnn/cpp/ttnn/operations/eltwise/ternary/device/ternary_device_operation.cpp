@@ -423,7 +423,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const auto& a_shape = input_a.padded_shape();
     TernaryVariant variant = args.ternary_variant;
 
-    TT_ASSERT(is_device_tensor(input_a), "Unexpected type {}", input_a.storage_type());
+    TT_FATAL(is_device_tensor(input_a), "Unexpected Tensor type {}", input_a.storage_type());
 
     auto program_factory = select_program_factory(args, tensor_args);
 
@@ -431,8 +431,8 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         args, program_factory.index(), input_a.dtype(), input_a.memory_config(), a_shape.volume());
 
     if (variant == TernaryVariant::TTT) {
-        TT_ASSERT(is_device_tensor(*input_b), "Unexpected type {}", input_b->storage_type());
-        TT_ASSERT(is_device_tensor(*input_c), "Unexpected type {}", input_c->storage_type());
+        TT_FATAL(is_device_tensor(*input_b), "Unexpected Tensor type {}", input_b->storage_type());
+        TT_FATAL(is_device_tensor(*input_c), "Unexpected Tensor type {}", input_c->storage_type());
 
         const auto shard_volumes = get_shard_volumes(
             input_a.tensor_spec(),
@@ -453,7 +453,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             shard_volumes);
 
     } else if (variant == TernaryVariant::TTS) {
-        TT_ASSERT(is_device_tensor(*input_b), "Unexpected type {}", input_b->storage_type());
+        TT_FATAL(is_device_tensor(*input_b), "Unexpected Tensor type {}", input_b->storage_type());
 
         const auto shard_volumes = get_shard_volumes(
             input_a.tensor_spec(), input_b->tensor_spec(), std::nullopt, compute_output_specs(args, tensor_args));
@@ -468,7 +468,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             a_shape.volume(),
             shard_volumes);
     } else if (variant == TernaryVariant::TST) {
-        TT_ASSERT(is_device_tensor(*input_c), "Unexpected type {}", input_c->storage_type());
+        TT_FATAL(is_device_tensor(*input_c), "Unexpected Tensor type {}", input_c->storage_type());
 
         const auto shard_volumes = get_shard_volumes(
             input_a.tensor_spec(), std::nullopt, input_c->tensor_spec(), compute_output_specs(args, tensor_args));

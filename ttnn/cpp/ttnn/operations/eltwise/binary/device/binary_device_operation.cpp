@@ -333,10 +333,10 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
     auto program_factory = select_program_factory(attributes, tensor_args);
-    TT_ASSERT(is_device_tensor(input_tensor_a), "Unexpected type {}", input_tensor_a.storage_type());
+    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
 
     if (input_tensor_b.has_value()) {
-        TT_ASSERT(is_device_tensor(*input_tensor_b), "Unexpected type {}", input_tensor_b->storage_type());
+        TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
 
         return operation::hash_operation<BinaryDeviceOperation>(
             attributes,

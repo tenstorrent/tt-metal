@@ -338,7 +338,7 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
 
             return Tensor(std::move(device_storage), upd_spec, input_tensor.tensor_topology());
         }
-        TT_FATAL(is_cpu_tensor(input_tensor), "Unsupported storage type");
+        // Tensor is host tensor.
         return Tensor(input_tensor.host_storage(), new_spec, input_tensor.tensor_topology());
     }();
     output = tt::tt_metal::set_tensor_id(output);
