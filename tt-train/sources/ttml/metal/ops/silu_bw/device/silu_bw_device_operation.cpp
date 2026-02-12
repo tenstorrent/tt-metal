@@ -10,7 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::silu_bw::device {
-}
 
 void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {

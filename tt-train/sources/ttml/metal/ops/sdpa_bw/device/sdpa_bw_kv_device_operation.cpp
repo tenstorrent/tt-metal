@@ -13,7 +13,6 @@ namespace ttml::metal::ops::sdpa_bw::device {
 
 using namespace tt::tt_metal;
 using namespace ttnn;
-}
 
 void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
