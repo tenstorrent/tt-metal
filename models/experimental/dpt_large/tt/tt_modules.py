@@ -260,12 +260,6 @@ class TTLayerNorm:
                 "bias": self.bias_tt,
                 "epsilon": self.eps,
             }
-            if self.output_mem is not None:
-                kwargs["memory_config"] = self.output_mem
-
-            pc = getattr(self.program_config, "ln_program_config", None)
-            if pc is not None:
-                kwargs["program_config"] = pc
             cc = getattr(self.program_config, "ln_compute_config", None)
             if cc is not None:
                 kwargs["compute_kernel_config"] = cc
