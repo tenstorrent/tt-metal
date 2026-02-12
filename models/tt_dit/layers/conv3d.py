@@ -36,7 +36,7 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=16)
     tt_weight = ttnn.from_torch(
         w,
         layout=ttnn.TILE_LAYOUT,
-        conv_config.weights_dtype,
+        dtype=conv_config.weights_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=mesh_device,
         mesh_mapper=None,

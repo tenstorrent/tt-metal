@@ -1435,6 +1435,7 @@ class WanDecoder:
         self._feat_cache = [None] * self.cached_conv_count
 
     def __call__(self, z_BTHWC, logical_h):
+        print("INSIDE_DECODER")
         B, T, H, W, C = z_BTHWC.shape
 
         self.clear_cache()
@@ -1444,6 +1445,7 @@ class WanDecoder:
 
         output_BCTHW = None
         for i in range(T):
+            print(f" DECODER {i}/{T}")
             # Process one frame at a time
             self._conv_idx = [0]
             out_BTHWC, new_logical_h = self.decoder(
@@ -1462,6 +1464,7 @@ class WanDecoder:
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
         self.clear_cache()
+        print("FINISHED DECODER")
         return (output_BCTHW, new_logical_h)
 
 
