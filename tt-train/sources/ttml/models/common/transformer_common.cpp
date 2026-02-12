@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,28 +37,36 @@ void initialize_weights_he_kaiming_normal(modules::ModuleBase& model) {
     }
 }
 
-RunnerType read_runner_type(const YAML::Node& config) {
-    auto runner_type_str = config["runner_type"].as<std::string>("default");
-    if (runner_type_str == "default") {
+RunnerType read_runner_type(const std::string& s) {
+    if (s == "default") {
         return RunnerType::Default;
-    } else if (runner_type_str == "memory_efficient") {
+    } else if (s == "memory_efficient") {
         return RunnerType::MemoryEfficient;
     } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown runner type: {}. Supported runner types [default, memory_efficient]", runner_type_str));
+        throw std::runtime_error(
+            fmt::format("Unknown runner type: {}. Supported runner types [default, memory_efficient]", s));
+    }
+}
+
+RunnerType read_runner_type(const YAML::Node& config) {
+    auto runner_type_str = config["runner_type"].as<std::string>("default");
+    return read_runner_type(runner_type_str);
+}
+
+WeightTyingType read_weight_tying_type(const std::string& s) {
+    if (s == "disabled") {
+        return WeightTyingType::Disabled;
+    } else if (s == "enabled") {
+        return WeightTyingType::Enabled;
+    } else {
+        throw std::runtime_error(
+            fmt::format("Unknown weight tying type: {}. Supported weight tying types [disabled, enabled]", s));
     }
 }
 
 WeightTyingType read_weight_tying_type(const YAML::Node& config) {
     auto weight_tying_str = config["weight_tying"].as<std::string>("disabled");
-    if (weight_tying_str == "disabled") {
-        return WeightTyingType::Disabled;
-    } else if (weight_tying_str == "enabled") {
-        return WeightTyingType::Enabled;
-    } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown weight tying type: {}. Supported weight tying types [disabled, enabled]", weight_tying_str));
-    }
+    return read_weight_tying_type(weight_tying_str);
 }
 
 KvCache::KvCache(

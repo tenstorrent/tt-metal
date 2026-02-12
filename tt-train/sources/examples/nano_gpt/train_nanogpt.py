@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,8 +20,8 @@ including:
 import argparse
 import os
 import random
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Optional, Tuple, Literal
 import time
 import pickle
 
@@ -30,7 +30,12 @@ import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
+from ttml.models.nanogpt import (
+    NanoGPT,
+    NanoGPTConfig,
+    NanoGPTExperimentalConfig,
+    create_nanogpt,
+)
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_home
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
@@ -89,6 +94,11 @@ class TrainingConfig(BaseTrainingConfig):
 
 
 @dataclass
+class ModelExperimentalConfig:
+    use_composite_layernorm: bool = False  # Use composite vs fused layernorm
+
+
+@dataclass
 class ModelConfig:
     """Model configuration aligned with ttml.common.config.TransformerConfig naming."""
 
@@ -101,6 +111,12 @@ class ModelConfig:
     dropout_prob: float = 0.2  # Match C++ default: float dropout_prob = 0.2F
     bias: bool = True
     max_sequence_length: int = 128  # Reduced from 1024 to avoid memory issues
+    runner_type: ttml.models.RunnerType = ttml.models.RunnerType.Default
+    weight_tying: ttml.models.WeightTyingType = ttml.models.WeightTyingType.Disabled
+    positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
+    experimental: ModelExperimentalConfig = field(
+        default_factory=ModelExperimentalConfig
+    )
 
 
 class LossAverageMeter:
@@ -385,6 +401,25 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
         config.max_sequence_length = transformer_config.get(
             "max_sequence_length", config.max_sequence_length
         )
+        config.positional_embedding_type = transformer_config.get(
+            "positional_embedding_type", config.positional_embedding_type
+        )
+
+        tc_runner_type = transformer_config.get("runner_type")
+        if tc_runner_type is not None:
+            config.runner_type = ttml.models.RunnerType.from_string(tc_runner_type)
+
+        tc_weight_tying = transformer_config.get("weight_tying")
+        if tc_weight_tying is not None:
+            config.weight_tying = ttml.models.WeightTyingType.from_string(
+                tc_weight_tying
+            )
+
+        exp_config = transformer_config.get("experimental")
+        if isinstance(exp_config, dict):
+            config.experimental.use_composite_layernorm = exp_config.get(
+                "use_composite_layernorm", config.experimental.use_composite_layernorm
+            )
     else:
         raise ValueError(f"Unsupported model type: {config.model_type}")
 
@@ -783,6 +818,9 @@ def load_model_from_checkpoint(
     step = checkpoint.get("step", 0)
 
     # Create model config (map aligned names to NanoGPTConfig fields)
+    nanogpt_exp_config = NanoGPTExperimentalConfig(
+        use_composite_layernorm=model_config.experimental.use_composite_layernorm,
+    )
     nanogpt_config = NanoGPTConfig(
         vocab_size=model_config.vocab_size,
         block_size=model_config.max_sequence_length,
@@ -791,6 +829,10 @@ def load_model_from_checkpoint(
         n_head=model_config.num_heads,
         dropout=model_config.dropout_prob,
         bias=model_config.bias,
+        runner_type=model_config.runner_type,
+        weight_tying=model_config.weight_tying,
+        positional_embedding_type=model_config.positional_embedding_type,
+        experimental=nanogpt_exp_config,
     )
 
     # Create model
@@ -1185,6 +1227,9 @@ def main():
             model_config.vocab_size = round_up_to_tile(model_config.vocab_size, 32)
 
             # Create model config (map aligned names to NanoGPTConfig fields)
+            nanogpt_exp_config = NanoGPTExperimentalConfig(
+                use_composite_layernorm=model_config.experimental.use_composite_layernorm,
+            )
             nanogpt_config = NanoGPTConfig(
                 vocab_size=model_config.vocab_size,
                 block_size=model_config.max_sequence_length,
@@ -1193,6 +1238,10 @@ def main():
                 n_head=model_config.num_heads,
                 dropout=model_config.dropout_prob,
                 bias=model_config.bias,
+                runner_type=model_config.runner_type,
+                weight_tying=model_config.weight_tying,
+                positional_embedding_type=model_config.positional_embedding_type,
+                experimental=nanogpt_exp_config,
             )
 
             # Create model
