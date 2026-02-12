@@ -40,10 +40,11 @@ def _ensure_tt_device_tensor(x, tt_device, ttnn):
 def _tt_relu_with_fallback(hidden_state, tt_device, ttnn):
     """Apply ReLU on device if possible, fallback to host otherwise."""
     try:
-        # ttnn.relu requires TILE_LAYOUT; convert if needed
-        if hasattr(hidden_state, "layout") and hidden_state.layout != ttnn.TILE_LAYOUT:
-            hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT)
-        return ttnn.relu(hidden_state)
+        # Prefer in-place ReLU to reduce intermediate allocations in the hot path.
+        try:
+            return ttnn.relu(hidden_state, output_tensor=hidden_state)
+        except TypeError:
+            return ttnn.relu(hidden_state)
     except Exception:
         # Fallback to host relu if ttnn.relu is unavailable
         x_host = hidden_state.cpu()
