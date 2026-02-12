@@ -897,16 +897,19 @@ FORCE_INLINE void noc_async_write_multicast_one_packet(
  * The destination nodes must form a rectangular grid. The destination L1
  * memory address must be the same on all destination nodes.
  *
- * With this API, the multicast sender cannot be part of the multicast
- * destinations. If the multicast sender has to be in the multicast
- * destinations (i.e. must perform a local L1 write), the other API variant
+ * With this API (non-loopback multicast), the multicast sender can be part
+ * of the multicast destination range, but data will NOT be written to self.
+ * The num_dests argument should NOT count self. For example, when mcasting to
+ * an 8x8 grid that includes self, num_dests should be 63.
+ * The destination range must not be just self (i.e. at least one other core
+ * must be in the range). If the multicast sender also needs to receive the
+ * data (i.e. must perform a local L1 write), the other API variant
  * *noc_async_write_multicast_loopback_src* can be used.
  *
  * Note: The number of destinations needs to be non-zero. Besides that,
  * there is no restriction on the number of destinations, i.e. the
- * multicast destinations can span the full chip. However, as mentioned
- * previously, the multicast source cannot be part of the destinations. So, the
- * maximum number of destinations is number of cores - 1.
+ * multicast destinations can span the full chip. Since self is not counted,
+ * the maximum number of destinations is number of cores - 1.
  *
  * Return value: None
  *
@@ -1539,9 +1542,13 @@ inline void noc_semaphore_set_remote(
  * way of a synchronization mechanism. The same as *noc_async_write_multicast*
  * with preset size of 4 Bytes.
  *
- * With this API, the multicast sender cannot be part of the multicast
- * destinations. If the multicast sender has to be in the multicast
- * destinations (i.e. must perform a local L1 write), the other API variant
+ * With this API (non-loopback multicast), the multicast sender can be part
+ * of the multicast destination range, but data will NOT be written to self.
+ * The num_dests argument should NOT count self. For example, when mcasting to
+ * an 8x8 grid that includes self, num_dests should be 63.
+ * The destination range must not be just self (i.e. at least one other core
+ * must be in the range). If the multicast sender also needs to receive the
+ * data (i.e. must perform a local L1 write), the other API variant
  * *noc_semaphore_set_multicast_loopback_src* can be used.
  *
  * Return value: None
@@ -1598,8 +1605,10 @@ inline void noc_semaphore_set_multicast(
  * (x_start,y_start,x_end,y_end) and a local address created using
  * *get_noc_multicast_addr* function. The size of data that is sent is 4 Bytes.
  * This is usually used to set a semaphore value at the destination nodes, as a
- * way of a synchronization mechanism. The same as *noc_async_write_multicast*
- * with preset size of 4 Bytes.
+ * way of a synchronization mechanism. The same as *noc_semaphore_set_multicast*
+ * but uses loopback multicast, meaning data will also be written to self. The
+ * num_dests argument should count self. For example, when mcasting to an 8x8
+ * grid that includes self, num_dests should be 64.
  *
  * Note: With this API, sending data only to the source node (when num_dests
  * is 1) may result in unexpected behaviour. For some parameters, hangs have
@@ -1612,7 +1621,7 @@ inline void noc_semaphore_set_multicast(
  * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores)                       | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting (including self) | uint32_t | 0..(number of cores)                       | True     |
  * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
@@ -1655,8 +1664,11 @@ inline void noc_semaphore_set_multicast_loopback_src(
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the
  * Tensix core executing this function call to a rectangular destination grid.
- * This API is the same as *noc_async_write_multicast* but with the multicast
- * sender being part of the multicast destinations. Refer to *noc_async_write_multicast* for more details.
+ * This API is the same as *noc_async_write_multicast* but uses loopback
+ * multicast, meaning data will also be written to self. The num_dests
+ * argument should count self. For example, when mcasting to an 8x8 grid that
+ * includes self, num_dests should be 64. Refer to *noc_async_write_multicast*
+ * for more details.
  *
  * Return value: None
  *
@@ -1665,7 +1677,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
  * | src_local_l1_addr                 | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast            | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
  * | size                              | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                     | True     |
- * | num_dests                         | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores -1)                    | True     |
+ * | num_dests                         | Number of destinations that the multicast source is targeting (including self) | uint32_t | 0..(number of cores)                       | True     |
  * | linked                            | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
