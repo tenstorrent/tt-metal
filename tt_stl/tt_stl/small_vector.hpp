@@ -6,7 +6,7 @@
 
 #include <tt_stl/llvm/llvm_small_vector.hpp>
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 namespace ttsl {
 
@@ -24,7 +24,7 @@ Stream& operator<<(Stream& os, const SmallVector<T, PREALLOCATED_SIZE>& vec) {
         if (i > 0) {
             os << ", ";
         }
-        using ttsl::reflection::operator<<;
+        using ttsl::stl_fmt::operator<<;
         os << vec[i];
     }
     os << "])";

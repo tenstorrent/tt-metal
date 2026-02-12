@@ -8,11 +8,12 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -91,6 +92,10 @@ struct AllReduceCreateQkvHeadsInputs {
     Tensor input_tensor;
     Tensor buffer_tensor;
     Tensor batch_offset_tensor;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor", "buffer_tensor", "batch_offset_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, buffer_tensor, batch_offset_tensor); }
 };
 
 // Return types using named structs for Q, K, V heads

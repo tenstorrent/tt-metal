@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -17,6 +18,27 @@ struct UntilizeWithUnpaddingParams {
     bool enough_space_width = false;
     bool enough_space_height = false;
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "output_tensor_end",
+        "output_mem_config",
+        "use_multicore",
+        "use_pack_untilize",
+        "fp32_dest_acc_en",
+        "enough_space_width",
+        "enough_space_height",
+        "sub_core_grids");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            output_tensor_end,
+            output_mem_config,
+            use_multicore,
+            use_pack_untilize,
+            fp32_dest_acc_en,
+            enough_space_width,
+            enough_space_height,
+            sub_core_grids);
+    }
 };
 
 }  // namespace ttnn::prim

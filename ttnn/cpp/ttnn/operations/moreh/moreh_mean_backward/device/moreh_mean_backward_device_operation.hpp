@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -22,10 +24,19 @@ struct MorehMeanBackwardOperation {
         const std::optional<ttnn::Shape> input_grad_shape;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("dims", "keepdim", "input_grad_shape", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(dims, keepdim, input_grad_shape, memory_config, compute_kernel_config);
+        }
     };
     struct tensor_args_t {
         const Tensor& output_grad;
         const std::optional<Tensor>& input_grad;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("output_grad", "input_grad");
+        auto attribute_values() const { return std::forward_as_tuple(output_grad, input_grad); }
     };
 
     using spec_return_value_t = TensorSpec;

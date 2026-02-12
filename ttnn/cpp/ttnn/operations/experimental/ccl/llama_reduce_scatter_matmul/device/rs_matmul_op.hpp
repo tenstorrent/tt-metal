@@ -33,18 +33,30 @@ struct Matmul_RS {
     struct matmul_tensor_args_t {
         const Tensor input_tensor;
         const Tensor weight_tensor;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "weight_tensor");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor, weight_tensor); }
     };
     struct tensor_args_t {
         LlamaReduceScatterDeviceOperation::tensor_args_t rs;
         matmul_tensor_args_t matmul;
         std::vector<Tensor> matmul_output_tensors;
         const std::optional<const ttnn::Tensor> second_weight_tensor;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("rs", "matmul", "matmul_output_tensors", "second_weight_tensor");
+        auto attribute_values() const {
+            return std::forward_as_tuple(rs, matmul, matmul_output_tensors, second_weight_tensor);
+        }
     };
     struct operation_attributes_t {
         LlamaReduceScatterDeviceOperation rs;
         LlamaReduceScatterDeviceOperation::operation_attributes_t rs_op;
         ttnn::prim::MatmulDeviceOperation::operation_attributes_t matmul;
         using matmul_device_t = ttnn::prim::MatmulDeviceOperation;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("rs", "rs_op", "matmul");
+        auto attribute_values() const { return std::forward_as_tuple(rs, rs_op, matmul); }
     };
     struct Matmul_RS_PF {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods

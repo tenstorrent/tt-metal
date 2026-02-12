@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <optional>
 #include <variant>
 
@@ -22,6 +24,12 @@ struct ExampleMultipleReturnDeviceOperation {
         int some_other_attribute = 42;
         uint32_t return_output1 = true;
         uint32_t return_output2 = true;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("attribute", "some_other_attribute", "return_output1", "return_output2");
+        auto attribute_values() const {
+            return std::forward_as_tuple(attribute, some_other_attribute, return_output1, return_output2);
+        }
     };
 
     // Define the tensor arguments. This is it to store all tensors passed in and/or out of the operation
@@ -50,6 +58,9 @@ struct ExampleMultipleReturnDeviceOperation {
 
         // An example of a tuple of tensors
         // std::tuple<std::vector<std::optional<Tensor>>, std::optional<Tensor>> some_crazy_tuple_of_tensors;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor); }
     };
 
     // Define the return types for the spec(s) of the operation

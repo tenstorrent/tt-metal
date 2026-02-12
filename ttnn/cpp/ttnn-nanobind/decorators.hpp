@@ -130,7 +130,7 @@ void def_call_operator(py_operation_t& py_operation, const nanobind_overload_t<f
         overload.args.value);
 }
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, typename... overload_t>
+template <ttsl::fixed_string cpp_fully_qualified_name, typename operation_t, typename... overload_t>
 auto bind_registered_operation(
     nb::module_& mod,
     const registered_operation_t<cpp_fully_qualified_name, operation_t>& operation,

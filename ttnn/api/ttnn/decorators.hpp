@@ -10,7 +10,7 @@
 #include <utility>      // index_sequence, forward
 
 #include <fmt/format.h>
-#include <reflect>
+#include <tt_stl/fixed_string.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -61,7 +61,7 @@ concept HasInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
 };
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
+template <ttsl::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
     // Get "add" from "ttnn::add"
     std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
@@ -108,7 +108,7 @@ private:
     }
 };
 
-template <reflect::fixed_string cpp_fully_qualified_name>
+template <ttsl::fixed_string cpp_fully_qualified_name>
 struct operation_name_key_t {
     friend consteval auto get(operation_name_key_t<cpp_fully_qualified_name>);
 };
@@ -118,13 +118,13 @@ struct operation_key_t {
     friend consteval auto get(operation_key_t<operation_t>);
 };
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, auto operation>
+template <ttsl::fixed_string cpp_fully_qualified_name, typename operation_t, auto operation>
 struct set_operation_t : std::true_type {
     friend consteval auto get(operation_key_t<operation_t>) { return operation; }
     friend consteval auto get(operation_name_key_t<cpp_fully_qualified_name>) { return operation; }
 };
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
+template <ttsl::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_impl() {
     constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t>{};
     static_assert(
@@ -137,7 +137,7 @@ constexpr auto register_operation_impl() {
     return operation;
 }
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
+template <ttsl::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation() {
     return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }

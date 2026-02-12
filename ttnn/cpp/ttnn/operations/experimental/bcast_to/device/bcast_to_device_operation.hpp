@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <cstdint>
 #include <variant>
 #include <vector>
@@ -25,11 +27,20 @@ struct BcastToOperation {
         const Shape output_shape;
         const MemoryConfig memory_config;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("output_shape", "memory_config", "subtile_broadcast_type");
+        auto attribute_values() const {
+            return std::forward_as_tuple(output_shape, memory_config, subtile_broadcast_type);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& input;
         const std::optional<Tensor>& output;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input", "output");
+        auto attribute_values() const { return std::forward_as_tuple(input, output); }
     };
 
     using spec_return_value_t = TensorSpec;

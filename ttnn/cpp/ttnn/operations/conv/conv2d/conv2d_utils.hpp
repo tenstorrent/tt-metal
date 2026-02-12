@@ -189,6 +189,13 @@ struct core_count_and_size {
     uint32_t conv_op_size{};
     uint32_t total_size{};
     Conv2dConfig conv_config;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "core_count", "halo_input_size", "halo_output_size", "conv_op_size", "total_size", "conv_config");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            core_count, halo_input_size, halo_output_size, conv_op_size, total_size, conv_config);
+    }
 };
 
 core_count_and_size calculate_L1_usage_for_conv_op(

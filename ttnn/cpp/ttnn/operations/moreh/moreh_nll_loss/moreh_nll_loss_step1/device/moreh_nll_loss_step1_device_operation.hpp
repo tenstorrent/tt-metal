@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -19,11 +21,21 @@ struct MorehNllLossStep1DeviceOperation {
         const uint32_t channel_size = 1;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "reduction", "ignore_index", "dtype", "channel_size", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                reduction, ignore_index, dtype, channel_size, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& target_tensor;
         const std::optional<Tensor>& weight_tensor;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("target_tensor", "weight_tensor");
+        auto attribute_values() const { return std::forward_as_tuple(target_tensor, weight_tensor); }
     };
 
     using spec_return_value_t = TensorSpec;

@@ -8,7 +8,8 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -53,6 +54,9 @@ struct BroadcastParams {
 
 struct BroadcastInputs {
     Tensor input_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor); }
 };
 
 }  // namespace ttnn::prim

@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 namespace ttnn {
 namespace operations::complex {

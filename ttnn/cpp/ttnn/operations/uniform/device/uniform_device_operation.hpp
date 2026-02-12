@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -16,10 +18,16 @@ struct UniformDeviceOperation {
         uint32_t seed;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("from", "to", "seed", "memory_config", "compute_kernel_config");
+        auto attribute_values() const { return std::forward_as_tuple(from, to, seed, memory_config, compute_kernel_config); }
     };
 
     struct tensor_args_t {
         const Tensor& input;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input");
+        auto attribute_values() const { return std::forward_as_tuple(input); }
     };
 
     using spec_return_value_t = TensorSpec;

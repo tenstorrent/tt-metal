@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <optional>
 
 #include "ttnn/decorators.hpp"
@@ -20,6 +22,12 @@ struct MorehMatmulOperation {
 
         const MemoryConfig output_memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "transpose_input", "transpose_other", "output_memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(transpose_input, transpose_other, output_memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
@@ -28,6 +36,9 @@ struct MorehMatmulOperation {
 
         const std::optional<Tensor>& output;
         const std::optional<const Tensor>& bias;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input", "other", "output", "bias");
+        auto attribute_values() const { return std::forward_as_tuple(input, other, output, bias); }
     };
 
     using spec_return_value_t = TensorSpec;

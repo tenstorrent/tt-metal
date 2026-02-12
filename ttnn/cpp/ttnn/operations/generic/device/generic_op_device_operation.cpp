@@ -6,7 +6,6 @@
 #include "generic_op_device_operation.hpp"
 #include "generic_op_device_operation_types.hpp"
 
-#include <tt_stl/reflection.hpp>
 #include <unordered_set>
 
 namespace ttnn::operations::generic {

@@ -20,6 +20,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -38,6 +39,9 @@ struct RingAttentionAllGatherAsyncParams {
 struct RingAttentionAllGatherAsyncInputs {
     std::vector<Tensor> input_tensor;
     std::vector<std::optional<Tensor>> persistent_output_buffer;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "persistent_output_buffer");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, persistent_output_buffer); }
 };
 
 }  // namespace ttnn::experimental::prim

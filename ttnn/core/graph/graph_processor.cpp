@@ -12,7 +12,6 @@
 #include <string>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/reflection.hpp>
 #include <unordered_map>
 
 using namespace tt::tt_metal;

@@ -7,6 +7,7 @@
 #include <optional>
 
 #include <fmt/format.h>
+#include <tt_stl/stl_fmt.hpp>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 

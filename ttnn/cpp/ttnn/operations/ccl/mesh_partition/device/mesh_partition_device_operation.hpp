@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <optional>
 
@@ -25,10 +27,16 @@ struct MeshPartitionDeviceOperation {
         uint32_t dim;
         std::optional<uint32_t> cluster_axis;
         const MemoryConfig output_mem_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("dim", "cluster_axis", "output_mem_config");
+        auto attribute_values() const { return std::forward_as_tuple(dim, cluster_axis, output_mem_config); }
     };
     struct tensor_args_t {
         const ttnn::Tensor input_tensor;
         const std::optional<ttnn::Tensor> optional_output_tensor;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "optional_output_tensor");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor, optional_output_tensor); }
     };
 
     using spec_return_value_t = ttnn::TensorSpec;

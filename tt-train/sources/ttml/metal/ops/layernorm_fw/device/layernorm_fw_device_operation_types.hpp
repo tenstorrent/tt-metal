@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::layernorm_fw::device {
@@ -12,6 +14,11 @@ namespace ttml::metal::ops::layernorm_fw::device {
 struct operation_attributes_t {
     float epsilon;          // epsilon for numerical stability
     bool return_mean_rstd;  // whether to return mean and rstd for backward pass
+
+    static constexpr auto attribute_names = std::forward_as_tuple("epsilon", "return_mean_rstd");
+    auto attribute_values() const {
+        return std::forward_as_tuple(epsilon, return_mean_rstd);
+    }
 };
 
 // Tensors required for forward
@@ -22,6 +29,12 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_output = std::nullopt;
     std::optional<ttnn::Tensor> preallocated_mean = std::nullopt;
     std::optional<ttnn::Tensor> preallocated_rstd = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "input", "gamma", "beta", "preallocated_output", "preallocated_mean", "preallocated_rstd");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input, gamma, beta, preallocated_output, preallocated_mean, preallocated_rstd);
+    }
 };
 
 // Output tensor specs and tensors

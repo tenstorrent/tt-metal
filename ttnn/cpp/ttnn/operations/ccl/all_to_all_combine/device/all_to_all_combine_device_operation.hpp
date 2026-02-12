@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <optional>
 
@@ -45,6 +47,12 @@ struct AllToAllCombineDeviceOperation {
         const ttnn::Tensor mapping_tensor;
         const ttnn::Tensor metadata_tensor;
         const std::optional<ttnn::Tensor> optional_output_tensor;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_tensor", "mapping_tensor", "metadata_tensor", "optional_output_tensor");
+        auto attribute_values() const {
+            return std::forward_as_tuple(input_tensor, mapping_tensor, metadata_tensor, optional_output_tensor);
+        }
     };
 
     using spec_return_value_t = ttnn::TensorSpec;

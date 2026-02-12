@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <optional>
 
@@ -57,7 +59,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
             "drain_sync_tilizer_core",
             "worker_mode",
             "mux_core_range_set",
-            "dispatch_algorithm");
+            "dispatch_algorithm",
+            "cross_device_semaphore");
         auto attribute_values() const {
             return std::forward_as_tuple(
                 worker_core_range_set,
@@ -67,7 +70,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
                 drain_sync_tilizer_core,
                 worker_mode,
                 mux_core_range_set,
-                dispatch_algorithm);
+                dispatch_algorithm,
+                cross_device_semaphore);
         };
     };
     struct tensor_args_t {
@@ -79,6 +83,21 @@ struct AllToAllDispatchMetadataDeviceOperation {
         // Note: GlobalSemaphore moved to operation_attributes_t because tensor_args_t is visited
         // by visit_object_of_type<Tensor> and GlobalSemaphore's attribute_values() contains CoreRangeSet
         // which isn't supported by the visitor.
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "input_tensor",
+            "expert_indices_tensor",
+            "expert_scores_tensor",
+            "expert_mapping_tensor",
+            "optional_output_tensors");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                input_tensor,
+                expert_indices_tensor,
+                expert_scores_tensor,
+                expert_mapping_tensor,
+                optional_output_tensors);
+        }
     };
 
     using spec_return_value_t = std::array<ttnn::TensorSpec, 3>;

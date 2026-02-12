@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -18,6 +19,9 @@ struct InterleavedToShardedParams {
 struct InterleavedToShardedInputs {
     tt::tt_metal::Tensor input_tensor;
     std::optional<tt::tt_metal::Tensor> output_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "output_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, output_tensor); }
 };
 
 }  // namespace ttnn::prim

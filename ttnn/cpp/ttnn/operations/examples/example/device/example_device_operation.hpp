@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <optional>
 #include <variant>
 
@@ -20,6 +22,9 @@ struct ExampleDeviceOperation {
     struct operation_attributes_t {
         bool attribute;
         int some_other_attribute;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("attribute", "some_other_attribute");
+        auto attribute_values() const { return std::forward_as_tuple(attribute, some_other_attribute); }
     };
 
     // Define the tensor arguments. This is it to store all tensors passed in and/or out of the operation
@@ -48,6 +53,9 @@ struct ExampleDeviceOperation {
 
         // An example of a tuple of tensors
         // std::tuple<std::vector<std::optional<Tensor>>, std::optional<Tensor>> some_crazy_tuple_of_tensors;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor); }
     };
 
     // Define the return types for the spec(s) of the operation

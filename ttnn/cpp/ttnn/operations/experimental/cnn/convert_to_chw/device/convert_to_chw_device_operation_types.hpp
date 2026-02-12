@@ -5,12 +5,16 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
 struct ConvertToCHWParams {
     const tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("memory_config", "dtype");
+    auto attribute_values() const { return std::forward_as_tuple(memory_config, dtype); }
 };
 
 }  // namespace ttnn::experimental::prim

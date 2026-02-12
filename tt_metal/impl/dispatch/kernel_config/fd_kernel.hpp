@@ -17,7 +17,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <tt_stl/tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 

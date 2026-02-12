@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -15,6 +17,12 @@ struct MorehLayerNormBackwardGammaBetaGradOperation {
         uint32_t normalized_dims;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("normalized_dims", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(normalized_dims, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
@@ -25,6 +33,12 @@ struct MorehLayerNormBackwardGammaBetaGradOperation {
 
         const std::optional<const Tensor>& gamma_grad;
         const std::optional<const Tensor>& beta_grad;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("output_grad", "input", "mean", "rstd", "gamma_grad", "beta_grad");
+        auto attribute_values() const {
+            return std::forward_as_tuple(output_grad, input, mean, rstd, gamma_grad, beta_grad);
+        }
     };
 
     using spec_return_value_t = std::vector<std::optional<TensorSpec>>;

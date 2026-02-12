@@ -250,7 +250,6 @@ target_link_libraries(
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
-        Reflect::Reflect
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}
@@ -347,7 +346,6 @@ if(TT_INSTALL)
     # ... or refactor our public API.
     install(
         TARGETS
-            reflect
             enchantum
             TracyClient
             tt-logger

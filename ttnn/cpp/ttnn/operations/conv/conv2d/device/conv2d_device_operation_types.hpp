@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -180,6 +181,23 @@ struct Conv2dParallelizationConfig {
     uint32_t per_core_out_matrix_width_ntile = 1;
 
     CoreCoord get_grid_size() const { return this->grid_size; }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "grid_size",
+        "num_cores_nhw",
+        "num_cores_c_in",
+        "num_cores_c_out",
+        "per_core_out_matrix_height_ntile",
+        "per_core_out_matrix_width_ntile");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            grid_size,
+            num_cores_nhw,
+            num_cores_c_in,
+            num_cores_c_out,
+            per_core_out_matrix_height_ntile,
+            per_core_out_matrix_width_ntile);
+    }
 };
 
 struct Conv2dBlockConfig {
@@ -187,6 +205,13 @@ struct Conv2dBlockConfig {
     uint32_t act_block_w_ntiles;
     uint32_t out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "act_block_h_ntiles", "act_block_w_ntiles", "out_subblock_h_ntiles", "out_subblock_w_ntiles");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            act_block_h_ntiles, act_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles);
+    }
 };
 
 struct Conv2dParams {
@@ -228,18 +253,61 @@ struct Conv2dHashableParams {
     bool enable_activation_reuse = false;
     bool config_tensors_in_dram = false;
     std::optional<bool> force_split_reader;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "sliding_window_config",
+        "output_channels",
+        "untilize_out",
+        "has_bias",
+        "activation",
+        "parallelization_config",
+        "block_config",
+        "memory_config",
+        "dtype",
+        "input_tensor_shape",
+        "compute_kernel_config",
+        "enable_act_double_buffer",
+        "enable_weights_double_buffer",
+        "enable_activation_reuse",
+        "config_tensors_in_dram",
+        "force_split_reader");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            sliding_window_config,
+            output_channels,
+            untilize_out,
+            has_bias,
+            activation,
+            parallelization_config,
+            block_config,
+            memory_config,
+            dtype,
+            input_tensor_shape,
+            compute_kernel_config,
+            enable_act_double_buffer,
+            enable_weights_double_buffer,
+            enable_activation_reuse,
+            config_tensors_in_dram,
+            force_split_reader);
+    }
 };
 
 struct Conv2dInputs {
     Tensor a;
     Tensor b;
     std::optional<Tensor> bias;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("a", "b", "bias");
+    auto attribute_values() const { return std::forward_as_tuple(a, b, bias); }
 };
 
 // Both CB and tensor allocation sizes are per per tensix core and in bytes.
 struct conv_op_l1_usage {
     uint32_t tensor_allocation_size;
     uint32_t CB_allocation_size;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("tensor_allocation_size", "CB_allocation_size");
+    auto attribute_values() const { return std::forward_as_tuple(tensor_allocation_size, CB_allocation_size); }
 };
 
 }  // namespace ttnn::prim

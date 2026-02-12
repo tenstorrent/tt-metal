@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <nlohmann/json_fwd.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -71,6 +73,9 @@ struct TensorInfo {
     tt::tt_metal::BufferType type = tt::tt_metal::BufferType::DRAM;
 
     bool operator==(const TensorInfo& other) const = default;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("shape", "size", "type");
+    auto attribute_values() const { return std::forward_as_tuple(shape, size, type); }
 };
 
 std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace);

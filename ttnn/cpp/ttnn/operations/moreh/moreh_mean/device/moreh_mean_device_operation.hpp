@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -22,10 +24,19 @@ struct MorehMeanOperation {
         const std::optional<uint32_t> divisor;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("dim", "keepdim", "divisor", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(dim, keepdim, divisor, memory_config, compute_kernel_config);
+        }
     };
     struct tensor_args_t {
         const Tensor& input;
         const std::optional<Tensor>& output;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input", "output");
+        auto attribute_values() const { return std::forward_as_tuple(input, output); }
     };
 
     using spec_return_value_t = TensorSpec;

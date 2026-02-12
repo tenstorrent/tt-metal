@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <optional>
 #include <variant>
 
@@ -20,12 +22,24 @@ struct MorehNllLossUnreducedBackwardDeviceOperation {
         const uint32_t ignore_index = std::numeric_limits<uint32_t>::max();
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("ignore_index", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(ignore_index, memory_config, compute_kernel_config);
+        }
     };
     struct tensor_args_t {
         const Tensor& target_tensor;
         const Tensor& output_grad_tensor;
         const std::optional<Tensor>& weight_tensor;
         const std::optional<Tensor>& input_grad_tensor;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("target_tensor", "output_grad_tensor", "weight_tensor", "input_grad_tensor");
+        auto attribute_values() const {
+            return std::forward_as_tuple(target_tensor, output_grad_tensor, weight_tensor, input_grad_tensor);
+        }
     };
 
     using spec_return_value_t = ttnn::TensorSpec;

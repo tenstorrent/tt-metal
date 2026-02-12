@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -16,12 +17,33 @@ struct AttnMatmulParams {
     const tt::tt_metal::MemoryConfig output_mem_config;
     const tt::tt_metal::DataType output_dtype;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "num_tokens",
+        "transpose_hw",
+        "compute_with_storage_grid_size",
+        "output_mem_config",
+        "output_dtype",
+        "compute_kernel_config");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            num_tokens,
+            transpose_hw,
+            compute_with_storage_grid_size,
+            output_mem_config,
+            output_dtype,
+            compute_kernel_config);
+    }
 };
 
 struct AttnMatmulInputs {
     Tensor input_tensor_a;
     Tensor input_tensor_b;
     std::optional<Tensor> preallocated_output;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor_a", "input_tensor_b", "preallocated_output");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor_a, input_tensor_b, preallocated_output); }
 };
 
 }  // namespace ttnn::experimental::prim

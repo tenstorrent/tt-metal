@@ -7,7 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <umd/device/types/arch.hpp>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId

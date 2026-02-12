@@ -413,7 +413,7 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
         shard_shape,
         page_shape,
         page_size >> 10,
-        reflect::enum_name(tensor_layout));
+        enchantum::to_string(tensor_layout));
 
     uint32_t device_rows = mesh_device_->num_rows();
     uint32_t device_cols = mesh_device_->num_cols();

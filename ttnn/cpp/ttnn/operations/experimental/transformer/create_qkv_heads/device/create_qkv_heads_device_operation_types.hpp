@@ -23,6 +23,9 @@ struct CreateQKVHeadsParams {
 struct CreateQKVHeadsInputs {
     const Tensor input;
     const std::optional<std::tuple<Tensor, Tensor, Tensor>> preallocated_outputs;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "preallocated_outputs");
+    auto attribute_values() const { return std::forward_as_tuple(input, preallocated_outputs); }
 };
 
 using CreateQKVHeadsResultSpec = std::tuple<TensorSpec, TensorSpec, TensorSpec>;

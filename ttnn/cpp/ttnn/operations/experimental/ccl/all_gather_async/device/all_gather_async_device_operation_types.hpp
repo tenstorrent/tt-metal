@@ -10,11 +10,12 @@
 
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -102,6 +103,9 @@ struct AllGatherAsyncParams {
 struct AllGatherAsyncInputs {
     Tensor input_tensor;
     std::optional<Tensor> persistent_output_buffer;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "persistent_output_buffer");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, persistent_output_buffer); }
 };
 
 }  // namespace ttnn::experimental::prim

@@ -16,7 +16,7 @@
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/utils/semver.hpp>
 #include <tt_stl/strong_type.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 namespace YAML {
 class Node;

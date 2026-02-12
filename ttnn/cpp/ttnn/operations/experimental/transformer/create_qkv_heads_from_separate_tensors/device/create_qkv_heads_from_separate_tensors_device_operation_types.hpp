@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -21,6 +22,12 @@ struct CreateQKVHeadsFromSeparateTensorsInputs {
     const Tensor& input_tensor;
     const Tensor& input_tensor_kv;
     const std::optional<std::array<Tensor, 3>>& optional_output_tensors;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor", "input_tensor_kv", "optional_output_tensors");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_tensor, input_tensor_kv, optional_output_tensors);
+    }
 };
 
 using CreateQKVHeadsFromSeparateTensorsResult = std::tuple<Tensor, Tensor, Tensor>;

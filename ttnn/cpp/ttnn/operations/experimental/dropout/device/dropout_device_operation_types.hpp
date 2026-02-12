@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -19,11 +20,20 @@ struct DropoutParams {
 
     const float prob = 0.0f;
     const float scale = 1.0f;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("output_dtype", "output_memory_config", "seed", "use_per_device_seed", "prob", "scale");
+    auto attribute_values() const {
+        return std::forward_as_tuple(output_dtype, output_memory_config, seed, use_per_device_seed, prob, scale);
+    }
 };
 
 struct DropoutInputs {
     const Tensor& input;
     std::optional<Tensor> preallocated_output;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "preallocated_output");
+    auto attribute_values() const { return std::forward_as_tuple(input, preallocated_output); }
 };
 
 }  // namespace ttnn::experimental::prim

@@ -9,6 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -75,12 +76,42 @@ struct Conv3dParams {
     std::array<uint32_t, 3> dilation;
     std::string padding_mode;
     uint32_t groups;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "config",
+        "output_mem_config",
+        "compute_kernel_config",
+        "dtype",
+        "output_channels",
+        "kernel_size",
+        "stride",
+        "padding",
+        "dilation",
+        "padding_mode",
+        "groups");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            config,
+            output_mem_config,
+            compute_kernel_config,
+            dtype,
+            output_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            padding_mode,
+            groups);
+    }
 };
 
 struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "weight_tensor", "bias_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, weight_tensor, bias_tensor); }
 };
 
 namespace detail {

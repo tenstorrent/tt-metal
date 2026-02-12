@@ -30,6 +30,13 @@ struct PagedFusedUpdateCacheInputs {
     Tensor input_tensor2;
     std::optional<Tensor> update_idxs_tensor;
     std::optional<Tensor> page_table;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "cache_tensor1", "input_tensor1", "cache_tensor2", "input_tensor2", "update_idxs_tensor", "page_table");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            cache_tensor1, input_tensor1, cache_tensor2, input_tensor2, update_idxs_tensor, page_table);
+    }
 };
 
 using PagedFusedUpdateCacheResultSpec = std::vector<ttnn::TensorSpec>;

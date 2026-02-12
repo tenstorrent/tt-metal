@@ -4,6 +4,7 @@
 
 #include "sliding_window_nanobind.hpp"
 
+#include <tt_stl/stl_fmt.hpp>
 #include "ttnn-nanobind/decorators.hpp"
 #include "sliding_window.hpp"
 #include "op_slicing/op_slicing.hpp"

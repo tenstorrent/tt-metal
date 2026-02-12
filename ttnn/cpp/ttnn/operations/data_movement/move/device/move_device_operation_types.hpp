@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -16,12 +17,21 @@ struct MoveOperationAttributes {
     tt::tt_metal::MemoryConfig output_mem_config;
     MoveOpParallelizationStrategy move_op_parallelization_strategy;
     bool backwards = false;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("output_mem_config", "move_op_parallelization_strategy", "backwards");
+    auto attribute_values() const {
+        return std::forward_as_tuple(output_mem_config, move_op_parallelization_strategy, backwards);
+    }
 };
 
 // Tensor arguments - tensor parameters
 struct MoveTensorArgs {
     Tensor input_tensor;
     Tensor output_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "output_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, output_tensor); }
 };
 
 // Return types

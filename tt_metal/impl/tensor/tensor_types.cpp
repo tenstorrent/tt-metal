@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt_stl/stl_json.hpp>
 
 namespace tt::tt_metal {
 
@@ -113,3 +114,13 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
 }
 
 }  // namespace tt::tt_metal
+
+tt::tt_metal::NdShardSpec ttsl::json::from_json_t<tt::tt_metal::NdShardSpec>::operator()(
+    const nlohmann::json& json_object) const {
+    return tt::tt_metal::NdShardSpec{
+        ttsl::json::from_json<tt::tt_metal::Shape>(json_object.at("shard_shape")),
+        ttsl::json::from_json<tt::tt_metal::CoreRangeSet>(json_object.at("grid")),
+        ttsl::json::from_json<tt::tt_metal::ShardOrientation>(json_object.at("orientation")),
+        ttsl::json::from_json<tt::tt_metal::ShardDistributionStrategy>(json_object.at("shard_distribution_strategy")),
+    };
+}

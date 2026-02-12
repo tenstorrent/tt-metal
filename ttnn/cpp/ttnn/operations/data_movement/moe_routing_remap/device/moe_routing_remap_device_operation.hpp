@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <optional>
 
@@ -32,6 +34,12 @@ struct MoeRoutingRemapDeviceOperation {
     struct tensor_args_t {
         const ttnn::Tensor input_routing_weights;
         const std::optional<ttnn::Tensor> optional_output_routing_weights;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_routing_weights", "optional_output_routing_weights");
+        auto attribute_values() const {
+            return std::forward_as_tuple(input_routing_weights, optional_output_routing_weights);
+        }
     };
 
     using spec_return_value_t = ttnn::TensorSpec;

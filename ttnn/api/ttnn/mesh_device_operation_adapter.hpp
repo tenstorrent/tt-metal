@@ -15,7 +15,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 namespace ttnn::device_operation {
 

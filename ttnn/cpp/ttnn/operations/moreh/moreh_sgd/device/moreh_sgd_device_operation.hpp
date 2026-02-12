@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -21,6 +23,29 @@ struct MorehSgdOperation {
         const MemoryConfig param_out_memory_config;
         const MemoryConfig momentum_buffer_out_memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "lr",
+            "momentum",
+            "dampening",
+            "weight_decay",
+            "nesterov",
+            "momentum_initialized",
+            "param_out_memory_config",
+            "momentum_buffer_out_memory_config",
+            "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                lr,
+                momentum,
+                dampening,
+                weight_decay,
+                nesterov,
+                momentum_initialized,
+                param_out_memory_config,
+                momentum_buffer_out_memory_config,
+                compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
@@ -29,6 +54,12 @@ struct MorehSgdOperation {
         const std::optional<Tensor>& momentum_buffer_in;
         const std::optional<Tensor>& param_out;
         const std::optional<Tensor>& momentum_buffer_out;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("param_in", "grad", "momentum_buffer_in", "param_out", "momentum_buffer_out");
+        auto attribute_values() const {
+            return std::forward_as_tuple(param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out);
+        }
     };
 
     using spec_return_value_t = std::vector<std::optional<TensorSpec>>;

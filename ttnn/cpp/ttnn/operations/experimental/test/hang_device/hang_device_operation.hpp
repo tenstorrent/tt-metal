@@ -6,18 +6,26 @@
 
 #include "ttnn/decorators.hpp"
 
+#include <tuple>
+
 namespace ttnn::prim {
 
 struct ExecuteTestHangDeviceOperation {
     struct tensor_args_t {
         const Tensor& tensor;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("tensor");
+        auto attribute_values() const { return std::forward_as_tuple(tensor); }
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
 
     using tensor_return_value_t = Tensor;
 
-    struct operation_attributes_t {};
+    struct operation_attributes_t {
+        static constexpr auto attribute_names = std::make_tuple();
+        auto attribute_values() const { return std::make_tuple(); }
+    };
 
     struct SingleCore {
         struct shared_variables_t {};

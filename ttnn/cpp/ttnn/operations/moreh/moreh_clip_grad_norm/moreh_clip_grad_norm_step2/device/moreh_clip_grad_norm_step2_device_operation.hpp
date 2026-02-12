@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -20,11 +22,18 @@ struct MorehClipGradNormStep2Operation {
         const float norm_type;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("norm_type", "memory_config", "compute_kernel_config");
+        auto attribute_values() const { return std::forward_as_tuple(norm_type, memory_config, compute_kernel_config); }
     };
 
     struct tensor_args_t {
         const Tensor& tmp_pow_sum;
         const std::optional<Tensor>& total_norm;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("tmp_pow_sum", "total_norm");
+        auto attribute_values() const { return std::forward_as_tuple(tmp_pow_sum, total_norm); }
     };
 
     using spec_return_value_t = TensorSpec;

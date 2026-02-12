@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <variant>
 #include <vector>
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/span.hpp>
+#include <tt_stl/stl_json.hpp>
 #include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal {
@@ -76,9 +78,22 @@ struct NdShardSpec {
 
     bool operator==(const NdShardSpec& other) const = default;
     bool operator!=(const NdShardSpec& other) const = default;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("shard_shape", "grid", "orientation", "shard_distribution_strategy");
+    auto attribute_values() const {
+        return std::forward_as_tuple(shard_shape, grid, orientation, shard_distribution_strategy);
+    }
 };
 
 using PadValue = std::variant<uint32_t, float>;
 std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
 
 }  // namespace tt::tt_metal
+
+namespace ttsl::json {
+template <>
+struct from_json_t<tt::tt_metal::NdShardSpec> {
+    tt::tt_metal::NdShardSpec operator()(const nlohmann::json& json_object) const;
+};
+}  // namespace ttsl::json

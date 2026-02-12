@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "mesh_device.hpp"
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
@@ -59,7 +59,7 @@ void GlobalSemaphore::setup_buffer(uint32_t initial_value, BufferType buffer_typ
 IDevice* GlobalSemaphore::device() const { return device_; }
 
 std::ostream& operator<<(std::ostream& os, const GlobalSemaphore& global_semaphore) {
-    tt::stl::reflection::operator<<(os, global_semaphore);
+    ttsl::stl_fmt::operator<<(os, global_semaphore);
     return os;
 }
 

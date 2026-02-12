@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -32,6 +33,9 @@ struct GridSampleParams {
 struct GridSampleInputs {
     Tensor input_tensor;
     Tensor grid;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "grid");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, grid); }
 };
 
 }  // namespace ttnn::prim

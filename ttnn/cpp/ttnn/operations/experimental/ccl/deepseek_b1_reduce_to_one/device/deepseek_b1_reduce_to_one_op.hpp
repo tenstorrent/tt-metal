@@ -4,6 +4,8 @@
 ///
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -22,14 +24,23 @@ struct DeepseekB1ReduceToOneOp {
 
         const ttnn::TensorSpec _input_tensor_spec;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "exit_coord", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(root_coord, exit_coord, topology); };
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("root_coord", "exit_coord", "topology", "_input_tensor_spec");
+        auto attribute_values() const {
+            return std::forward_as_tuple(root_coord, exit_coord, topology, _input_tensor_spec);
+        };
     };
 
     struct tensor_args_t {
         const Tensor input_tensor;
         const std::optional<Tensor> optional_output_tensor;
         const std::optional<std::vector<Tensor>> optional_intermediate_tensors;  // 3 tensors for 3 reduction rounds
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_tensor", "optional_output_tensor", "optional_intermediate_tensors");
+        auto attribute_values() const {
+            return std::forward_as_tuple(input_tensor, optional_output_tensor, optional_intermediate_tensors);
+        }
     };
 
     using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;

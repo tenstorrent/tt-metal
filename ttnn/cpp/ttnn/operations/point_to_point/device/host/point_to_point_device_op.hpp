@@ -4,6 +4,8 @@
 ///
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -23,14 +25,23 @@ struct PointToPointOp {
         // put this in here to hash on tensor spec
         const ttnn::TensorSpec _input_tensor_spec;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("send_coord", "receive_coord", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(send_coord, receive_coord, topology); };
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("receive_coord", "send_coord", "topology", "_input_tensor_spec");
+        auto attribute_values() const {
+            return std::forward_as_tuple(receive_coord, send_coord, topology, _input_tensor_spec);
+        };
     };
 
     struct tensor_args_t {
         const Tensor input_tensor;
         const std::optional<ttnn::Tensor> optional_output_tensor;
         const std::optional<ttnn::Tensor> optional_intermediate_tensor;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_tensor", "optional_output_tensor", "optional_intermediate_tensor");
+        auto attribute_values() const {
+            return std::forward_as_tuple(input_tensor, optional_output_tensor, optional_intermediate_tensor);
+        }
     };
 
     // entry 0 is the intermediate. Entry 1 is the final output

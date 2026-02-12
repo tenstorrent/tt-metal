@@ -1439,7 +1439,7 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
 }
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
-    tt::stl::reflection::operator<<(os, config);
+    ttsl::stl_fmt::operator<<(os, config);
     return os;
 }
 

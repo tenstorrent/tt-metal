@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 enum class UpdateCacheOpParallelizationStrategy { MULTI_CORE };
@@ -23,6 +24,9 @@ struct KvCacheParams {
 struct KvCacheInputs {
     Tensor cache;
     Tensor input;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("cache", "input");
+    auto attribute_values() const { return std::forward_as_tuple(cache, input); }
 };
 
 }  // namespace ttnn::prim

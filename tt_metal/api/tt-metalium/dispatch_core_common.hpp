@@ -7,7 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 namespace tt::tt_metal {
 

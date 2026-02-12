@@ -10,7 +10,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
-#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"

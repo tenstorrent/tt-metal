@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -20,6 +21,31 @@ struct HaloParams {
     tt::tt_metal::MemoryConfig output_memory_config;
     bool is_out_tiled = false;
     bool config_tensors_in_dram = false;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "config",
+        "parallel_config",
+        "pad_val",
+        "remote_read",
+        "transpose_mcast",
+        "max_out_nsticks_per_core",
+        "in_nsticks_per_core",
+        "output_memory_config",
+        "is_out_tiled",
+        "config_tensors_in_dram");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            config,
+            parallel_config,
+            pad_val,
+            remote_read,
+            transpose_mcast,
+            max_out_nsticks_per_core,
+            in_nsticks_per_core,
+            output_memory_config,
+            is_out_tiled,
+            config_tensors_in_dram);
+    }
 };
 
 }  // namespace ttnn::prim

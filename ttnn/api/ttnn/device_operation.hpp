@@ -16,7 +16,7 @@
 #include <tt-metalium/program_cache.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include <tt_stl/concepts.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/graph/graph_processor.hpp"

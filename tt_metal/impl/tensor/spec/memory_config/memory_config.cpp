@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
@@ -63,7 +63,7 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
-    tt::stl::reflection::operator<<(os, config);
+    ttsl::stl_fmt::operator<<(os, config);
     return os;
 }
 

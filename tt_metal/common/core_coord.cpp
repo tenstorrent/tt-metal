@@ -5,7 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <core_coord.hpp>
 #include <nlohmann/json.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -734,6 +734,6 @@ CoreRangeSet from_json_t<CoreRangeSet>::operator()(const nlohmann::json& json) n
 }  // namespace ttsl::json
 
 std::ostream& operator<<(std::ostream& os, const CoreRangeSet& core_range_set) {
-    tt::stl::reflection::operator<<(os, core_range_set);
+    os << fmt::format("{}", core_range_set);
     return os;
 }

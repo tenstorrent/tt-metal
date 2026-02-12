@@ -9,6 +9,7 @@
 #include "tt-metalium/global_circular_buffer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -24,12 +25,45 @@ struct SparseMatmulParams {
     std::optional<const tt::tt_metal::Tile> output_tile;
     std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "nnz",
+        "is_input_a_sparse",
+        "is_input_b_sparse",
+        "program_config",
+        "output_mem_config",
+        "output_dtype",
+        "compute_kernel_config",
+        "user_core_coord",
+        "output_tile",
+        "global_cb",
+        "sub_device_id");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            nnz,
+            is_input_a_sparse,
+            is_input_b_sparse,
+            program_config,
+            output_mem_config,
+            output_dtype,
+            compute_kernel_config,
+            user_core_coord,
+            output_tile,
+            global_cb,
+            sub_device_id);
+    }
 };
 
 struct SparseMatmulInputs {
     std::vector<Tensor> input_tensors;
     std::vector<std::optional<const Tensor>> optional_input_tensors;
     std::vector<std::optional<Tensor>> optional_output_tensors;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensors", "optional_input_tensors", "optional_output_tensors");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_tensors, optional_input_tensors, optional_output_tensors);
+    }
 };
 
 }  // namespace ttnn::prim

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/decorators.hpp"
@@ -19,11 +21,33 @@ struct DeepseekGroupedGateDeviceOperation {
         float route_scale;
         float epsilon;
         MemoryConfig output_mem_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "n_groups",
+            "summed_experts_per_group",
+            "topk_groups",
+            "n_activated_experts",
+            "route_scale",
+            "epsilon",
+            "output_mem_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                n_groups,
+                summed_experts_per_group,
+                topk_groups,
+                n_activated_experts,
+                route_scale,
+                epsilon,
+                output_mem_config);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& scores;
         const Tensor& bias;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("scores", "bias");
+        auto attribute_values() const { return std::forward_as_tuple(scores, bias); }
     };
 
     using spec_return_value_t = std::array<TensorSpec, 2>;

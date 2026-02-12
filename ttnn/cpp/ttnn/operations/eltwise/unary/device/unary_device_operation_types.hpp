@@ -9,6 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -22,11 +23,17 @@ struct UnaryParams {
     const bool preserve_fp32_precision = false;
     const bool bfp8_pack_precise = false;
     const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("op_chain", "output_dtype", "output_memory_config", "fp32_dest_acc_en", "preserve_fp32_precision", "bfp8_pack_precise", "sub_core_grids");
+    auto attribute_values() const { return std::forward_as_tuple(op_chain, output_dtype, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise, sub_core_grids); }
 };
 
 struct UnaryInputs {
     const Tensor& input;
     std::optional<Tensor> preallocated_output;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "preallocated_output");
+    auto attribute_values() const { return std::forward_as_tuple(input, preallocated_output); }
 };
 
 }  // namespace ttnn::prim

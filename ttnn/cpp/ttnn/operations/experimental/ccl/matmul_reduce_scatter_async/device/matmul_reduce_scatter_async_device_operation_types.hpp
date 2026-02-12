@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -33,9 +34,11 @@ struct MatmulReduceScatterAsyncParams {
         reduce_scatter_core_grid_offset(reduce_scatter_core_grid_offset),
         devices(std::move(devices)) {}
 
-    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "reduce_scatter_core_grid_offset");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("reduce_scatter_params", "matmul_struct", "reduce_scatter_core_grid_offset", "devices");
     auto attribute_values() const {
-        return std::forward_as_tuple(this->matmul_struct, this->reduce_scatter_core_grid_offset);
+        return std::forward_as_tuple(
+            this->reduce_scatter_params, this->matmul_struct, this->reduce_scatter_core_grid_offset, this->devices);
     }
 };
 
@@ -55,6 +58,12 @@ struct MatmulReduceScatterAsyncInputs {
     std::optional<Tensor> bias;
     Tensor persistent_intermediate;
     Tensor persistent_output;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input", "weight", "bias", "persistent_intermediate", "persistent_output");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input, weight, bias, persistent_intermediate, persistent_output);
+    }
 };
 
 }  // namespace ttnn::experimental::prim

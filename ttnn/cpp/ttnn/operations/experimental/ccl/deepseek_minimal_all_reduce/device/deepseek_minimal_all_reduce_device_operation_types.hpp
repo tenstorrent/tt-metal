@@ -15,6 +15,9 @@ struct operation_attributes_t {
     uint32_t ring_size = 2;
     tt::tt_fabric::Topology topology{};
     std::optional<uint32_t> cluster_axis;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("num_links", "ring_size", "topology", "cluster_axis");
+    auto attribute_values() const { return std::forward_as_tuple(num_links, ring_size, topology, cluster_axis); }
 };
 
 struct tensor_args_t {
@@ -22,6 +25,12 @@ struct tensor_args_t {
     std::optional<Tensor> intermediate_tensor;
     std::optional<Tensor> residual_tensor;  // Optional residual input for fused residual add
     std::optional<Tensor> persistent_output_tensor;  // Optional persistent output buffer
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor", "intermediate_tensor", "residual_tensor", "persistent_output_tensor");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_tensor, intermediate_tensor, residual_tensor, persistent_output_tensor);
+    }
 };
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce

@@ -32,10 +32,40 @@ struct Pool2D {
         bool return_indices_{};
         uint32_t memory_used{};
         bool config_tensor_in_dram{};
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "sliding_window_config_",
+            "pool_type_",
+            "output_dtype_",
+            "output_layout_",
+            "memory_config_",
+            "compute_kernel_config_",
+            "count_include_pad_",
+            "divisor_override_",
+            "return_indices_",
+            "memory_used",
+            "config_tensor_in_dram");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                sliding_window_config_,
+                pool_type_,
+                output_dtype_,
+                output_layout_,
+                memory_config_,
+                compute_kernel_config_,
+                count_include_pad_,
+                divisor_override_,
+                return_indices_,
+                memory_used,
+                config_tensor_in_dram);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& input_tensor_;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor_");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor_); }
     };
 
     using spec_return_value_t = TensorSpec;

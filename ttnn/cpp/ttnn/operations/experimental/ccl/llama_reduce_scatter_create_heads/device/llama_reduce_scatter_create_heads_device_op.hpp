@@ -35,10 +35,48 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const std::optional<MemoryConfig> qkv_memory_config;
         bool use_noc1_only;
         bool use_optimal_ccl_for_llama;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "dim",
+            "cross_device_semaphore",
+            "subdevice_id",
+            "cluster_axis",
+            "output_mem_config",
+            "ring_devices",
+            "topology",
+            "num_links",
+            "num_heads",
+            "num_kv_heads",
+            "head_dim",
+            "slice_size",
+            "qkv_memory_config",
+            "use_noc1_only",
+            "use_optimal_ccl_for_llama");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                dim,
+                cross_device_semaphore,
+                subdevice_id,
+                cluster_axis,
+                output_mem_config,
+                ring_devices,
+                topology,
+                num_links,
+                num_heads,
+                num_kv_heads,
+                head_dim,
+                slice_size,
+                qkv_memory_config,
+                use_noc1_only,
+                use_optimal_ccl_for_llama);
+        }
     };
     struct tensor_args_t {
         const Tensor input_tensor;
         Tensor intermediate_packet_buffer;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "intermediate_packet_buffer");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor, intermediate_packet_buffer); }
     };
 
     using spec_return_value_t = std::vector<ttnn::TensorSpec>;

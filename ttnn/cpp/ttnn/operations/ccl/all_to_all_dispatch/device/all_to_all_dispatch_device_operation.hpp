@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <optional>
 
@@ -56,6 +58,13 @@ struct AllToAllDispatchDeviceOperation {
         const Tensor expert_indices_tensor;
         const Tensor expert_mapping_tensor;
         const std::optional<std::array<Tensor, 2>> optional_output_tensors;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "input_tensor", "expert_indices_tensor", "expert_mapping_tensor", "optional_output_tensors");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                input_tensor, expert_indices_tensor, expert_mapping_tensor, optional_output_tensors);
+        }
     };
 
     using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;

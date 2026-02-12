@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 
 #include "ttnn/decorators.hpp"
@@ -19,9 +21,18 @@ struct FullOperation {
         const DataType dtype;
         const Layout layout;
         const MemoryConfig memory_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("shape", "fill_value", "mesh_device", "dtype", "layout", "memory_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(shape, fill_value, mesh_device, dtype, layout, memory_config);
+        }
     };
 
-    struct tensor_args_t {};
+    struct tensor_args_t {
+        static constexpr auto attribute_names = std::make_tuple();
+        auto attribute_values() const { return std::make_tuple(); }
+    };
 
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;

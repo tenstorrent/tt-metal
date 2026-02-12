@@ -6,7 +6,6 @@
 
 #include <enchantum/enchantum.hpp>
 #include <ostream>
-#include <tt_stl/reflection.hpp>
 
 namespace tt::tt_fabric {
 

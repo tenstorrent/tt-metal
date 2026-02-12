@@ -8,7 +8,7 @@
 #include <vector>
 #include <cstdint>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 struct TrafficParams {
     uint32_t packet_size_bytes = 0;

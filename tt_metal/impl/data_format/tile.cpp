@@ -12,7 +12,7 @@
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tt_backend_api_types.hpp"
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 namespace tt::tt_metal {
 
@@ -100,7 +100,7 @@ bool Tile::operator==(const Tile& other) const {
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tile& tile) {
-    tt::stl::reflection::operator<<(os, tile);
+    ttsl::stl_fmt::operator<<(os, tile);
     return os;
 }
 

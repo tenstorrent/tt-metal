@@ -11,6 +11,7 @@
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include <vector>
 #include <optional>
+#include <tuple>
 
 namespace ttnn::prim {
 namespace untilize_helper {
@@ -19,6 +20,9 @@ uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint3
 
 struct UntilizeTensorArgs {
     Tensor input;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input");
+    auto attribute_values() const { return std::forward_as_tuple(input); }
 };
 
 struct UntilizeOperationAttributes {
@@ -30,6 +34,27 @@ struct UntilizeOperationAttributes {
     bool enough_space_width{};
     bool enough_space_height{};
     uint32_t pf_type{};
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "output_mem_config",
+        "use_multicore",
+        "use_pack_untilize",
+        "fp32_dest_acc_en",
+        "sub_core_grids",
+        "enough_space_width",
+        "enough_space_height",
+        "pf_type");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            output_mem_config,
+            use_multicore,
+            use_pack_untilize,
+            fp32_dest_acc_en,
+            sub_core_grids,
+            enough_space_width,
+            enough_space_height,
+            pf_type);
+    }
 };
 
 using UntilizeTensorReturnValue = Tensor;

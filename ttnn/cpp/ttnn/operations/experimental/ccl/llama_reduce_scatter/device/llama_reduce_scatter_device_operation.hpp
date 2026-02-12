@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <optional>
 
@@ -31,10 +33,36 @@ struct LlamaReduceScatterDeviceOperation {
         const uint32_t num_links;
         tt::tt_fabric::Topology topology;
         bool use_noc1_only;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "dim",
+            "cross_device_semaphore",
+            "subdevice_id",
+            "cluster_axis",
+            "output_mem_config",
+            "ring_devices",
+            "num_links",
+            "topology",
+            "use_noc1_only");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                dim,
+                cross_device_semaphore,
+                subdevice_id,
+                cluster_axis,
+                output_mem_config,
+                ring_devices,
+                num_links,
+                topology,
+                use_noc1_only);
+        }
     };
     struct tensor_args_t {
         const Tensor input_tensor;
         Tensor intermediate_packet_buffer;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "intermediate_packet_buffer");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor, intermediate_packet_buffer); }
     };
 
     using spec_return_value_t = ttnn::TensorSpec;

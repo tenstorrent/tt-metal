@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -17,6 +18,9 @@ struct ConcatenateHeadsParams {
 struct ConcatenateHeadsInputs {
     const Tensor input;
     const std::optional<Tensor> preallocated_output;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "preallocated_output");
+    auto attribute_values() const { return std::forward_as_tuple(input, preallocated_output); }
 };
 
 }  // namespace ttnn::experimental::prim

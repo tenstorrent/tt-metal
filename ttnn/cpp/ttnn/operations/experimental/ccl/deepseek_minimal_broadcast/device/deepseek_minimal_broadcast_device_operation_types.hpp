@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tuple>
 namespace ttnn::experimental::prim {
 
 struct DeepseekMinimalBroadcastParams {
@@ -25,6 +26,9 @@ struct DeepseekMinimalBroadcastParams {
 struct DeepseekMinimalBroadcastInputs {
     Tensor input_tensor;
     std::optional<Tensor> persistent_output_buffer;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "persistent_output_buffer");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, persistent_output_buffer); }
 };
 
 }  // namespace ttnn::experimental::prim

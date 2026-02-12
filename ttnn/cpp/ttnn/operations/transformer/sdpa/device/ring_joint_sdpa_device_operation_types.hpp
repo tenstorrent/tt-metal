@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -82,6 +83,12 @@ struct RingJointSDPAInputs {
     Tensor joint_v;
     Tensor gathered_k;
     Tensor gathered_v;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "input_q", "input_k", "input_v", "joint_q", "joint_k", "joint_v", "gathered_k", "gathered_v");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_q, input_k, input_v, joint_q, joint_k, joint_v, gathered_k, gathered_v);
+    }
 };
 
 struct RingJointSDPAResult {

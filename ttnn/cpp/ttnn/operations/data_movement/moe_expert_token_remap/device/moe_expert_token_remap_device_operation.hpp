@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <optional>
 
@@ -32,6 +34,21 @@ struct MoeExpertTokenRemapDeviceOperation {
         const ttnn::Tensor metadata_tensor;
         const std::optional<ttnn::Tensor> optional_output_mapping_tensor;
         const std::optional<ttnn::Tensor> optional_output_reduced_tensor;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "topk_tensor",
+            "mapping_tensor",
+            "metadata_tensor",
+            "optional_output_mapping_tensor",
+            "optional_output_reduced_tensor");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                topk_tensor,
+                mapping_tensor,
+                metadata_tensor,
+                optional_output_mapping_tensor,
+                optional_output_reduced_tensor);
+        }
     };
 
     using spec_return_value_t = std::vector<ttnn::TensorSpec>;

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <optional>
 #include <variant>
 
@@ -26,6 +28,13 @@ struct MorehAdamWDeviceOperation {
         bool amsgrad = false;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "lr", "beta1", "beta2", "eps", "weight_decay", "step", "amsgrad", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                lr, beta1, beta2, eps, weight_decay, step, amsgrad, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
@@ -39,6 +48,29 @@ struct MorehAdamWDeviceOperation {
         const std::optional<Tensor>& exp_avg_out;
         const std::optional<Tensor>& exp_avg_sq_out;
         const std::optional<Tensor>& max_exp_avg_sq_out;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "param_in",
+            "grad",
+            "exp_avg_in",
+            "exp_avg_sq_in",
+            "max_exp_avg_sq_in",
+            "param_out",
+            "exp_avg_out",
+            "exp_avg_sq_out",
+            "max_exp_avg_sq_out");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                param_in,
+                grad,
+                exp_avg_in,
+                exp_avg_sq_in,
+                max_exp_avg_sq_in,
+                param_out,
+                exp_avg_out,
+                exp_avg_sq_out,
+                max_exp_avg_sq_out);
+        }
     };
 
     using spec_return_value_t = std::vector<std::optional<ttnn::TensorSpec>>;

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <optional>
 #include "ttnn/operation.hpp"
 #include <variant>
@@ -21,12 +23,24 @@ struct NlpCreateHeadsBoltzDeviceOperation {
         uint32_t head_dim;
         bool transpose_k_heads;
         MemoryConfig output_mem_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("num_q_heads", "num_kv_heads", "head_dim", "transpose_k_heads", "output_mem_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(num_q_heads, num_kv_heads, head_dim, transpose_k_heads, output_mem_config);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& input_tensor_q;
         const std::optional<Tensor>& input_tensor_kv;
         std::vector<std::optional<Tensor>> optional_output_tensors;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_tensor_q", "input_tensor_kv", "optional_output_tensors");
+        auto attribute_values() const {
+            return std::forward_as_tuple(input_tensor_q, input_tensor_kv, optional_output_tensors);
+        }
     };
 
     using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ttnn::TensorSpec>;

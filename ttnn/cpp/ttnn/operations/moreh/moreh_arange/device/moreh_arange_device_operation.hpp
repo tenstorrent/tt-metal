@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
@@ -17,10 +19,19 @@ struct MorehArangeOperation {
         ttnn::MeshDevice* mesh_device;
         const DataType dtype;
         const MemoryConfig memory_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("start", "end", "step", "untilize_out", "mesh_device", "dtype", "memory_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(start, end, step, untilize_out, mesh_device, dtype, memory_config);
+        }
     };
 
     struct tensor_args_t {
         const std::optional<Tensor>& output;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("output");
+        auto attribute_values() const { return std::forward_as_tuple(output); }
     };
 
     using spec_return_value_t = TensorSpec;

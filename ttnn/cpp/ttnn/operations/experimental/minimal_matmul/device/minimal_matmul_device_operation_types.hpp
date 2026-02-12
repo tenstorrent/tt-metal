@@ -21,6 +21,13 @@ struct MinimalMatmulConfig {
     uint32_t subblock_w{};
 
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "M_block_size", "K_block_size", "N_block_size", "subblock_h", "subblock_w", "compute_with_storage_grid_size");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, compute_with_storage_grid_size);
+    }
 };
 
 struct MinimalMatmulParams {
@@ -29,6 +36,12 @@ struct MinimalMatmulParams {
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "config", "fused_activation", "output_mem_config", "output_dtype", "compute_kernel_config");
+    auto attribute_values() const {
+        return std::forward_as_tuple(config, fused_activation, output_mem_config, output_dtype, compute_kernel_config);
+    }
 };
 
 struct MinimalMatmulInputs {
@@ -36,6 +49,12 @@ struct MinimalMatmulInputs {
     Tensor weight_tensor;
     std::optional<Tensor> bias_tensor;
     std::optional<Tensor> optional_input_tensor;  // for StridedAllGatherMinimalMatmul
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor", "weight_tensor", "bias_tensor", "optional_input_tensor");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_tensor, weight_tensor, bias_tensor, optional_input_tensor);
+    }
 };
 
 }  // namespace ttnn::experimental::prim

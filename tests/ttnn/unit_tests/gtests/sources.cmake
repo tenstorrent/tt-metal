@@ -2,7 +2,6 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_TTNN_SMOKE_SOURCES
-    test_reflect.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp

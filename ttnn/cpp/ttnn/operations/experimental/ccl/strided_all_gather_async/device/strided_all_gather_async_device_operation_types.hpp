@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/types.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -32,6 +33,9 @@ struct StridedAllGatherAsyncParams {
 struct StridedAllGatherAsyncInputs {
     const Tensor input_tensor;
     const std::optional<Tensor> persistent_output_buffer;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "persistent_output_buffer");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, persistent_output_buffer); }
 };
 
 }  // namespace ttnn::experimental::prim

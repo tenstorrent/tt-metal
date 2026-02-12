@@ -4,6 +4,8 @@
 ///
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -23,8 +25,11 @@ struct ReduceToRootOp {
 
         const std::vector<ttnn::TensorSpec> _input_tensor_spec;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "scale_fp32", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(root_coord, scale_fp32, topology); };
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("root_coord", "scale_fp32", "topology", "input_mux_cores", "_input_tensor_spec");
+        auto attribute_values() const {
+            return std::forward_as_tuple(root_coord, scale_fp32, topology, input_mux_cores, _input_tensor_spec);
+        };
     };
 
     struct tensor_args_t {
@@ -35,6 +40,25 @@ struct ReduceToRootOp {
         const std::optional<Tensor> optional_output_tensor_s;
         const std::optional<Tensor> optional_output_tensor_m;
         const std::optional<Tensor> optional_intermediate_tensor;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "input_tensor_l",
+            "input_tensor_s",
+            "input_tensor_m",
+            "optional_output_tensor_l",
+            "optional_output_tensor_s",
+            "optional_output_tensor_m",
+            "optional_intermediate_tensor");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                input_tensor_l,
+                input_tensor_s,
+                input_tensor_m,
+                optional_output_tensor_l,
+                optional_output_tensor_s,
+                optional_output_tensor_m,
+                optional_intermediate_tensor);
+        }
     };
 
     using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;

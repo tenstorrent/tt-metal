@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -21,6 +22,9 @@ struct ReshapeViewParams {
 
 struct ReshapeViewInputs {
     Tensor input;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input");
+    auto attribute_values() const { return std::forward_as_tuple(input); }
 };
 
 }  // namespace ttnn::prim

@@ -15,7 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -29,7 +29,7 @@ struct AllGatherMatmulAsyncParams {
     /* Fusion params */
     CoreCoord all_gather_core_grid_offset;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "all_gather_core_grid_offset");
+    static constexpr auto attribute_names = std::forward_as_tuple("matmul", "all_gather_core_grid_offset");
     auto attribute_values() const { return std::forward_as_tuple(this->matmul, this->all_gather_core_grid_offset); }
 };
 
@@ -38,6 +38,12 @@ struct AllGatherMatmulAsyncInputs {
     Tensor weight_tensor;
     std::optional<const Tensor> bias;
     std::optional<Tensor> persistent_output_buffer;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor", "weight_tensor", "bias", "persistent_output_buffer");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_tensor, weight_tensor, bias, persistent_output_buffer);
+    }
 };
 
 using AllGatherMatmulAsyncResult = std::vector<Tensor>;
