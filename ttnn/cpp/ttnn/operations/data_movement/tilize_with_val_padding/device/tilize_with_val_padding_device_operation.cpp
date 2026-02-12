@@ -102,21 +102,44 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_HEIGHT);
 
     if (input_tensor.memory_config().is_sharded()) {
+        // Support both width sharding and height sharding
         TT_FATAL(
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-            "Input tensor must be width sharded");
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Input tensor must be width or height sharded");
         TT_FATAL(
             operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout(),
             "Output tensor must have the same memory layout as input tensor");
+        
+        // For height sharding, check that the non-height dimensions match
+        // For width sharding, check that the non-width dimensions match
+        auto memory_layout = input_tensor.memory_config().memory_layout();
         for (uint32_t i = 0; i < input_tensor.padded_shape().rank(); i++) {
-            if (i != input_shape.rank() - 2) {
-                TT_FATAL(
-                    input_shape[i] == operation_attributes.output_padded_shape[i],
-                    "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
-                    i,
-                    input_shape[i],
-                    i,
-                    operation_attributes.output_padded_shape[i]);
+            bool is_height_dim = (i == input_shape.rank() - 2);
+            bool is_width_dim = (i == input_shape.rank() - 1);
+            
+            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                // For height sharding, only the height dimension can differ (padded)
+                if (!is_height_dim) {
+                    TT_FATAL(
+                        input_shape[i] == operation_attributes.output_padded_shape[i],
+                        "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
+                        i,
+                        input_shape[i],
+                        i,
+                        operation_attributes.output_padded_shape[i]);
+                }
+            } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                // For width sharding, only the width dimension can differ (padded)
+                if (!is_width_dim) {
+                    TT_FATAL(
+                        input_shape[i] == operation_attributes.output_padded_shape[i],
+                        "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
+                        i,
+                        input_shape[i],
+                        i,
+                        operation_attributes.output_padded_shape[i]);
+                }
             }
         }
     }
