@@ -11,11 +11,6 @@ from loguru import logger
 
 from models.common.utility_functions import comp_pcc, comp_allclose
 
-from tracy.process_model_log import (
-    run_device_profiler,
-)
-
-
 PCC_THRESHOLD = 0.97
 
 """
