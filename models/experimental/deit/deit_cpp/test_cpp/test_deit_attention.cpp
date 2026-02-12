@@ -108,13 +108,10 @@ void test_deit_attention_inference(const std::string& model_path) {
     torch::Tensor torch_head_mask; // None equivalent
 
     // Call attention module forward
-    // Traced模型的forward方法只接受2个参数：self和hidden_states
-    // 可选参数（head_mask, output_attentions）在traced时被优化掉了
     std::vector<torch::jit::IValue> inputs;
     inputs.push_back(hidden_states);
 
     auto output = attention_module.forward(inputs);
-    // Traced模型的forward方法直接返回Tensor，而不是Tuple
     auto torch_output = output.toTensor();
 
     // Create DeiT config
