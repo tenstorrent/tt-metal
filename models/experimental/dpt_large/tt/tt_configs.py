@@ -91,7 +91,14 @@ class TTLayerConfig:
         base = min(seq_len, 256)
         base = max(32, (base // 32) * 32)
         q_chunk = base
-        k_chunk = base
+        # When seq_len is tile-aligned (perf path padding), prefer the largest
+        # 32-aligned divisor so masked SDPA does not reject q_seq_len/chunk.
+        if seq_len > 0 and (seq_len % 32) == 0:
+            for candidate in range(base, 31, -32):
+                if seq_len % candidate == 0:
+                    q_chunk = candidate
+                    break
+        k_chunk = q_chunk
         grid = self.sdpa_grid if self.sdpa_grid is not None else self.grid
         try:
             return SDPAProgramConfig(

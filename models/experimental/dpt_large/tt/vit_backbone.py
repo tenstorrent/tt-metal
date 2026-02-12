@@ -359,7 +359,9 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         pad_seq = bool(getattr(self.config, "tt_perf_encoder", False))
         seq_len = int(orig_len)
         if pad_seq:
-            padded_len = ((seq_len + 31) // 32) * 32
+            # Use a wider pad multiple for perf mode so SDPA chunking can pick
+            # larger divisors when an attention mask is present.
+            padded_len = ((seq_len + 63) // 64) * 64
             if padded_len != seq_len:
                 tokens_tt3 = ttnn.pad(tokens_tt3, [(0, 0), (0, int(padded_len - seq_len)), (0, 0)], value=0.0)
                 seq_len = int(padded_len)
