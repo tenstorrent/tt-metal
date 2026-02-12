@@ -37,34 +37,23 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
     tt::tt_metal::Program program{};
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto* mesh_device = tensor_args.input_tensor[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : mesh_device;
-    std::vector<IDevice*> devices_to_use = {};
-    // User specified the cluster-axis. Derive devices based on the current coordinate
-    // and the cluster-axis.
-    const auto& mesh_view = mesh_device->get_view();
-    devices_to_use = (operation_attributes.cluster_axis.value() == 0)
-                         ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                         : mesh_view.get_devices_on_row(mesh_coordinate[0]);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(operation_attributes.ring_size - 1);
-            }
-            if (i != operation_attributes.ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
-            }
-        }
-    }
+    uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input_tensor[0], mesh_coordinate, operation_attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor[0],
+        mesh_coordinate,
+        1,
+        operation_attributes.topology,
+        operation_attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor[0],
+        mesh_coordinate,
+        -1,
+        operation_attributes.topology,
+        operation_attributes.cluster_axis);
     auto
         [worker_sender_reader_forward_kernel_id,
          worker_sender_writer_forward_kernel_id,
@@ -78,9 +67,9 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
             ring_attention_all_gather_async_multi_core_with_workers_helper(
                 program,
                 tensor_args.input_tensor,
-                target_device,
-                forward_device,
-                backward_device,
+                mesh_coordinate,
+                forward_coord,
+                backward_coord,
                 tensor_return_value,
                 operation_attributes.dim,
                 operation_attributes.num_links,
@@ -146,9 +135,9 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables
 ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    std::optional<MeshCoordinate> forward_device_coord,
+    std::optional<MeshCoordinate> backward_device_coord,
     std::vector<Tensor>& output_tensor,
     int32_t dim,
     uint32_t num_links,
@@ -498,12 +487,10 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }
         writer_forward_rt_args.push_back(false);
-        writer_forward_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto backward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_forward_rt_args.push_back(backward_device_coord.has_value());
+        if (backward_device_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto backward_fabric_node_id = mesh_device->get_fabric_node_id(backward_device_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 backward_fabric_node_id,
@@ -539,12 +526,10 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }
-        writer_backward_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto forward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_backward_rt_args.push_back(forward_device_coord.has_value());
+        if (forward_device_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto forward_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 forward_fabric_node_id,
