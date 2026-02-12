@@ -164,7 +164,6 @@ inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_
     *ptr = id_mask;
 }
 
-<<<<<<< HEAD
 // Save/restore entire command buffer state (e.g. for profiler).
 // Same struct on all arches; ret_addr_mid only used on Blackhole and Quasar (WH keeps it for layout uniformity).
 struct NocCmdBufState {
