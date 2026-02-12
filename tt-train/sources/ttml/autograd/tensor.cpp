@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -59,7 +59,7 @@ void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
 
 void Tensor::backward(bool retain_graph) {
     if (!m_node_id.has_value()) {
-        return;
+        throw std::runtime_error("[Tensor::backward] This tensor has no associated gradient function.");
     }
     std::vector<size_t> sorted_nodes;
     std::unordered_set<std::size_t> visited_nodes;

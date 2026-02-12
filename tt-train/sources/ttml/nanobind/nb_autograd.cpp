@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -63,6 +63,10 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<const Tensor&>());
         py_tensor.def(nb::init<Tensor&&>());
         py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
+        py_tensor.def_prop_ro(
+            "tensor",
+            [](const TensorPtr& self) -> TensorPtr { return self; },
+            "Returns self (enables uniform access with Parameter)");
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"), "Set underlying tensor");
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"), "Set gradient");
         py_tensor.def(
