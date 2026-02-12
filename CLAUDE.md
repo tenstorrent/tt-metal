@@ -53,21 +53,45 @@ The TT-MoE infrastructure is a generalized implementation for creating Mixture o
   - Was using: `[1, 1]` (incorrect for DeepSeek-V3)
   - Now using: `[128, 128]` (matches actual model configuration)
 
-### Full Infrastructure Test Status
-- **PCC Issue**: test_deepseek_moe_block achieves 0.812 PCC vs required 0.98 when using real weights
-- **Investigation Findings**:
-  1. Both implementations correctly combine MoE and SharedExpert outputs using `ttnn.add`
-  2. Both run SharedExpert.forward_decode with same gathered input as MoE
-  3. Weight loading appears correct (1544 weights loaded for layer 3 including scales)
-  4. Configuration values from JSON are being used correctly
+### Full Infrastructure Test Status (Latest Run: 2026-02-12 19:10)
+- **PCC Issue**: test_deepseek_moe_block achieves **0.8158 PCC** vs required 0.98 when using real weights
+- **Test Execution**: Full test completes successfully with 15-minute timeout
+- **Weight Loading**: Confirmed 1544 weights loaded for layer 3 (including Float8 quantization scales)
+- **Graph Capture**: Successfully captured to `/tmp/ttnn_infra_test_graph_rqrkm2bc/infra_test_captured_operations.json`
 
-### Potential Root Causes for PCC Gap (Under Investigation)
-1. **Weight Dequantization**: Check if the dequantization process differs between implementations
-2. **Shared Expert Integration**: Verify shared expert uses correct intermediate_size (2048 for moe_intermediate_size)
-3. **Activation Functions**: Ensure SwiGLU implementation matches exactly
-4. **Numerical Precision**: Check for any float32 vs bfloat16 conversions that could affect accuracy
-5. **Router Weights Preparation**: Verify `_prepare_expert_weights` permutation and repeat operations
-6. **All-to-all Operations**: Check if dispatch/combine operations preserve numerical accuracy
+### Investigation Findings:
+1. ✅ **Weight Loading**: Both implementations load identical weights (1544 for layer 3)
+2. ✅ **Weight Quantization**: Confirmed Float8_e4m3fn format with weight_block_size [128, 128]
+3. ✅ **Module Flow**: Correct execution sequence: all_gather → router → MoE → SharedExpert → add → reduce_scatter
+4. ✅ **Tensor Shapes**: All intermediate shapes match expected values
+5. ✅ **Shared Expert Config**: Using correct moe_intermediate_size (2048)
+
+### Debug Instrumentation Added:
+- **MoEBlock**: Added comprehensive logging at 11 key stages
+- **Reference Models**: Instrumented MoE and MoEDecoderBlock2D
+- **Debug Logger**: Created `/tmp/moe_debug_logger.py` for tensor comparison
+- **Analysis Scripts**: Multiple comparison scripts in `/tmp/`
+
+### Potential Root Causes for PCC Gap (Still Under Investigation):
+1. **Numerical Precision in Operations**:
+   - Possible differences in how ttnn.linear handles Float8 dequantized weights
+   - BFloat16 precision loss during collective operations
+
+2. **Router Score Normalization**:
+   - Check if softmax implementation differs
+   - Verify score_correction_bias application
+
+3. **Expert Weight Preparation**:
+   - `_prepare_expert_weights` permutation logic
+   - Repeat operations for weight broadcasting
+
+4. **All-to-All Operations**:
+   - Numerical precision during dispatch/combine
+   - Potential reordering of operations affecting accumulation
+
+5. **Activation Functions**:
+   - SwiGLU (silu activation) implementation differences
+   - Order of gate_proj * up_proj operations
 
 - **Major Rework Completed**: Rewrote distributed_expert.py as direct port of reference implementation
 - **Key Changes Made**:
@@ -97,6 +121,28 @@ The TT-MoE infrastructure is a generalized implementation for creating Mixture o
 | **Memory Config** | Complex inheritance | Simple mode-based (L1/DRAM) |
 | **Utilities** | External dependencies | All utilities copied locally |
 | **Testing** | Part of larger test | Dedicated unit tests |
+
+### Work Completed (2026-02-12):
+
+1. **Major Refactoring**:
+   - Complete rewrite of DistributedExpert as class-based API
+   - Complete rewrite of SharedExpert matching reference
+   - Updated MoEBlock to use class-based components
+   - Fixed Float8 dequantization (weight_block_size [128,128])
+
+2. **Test Infrastructure**:
+   - Created comprehensive test suite in test_moe_components.py
+   - test_08 passes with PCC 0.998415 for DistributedExpert alone
+   - Full integration test runs but PCC is 0.8158 (needs improvement)
+
+3. **Debug Infrastructure**:
+   - Added comprehensive instrumentation to both implementations
+   - Created multiple debug and comparison scripts
+   - Captured operation graphs for analysis
+
+4. **Configuration**:
+   - Fixed deepseek_v3.json configuration values
+   - Created CLAUDE.md documentation for tracking progress
 
 ### Next Debugging Steps for PCC Issue
 
