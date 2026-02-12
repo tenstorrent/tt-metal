@@ -208,6 +208,9 @@ def test_embedding_forward_pass(
         assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
         ttnn.deallocate(tt_output)
 
+        # Reset CCL semaphore counters before trace capture
+        ccl.reset_sem_counters()
+
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         trace_output = run_module_forward(EmbeddingClass, mode, tt_input_ids, run_config)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)

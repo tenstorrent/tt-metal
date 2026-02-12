@@ -372,6 +372,9 @@ def run_test_forward_pass_mla1d(
         check_outputs(tt_output)
         ttnn.deallocate(tt_output)
 
+        # Reset CCL semaphore counters before trace capture
+        ccl.reset_sem_counters()
+
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         trace_output = run_forward()
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -530,6 +533,9 @@ def run_test_forward_pass_mla2d(
         ttnn.synchronize_device(mesh_device)
         check_outputs(tt_output)
         ttnn.deallocate(tt_output)
+
+        # Reset CCL semaphore counters before trace capture
+        ccl.reset_sem_counters()
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         trace_output = run_forward()

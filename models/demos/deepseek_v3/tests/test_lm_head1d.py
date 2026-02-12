@@ -217,6 +217,9 @@ def test_forward_pass(
         assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
         ttnn.deallocate(warmup_base)
 
+        # Reset CCL semaphore counters before trace capture
+        ccl.reset_sem_counters()
+
         trace_input_base, trace_input = make_tt_input()
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         trace_output = run_module_forward(LMHead1D, mode, trace_input, run_config)
