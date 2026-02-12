@@ -422,12 +422,5 @@ fi
 # Build libraries and cpp tests
 if [ "$configure_only" = "OFF" ]; then
     echo "INFO: Building Project"
-    # Limit parallelism to 32 cores for reliable/reproducible build timing
-    build_start=$(date +%s)
-    cmake --build $build_dir --target $target --parallel 32
-    build_end=$(date +%s)
-    build_elapsed=$((build_end - build_start))
-    build_min=$((build_elapsed / 60))
-    build_sec=$((build_elapsed % 60))
-    echo "INFO: Build step completed in ${build_min}m ${build_sec}s (${build_elapsed}s total)"
+    cmake --build $build_dir --target $target
 fi
