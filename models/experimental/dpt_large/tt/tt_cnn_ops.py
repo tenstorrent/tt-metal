@@ -79,10 +79,9 @@ def ensure_tt_device_tensor(x, tt_device):
 
 def tt_relu(x):
     _require_ttnn()
-    try:
-        return ttnn.relu(x, output_tensor=x)
-    except TypeError:
-        return ttnn.relu(x)
+    # Keep ReLU out-of-place so pre-activation residual paths preserve the
+    # original skip tensor semantics.
+    return ttnn.relu(x)
 
 
 def _nchw_to_nhwc(x):
