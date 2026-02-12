@@ -606,6 +606,4 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
     return os;
 }
 
-bool Tensor::is_valueless() const { return this->tensor_attributes == nullptr; }
-
 }  // namespace tt::tt_metal
