@@ -21,11 +21,6 @@ void MorehLayerNormBackwardGammaBetaGradOperation::validate_on_program_cache_mis
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehLayerNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
 MorehLayerNormBackwardGammaBetaGradOperation::spec_return_value_t
 MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
