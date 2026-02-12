@@ -205,6 +205,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t num_cores_per_batch = std::min(num_cores_available, max_num_cores_for_compute) / B;
     //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
     uint32_t num_cores_per_head = std::max((uint32_t)1, num_cores_per_batch / num_kv_heads);
+
     uint32_t num_heads_per_core = std::max((uint32_t)1, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch));
     uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     uint32_t num_output_cores = B;
@@ -302,7 +303,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t out_im_tiles = PNHt * vDHt;
     uint32_t out0_t = PNHt * vDHt;
     uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = PNHt * 2;  // Single column of values in each iteration
+    uint32_t statistics_tiles = PNHt;  // Single column of values in each iteration
 
     // log all values
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
@@ -412,10 +413,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     if (use_half_tile) {
         q_tile = half_tile;
         mask_tile = half_tile;
-
-        // TODO: out_tile is re-packed as full 32x32 with PACK for now #25060
-        // out_tile = half_tile;
-
         scalar_tile = half_tile;
         im_tile = half_tile;
         stats_tile = half_tile;
@@ -483,7 +480,10 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{CBIndex::c_0, q_df}})
                             .set_page_size(CBIndex::c_0, q_tile_size)
                             .set_tile_dims(CBIndex::c_0, q_tile);
-    CreateCircularBuffer(program, core_grid, c_in0_config);
+    if (is_q_sharded) {
+        c_in0_config.set_globally_allocated_address(*input_tensor_q.buffer());
+    }
+    auto cb_in0_id = CreateCircularBuffer(program, core_grid, c_in0_config);
 
     // K input
     auto c_in1_config =
@@ -1117,6 +1117,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
          .num_output_cores = num_output_cores,
          .cb_in8_id = cb_in8_id,
          .cb_in9_id = cb_in9_id,
+         .cb_in0_id = cb_in0_id,
+         .is_q_sharded = is_q_sharded,
          .is_output_sharded = is_output_sharded,
          .cb_out4_id = cb_out4_id,
          .B = B,
@@ -1146,6 +1148,8 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     const auto& num_cores_per_head = shared_variables.num_cores_per_head;
     const auto& cb_in8_id = shared_variables.cb_in8_id;
     const auto& cb_in9_id = shared_variables.cb_in9_id;
+    const auto& cb_in0_id = shared_variables.cb_in0_id;
+    const auto& is_q_sharded = shared_variables.is_q_sharded;
     const auto& is_output_sharded = shared_variables.is_output_sharded;
     const auto& cb_out4_id = shared_variables.cb_out4_id;
     const auto& q_heads_parallel_factor = shared_variables.q_heads_parallel_factor;
@@ -1249,6 +1253,9 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     }
     if (is_paged_attention and page_table_tensor.value().is_sharded()) {
         UpdateDynamicCircularBufferAddress(program, cb_in9_id, *page_table_tensor.value().buffer());
+    }
+    if (is_q_sharded) {
+        UpdateDynamicCircularBufferAddress(program, cb_in0_id, *q_buffer);
     }
     if (is_output_sharded) {
         UpdateDynamicCircularBufferAddress(program, cb_out4_id, *out0_buffer);

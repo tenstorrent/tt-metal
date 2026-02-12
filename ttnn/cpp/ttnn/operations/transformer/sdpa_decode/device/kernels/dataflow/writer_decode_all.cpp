@@ -236,9 +236,9 @@ void kernel_main() {
         // The compute kernel processes each child's data before we move to the next round
         // Only receive from children that actually have data
         if (num_active_children > 0) {
-            ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers
+            // If there are workers, then head must be split across workers
+            ASSERT(num_heads_per_core == 1);
 
-            // Process each round sequentially
             for (uint32_t round = 0; round < num_active_rounds; ++round) {
                 uint32_t child_id = active_children_per_round[round];
 
@@ -324,6 +324,10 @@ void kernel_main() {
             cb_pop_front(cb_out_l, PNHt);
             noc_async_atomic_barrier();
             // Senders can return, dont need to participate
+            return;
+        }
+
+        if (!is_tree_root) {
             return;
         }
 
