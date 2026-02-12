@@ -62,11 +62,6 @@ void MorehAdamWDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(attributes, tensor_args);
 }
 
-void MorehAdamWDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
 MorehAdamWDeviceOperation::spec_return_value_t MorehAdamWDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.param_in.logical_shape();

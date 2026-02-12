@@ -61,7 +61,11 @@ struct MeshDeviceOperationAdapter {
     }
 
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        DeviceOperation::validate_on_program_cache_hit(attrs, tensor_args);
+        if constexpr (HasValidateOnProgramCacheHit<DeviceOperation>) {
+            DeviceOperation::validate_on_program_cache_hit(attrs, tensor_args);
+        } else {
+            DeviceOperation::validate_on_program_cache_miss(attrs, tensor_args);
+        }
     }
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {

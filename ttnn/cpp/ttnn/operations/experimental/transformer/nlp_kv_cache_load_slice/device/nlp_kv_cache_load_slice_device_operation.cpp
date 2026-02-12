@@ -14,11 +14,6 @@ NlpKVCacheLoadSliceDeviceOperation::program_factory_t NlpKVCacheLoadSliceDeviceO
     return NlpKVCacheLoadSliceProgramFactory{};
 }
 
-void NlpKVCacheLoadSliceDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void NlpKVCacheLoadSliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
