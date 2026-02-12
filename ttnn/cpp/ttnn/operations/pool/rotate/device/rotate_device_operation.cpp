@@ -85,11 +85,6 @@ void RotateDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void RotateDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
 RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
