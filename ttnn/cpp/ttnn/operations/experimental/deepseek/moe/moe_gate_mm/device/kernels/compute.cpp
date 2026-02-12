@@ -98,7 +98,7 @@ void kernel_main() {
         mm_block_init(cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/2, /*rt_dim=*/1, /*kt_dim=*/1);
 
         //-------------------------------------------------------------------------
-        // Compute: input @ 2 weights -> 2 outputss
+        // Compute: input @ 2 weights -> 2 outputs
         //-------------------------------------------------------------------------
         tile_regs_acquire();
 
