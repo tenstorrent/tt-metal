@@ -59,11 +59,12 @@ done
 # Enable DPRINT CB monitoring if requested
 if [[ "${DPRINT_ENABLED}" == "true" ]]; then
     DPRINT_FILE="${LOG_DIR}/dprint_$(date +%Y%m%d_%H%M%S).log"
-    # Monitor 2 cores with ALL 5 RISCs to get full pipeline visibility
-    # (including trisc0/unpack, trisc1/math, trisc2/pack).
-    # Using only 2 cores keeps volume manageable.
-    export TT_METAL_DPRINT_CORES="(0,0),(7,7)"
-    export TT_METAL_DPRINT_RISCVS="BR+NC+TR0+TR1+TR2"
+    # Monitor 1 receiver core with dataflow RISCs only.
+    # (7,7) is a receiver for both in0 and in1 multicast — the contention hotspot.
+    # Compute kernel DPRINT removed (static counters reset per trace replay, useless).
+    # Event-driven: only prints when contention detected (sem=INVALID).
+    export TT_METAL_DPRINT_CORES="(7,7)"
+    export TT_METAL_DPRINT_RISCVS="BR+NC"
     export TT_METAL_DPRINT_FILE="${DPRINT_FILE}"
 fi
 
@@ -125,6 +126,7 @@ while true; do
     log "Resetting device with tt-smi -r ..."
     tt-smi -r 0 2>&1 | tee -a "${LOG_FILE}" || true
     sleep 5
+    break
 done
 
 log ""

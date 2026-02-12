@@ -140,14 +140,6 @@ void kernel_main() {
                         block_id = fused_op_receiver.align_to_slice_and_sync(block, sender_id);
                     }
 
-                    // CB monitor (ncrisc): log before reserving in0 space
-                    {
-                        static uint32_t _dbg_cnt_nc = 0;
-                        if (++_dbg_cnt_nc % 100000 == 1) {
-                            DPRINT << "NC:rsrv in0=" << cb_id_in0 << " tiles=" << in0_block_num_tiles
-                                   << " blk=" << block << " bh=" << bh << " bw=" << bw << ENDL();
-                        }
-                    }
                     cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
                     // All cores in receiver grid need to participate in receiving regardless if they produce output
@@ -201,12 +193,15 @@ void kernel_main() {
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
-                        // CB monitor (ncrisc): sender waiting for receivers
+                        // Event-driven CB monitor: only log when NOT all receivers have acknowledged
                         {
-                            static uint32_t _dbg_cnt_nc2 = 0;
-                            if (++_dbg_cnt_nc2 % 100000 == 1) {
-                                DPRINT << "NC:SEND sem_wait blk=" << block
-                                       << " sem=" << *in0_mcast_sender_semaphore_addr_ptr << ENDL();
+                            uint32_t _sem_val = *in0_mcast_sender_semaphore_addr_ptr;
+                            uint32_t _expected =
+                                core_in_in0_receiver_mcast_grid ? (in0_mcast_num_dests - 1) : in0_mcast_num_dests;
+                            if (_sem_val < _expected) {
+                                DPRINT << "NC:SEND_WAIT blk=" << block << "/" << num_blocks_inner_dim
+                                       << " sem=" << _sem_val << "/" << _expected << " bh=" << bh << " bw=" << bw
+                                       << ENDL();
                             }
                         }
                         if constexpr (core_in_in0_receiver_mcast_grid) {
@@ -299,13 +294,10 @@ void kernel_main() {
                     }
 
                     if constexpr (core_in_in0_receiver_mcast_grid) {
-                        // CB monitor (ncrisc): receiver waiting for mcast data
-                        {
-                            static uint32_t _dbg_cnt_nc3 = 0;
-                            if (++_dbg_cnt_nc3 % 100000 == 1) {
-                                DPRINT << "NC:RECV sem_wait blk=" << block
-                                       << " sem=" << *in0_mcast_receiver_semaphore_addr_ptr << ENDL();
-                            }
+                        // Event-driven CB monitor: only log when in0 data is NOT ready (contention)
+                        if (*in0_mcast_receiver_semaphore_addr_ptr == INVALID) {
+                            DPRINT << "NC:in0_WAIT blk=" << block << "/" << num_blocks_inner_dim << " bh=" << bh
+                                   << " bw=" << bw << ENDL();
                         }
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                         noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
