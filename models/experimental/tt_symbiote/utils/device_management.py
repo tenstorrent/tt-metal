@@ -7,7 +7,6 @@ import time
 
 from torch import nn
 
-from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, DistributedConfig
 
 
@@ -31,7 +30,7 @@ class DeviceInit:
         return DistributedConfig(device)
 
 
-def _initialize_module_on_device(module: TTNNModule, device, device_init=DeviceInit):
+def _initialize_module_on_device(module: "TTNNModule", device, device_init=DeviceInit):
     """Initialize a TTNN module on the specified device."""
     module.to_device(device)
     if device.get_num_devices() > 1:
@@ -40,6 +39,8 @@ def _initialize_module_on_device(module: TTNNModule, device, device_init=DeviceI
 
 def set_device(obj, device, device_init=DeviceInit, **kwargs):
     """Recursively set device for all TTNN modules in a model."""
+    from models.experimental.tt_symbiote.core.module import TTNNModule
+
     # Build module name mapping before recursion
     module_names = {}
     if isinstance(obj, nn.Module):
