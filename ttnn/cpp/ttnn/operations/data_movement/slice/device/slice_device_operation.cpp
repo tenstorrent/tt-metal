@@ -174,11 +174,6 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-void SliceDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;

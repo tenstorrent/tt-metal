@@ -19,6 +19,7 @@ on:
       # to want to to
       - "zzz TG Quick tests"
       - "apc nightly debug run"
+      - "apc nightly debug run with watcher"
     types:
       - completed
 

@@ -21,11 +21,6 @@ SliceReshardAsyncDeviceOperation::program_factory_t SliceReshardAsyncDeviceOpera
     return SliceReshardAsyncProgramFactory{};
 }
 
-void SliceReshardAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void SliceReshardAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.dim == 0, "Error, neighbor pad currently only supports sharding dim 0, provided {}", args.dim);

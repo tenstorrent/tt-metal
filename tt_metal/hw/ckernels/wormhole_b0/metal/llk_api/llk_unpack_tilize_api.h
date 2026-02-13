@@ -178,10 +178,11 @@ inline void llk_unpack_fast_tilize_block(
     const std::uint32_t num_units,
     const std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
 
     _llk_unpack_fast_tilize_block_(
-        base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim);
+        base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim, num_faces);
 }
 
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {

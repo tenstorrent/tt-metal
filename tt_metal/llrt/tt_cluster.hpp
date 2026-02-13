@@ -69,7 +69,7 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
+    Cluster(llrt::RunTimeOptions& rtoptions);
     ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
@@ -97,6 +97,9 @@ public:
         TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
         return driver_;
     }
+
+    // Sets the HAL to be used for this Cluster
+    void set_hal(const tt_metal::Hal* hal);
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
@@ -136,7 +139,7 @@ public:
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
-    bool verify_eth_fw_capability() const;
+    std::optional<tt::umd::semver_t> get_ethernet_firmware_version() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
@@ -318,14 +321,16 @@ public:
     void configure_ethernet_cores_for_fabric_routers(
         tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
-    void initialize_fabric_config(
-        tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
-
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
 
-    // Returns whether we are running on UBB Galaxy.
+    // Returns whether the Cluster instance is running on UBB Galaxy.
     bool is_ubb_galaxy() const;
+
+    static bool is_ubb_galaxy(tt::tt_metal::ClusterType cluster_type) {
+        return cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY ||
+               cluster_type == tt::tt_metal::ClusterType::GALAXY;
+    }
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(ChipId chip_id) const;
@@ -459,11 +464,13 @@ private:
     std::unordered_map<ChipId, std::unordered_map<ChipId, std::vector<CoreCoord>>> ethernet_sockets_;
 
     uint32_t routing_info_addr_ = 0;
+    uint32_t retrain_count_addr_ = 0;
+    uint8_t num_nocs_ = 0;
 
     // Cluster depends on RunTimeOptions and Hal to set up, but they're all initialized/accessed by MetalContext, so
     // keep a local reference for init.
     const llrt::RunTimeOptions& rtoptions_;
-    const tt_metal::Hal& hal_;
+    const tt_metal::Hal* hal_ = nullptr;
 };
 
 }  // namespace tt
