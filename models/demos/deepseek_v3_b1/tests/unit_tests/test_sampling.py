@@ -162,6 +162,7 @@ def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
         ((1, 1), 4242, 73),
     ],
 )
+@pytest.mark.skip(reason="Skipping 2x2 tests as they only work on quiet box")
 def test_sampling_argmax_mesh_2x2_axis_x(mesh_device, final_mesh_coord, seed, final_core_idx):
     """
     Mesh extension test:
@@ -314,6 +315,7 @@ def _is_sampling_perf_enabled():
     ],
     indirect=True,
 )
+@pytest.mark.skip(reason="Skipping 2x2 tests as they only work on quiet box")
 @pytest.mark.parametrize("num_iters,num_warmup_iters", [(30, 10)])
 def test_sampling_argmax_mesh_2x2_axis_x_perf(mesh_device, num_iters, num_warmup_iters):
     """
