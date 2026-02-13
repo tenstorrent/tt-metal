@@ -29,6 +29,8 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
 
     uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
 
+    uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
+
     return CBDescriptor{
         .total_size = effective_total_size,
         .core_ranges = tensor.shard_spec()->grid,
