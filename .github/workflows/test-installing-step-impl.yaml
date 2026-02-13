@@ -4,7 +4,6 @@ name: "[internal] Validate installation step from instructions impl"
 on:
   workflow_call:
 
-
 jobs:
   install-and-run-mnist:
     name: TT-Installer and run MNIST MLP
@@ -125,7 +124,7 @@ jobs:
         timeout-minutes: 30
         run: |
           set -euo pipefail
-          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
+          LFC_BASE="http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface"
           # Download under huggingface/tt_cache so when workspace is mounted at /mnt/MLPerf,
           # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct is found
           mkdir -p huggingface/tt_cache
