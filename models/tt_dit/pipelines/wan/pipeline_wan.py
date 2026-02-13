@@ -185,7 +185,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             kv_dim=self.text_encoder.config.d_kv,
             num_heads=self.text_encoder.config.num_heads,
             num_hidden_layers=self.text_encoder.config.num_layers,
-            max_prompt_length=256,  # TODO: Consider removing
+            max_prompt_length=512,  # TODO: Consider removing
             layer_norm_eps=self.text_encoder.config.layer_norm_epsilon,
             relative_attention_num_buckets=self.text_encoder.config.relative_attention_num_buckets,
             relative_attention_max_distance=self.text_encoder.config.relative_attention_max_distance,
@@ -321,7 +321,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ),
         )
         encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis)
+            tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis)
         )
         pipeline_class_ = pipeline_class or WanPipeline
         return pipeline_class_(
@@ -401,12 +401,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self,
         prompt: Union[str, List[str]] = None,
         num_videos_per_prompt: int = 1,
-        max_sequence_length: int = 226,
+        max_sequence_length: int = 512,
     ):
         prompt = [prompt] if isinstance(prompt, str) else prompt
         prompt = [prompt_clean(u) for u in prompt]
         batch_size = len(prompt)
 
+        # NOTE: while the reference impl does not pad to max_sequence_length, for some reason this seems to be necessary for correctness in this pipeline.
+        # TODO: investigate
         text_inputs = self.tokenizer(
             prompt,
             padding="max_length",
@@ -419,33 +421,35 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
         seq_lens = mask.gt(0).sum(dim=1).long()
 
+        # Shard on batch dimension. On non TP axis
+        dims = [None, None]
+        DP_axis = 1 - self.parallel_config.tensor_parallel.mesh_axis
+        dims[DP_axis] = 0
+        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims)
         tt_prompt = ttnn.from_torch(
             text_input_ids,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=mesh_mapper,
         )
-        prompt_embeds = self.tt_umt5_encoder(tt_prompt)[-1]
-        prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
 
-        # NOTE: while the reference impl does not pad to max_sequence_length, for some reason this seems to be necessary for correctness in this pipeline.
-        # TODO: investigate
-        prompt_embeds = ttnn.stack(
-            [
-                ttnn.concat(
-                    [
-                        u,
-                        ttnn.zeros(
-                            (max_sequence_length - u.shape[0], u.shape[1]),
-                            dtype=u.dtype,
-                            layout=u.layout,
-                            device=self.mesh_device,
-                        ),
-                    ]
-                )
-                for u in prompt_embeds
-            ],
-            dim=0,
+        tt_mask = ttnn.from_torch(
+            mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=mesh_mapper,
+        )
+
+        prompt_embeds = self.tt_umt5_encoder(tt_prompt, attention_mask=tt_mask)[-1]
+
+        # use the mask to zero out the padding tokens. As a result, the comment below still holds, and had been copied for completeness.
+        # # NOTE: while the reference impl does not pad to max_sequence_length, for some reason this seems to be necessary for correctness in this pipeline.
+        # # TODO: investigate
+        prompt_embeds = prompt_embeds * ttnn.unsqueeze(tt_mask, -1)
+
+        prompt_embeds = self.encoder_ccl_manager.all_gather(
+            prompt_embeds, dim=0, mesh_axis=DP_axis, use_hyperparams=True
         )
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
@@ -462,10 +466,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         num_videos_per_prompt: int = 1,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
-        max_sequence_length: int = 226,
+        max_sequence_length: int = 512,
     ):
         r"""
-        Encodes the prompt into text encoder hidden states.
+        Batch encodes the prompt and negative prompt into text encoder hidden states..
 
         Args:
             prompt (`str` or `List[str]`, *optional*):
@@ -492,12 +496,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         else:
             batch_size = prompt_embeds.shape[0]
 
+        # Setup batching variables
+        all_input_prompts = []
+        pos_prompt_end_idx = 0
+        neg_prompt_end_idx = 0
+
         if prompt_embeds is None:
-            prompt_embeds = self._get_t5_prompt_embeds(
-                prompt=prompt,
-                num_videos_per_prompt=num_videos_per_prompt,
-                max_sequence_length=max_sequence_length,
-            )
+            all_input_prompts += prompt
+            pos_prompt_end_idx = batch_size * num_videos_per_prompt
 
         if do_classifier_free_guidance and negative_prompt_embeds is None:
             negative_prompt = negative_prompt or ""
@@ -515,11 +521,28 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     " the batch size of `prompt`."
                 )
 
-            negative_prompt_embeds = self._get_t5_prompt_embeds(
-                prompt=negative_prompt,
-                num_videos_per_prompt=num_videos_per_prompt,
-                max_sequence_length=max_sequence_length,
-            )
+            all_input_prompts += negative_prompt
+            neg_prompt_end_idx = pos_prompt_end_idx + batch_size * num_videos_per_prompt
+
+        # Add data to pad for size of device on mesh axis to ensure proper shadding on batch dimension.
+        total_prompts = len(all_input_prompts)
+        num_devices = self.mesh_device.shape[1 - self.parallel_config.tensor_parallel.mesh_axis]
+
+        # Pad batch list of prompts to ensure proper shadding on batch dimension.
+        all_input_prompts += [" "] * ((num_devices - (total_prompts % num_devices)) % num_devices)
+        all_prompt_embeds = self._get_t5_prompt_embeds(
+            prompt=all_input_prompts,
+            num_videos_per_prompt=num_videos_per_prompt,
+            max_sequence_length=max_sequence_length,
+        )
+
+        # When CFG is enabled, we should be able to leave the shards on device.
+        prompt_embeds = all_prompt_embeds[:, :pos_prompt_end_idx] if pos_prompt_end_idx > 0 else prompt_embeds
+        negative_prompt_embeds = (
+            all_prompt_embeds[:, pos_prompt_end_idx:neg_prompt_end_idx]
+            if neg_prompt_end_idx > 0
+            else negative_prompt_embeds
+        )
 
         return prompt_embeds, negative_prompt_embeds
 
