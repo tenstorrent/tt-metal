@@ -421,22 +421,6 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(enable_2_erisc_mode);
 
-    this->verify_eth_fw_version_func_ = [=](tt::umd::semver_t fw_version) {
-        if (enable_2_erisc_mode) {
-            tt::umd::semver_t min_version(1, 7, 0);
-            if (!(fw_version >= min_version)) {
-                log_warning(
-                    tt::LogLLRuntime,
-                    "Blackhole multi erisc mode requires ethernet firmware version {} or higher, but detected version "
-                    "{}. Automatically falling back to single erisc mode for compatibility.",
-                    min_version.to_string(),
-                    fw_version.to_string());
-                return false;
-            }
-        }
-        return true;
-    };
-
     this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
     this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();
 }
