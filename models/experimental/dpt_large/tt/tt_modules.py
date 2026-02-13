@@ -570,8 +570,27 @@ class TTAttention:
             try:
                 ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **sdpa_kwargs)
             except TypeError:
+                # Older runtimes may not accept memory_config for this op.
                 sdpa_kwargs.pop("memory_config", None)
                 ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **sdpa_kwargs)
+            except Exception:
+                # Some runtimes accept program_config/memory_config but can fail for
+                # particular layouts (for example with an attention mask). Retry
+                # conservatively before falling back to the host path.
+                retry_kwargs = dict(sdpa_kwargs)
+                if "program_config" in retry_kwargs:
+                    inc_vit_program_config_retry()
+                    retry_kwargs.pop("program_config", None)
+                    try:
+                        ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **retry_kwargs)
+                    except Exception:
+                        if "memory_config" in retry_kwargs:
+                            retry_kwargs.pop("memory_config", None)
+                            ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **retry_kwargs)
+                        else:
+                            raise
+                else:
+                    raise
             # Merge heads back to [B, N, C]
             concat_kwargs = {}
             if memcfg is not None:
