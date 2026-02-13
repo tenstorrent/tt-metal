@@ -1054,7 +1054,7 @@ Perform the following steps to complete the exercise:
    It is a good practice to include "logical" or "device" in the names of all coordinate
    variables to avoid accidental misuse.
 
-#. **Build, verify correctness, and profile performance**
+#. **Build and verify correctness**
 
    Build and run your program and verify correctness in the same manner as in Lab 2.
 
@@ -1078,7 +1078,9 @@ Perform the following steps to complete the exercise:
    Consider refactoring common code into helper functions to reduce the risk of copy-paste
    errors.
 
-#. Once correctness is verified, profile both your Lab 2 implementation and your new
+#. **Profile performance**
+
+   Once correctness is verified, profile both your Lab 2 implementation and your new
    multicast-enabled implementation using the device profiler.
    Compare firmware times for the same matrix sizes and core grid configurations.
    Plot firmware time or speedup versus the number of cores and compare against:
