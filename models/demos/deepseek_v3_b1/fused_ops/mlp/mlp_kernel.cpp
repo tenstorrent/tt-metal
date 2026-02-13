@@ -55,6 +55,7 @@
 #include "../../unified_kernels/kn_sliced_matmul.hpp"
 #include "../../unified_kernels/gated_reduce.hpp"
 #include "../../unified_kernels/residual_add.hpp"
+#include "../../unified_kernels/cb_validation.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr.
 struct Core {
@@ -655,6 +656,14 @@ void kernel_main() {
 
 #endif
 
+    // CB Pointer Validation — capture BEFORE ops (compiled out when validation_addr == 0)
+    {
+        constexpr uint32_t validation_addr = get_named_compile_time_arg_val("validation_addr");
+        if constexpr (validation_addr != 0) {
+            cb_validation::capture(validation_addr, 0);
+        }
+    }
+
     // ============================================================================
     // Operation calls — Mlp::Routed::* for types, mlp.routed.* for args
     // ============================================================================
@@ -864,6 +873,14 @@ void kernel_main() {
         DeviceZoneScopedN("ELTWISE_ADD");
         deepseek_b1_ops::EltwiseAdd::Op<Mlp::Routed::AddCTArgs, Core::Routed::is_gate_proj_core> add_op;
         add_op();
+    }
+
+    // CB Pointer Validation — capture AFTER ops (compiled out when validation_addr == 0)
+    {
+        constexpr uint32_t validation_addr = get_named_compile_time_arg_val("validation_addr");
+        if constexpr (validation_addr != 0) {
+            cb_validation::capture(validation_addr, cb_validation::SECTION_SIZE);
+        }
     }
 
     // Teardown (one teardown since all mcasts reuse the same semaphores)

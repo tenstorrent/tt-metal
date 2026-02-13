@@ -18,6 +18,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_b1.cb_validation import create_validation_tensor, validate_cb_pointers
 from models.demos.deepseek_v3_b1.fused_ops.mlp.op import MlpOp
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe import (
     create_expert_matmul_tensors,
@@ -311,6 +312,9 @@ def create_mlp_tensors(device):
 
     # No mul_scalar_buf_tensor needed for MLP (no expert scale)
 
+    # ── CB pointer validation tensor (all cores) ──
+    validation_tensor, validation_grid_x, validation_grid_y = create_validation_tensor(device)
+
     return {
         # TTNN tensors for op()
         "ttnn_rmsnorm_output": ttnn_rmsnorm_output,
@@ -345,6 +349,10 @@ def create_mlp_tensors(device):
         "num_gate_proj_cores": num_gate_proj_cores,
         "final_output_width_per_core": final_output_width_per_core,
         "per_core_down_proj_N": per_core_down_proj_N,
+        # CB pointer validation
+        "validation_tensor": validation_tensor,
+        "device_grid_x": validation_grid_x,
+        "device_grid_y": validation_grid_y,
     }
 
 
@@ -406,9 +414,14 @@ def test_mlp_fused(device):
             shared_residual_add_out_tensor=s["ttnn_residual_add_out"],
             shared_k_parallel=s["k_parallel"],
             shared_n_parallel=s["n_parallel"],
+            validation_tensor=r["validation_tensor"],
         )
     ttnn.synchronize_device(device)
     logger.info(f"Fused MLP: {num_iterations} iterations completed")
+
+    # ── Read back CB pointer validation tensor (all cores) ──
+    # Skip CB[9] and CB[18] — DRAM matmul weight input CBs with internal reset logic
+    validate_cb_pointers(r["validation_tensor"], r["device_grid_x"], r["device_grid_y"], skip_cbs={9, 18})
 
     # ── Read back and validate ──
     output_final_torch = ttnn.to_torch(ttnn_result_final)

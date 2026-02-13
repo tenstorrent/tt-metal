@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import ttnn
+from models.demos.deepseek_v3_b1.cb_validation import get_validation_compile_time_args
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp, MoeRoutedExpertOp, MoeSharedExpertOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
@@ -126,6 +127,9 @@ class _MlpRoutedExpertContext:
     vc_core_values: list
     sender_idx_core_values: list
 
+    # CB pointer validation
+    validation_compile_time_args: list = None
+
 
 class MlpRoutedExpertOp:
     """
@@ -207,6 +211,7 @@ class MlpRoutedExpertOp:
         shared_residual_mcast_src_tensor,
         shared_residual_mcast_dst_tensor,
         rmsnorm_gamma_tensor,
+        validation_tensor=None,
         epsilon=1e-6,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values."""
@@ -487,6 +492,11 @@ class MlpRoutedExpertOp:
             sender_idx_core_values.append((core, idx))
 
         # ==================================================================
+        # CB pointer validation
+        # ==================================================================
+        validation_compile_time_args = get_validation_compile_time_args(validation_tensor)
+
+        # ==================================================================
         # Return context
         # ==================================================================
         return _MlpRoutedExpertContext(
@@ -559,199 +569,219 @@ class MlpRoutedExpertOp:
             bank_id_core_values=bank_id_core_values,
             vc_core_values=vc_core_values,
             sender_idx_core_values=sender_idx_core_values,
+            # CB pointer validation
+            validation_compile_time_args=validation_compile_time_args,
         )
 
     @staticmethod
     def _build_compile_time_args(ctx, mesh_chip_id):
         """Build NCRISC, BRISC, and TRISC compile-time arg lists for MLP (no routing)."""
 
-        ncrisc_named_compile_time_args = [
-            # Input mcast (sender sharded buffer + receiver)
-            ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
-            ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
-            ("mcast_data_receiver_semaphore", ctx.rmsnorm_mcast_params["receiver_semaphore_id"]),
-            ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
-            ("mcast_dst_num_pages", ctx.rmsnorm_mcast_params["dst_num_pages"]),
-            # Residual mcast source (setup_sharded_buffer on sender core)
-            ("shared_residual_mcast_src_cb", ctx.residual_mcast_params["src_cb"]),
-            ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
-            # Residual mcast receiver
-            ("shared_residual_mcast_data_receiver_semaphore", ctx.residual_mcast_receiver_semaphore_id),
-            ("shared_residual_cb", ctx.residual_mcast_dst_cb),
-            ("shared_residual_num_pages", ctx.residual_mcast_params["dst_num_pages"]),
-            # RMSNorm (setup_sharded_buffer for gamma on sender core)
-            ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
-            # No gate_mm, gate_gather, gate, index_mcast, expert_scale_mcast args
-            # Mul reader (setup mul_in1 buffer)
-            ("mul_cb_in1", ctx.mul_cb_in1),
-            ("mul_num_tiles", ctx.mul_num_tiles),
-            # down_proj gather receiver
-            ("down_proj_gather_noc0_num_senders", ctx.down_proj_gather_params["noc0_num_senders"]),
-            ("down_proj_gather_noc1_num_senders", ctx.down_proj_gather_params["noc1_num_senders"]),
-            ("down_proj_gather_noc0_receiver_semaphore_id", ctx.down_proj_gather_params["noc0_receiver_semaphore_id"]),
-            ("down_proj_gather_noc1_receiver_semaphore_id", ctx.down_proj_gather_params["noc1_receiver_semaphore_id"]),
-            ("down_proj_gather_dst_cb", ctx.down_proj_gather_params["dst_cb"]),
-            ("down_proj_gather_dst_num_pages", ctx.down_proj_gather_params["dst_num_pages"]),
-            # down_proj mcast receiver
-            ("down_proj_mcast_receiver_semaphore", ctx.down_proj_mcast_params["receiver_semaphore_id"]),
-            ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
-            ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
-            # Eltwise add
-            ("add_cb_in0", ctx.add_cb_in0),
-            ("add_cb_in1", ctx.add_cb_in1),
-            ("add_cb_in0_wait_tiles", ctx.add_params["cb_in0_wait_tiles"]),
-            ("add_cb_in1_wait_tiles", ctx.add_params["cb_in1_wait_tiles"]),
-            # gate_proj DRAM matmul reader (no indexing params)
-            ("gate_proj_cb_in1", ctx.gate_proj_cb_in1),
-            ("gate_proj_cb_out", ctx.gate_proj_cb_out),
-            ("gate_proj_in1_tensor_addr", ctx.gate_proj_params["in1_tensor_addr"]),
-            ("gate_proj_in1_page_size", ctx.gate_proj_params["in1_page_size"]),
-            ("gate_proj_in1_num_pages", ctx.gate_proj_params["in1_num_pages"]),
-            ("gate_proj_subblock_k", ctx.gate_proj_params["subblock_k"]),
-            ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
-            ("gate_proj_in1_block_size_bytes", ctx.gate_proj_params["in1_block_size_bytes"]),
-            ("gate_proj_out_num_tiles", ctx.gate_proj_params["out_num_tiles"]),
-            ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
-            # up_proj DRAM matmul reader (no indexing params)
-            ("up_proj_cb_in1", ctx.up_proj_cb_in1),
-            ("up_proj_in1_tensor_addr", ctx.up_proj_params["in1_tensor_addr"]),
-            ("up_proj_in1_page_size", ctx.up_proj_params["in1_page_size"]),
-            ("up_proj_in1_num_pages", ctx.up_proj_params["in1_num_pages"]),
-            ("up_proj_subblock_k", ctx.up_proj_params["subblock_k"]),
-            ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
-            ("up_proj_in1_block_size_bytes", ctx.up_proj_params["in1_block_size_bytes"]),
-            ("up_proj_out_num_tiles", ctx.up_proj_params["out_num_tiles"]),
-            ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
-            ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
-            ("up_proj_cb_mm_out", ctx.up_proj_cb_mm_out),
-            # down_proj DRAM matmul reader (no indexing params)
-            ("down_proj_cb_in1", ctx.down_proj_cb_in1),
-            ("down_proj_cb_out", ctx.down_proj_cb_out),
-            ("down_proj_in1_tensor_addr", ctx.down_proj_params["in1_tensor_addr"]),
-            ("down_proj_in1_page_size", ctx.down_proj_params["in1_page_size"]),
-            ("down_proj_in1_num_pages", ctx.down_proj_params["in1_num_pages"]),
-            ("down_proj_subblock_k", ctx.down_proj_params["subblock_k"]),
-            ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
-            ("down_proj_in1_block_size_bytes", ctx.down_proj_params["in1_block_size_bytes"]),
-            ("down_proj_out_num_tiles", ctx.down_proj_params["out_num_tiles"]),
-            ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
-            ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
-        ]
+        ncrisc_named_compile_time_args = (
+            [
+                # Input mcast (sender sharded buffer + receiver)
+                ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
+                ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
+                ("mcast_data_receiver_semaphore", ctx.rmsnorm_mcast_params["receiver_semaphore_id"]),
+                ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
+                ("mcast_dst_num_pages", ctx.rmsnorm_mcast_params["dst_num_pages"]),
+                # Residual mcast source (setup_sharded_buffer on sender core)
+                ("shared_residual_mcast_src_cb", ctx.residual_mcast_params["src_cb"]),
+                ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
+                # Residual mcast receiver
+                ("shared_residual_mcast_data_receiver_semaphore", ctx.residual_mcast_receiver_semaphore_id),
+                ("shared_residual_cb", ctx.residual_mcast_dst_cb),
+                ("shared_residual_num_pages", ctx.residual_mcast_params["dst_num_pages"]),
+                # RMSNorm (setup_sharded_buffer for gamma on sender core)
+                ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
+                ("rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
+                # No gate_mm, gate_gather, gate, index_mcast, expert_scale_mcast args
+                # Mul reader (setup mul_in1 buffer)
+                ("mul_cb_in1", ctx.mul_cb_in1),
+                ("mul_num_tiles", ctx.mul_num_tiles),
+                # down_proj gather receiver
+                ("down_proj_gather_noc0_num_senders", ctx.down_proj_gather_params["noc0_num_senders"]),
+                ("down_proj_gather_noc1_num_senders", ctx.down_proj_gather_params["noc1_num_senders"]),
+                (
+                    "down_proj_gather_noc0_receiver_semaphore_id",
+                    ctx.down_proj_gather_params["noc0_receiver_semaphore_id"],
+                ),
+                (
+                    "down_proj_gather_noc1_receiver_semaphore_id",
+                    ctx.down_proj_gather_params["noc1_receiver_semaphore_id"],
+                ),
+                ("down_proj_gather_dst_cb", ctx.down_proj_gather_params["dst_cb"]),
+                ("down_proj_gather_dst_num_pages", ctx.down_proj_gather_params["dst_num_pages"]),
+                # down_proj mcast receiver
+                ("down_proj_mcast_receiver_semaphore", ctx.down_proj_mcast_params["receiver_semaphore_id"]),
+                ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
+                ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
+                # Eltwise add
+                ("add_cb_in0", ctx.add_cb_in0),
+                ("add_cb_in1", ctx.add_cb_in1),
+                ("add_cb_in0_wait_tiles", ctx.add_params["cb_in0_wait_tiles"]),
+                ("add_cb_in1_wait_tiles", ctx.add_params["cb_in1_wait_tiles"]),
+                # gate_proj DRAM matmul reader (no indexing params)
+                ("gate_proj_cb_in1", ctx.gate_proj_cb_in1),
+                ("gate_proj_cb_out", ctx.gate_proj_cb_out),
+                ("gate_proj_in1_tensor_addr", ctx.gate_proj_params["in1_tensor_addr"]),
+                ("gate_proj_in1_page_size", ctx.gate_proj_params["in1_page_size"]),
+                ("gate_proj_in1_num_pages", ctx.gate_proj_params["in1_num_pages"]),
+                ("gate_proj_subblock_k", ctx.gate_proj_params["subblock_k"]),
+                ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
+                ("gate_proj_in1_block_size_bytes", ctx.gate_proj_params["in1_block_size_bytes"]),
+                ("gate_proj_out_num_tiles", ctx.gate_proj_params["out_num_tiles"]),
+                ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
+                # up_proj DRAM matmul reader (no indexing params)
+                ("up_proj_cb_in1", ctx.up_proj_cb_in1),
+                ("up_proj_in1_tensor_addr", ctx.up_proj_params["in1_tensor_addr"]),
+                ("up_proj_in1_page_size", ctx.up_proj_params["in1_page_size"]),
+                ("up_proj_in1_num_pages", ctx.up_proj_params["in1_num_pages"]),
+                ("up_proj_subblock_k", ctx.up_proj_params["subblock_k"]),
+                ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
+                ("up_proj_in1_block_size_bytes", ctx.up_proj_params["in1_block_size_bytes"]),
+                ("up_proj_out_num_tiles", ctx.up_proj_params["out_num_tiles"]),
+                ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
+                ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
+                ("up_proj_cb_mm_out", ctx.up_proj_cb_mm_out),
+                # down_proj DRAM matmul reader (no indexing params)
+                ("down_proj_cb_in1", ctx.down_proj_cb_in1),
+                ("down_proj_cb_out", ctx.down_proj_cb_out),
+                ("down_proj_in1_tensor_addr", ctx.down_proj_params["in1_tensor_addr"]),
+                ("down_proj_in1_page_size", ctx.down_proj_params["in1_page_size"]),
+                ("down_proj_in1_num_pages", ctx.down_proj_params["in1_num_pages"]),
+                ("down_proj_subblock_k", ctx.down_proj_params["subblock_k"]),
+                ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
+                ("down_proj_in1_block_size_bytes", ctx.down_proj_params["in1_block_size_bytes"]),
+                ("down_proj_out_num_tiles", ctx.down_proj_params["out_num_tiles"]),
+                ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
+                ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
+            ]
+            + ctx.validation_compile_time_args
+            + []
+        )
 
-        brisc_named_compile_time_args = [
-            # Input mcast sender
-            ("mcast_dest_noc_start_x", ctx.rmsnorm_mcast_params["dest_noc_start_x"]),
-            ("mcast_dest_noc_start_y", ctx.rmsnorm_mcast_params["dest_noc_start_y"]),
-            ("mcast_dest_noc_end_x", ctx.rmsnorm_mcast_params["dest_noc_end_x"]),
-            ("mcast_dest_noc_end_y", ctx.rmsnorm_mcast_params["dest_noc_end_y"]),
-            ("mcast_num_cores", ctx.rmsnorm_mcast_params["num_cores"]),
-            ("mcast_data_sender_semaphore", ctx.rmsnorm_mcast_params["sender_semaphore_id"]),
-            ("mcast_data_receiver_semaphore", ctx.rmsnorm_mcast_params["receiver_semaphore_id"]),
-            ("mcast_data_size_bytes", ctx.rmsnorm_mcast_params["data_size_bytes"]),
-            ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
-            ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
-            ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
-            ("mcast_is_part_of_receiver_grid", ctx.rmsnorm_mcast_params["is_sender_part_of_receiver_grid"]),
-            # Residual mcast sender
-            ("shared_residual_mcast_data_sender_semaphore", ctx.mcast_data_sender_semaphore_id),
-            ("shared_residual_mcast_data_receiver_semaphore", ctx.residual_mcast_receiver_semaphore_id),
-            ("shared_residual_mcast_data_size_bytes", ctx.residual_mcast_params["data_size_bytes"]),
-            ("shared_residual_mcast_src_cb", ctx.residual_mcast_params["src_cb"]),
-            ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
-            ("shared_residual_mcast_dst_cb", ctx.residual_mcast_dst_cb),
-            # No gate_gather, gate, index_mcast, expert_scale_mcast args
-            # Mul writer (no scalar args)
-            ("mul_cb_out", ctx.mul_cb_out),
-            ("mul_num_tiles", ctx.mul_num_tiles),
-            # down_proj gather sender
-            ("down_proj_gather_dest_noc_x", ctx.down_proj_gather_params["dest_noc_x"]),
-            ("down_proj_gather_dest_noc_y", ctx.down_proj_gather_params["dest_noc_y"]),
-            ("down_proj_gather_data_size_bytes", ctx.down_proj_gather_params["data_size_bytes"]),
-            ("down_proj_gather_receiver_semaphore_id", ctx.down_proj_gather_params["receiver_semaphore_id"]),
-            ("down_proj_gather_src_cb", ctx.down_proj_gather_params["src_cb"]),
-            ("down_proj_gather_src_num_pages", ctx.down_proj_gather_params["src_num_pages"]),
-            ("down_proj_gather_sender_grid_start_x", ctx.down_proj_gather_params["sender_grid_start_x"]),
-            ("down_proj_gather_sender_grid_start_y", ctx.down_proj_gather_params["sender_grid_start_y"]),
-            ("down_proj_gather_sender_grid_end_x", ctx.down_proj_gather_params["sender_grid_end_x"]),
-            ("down_proj_gather_sender_grid_end_y", ctx.down_proj_gather_params["sender_grid_end_y"]),
-            ("down_proj_gather_row_major", ctx.down_proj_gather_params["row_major"]),
-            ("down_proj_gather_receiver_data_addr", ctx.down_proj_gather_params["receiver_data_addr"]),
-            # down_proj mcast sender
-            ("down_proj_mcast_sender_semaphore", ctx.down_proj_mcast_params["sender_semaphore_id"]),
-            ("down_proj_mcast_receiver_semaphore", ctx.down_proj_mcast_params["receiver_semaphore_id"]),
-            ("down_proj_mcast_data_size_bytes", ctx.down_proj_mcast_params["data_size_bytes"]),
-            ("down_proj_mcast_src_cb", ctx.down_proj_mcast_params["src_cb"]),
-            ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
-            ("down_proj_mcast_src_num_pages", ctx.down_proj_mcast_params["src_num_pages"]),
-            # CB reset addresses
-            ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
-            ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
-            # Eltwise add CB
-            ("add_cb_in1", ctx.add_cb_in1),
-        ]
+        brisc_named_compile_time_args = (
+            [
+                # Input mcast sender
+                ("mcast_dest_noc_start_x", ctx.rmsnorm_mcast_params["dest_noc_start_x"]),
+                ("mcast_dest_noc_start_y", ctx.rmsnorm_mcast_params["dest_noc_start_y"]),
+                ("mcast_dest_noc_end_x", ctx.rmsnorm_mcast_params["dest_noc_end_x"]),
+                ("mcast_dest_noc_end_y", ctx.rmsnorm_mcast_params["dest_noc_end_y"]),
+                ("mcast_num_cores", ctx.rmsnorm_mcast_params["num_cores"]),
+                ("mcast_data_sender_semaphore", ctx.rmsnorm_mcast_params["sender_semaphore_id"]),
+                ("mcast_data_receiver_semaphore", ctx.rmsnorm_mcast_params["receiver_semaphore_id"]),
+                ("mcast_data_size_bytes", ctx.rmsnorm_mcast_params["data_size_bytes"]),
+                ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
+                ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
+                ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
+                ("mcast_is_part_of_receiver_grid", ctx.rmsnorm_mcast_params["is_sender_part_of_receiver_grid"]),
+                # Residual mcast sender
+                ("shared_residual_mcast_data_sender_semaphore", ctx.mcast_data_sender_semaphore_id),
+                ("shared_residual_mcast_data_receiver_semaphore", ctx.residual_mcast_receiver_semaphore_id),
+                ("shared_residual_mcast_data_size_bytes", ctx.residual_mcast_params["data_size_bytes"]),
+                ("shared_residual_mcast_src_cb", ctx.residual_mcast_params["src_cb"]),
+                ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
+                ("shared_residual_mcast_dst_cb", ctx.residual_mcast_dst_cb),
+                # No gate_gather, gate, index_mcast, expert_scale_mcast args
+                # Mul writer (no scalar args)
+                ("mul_cb_out", ctx.mul_cb_out),
+                ("mul_num_tiles", ctx.mul_num_tiles),
+                # down_proj gather sender
+                ("down_proj_gather_dest_noc_x", ctx.down_proj_gather_params["dest_noc_x"]),
+                ("down_proj_gather_dest_noc_y", ctx.down_proj_gather_params["dest_noc_y"]),
+                ("down_proj_gather_data_size_bytes", ctx.down_proj_gather_params["data_size_bytes"]),
+                ("down_proj_gather_receiver_semaphore_id", ctx.down_proj_gather_params["receiver_semaphore_id"]),
+                ("down_proj_gather_src_cb", ctx.down_proj_gather_params["src_cb"]),
+                ("down_proj_gather_src_num_pages", ctx.down_proj_gather_params["src_num_pages"]),
+                ("down_proj_gather_sender_grid_start_x", ctx.down_proj_gather_params["sender_grid_start_x"]),
+                ("down_proj_gather_sender_grid_start_y", ctx.down_proj_gather_params["sender_grid_start_y"]),
+                ("down_proj_gather_sender_grid_end_x", ctx.down_proj_gather_params["sender_grid_end_x"]),
+                ("down_proj_gather_sender_grid_end_y", ctx.down_proj_gather_params["sender_grid_end_y"]),
+                ("down_proj_gather_row_major", ctx.down_proj_gather_params["row_major"]),
+                ("down_proj_gather_receiver_data_addr", ctx.down_proj_gather_params["receiver_data_addr"]),
+                # down_proj mcast sender
+                ("down_proj_mcast_sender_semaphore", ctx.down_proj_mcast_params["sender_semaphore_id"]),
+                ("down_proj_mcast_receiver_semaphore", ctx.down_proj_mcast_params["receiver_semaphore_id"]),
+                ("down_proj_mcast_data_size_bytes", ctx.down_proj_mcast_params["data_size_bytes"]),
+                ("down_proj_mcast_src_cb", ctx.down_proj_mcast_params["src_cb"]),
+                ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
+                ("down_proj_mcast_src_num_pages", ctx.down_proj_mcast_params["src_num_pages"]),
+                # CB reset addresses
+                ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
+                ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
+                # Eltwise add CB
+                ("add_cb_in1", ctx.add_cb_in1),
+            ]
+            + ctx.validation_compile_time_args
+            + []
+        )
 
-        trisc_named_compile_time_args = [
-            # RMSNorm compute
-            ("rmsnorm_input_cb", ctx.residual_mcast_src_cb),
-            ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("rmsnorm_output_cb", ctx.rmsnorm_output_cb),
-            ("rmsnorm_fp32_acc", 0),
-            ("rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
-            ("rmsnorm_rsqrt_fast_approx", 0),
-            # No gate_mm, gate compute args
-            # gate_proj compute
-            ("gate_proj_cb_in0", ctx.gate_mm_input_cb),
-            ("gate_proj_cb_in1", ctx.gate_proj_cb_in1),
-            ("gate_proj_cb_out", ctx.gate_proj_cb_out),
-            ("gate_proj_subblock_k", ctx.gate_proj_params["subblock_k"]),
-            ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
-            ("gate_proj_subblock_w", ctx.gate_proj_params["subblock_w"]),
-            ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
-            ("gate_proj_tile_r_dim", ctx.gate_proj_params["tile_r_dim"]),
-            ("gate_proj_fuse_silu", 1),
-            ("gate_proj_fp32_dest_acc_en", 1),
-            # up_proj compute
-            ("up_proj_cb_in0", ctx.gate_mm_input_cb),
-            ("up_proj_cb_in1", ctx.up_proj_cb_in1),
-            ("up_proj_subblock_k", ctx.up_proj_params["subblock_k"]),
-            ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
-            ("up_proj_subblock_w", ctx.up_proj_params["subblock_w"]),
-            ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
-            ("up_proj_tile_r_dim", ctx.up_proj_params["tile_r_dim"]),
-            ("up_proj_fuse_silu", 0),
-            ("up_proj_fp32_dest_acc_en", 1),
-            ("up_proj_cb_mm_out", ctx.up_proj_cb_mm_out),
-            # Mul compute (no scalar)
-            ("mul_cb_in0", ctx.mul_cb_in0),
-            ("mul_cb_in1", ctx.mul_cb_in1),
-            ("mul_cb_out", ctx.mul_cb_out),
-            ("mul_num_tiles", ctx.mul_num_tiles),
-            ("mul_fp32_dest_acc_en", 1),
-            ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
-            # down_proj compute
-            ("down_proj_cb_in0", ctx.down_proj_mcast_dst_cb),
-            ("down_proj_cb_in1", ctx.down_proj_cb_in1),
-            ("down_proj_cb_out", ctx.down_proj_cb_out),
-            ("down_proj_subblock_k", ctx.down_proj_params["subblock_k"]),
-            ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
-            ("down_proj_subblock_w", ctx.down_proj_params["subblock_w"]),
-            ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
-            ("down_proj_tile_r_dim", ctx.down_proj_params["tile_r_dim"]),
-            ("down_proj_fuse_silu", 0),
-            ("down_proj_fp32_dest_acc_en", 1),
-            # Eltwise add compute
-            ("add_cb_in0", ctx.add_cb_in0),
-            ("add_cb_in1", ctx.add_cb_in1),
-            ("add_cb_out", ctx.add_cb_out),
-            ("add_num_tiles", ctx.add_params["num_tiles"]),
-            ("add_cb_in0_wait_tiles", ctx.add_params["cb_in0_wait_tiles"]),
-            ("add_cb_in1_wait_tiles", ctx.add_params["cb_in1_wait_tiles"]),
-            ("add_slice_size_bytes", ctx.add_params["slice_size_bytes"]),
-            # CB reset addresses
-            ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
-            ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
-        ]
+        trisc_named_compile_time_args = (
+            [
+                # RMSNorm compute
+                ("rmsnorm_input_cb", ctx.residual_mcast_src_cb),
+                ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
+                ("rmsnorm_output_cb", ctx.rmsnorm_output_cb),
+                ("rmsnorm_fp32_acc", 0),
+                ("rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
+                ("rmsnorm_rsqrt_fast_approx", 0),
+                # No gate_mm, gate compute args
+                # gate_proj compute
+                ("gate_proj_cb_in0", ctx.gate_mm_input_cb),
+                ("gate_proj_cb_in1", ctx.gate_proj_cb_in1),
+                ("gate_proj_cb_out", ctx.gate_proj_cb_out),
+                ("gate_proj_subblock_k", ctx.gate_proj_params["subblock_k"]),
+                ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
+                ("gate_proj_subblock_w", ctx.gate_proj_params["subblock_w"]),
+                ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
+                ("gate_proj_tile_r_dim", ctx.gate_proj_params["tile_r_dim"]),
+                ("gate_proj_fuse_silu", 1),
+                ("gate_proj_fp32_dest_acc_en", 1),
+                # up_proj compute
+                ("up_proj_cb_in0", ctx.gate_mm_input_cb),
+                ("up_proj_cb_in1", ctx.up_proj_cb_in1),
+                ("up_proj_subblock_k", ctx.up_proj_params["subblock_k"]),
+                ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
+                ("up_proj_subblock_w", ctx.up_proj_params["subblock_w"]),
+                ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
+                ("up_proj_tile_r_dim", ctx.up_proj_params["tile_r_dim"]),
+                ("up_proj_fuse_silu", 0),
+                ("up_proj_fp32_dest_acc_en", 1),
+                ("up_proj_cb_mm_out", ctx.up_proj_cb_mm_out),
+                # Mul compute (no scalar)
+                ("mul_cb_in0", ctx.mul_cb_in0),
+                ("mul_cb_in1", ctx.mul_cb_in1),
+                ("mul_cb_out", ctx.mul_cb_out),
+                ("mul_num_tiles", ctx.mul_num_tiles),
+                ("mul_fp32_dest_acc_en", 1),
+                ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
+                # down_proj compute
+                ("down_proj_cb_in0", ctx.down_proj_mcast_dst_cb),
+                ("down_proj_cb_in1", ctx.down_proj_cb_in1),
+                ("down_proj_cb_out", ctx.down_proj_cb_out),
+                ("down_proj_subblock_k", ctx.down_proj_params["subblock_k"]),
+                ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
+                ("down_proj_subblock_w", ctx.down_proj_params["subblock_w"]),
+                ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
+                ("down_proj_tile_r_dim", ctx.down_proj_params["tile_r_dim"]),
+                ("down_proj_fuse_silu", 0),
+                ("down_proj_fp32_dest_acc_en", 1),
+                # Eltwise add compute
+                ("add_cb_in0", ctx.add_cb_in0),
+                ("add_cb_in1", ctx.add_cb_in1),
+                ("add_cb_out", ctx.add_cb_out),
+                ("add_num_tiles", ctx.add_params["num_tiles"]),
+                ("add_cb_in0_wait_tiles", ctx.add_params["cb_in0_wait_tiles"]),
+                ("add_cb_in1_wait_tiles", ctx.add_params["cb_in1_wait_tiles"]),
+                ("add_slice_size_bytes", ctx.add_params["slice_size_bytes"]),
+                # CB reset addresses
+                ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
+                ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
+            ]
+            + ctx.validation_compile_time_args
+            + []
+        )
 
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
 
@@ -967,6 +997,7 @@ class MlpOp:
         shared_residual_add_out_tensor,
         shared_k_parallel,
         shared_n_parallel,
+        validation_tensor=None,
         epsilon=1e-6,
     ):
         """
@@ -1000,6 +1031,7 @@ class MlpOp:
             shared_residual_mcast_src_tensor=shared_residual_mcast_src_tensor,
             shared_residual_mcast_dst_tensor=shared_residual_mcast_dst_tensor,
             rmsnorm_gamma_tensor=rmsnorm_gamma_tensor,
+            validation_tensor=validation_tensor,
             epsilon=epsilon,
         )
 
