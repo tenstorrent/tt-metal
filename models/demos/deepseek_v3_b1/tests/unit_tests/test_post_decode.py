@@ -38,7 +38,6 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("using_persistent_buffers", [True])
 @pytest.mark.parametrize("mesh_rows, mesh_cols, skip_ccl", [(4, 2, False), (1, 1, True)])
 @pytest.mark.parametrize(
     "device_params",
@@ -60,7 +59,6 @@ def test_post_decode(
     use_fp32,
     cluster_axis,
     secondary_cluster_axis,
-    using_persistent_buffers,
     skip_ccl,
 ):
     """Test CCL broadcast + mcast + matmul for post-decode vocab projection.
@@ -274,7 +272,6 @@ def test_post_decode(
         semaphores=semaphores,
         cluster_axis=cluster_axis,
         secondary_cluster_axis=secondary_cluster_axis,
-        using_persistent_buffers=using_persistent_buffers,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=skip_ccl,
     )
