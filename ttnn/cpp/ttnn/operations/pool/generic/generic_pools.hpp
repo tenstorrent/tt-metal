@@ -66,6 +66,97 @@ Tensor avg_pool2d(
     Layout output_layout = Layout::ROW_MAJOR,
     bool config_tensor_in_dram = false);
 
+// Compatibility wrappers for existing code (e.g., adaptive_pool)
+struct MaxPool2DOp {
+    static std::vector<Tensor> invoke(
+        const Tensor& input_tensor,
+        uint32_t batch_size,
+        uint32_t input_h,
+        uint32_t input_w,
+        uint32_t channels,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+        std::array<uint32_t, 2> dilation,
+        bool ceil_mode = false,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
+        std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+        bool deallocate_input = false,
+        bool reallocate_halo_output = true,
+        bool return_indices = false,
+        DataType dtype = DataType::BFLOAT16,
+        Layout output_layout = Layout::ROW_MAJOR,
+        bool config_tensor_in_dram = false) {
+        return max_pool2d(
+            input_tensor,
+            batch_size,
+            input_h,
+            input_w,
+            channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            memory_config,
+            dram_slice_config,
+            applied_shard_scheme,
+            deallocate_input,
+            reallocate_halo_output,
+            return_indices,
+            dtype,
+            output_layout,
+            config_tensor_in_dram);
+    }
+};
+
+struct AvgPool2DOp {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        uint32_t batch_size,
+        uint32_t input_h,
+        uint32_t input_w,
+        uint32_t channels,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+        bool ceil_mode = false,
+        bool count_include_pad = true,
+        std::optional<int32_t> divisor_override = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
+        std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+        bool deallocate_input = false,
+        bool reallocate_halo_output = true,
+        DataType dtype = DataType::BFLOAT16,
+        Layout output_layout = Layout::ROW_MAJOR,
+        bool config_tensor_in_dram = false) {
+        return avg_pool2d(
+            input_tensor,
+            batch_size,
+            input_h,
+            input_w,
+            channels,
+            kernel_size,
+            stride,
+            padding,
+            ceil_mode,
+            count_include_pad,
+            divisor_override,
+            memory_config,
+            dram_slice_config,
+            applied_shard_scheme,
+            compute_kernel_config,
+            deallocate_input,
+            reallocate_halo_output,
+            dtype,
+            output_layout,
+            config_tensor_in_dram);
+    }
+};
+
 }  // namespace operations::pool
 
 }  // namespace ttnn
