@@ -232,6 +232,13 @@ def get_or_create_sqlite_db(report_path):
         """CREATE TABLE IF NOT EXISTS errors
                 (operation_id int, operation_name text, error_type text, error_message text, stack_trace text, timestamp text)"""
     )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_buffers_address ON buffers (address)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_buffers_operation_id ON buffers (operation_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_buffers_device_id ON buffers (device_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_buffers_max_size_per_bank ON buffers (max_size_per_bank)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_buffers_buffer_type ON buffers (buffer_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_output_tensors_tensor_id ON output_tensors (tensor_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_input_tensors_tensor_id ON input_tensors (tensor_id)")
     sqlite_connection.commit()
     return sqlite_connection
 
