@@ -39,8 +39,230 @@ static constexpr uint32_t scale_fp32 = get_compile_time_arg_val(10);
 static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(11);  // tiles per L chunk (max 8)
 static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(12);       // number of L chunks
 
+// Position mask parameters (for conditional reduction)
+static constexpr uint32_t cb_position = get_compile_time_arg_val(13);
+static constexpr uint32_t position_enabled = get_compile_time_arg_val(14);
+static constexpr uint32_t num_devices = get_compile_time_arg_val(15);  // Total number of devices
+
 // SDPA uses "block_size" terminology - alias for clarity
 static constexpr uint32_t block_size = tiles_per_l_chunk;
+
+/**
+ * Conditional streaming SDPA tail reduction.
+ *
+ * Handles four cases based on validity of local and neighbor data:
+ * 1. Both invalid: Error case (shouldn't happen in valid topology)
+ * 2. Only local valid: Copy local data to output (neighbor drops its invalid data)
+ * 3. Only neighbor valid: Copy neighbor data to output (local drops its invalid data)
+ * 4. Both valid: Normal SDPA reduction
+ *
+ * This enables the reduce-to-all operation to work when only a subset of devices
+ * have valid data, by having invalid devices forward valid data without reduction.
+ */
+template <
+    bool SDPA_EXP_APPROX_MODE,
+    bool normalize,
+    uint32_t block_size,
+    uint32_t scale_fp32,
+    uint32_t num_l_chunks,
+    int vector_mode = (int)VectorMode::C>
+ALWI void sdpa_tail_streaming_conditional(
+    uint32_t cb_worker_max_sum,
+    uint32_t cb_prev_max_sum,
+    uint32_t cb_cur_max_sum,
+    uint32_t cb_l1,
+    uint32_t cb_l2,
+    uint32_t cb_l_out,
+    bool neighbor_valid,
+    bool local_valid) {
+    // Case 1: Both invalid - error case (shouldn't happen)
+    // Just copy local data as fallback
+    if (!neighbor_valid && !local_valid) {
+        // Copy local MS to output MS (needed for R1->R2 handoff)
+        DPRINT << "not neighbour valid and not local valid\n";
+        cb_wait_front(cb_prev_max_sum, 1);
+        cb_reserve_back(cb_cur_max_sum, 1);
+
+        tile_regs_acquire();
+        copy_tile_init(cb_prev_max_sum);
+        copy_tile(cb_prev_max_sum, 0, 0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(0, cb_cur_max_sum);
+        tile_regs_release();
+
+        cb_push_back(cb_cur_max_sum, 1);
+
+        // Copy local L to output L
+        for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+            cb_wait_front(cb_l2, (chunk + 1) * block_size);
+            cb_reserve_back(cb_l_out, block_size);
+
+            uint32_t tile_index = chunk * block_size;
+            for (uint32_t i = 0; i < block_size; i++) {
+                tile_regs_acquire();
+                copy_tile_init(cb_l2);
+                copy_tile(cb_l2, tile_index + i, i);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile(i, cb_l_out);
+                tile_regs_release();
+            }
+
+            cb_push_back(cb_l_out, block_size);
+        }
+        DPRINT << "end of not neighbour valid and not local valid\n";
+        return;
+    }
+
+    // Case 2: Only local valid - copy local data (cb_l2) to output and normalize if requested
+    if (!neighbor_valid && local_valid) {
+        DPRINT << "Case 2: only local valid, normalize=" << (uint32_t)normalize << "\n";
+
+        // If normalization requested, use SDPA path to normalize
+        if constexpr (normalize) {
+            // Setup normalization using MS reduce (even with single input, this sets up the divider)
+            ckernel::sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode>(
+                cb_prev_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l2);
+
+            // Process L chunks with normalization
+            for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+                cb_wait_front(cb_l2, (chunk + 1) * block_size);
+                cb_reserve_back(cb_l_out, block_size);
+
+                uint32_t tile_index = chunk * block_size;
+                bool acquire_regs = !(normalize && chunk == 0);
+                ckernel::sdpa_tail_l_block<block_size>(cb_l2, cb_l2, cb_l_out, tile_index, acquire_regs);
+
+                cb_push_back(cb_l_out, block_size);
+            }
+
+            ckernel::sdpa_tail_finalize(cb_prev_max_sum, cb_prev_max_sum);
+        } else {
+            // No normalization - just copy
+            // Copy local MS to output MS
+            cb_wait_front(cb_prev_max_sum, 1);
+            cb_reserve_back(cb_cur_max_sum, 1);
+
+            tile_regs_acquire();
+            copy_tile_init(cb_prev_max_sum);
+            copy_tile(cb_prev_max_sum, 0, 0);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(0, cb_cur_max_sum);
+            tile_regs_release();
+
+            cb_push_back(cb_cur_max_sum, 1);
+
+            // Copy local L to output L
+            for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+                cb_wait_front(cb_l2, (chunk + 1) * block_size);
+                cb_reserve_back(cb_l_out, block_size);
+
+                uint32_t tile_index = chunk * block_size;
+                for (uint32_t i = 0; i < block_size; i++) {
+                    tile_regs_acquire();
+                    copy_tile_init(cb_l2);
+                    copy_tile(cb_l2, tile_index + i, i);
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    pack_tile(i, cb_l_out);
+                    tile_regs_release();
+                }
+
+                cb_push_back(cb_l_out, block_size);
+            }
+        }
+        DPRINT << "Case 2: done\n";
+        return;
+    }
+
+    // Case 3: Only neighbor valid - copy neighbor data (cb_l1) to output and normalize if requested
+    if (neighbor_valid && !local_valid) {
+        DPRINT << "Case 3: only neighbor valid, normalize=" << (uint32_t)normalize << "\n";
+
+        // If normalization requested, use SDPA path to normalize
+        if constexpr (normalize) {
+            // Setup normalization using MS reduce
+            ckernel::sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode>(
+                cb_worker_max_sum, cb_worker_max_sum, cb_cur_max_sum, cb_l1);
+
+            // Process L chunks with normalization
+            for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+                cb_wait_front(cb_l1, (chunk + 1) * block_size);
+                cb_reserve_back(cb_l_out, block_size);
+
+                uint32_t tile_index = chunk * block_size;
+                bool acquire_regs = !(normalize && chunk == 0);
+                ckernel::sdpa_tail_l_block<block_size>(cb_l1, cb_l1, cb_l_out, tile_index, acquire_regs);
+
+                cb_push_back(cb_l_out, block_size);
+            }
+
+            ckernel::sdpa_tail_finalize(cb_worker_max_sum, cb_worker_max_sum);
+        } else {
+            // No normalization - just copy
+            // Copy neighbor MS to output MS
+            cb_wait_front(cb_worker_max_sum, 1);
+            cb_reserve_back(cb_cur_max_sum, 1);
+
+            tile_regs_acquire();
+            copy_tile_init(cb_worker_max_sum);
+            copy_tile(cb_worker_max_sum, 0, 0);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(0, cb_cur_max_sum);
+            tile_regs_release();
+
+            cb_push_back(cb_cur_max_sum, 1);
+
+            // Copy neighbor L to output L
+            for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+                cb_wait_front(cb_l1, (chunk + 1) * block_size);
+                cb_reserve_back(cb_l_out, block_size);
+
+                uint32_t tile_index = chunk * block_size;
+                for (uint32_t i = 0; i < block_size; i++) {
+                    tile_regs_acquire();
+                    copy_tile_init(cb_l1);
+                    copy_tile(cb_l1, tile_index + i, i);
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    pack_tile(i, cb_l_out);
+                    tile_regs_release();
+                }
+
+                cb_push_back(cb_l_out, block_size);
+            }
+        }
+        DPRINT << "Case 3: done\n";
+        return;
+    }
+
+    // Case 4: Both valid - perform normal SDPA reduction
+    ckernel::sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode>(
+        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
+
+    for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+        cb_wait_front(cb_l1, (chunk + 1) * block_size);
+        cb_wait_front(cb_l2, (chunk + 1) * block_size);
+        cb_reserve_back(cb_l_out, block_size);
+
+        uint32_t tile_index = chunk * block_size;
+        bool acquire_regs = !(normalize && chunk == 0);
+        ckernel::sdpa_tail_l_block<block_size>(cb_l1, cb_l2, cb_l_out, tile_index, acquire_regs);
+
+        cb_push_back(cb_l_out, block_size);
+    }
+
+    ckernel::sdpa_tail_finalize(cb_worker_max_sum, cb_prev_max_sum);
+}
 
 /**
  * Streaming SDPA tail reduction that processes L tiles in chunks.
@@ -110,27 +332,118 @@ void kernel_main() {
     binary_op_init_common(cb_local_l, cb_local_l, cb_l_out);
     exp_tile_init<EXP_APPROX_MODE, false>();
 
+    // Runtime args: device indices for position lookup (when position_enabled)
+    // When position_enabled=0, these defaults are used (all valid)
+    bool local_valid = true;
+    bool r1_neighbor_valid = true;
+    bool r2_neighbor_valid = true;
+
+    // Declare device index variables outside if block so they're accessible later
+    uint32_t device_idx = 0;
+    uint32_t r1_neighbor_device_idx = 0;
+    uint32_t r2_neighbor_device_idx = 0;
+
+    DPRINT << "COMPUTE position_enabled: " << (uint32_t)position_enabled << ", cb_position: " << (uint32_t)cb_position
+           << "\n";
+
+    if constexpr (position_enabled) {
+        // Read device indices from runtime args
+        size_t arg_idx = 0;
+        device_idx = get_arg_val<uint32_t>(arg_idx++);
+        r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
+        r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
+
+        // Read position values from CB (similar to flash_mla pattern)
+        // Position tensor contains validity flags (0 or non-zero) for each device
+        DPRINT << "COMPUTE device_idx: " << (uint32_t)device_idx
+               << ", r1_neighbor_device_idx: " << (uint32_t)r1_neighbor_device_idx
+               << ", r2_neighbor_device_idx: " << (uint32_t)r2_neighbor_device_idx << "\n";
+        cb_wait_front(cb_position, 1);
+        DPRINT << "COMPUTE after cb wait front\n";
+
+        // Read ALL position values at once (including R2 neighbor's R1 neighbor)
+        // Position is stored as uint32, we just check if non-zero
+        uint32_t local_val = read_tile_value(cb_position, 0, device_idx);
+        DPRINT << "COMPUTE read local_val at index " << (uint32_t)device_idx << ": " << (uint32_t)local_val << "\n";
+
+        uint32_t r1_val = read_tile_value(cb_position, 0, r1_neighbor_device_idx);
+        DPRINT << "COMPUTE read r1_val at index " << (uint32_t)r1_neighbor_device_idx << ": " << (uint32_t)r1_val
+               << "\n";
+
+        uint32_t r2_val = read_tile_value(cb_position, 0, r2_neighbor_device_idx);
+        DPRINT << "COMPUTE read r2_val at index " << (uint32_t)r2_neighbor_device_idx << ": " << (uint32_t)r2_val
+               << "\n";
+
+        uint32_t r2_neighbor_r1_val = read_tile_value(cb_position, 0, r2_neighbor_r1_neighbor_idx);
+        DPRINT << "COMPUTE read r2_neighbor_r1_val at index " << (uint32_t)r2_neighbor_r1_neighbor_idx << ": "
+               << (uint32_t)r2_neighbor_r1_val << "\n";
+
+        DPRINT << "COMPUTE after reading position values\n";
+
+        cb_pop_front(cb_position, 1);
+        DPRINT << "COMPUTE after cb pop front\n";
+
+        // Convert to boolean (non-zero means valid)
+        local_valid = (local_val != 0);
+        r1_neighbor_valid = (r1_val != 0);
+        r2_neighbor_valid =
+            (r2_val != 0) || (r2_neighbor_r1_val != 0);  // R2 neighbor's R1 result is valid if either device was valid
+        DPRINT << "COMPUTE r1_val: " << (uint32_t)r1_val << ", r2_val: " << (uint32_t)r2_val
+               << ", local_val: " << (uint32_t)local_val << ", r2_neighbor_r1_val: " << (uint32_t)r2_neighbor_r1_val
+               << "\n";
+        DPRINT << "COMPUTE local_valid: " << (uint32_t)local_valid
+               << ", r1_neighbor_valid: " << (uint32_t)r1_neighbor_valid
+               << ", r2_neighbor_valid: " << (uint32_t)r2_neighbor_valid << "\n";
+    }
+
     // =========================================================================
-    // ROUND 1: reduce(local, r1_neighbor) → r1_result
+    // ROUND 1: reduce(local, r1_neighbor) → r1_result (unnormalized)
     // =========================================================================
-    // Non-final reduction: outputs L and MS (streaming)
-    sdpa_tail_streaming<EXP_APPROX_MODE, false /* normalize */, block_size, scale_fp32, num_l_chunks, vector_mode>(
+    DPRINT << "COMPUTE starting R1 reduction\n";
+    sdpa_tail_streaming_conditional<
+        EXP_APPROX_MODE,
+        false /* no normalize - R1 doesn't normalize */,
+        block_size,
+        scale_fp32,
+        num_l_chunks,
+        vector_mode>(
         cb_r1_neighbor_ms,  // worker (neighbor)
         cb_local_ms,        // prev (local)
         cb_r1_result_ms,    // cur output MS
         cb_r1_neighbor_l,   // l1 (neighbor)
         cb_local_l,         // l2 (local)
-        cb_r1_result_l);    // l_out
+        cb_r1_result_l,     // l_out
+        r1_neighbor_valid,
+        local_valid);
+    DPRINT << "COMPUTE finished R1 reduction\n";
 
     // =========================================================================
-    // ROUND 2: reduce(r1_result, r2_neighbor) → final output (normalized L)
+    // ROUND 2: reduce(r1_result, r2_neighbor) → final output (ALWAYS normalized)
     // =========================================================================
-    // Final reduction with normalization: outputs only normalized L (streaming)
-    sdpa_tail_streaming<EXP_APPROX_MODE, true /* normalize */, block_size, scale_fp32, num_l_chunks, vector_mode>(
-        cb_r2_neighbor_ms,  // worker (neighbor)
-        cb_r1_result_ms,    // prev (R1 result)
-        cb_ms_out,          // cur output MS (unused when final=true)
-        cb_r2_neighbor_l,   // l1 (neighbor)
-        cb_r1_result_l,     // l2 (R1 result)
-        cb_l_out);          // l_out (normalized, aliased to output tensor)
+    // Compute R1 result validity: valid if at least one device in the pair was valid
+    bool local_r1_valid = local_valid || r1_neighbor_valid;
+    bool r2_neighbor_r1_valid = r2_neighbor_valid;
+
+    DPRINT << "COMPUTE starting R2 reduction\n";
+    DPRINT << "COMPUTE local_r1_valid: " << (uint32_t)local_r1_valid
+           << ", r2_neighbor_r1_valid: " << (uint32_t)r2_neighbor_r1_valid << "\n";
+
+    // R2: ALWAYS normalize (simplest approach - always do L/S at the end)
+    sdpa_tail_streaming_conditional<
+        EXP_APPROX_MODE,
+        true /* always normalize */,
+        block_size,
+        scale_fp32,
+        num_l_chunks,
+        vector_mode>(
+        cb_r2_neighbor_ms,     // worker (neighbor's R1 result)
+        cb_r1_result_ms,       // prev (local R1 result)
+        cb_ms_out,             // cur output MS
+        cb_r2_neighbor_l,      // l1 (neighbor's R1 result)
+        cb_r1_result_l,        // l2 (local R1 result)
+        cb_l_out,              // l_out
+        r2_neighbor_r1_valid,  // R2 neighbor R1 result validity
+        local_r1_valid);       // Local R1 result validity
+    DPRINT << "COMPUTE finished R2 reduction\n";
 }

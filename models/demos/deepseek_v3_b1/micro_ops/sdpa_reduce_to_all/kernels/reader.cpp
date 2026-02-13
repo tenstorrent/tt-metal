@@ -36,6 +36,10 @@ static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(7);
 static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(8);
 static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(9);
 
+// Position CB compile-time args (added for conditional reduction)
+static constexpr uint32_t cb_position = get_compile_time_arg_val(10);
+static constexpr uint32_t position_enabled = get_compile_time_arg_val(11);
+
 static constexpr uint32_t out_tiles = num_l_chunks * tiles_per_l_chunk;
 static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
 
@@ -53,10 +57,13 @@ static constexpr uint32_t L_SEM_BASE_THRESHOLD = 2;
  */
 FORCE_INLINE void prepare_ms_for_compute(
     uint32_t cb_ms, volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t recv_buffer_addr) {
+    DPRINT << "START OF prepare_ms_for_compute\n";
     cb_reserve_back(cb_ms, 1);
 
     // Wait for MS packet (sem >= 1)
+    DPRINT << "before waiting for MS,\n";
     noc_semaphore_wait_min(sem_ptr, MS_SEM_THRESHOLD);
+    DPRINT << "after waiting for MS,\n";
 
     // MS is at end of buffer (offset = total_l_bytes)
     tt_memmove<true, false, false, 0>(get_write_ptr(cb_ms), recv_buffer_addr + total_l_bytes, ms_tile_size_bytes);
@@ -89,14 +96,18 @@ FORCE_INLINE void prepare_data_for_compute(
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
     // MS first (sem >= 1)
+    DPRINT << "before preparing MS, sem value:\n";
     prepare_ms_for_compute(cb_ms, sem_ptr, recv_buffer_addr);
+    DPRINT << "after preparing MS, sem value:\n";
 
     // L chunks (sem >= 2, 3, 4, ...)
     for (uint32_t i = 0; i < num_l_chunks; i++) {
         prepare_l_chunk_for_compute(cb_l, sem_ptr, i);
     }
 
+    DPRINT << "before semaphore set\n";
     noc_semaphore_set(sem_ptr, 0);
+    DPRINT << "after semaphore set\n";
 }
 
 // =============================================================================
@@ -110,6 +121,44 @@ void kernel_main() {
     const uint32_t r1_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r2_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
 
+    DPRINT << "position_enabled: " << (uint32_t)position_enabled << ", cb_position: " << (uint32_t)cb_position << "\n";
+
+    // Device indices for position lookup (only used when position_enabled)
+    uint32_t device_idx = 0;
+    uint32_t r1_neighbor_device_idx = 0;
+    uint32_t r2_neighbor_device_idx = 0;
+    volatile tt_l1_ptr uint32_t* position_data_base = nullptr;
+
+    // =========================================================================
+    // Push position tensor to CB (if enabled)
+    // Position tensor is aliased to CB, just need to push
+    // =========================================================================
+    if constexpr (position_enabled) {
+        // Read device indices from runtime args
+        device_idx = get_arg_val<uint32_t>(arg_idx++);
+        r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
+        r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
+
+        DPRINT << "READER device_idx: " << (uint32_t)device_idx
+               << ", r1_neighbor_device_idx: " << (uint32_t)r1_neighbor_device_idx
+               << ", r2_neighbor_device_idx: " << (uint32_t)r2_neighbor_device_idx << "\n";
+
+        // Position CB is aliased to position tensor, just push it
+        cb_reserve_back(cb_position, 1);
+
+        // Debug: Read and print position values from the CB buffer before pushing
+        uint64_t position_cb_addr = get_write_ptr(cb_position);
+        position_data_base = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(position_cb_addr);
+        DPRINT << "READER position_cb_addr: " << (uint32_t)position_cb_addr << "\n";
+        DPRINT << "READER position[0]: " << (uint32_t)position_data_base[0]
+               << ", position[1]: " << (uint32_t)position_data_base[1]
+               << ", position[2]: " << (uint32_t)position_data_base[2]
+               << ", position[3]: " << (uint32_t)position_data_base[3] << "\n";
+
+        cb_push_back(cb_position, 1);
+        DPRINT << "READER after pushing position CB\n";
+    }
+
     // =========================================================================
     // Push local input (aliased CBs, no copy needed)
     // =========================================================================
@@ -120,12 +169,55 @@ void kernel_main() {
     cb_push_back(cb_local_ms, 1);
 
     // =========================================================================
-    // Prepare R1 neighbor data for compute
+    // ROUND 1: Prepare R1 neighbor data for compute
     // =========================================================================
+    DPRINT << "READER starting R1 prepare\n";
     prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
+    DPRINT << "READER finished R1 prepare\n";
 
     // =========================================================================
-    // Prepare R2 neighbor data for compute
+    // ROUND 2: Prepare R2 neighbor data for compute
+    // IMPORTANT: R2 neighbor's R1 result may be invalid if both devices in that pair were invalid
+    // We need to check R2 neighbor's R1 validity before receiving
     // =========================================================================
-    prepare_data_for_compute(cb_r2_neighbor_l, cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
+    DPRINT << "READER starting R2 prepare\n";
+
+    // Compute R2 neighbor's R1 validity: valid if at least one device in that pair was valid
+    // We need to read the position for r2_neighbor and its R1 neighbor
+    bool r2_neighbor_r1_valid = true;  // Default: assume R2 neighbor's R1 is valid
+
+    if constexpr (position_enabled) {
+        // Get r2_neighbor_r1_neighbor_idx from runtime args
+        uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
+
+        uint32_t r2_neighbor_val = position_data_base[r2_neighbor_device_idx];
+        uint32_t r2_neighbor_r1_neighbor_val = position_data_base[r2_neighbor_r1_neighbor_idx];
+
+        DPRINT << "READER r2_neighbor_val: " << (uint32_t)r2_neighbor_val
+               << ", r2_neighbor_r1_neighbor_val: " << (uint32_t)r2_neighbor_r1_neighbor_val << "\n";
+
+        // R2 neighbor's R1 result is valid if at least one device in that pair was valid
+        r2_neighbor_r1_valid = (r2_neighbor_val != 0) || (r2_neighbor_r1_neighbor_val != 0);
+
+        DPRINT << "READER r2_neighbor_r1_valid: " << (uint32_t)r2_neighbor_r1_valid << "\n";
+    }
+
+    // Only receive R2 data if R2 neighbor's R1 result is valid
+    if (r2_neighbor_r1_valid) {
+        prepare_data_for_compute(cb_r2_neighbor_l, cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
+    } else {
+        // R2 neighbor's R1 is invalid, push zero/dummy data to CBs
+        // Compute will use Case 2 (only local valid) to copy local R1 result
+        DPRINT << "READER R2 neighbor R1 invalid, skipping receive\n";
+
+        // Push dummy MS tile (will not be used by compute)
+        cb_reserve_back(cb_r2_neighbor_ms, 1);
+        cb_push_back(cb_r2_neighbor_ms, 1);
+
+        // Push dummy L tiles (will not be used by compute)
+        cb_reserve_back(cb_r2_neighbor_l, out_tiles);
+        cb_push_back(cb_r2_neighbor_l, out_tiles);
+    }
+
+    DPRINT << "READER finished R2 prepare\n";
 }

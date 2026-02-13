@@ -296,6 +296,7 @@ struct ChunkSender {
 using Sender = ChunkSender<slot_size, ms_tile_size_bytes, l_chunk_size_bytes, num_l_chunks, tiles_per_l_chunk>;
 
 void kernel_main() {
+    DPRINT << "WRITER kernel_main started\n";
     size_t arg_idx = 0;
 
     // R1 destination - intermediate tensor address on neighbor device
@@ -326,6 +327,7 @@ void kernel_main() {
     const uint32_t r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t r2_base_slot_idx = get_arg_val<uint32_t>(arg_idx++);
 
+    DPRINT << "WRITER args parsed\n";
     // Initialize sender with core coordinates
     Sender sender{current_core_x, current_core_y, fwd_core_x, fwd_core_y};
 
@@ -333,6 +335,7 @@ void kernel_main() {
     // ROUND 1: Send local input to R1 neighbor via forwarder
     // All local data is ready, send all packets immediately
     // ==========================================================================
+    DPRINT << "WRITER starting R1 send\n";
     sender.setup_round(
         {cb_local_l,
          cb_local_ms,
@@ -345,11 +348,13 @@ void kernel_main() {
          r1_base_slot_idx});
     sender.send_all();
     sender.finish_round();
+    DPRINT << "WRITER finished R1 send\n";
 
     // ==========================================================================
     // ROUND 2: Send R1 result to R2 neighbor via forwarder (STREAMING)
     // Overlap R2 fabric transfer with R1 compute by sending as data is produced
     // ==========================================================================
+    DPRINT << "WRITER starting R2 send\n";
     sender.setup_round(
         {cb_r1_result_l,
          cb_r1_result_ms,
@@ -362,6 +367,7 @@ void kernel_main() {
          r2_base_slot_idx});
     sender.send_streaming();
     sender.finish_round();
+    DPRINT << "WRITER finished R2 send\n";
 
     noc_async_full_barrier();
 
