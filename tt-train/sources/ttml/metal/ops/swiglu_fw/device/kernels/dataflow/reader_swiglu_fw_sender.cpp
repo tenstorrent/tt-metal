@@ -64,12 +64,12 @@ void kernel_main() {
     const auto w2_address_generator = TensorAccessor(w2_args, w2_address, tile_bytes);
     const auto w3_address_generator = TensorAccessor(w3_args, w3_address, tile_bytes);
 
-    for (uint32_t r = 0; r < max_rows_for_sync; ++r) {
+    for (uint32_t r = 0U; r < max_rows_for_sync; ++r) {
         // ---- Phase A: Mcast W1/W3 for all p_blocks × k_blocks ----
-        for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
+        for (uint32_t p_block_start = 0U; p_block_start < Wt; p_block_start += block_size) {
             const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
 
-            for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+            for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
                 const uint32_t weight_tile_start = p_block_start * hidden_Wt + k_block_start;
@@ -103,9 +103,9 @@ void kernel_main() {
         // ---- Phase B: Idle (SiLU is compute-only) ----
 
         // ---- Phase C: Mcast W2 for all c_blocks × k_blocks ----
-        for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
+        for (uint32_t c_block_start = 0U; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
-            for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+            for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 

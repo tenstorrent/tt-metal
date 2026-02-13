@@ -387,7 +387,7 @@ struct McastLoopbackConfig {
  */
 inline void mcast_sender_wait_for_receivers(volatile tt_l1_ptr uint32_t* sender_sem_ptr, const uint32_t num_receivers) {
     noc_semaphore_wait(sender_sem_ptr, num_receivers);
-    noc_semaphore_set(sender_sem_ptr, 0);
+    noc_semaphore_set(sender_sem_ptr, 0U);
 }
 
 /**
@@ -398,10 +398,10 @@ inline void mcast_sender_wait_for_receivers(volatile tt_l1_ptr uint32_t* sender_
  */
 inline void mcast_receiver_wait_for_data(
     volatile tt_l1_ptr uint32_t* receiver_sem_ptr, const uint64_t sender_sem_noc_addr) {
-    noc_semaphore_set(receiver_sem_ptr, 0);
-    noc_semaphore_inc(sender_sem_noc_addr, 1);
+    noc_semaphore_set(receiver_sem_ptr, 0U);
+    noc_semaphore_inc(sender_sem_noc_addr, 1U);
     noc_async_atomic_barrier();
-    noc_semaphore_wait(receiver_sem_ptr, 1);
+    noc_semaphore_wait(receiver_sem_ptr, 1U);
 }
 
 /**
@@ -477,7 +477,7 @@ inline void mcast_sender_signal_receivers_loopback(
     const uint32_t noc_end_x,
     const uint32_t noc_end_y,
     const uint32_t num_dests_including_self) {
-    noc_semaphore_set(receiver_sem_ptr, 1);
+    noc_semaphore_set(receiver_sem_ptr, 1U);
     const uint64_t receiver_sem_noc_addr =
         get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_sem_addr);
     // Use loopback multicast for semaphore as well
@@ -531,9 +531,9 @@ inline void mcast_sender_read_batched_rows_and_send_loopback(
     const uint32_t noc_end_y,
     const uint32_t num_receivers_excluding_self) {
     const uint32_t total_tiles = tiles_per_row * num_rows;
-    const uint32_t num_dests_including_self = num_receivers_excluding_self + 1;
+    const uint32_t num_dests_including_self = num_receivers_excluding_self + 1U;
 
-    if (num_receivers_excluding_self > 0) {
+    if (num_receivers_excluding_self > 0U) {
         // Multicast path with loopback (sender is also receiver)
         // CRITICAL: Wait for receivers BEFORE reserving CB to avoid deadlock.
         // If we reserve first and CB is full (compute slow), sender blocks.
@@ -547,11 +547,11 @@ inline void mcast_sender_read_batched_rows_and_send_loopback(
 
         // 3. Read all rows from DRAM into CB with padding
         uint32_t l1_addr = l1_write_addr;
-        for (uint32_t row = 0; row < num_rows; ++row) {
-            const uint32_t actual_row = (row < valid_num_rows) ? row : (valid_num_rows - 1);
+        for (uint32_t row = 0U; row < num_rows; ++row) {
+            const uint32_t actual_row = (row < valid_num_rows) ? row : (valid_num_rows - 1U);
             const uint32_t row_tile_start = first_row_start + actual_row * row_stride;
-            for (uint32_t t = 0; t < tiles_per_row; ++t) {
-                const uint32_t actual_t = (t < valid_tiles_per_row) ? t : (valid_tiles_per_row - 1);
+            for (uint32_t t = 0U; t < tiles_per_row; ++t) {
+                const uint32_t actual_t = (t < valid_tiles_per_row) ? t : (valid_tiles_per_row - 1U);
                 const uint64_t noc_addr = addr_gen.get_noc_addr(row_tile_start + actual_t);
                 noc_async_read(noc_addr, l1_addr, tile_bytes);
                 l1_addr += tile_bytes;
@@ -585,11 +585,11 @@ inline void mcast_sender_read_batched_rows_and_send_loopback(
         // Single-core path: just read tiles normally
         cb_reserve_back(cb_idx, total_tiles);
         uint32_t l1_addr = get_write_ptr(cb_idx);
-        for (uint32_t row = 0; row < num_rows; ++row) {
-            const uint32_t actual_row = (row < valid_num_rows) ? row : (valid_num_rows - 1);
+        for (uint32_t row = 0U; row < num_rows; ++row) {
+            const uint32_t actual_row = (row < valid_num_rows) ? row : (valid_num_rows - 1U);
             const uint32_t row_tile_start = first_row_start + actual_row * row_stride;
-            for (uint32_t t = 0; t < tiles_per_row; ++t) {
-                const uint32_t actual_t = (t < valid_tiles_per_row) ? t : (valid_tiles_per_row - 1);
+            for (uint32_t t = 0U; t < tiles_per_row; ++t) {
+                const uint32_t actual_t = (t < valid_tiles_per_row) ? t : (valid_tiles_per_row - 1U);
                 const uint64_t noc_addr = addr_gen.get_noc_addr(row_tile_start + actual_t);
                 noc_async_read(noc_addr, l1_addr, tile_bytes);
                 l1_addr += tile_bytes;

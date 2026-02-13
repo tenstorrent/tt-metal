@@ -71,21 +71,21 @@ inline void mul_XW_accumulate_l1(
         cb_w_idx,
         /*transpose=*/false,
         /*ct_dim=*/block_size,
-        /*rt_dim=*/1,
+        /*rt_dim=*/1U,
         /*kt_dim=*/p_block_size);
 
-    uint32_t in0_index = 0;
-    uint32_t in1_index = 0;
-    for (uint32_t p = 0; p < p_block_size; ++p) {
+    uint32_t in0_index = 0U;
+    uint32_t in1_index = 0U;
+    for (uint32_t p = 0U; p < p_block_size; ++p) {
         matmul_block(
             cb_x_idx,
             cb_w_idx,
             in0_index,
             in1_index,
-            /*dst_index=*/0,
+            /*dst_index=*/0U,
             /*transpose=*/false,
             /*ct_dim=*/block_size,
-            /*rt_dim=*/1,
+            /*rt_dim=*/1U,
             /*kt_dim=*/p_block_size);
         in0_index++;
         in1_index += block_size;
@@ -98,12 +98,12 @@ inline void mul_XW_accumulate_l1(
 
     // Pack to final CB at correct k_block offset using L1 accumulation
     pack_reconfig_data_format(cb_out_idx);
-    PACK((llk_pack_reconfig_l1_acc(first_p_block ? 0 : 1)));
-    for (uint32_t k = 0; k < block_size; ++k) {
+    PACK((llk_pack_reconfig_l1_acc(first_p_block ? 0U : 1U)));
+    for (uint32_t k = 0U; k < block_size; ++k) {
         pack_tile<true>(k, cb_out_idx, k_block_start + k);
     }
     // Disable L1 acc after packing (will be re-enabled on next call if needed)
-    PACK((llk_pack_reconfig_l1_acc(0)));
+    PACK((llk_pack_reconfig_l1_acc(0U)));
 
     tile_regs_release();
 }
@@ -117,13 +117,13 @@ inline void compute_XW1_XW3_for_r() {
     cb_reserve_back(cb_xw1_idx, hidden_Wt_rounded_up);
     cb_reserve_back(cb_xw3_idx, hidden_Wt_rounded_up);
 
-    for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
+    for (uint32_t p_block_start = 0U; p_block_start < Wt; p_block_start += block_size) {
         const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
-        const bool first_p_block = (p_block_start == 0);
+        const bool first_p_block = (p_block_start == 0U);
 
         cb_wait_front(cb_input_idx, block_size);
 
-        for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+        for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
             mul_XW_accumulate_l1(cb_input_idx, cb_w1_idx, cb_xw1_idx, k_block_start, p_block_size, first_p_block);
 
             mul_XW_accumulate_l1(cb_input_idx, cb_w3_idx, cb_xw3_idx, k_block_start, p_block_size, first_p_block);
@@ -154,22 +154,22 @@ inline void compute_silu_tile(uint32_t tile_offset, uint32_t base_reg) {
     copy_tile_init(cb_xw1_idx);
     copy_tile(cb_xw1_idx, tile_offset, base_reg);  // base = XW1
     copy_tile_init(cb_xw3_idx);
-    copy_tile(cb_xw3_idx, tile_offset, base_reg + 1);  // base+1 = XW3
+    copy_tile(cb_xw3_idx, tile_offset, base_reg + 1U);  // base+1 = XW3
 
     copy_dest_values_init();
-    copy_dest_values(base_reg, base_reg + 2);  // base+2 = copy of XW1
+    copy_dest_values(base_reg, base_reg + 2U);  // base+2 = copy of XW1
     sigmoid_tile_init();
-    sigmoid_tile(base_reg + 2);  // base+2 = sigmoid(XW1)
+    sigmoid_tile(base_reg + 2U);  // base+2 = sigmoid(XW1)
     mul_binary_tile_init();
-    mul_binary_tile(base_reg, base_reg + 2, base_reg);  // base = XW1 * sigmoid = SiLU
-    mul_binary_tile(base_reg, base_reg + 1, base_reg);  // base = SiLU * XW3 = M
+    mul_binary_tile(base_reg, base_reg + 2U, base_reg);  // base = XW1 * sigmoid = SiLU
+    mul_binary_tile(base_reg, base_reg + 1U, base_reg);  // base = SiLU * XW3 = M
 }
 
 inline void compute_M_for_r() {
     cb_wait_front(cb_xw1_idx, hidden_Wt_rounded_up);
     cb_wait_front(cb_xw3_idx, hidden_Wt_rounded_up);
 
-    for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+    for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
         const uint32_t k_block_size =
             (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
@@ -177,31 +177,31 @@ inline void compute_M_for_r() {
         cb_reserve_back(cb_m_idx, block_size);
 
         // Process valid tiles in pairs (2 tiles per acquire/commit)
-        uint32_t k = 0;
-        for (; k + 1 < k_block_size; k += 2) {
+        uint32_t k = 0U;
+        for (; k + 1U < k_block_size; k += 2U) {
             tile_regs_acquire();
 
             // Tile 0: uses REGs 0, 1, 2. Result in REG 0.
-            compute_silu_tile(k_block_start + k, 0);
+            compute_silu_tile(k_block_start + k, 0U);
             // Tile 1: reuses REGs 1, 2 + REG 3. Result in REG 1.
-            compute_silu_tile(k_block_start + k + 1, 1);
+            compute_silu_tile(k_block_start + k + 1U, 1U);
 
             tile_regs_commit();
             tile_regs_wait();
             pack_reconfig_data_format(cb_m_idx);
-            pack_tile(0, cb_m_idx);  // M tile 0
-            pack_tile(1, cb_m_idx);  // M tile 1
+            pack_tile(0U, cb_m_idx);  // M tile 0
+            pack_tile(1U, cb_m_idx);  // M tile 1
             tile_regs_release();
         }
 
         // Handle odd remaining tile (if k_block_size is odd)
         if (k < k_block_size) {
             tile_regs_acquire();
-            compute_silu_tile(k_block_start + k, 0);
+            compute_silu_tile(k_block_start + k, 0U);
             tile_regs_commit();
             tile_regs_wait();
             pack_reconfig_data_format(cb_m_idx);
-            pack_tile(0, cb_m_idx);
+            pack_tile(0U, cb_m_idx);
             tile_regs_release();
         }
 
@@ -211,8 +211,8 @@ inline void compute_M_for_r() {
             tile_regs_commit();
             tile_regs_wait();
             pack_reconfig_data_format(cb_m_idx);
-            for (uint32_t pad = 0; pad < block_size - k_block_size; ++pad) {
-                pack_tile(0, cb_m_idx);
+            for (uint32_t pad = 0U; pad < block_size - k_block_size; ++pad) {
+                pack_tile(0U, cb_m_idx);
             }
             tile_regs_release();
         }
@@ -243,20 +243,20 @@ inline void mul_MW2_accumulate_Y_l1(
         cb_w2_idx,
         /*transpose=*/false,
         /*ct_dim=*/block_size,
-        /*rt_dim=*/1,
+        /*rt_dim=*/1U,
         /*kt_dim=*/k_block_size);
 
     // For each inner dim step k: M[k] × W2[k, c=0..block_size-1]
-    for (uint32_t k = 0; k < k_block_size; ++k) {
+    for (uint32_t k = 0U; k < k_block_size; ++k) {
         matmul_block(
             cb_m_idx,
             cb_w2_idx,
             /*in0_index=*/k_block_start + k,
             /*in1_index=*/k * block_size,  // Row k in W2 CB (row-major)
-            /*dst_index=*/0,
+            /*dst_index=*/0U,
             /*transpose=*/false,
             /*ct_dim=*/block_size,
-            /*rt_dim=*/1,
+            /*rt_dim=*/1U,
             /*kt_dim=*/k_block_size);
     }
 
@@ -267,11 +267,11 @@ inline void mul_MW2_accumulate_Y_l1(
 
     // Pack to cb_y using L1 accumulation
     pack_reconfig_data_format(cb_y_idx);
-    PACK((llk_pack_reconfig_l1_acc(first_k_block ? 0 : 1)));
-    for (uint32_t c = 0; c < block_size; ++c) {
+    PACK((llk_pack_reconfig_l1_acc(first_k_block ? 0U : 1U)));
+    for (uint32_t c = 0U; c < block_size; ++c) {
         pack_tile<true>(c, cb_y_idx, c);
     }
-    PACK((llk_pack_reconfig_l1_acc(0)));
+    PACK((llk_pack_reconfig_l1_acc(0U)));
 
     tile_regs_release();
 }
@@ -283,7 +283,7 @@ void kernel_main() {
     init_sfpu(cb_input_idx, cb_y_idx);
     binary_op_init_common(cb_input_idx, cb_w1_idx, cb_y_idx);
 
-    for (uint32_t r = 0; r < max_rows_for_sync; ++r) {
+    for (uint32_t r = 0U; r < max_rows_for_sync; ++r) {
         const bool is_padding_row = (r >= num_rows_per_core);
 
         // ---- Phase A: Accumulate XW1[r,:] and XW3[r,:] with L1 acc ----
@@ -294,10 +294,10 @@ void kernel_main() {
         cb_wait_front(cb_m_idx, hidden_Wt_rounded_up);
 
         // ---- Phase C: Compute Y[r,:] = M @ W2 with L1 acc ----
-        for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
+        for (uint32_t c_block_start = 0U; c_block_start < Wt; c_block_start += block_size) {
             if (is_padding_row) {
                 // Consume W2 to stay in sync
-                for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+                for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
                     cb_wait_front(cb_w2_idx, tiles_per_batch);
                     cb_pop_front(cb_w2_idx, tiles_per_batch);
                 }
@@ -305,10 +305,10 @@ void kernel_main() {
                 // Reserve cb_y once per c_block, accumulate across k_blocks
                 cb_reserve_back(cb_y_idx, block_size);
 
-                for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+                for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
                     const uint32_t k_block_size =
                         (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
-                    const bool first_k_block = (k_block_start == 0);
+                    const bool first_k_block = (k_block_start == 0U);
 
                     mul_MW2_accumulate_Y_l1(k_block_start, k_block_size, first_k_block);
                 }
