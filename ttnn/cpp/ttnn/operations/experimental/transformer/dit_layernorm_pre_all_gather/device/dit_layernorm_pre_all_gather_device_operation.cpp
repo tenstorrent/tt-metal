@@ -20,24 +20,23 @@ PreAllGatherDeviceOperation::program_factory_t PreAllGatherDeviceOperation::sele
 
 void PreAllGatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto& tensor = tensor_args;
+    const auto& input = tensor_args.input;
 
-    TT_FATAL(!tensor.is_sharded(), "DIT layernorm pre-all-gather does not support sharded inputs.");
-    TT_FATAL(tensor.layout() == Layout::TILE, "Only tilized inputs supported.");
+    TT_FATAL(!input.is_sharded(), "DIT layernorm pre-all-gather does not support sharded inputs.");
+    TT_FATAL(input.layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(
-        tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Only interleaved inputs supported.");
+        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Only interleaved inputs supported.");
     TT_FATAL(
-        tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
-            tensor.dtype() == DataType::FLOAT32,
+        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||
+            input.dtype() == DataType::FLOAT32,
         "Input data format not supported.");
-    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands must be on device.");
-    TT_FATAL(tensor.buffer() != nullptr, "Operands must be allocated on device.");
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands must be on device.");
+    TT_FATAL(input.buffer() != nullptr, "Operands must be allocated on device.");
 }
 
 PreAllGatherDeviceOperation::spec_return_value_t PreAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args;
+    const auto& input_tensor = tensor_args.input;
 
     auto output_shape = input_tensor.logical_shape();
     output_shape[3] = 2 * TILE_WIDTH;  // two tile columns: sum(x) and sum(x^2)
@@ -48,7 +47,7 @@ PreAllGatherDeviceOperation::spec_return_value_t PreAllGatherDeviceOperation::co
 
 PreAllGatherDeviceOperation::tensor_return_value_t PreAllGatherDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 }  // namespace ttnn::experimental::prim
@@ -57,6 +56,7 @@ namespace ttnn::prim {
 
 Tensor dit_layernorm_pre_all_gather(
     const Tensor& input,
+    const Tensor& recip_tensor,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const tt::tt_metal::MemoryConfig& memory_config) {
@@ -67,7 +67,10 @@ Tensor dit_layernorm_pre_all_gather(
             .compute_kernel_config = compute_kernel_config,
             .memory_config = memory_config,
         },
-        input);
+        OperationType::tensor_args_t{
+            .input = input,
+            .recip_tensor = recip_tensor,
+        });
 }
 
 }  // namespace ttnn::prim
