@@ -82,6 +82,5 @@ inline void llk_math_fast_tilize_block_(
     LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);
-
     _llk_math_fast_tilize_block_(dst_index, unpack_dst_format[operand_id], unit_dim, num_units);
 }

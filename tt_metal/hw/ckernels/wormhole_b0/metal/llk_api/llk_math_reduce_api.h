@@ -36,7 +36,6 @@ inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t op
 
     const std::uint32_t operand_id = get_operand_id(operandA);  // both operands must have same number of faces
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-
     _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, enforce_fp32_accumulation>(
         dst_index, false, num_faces);
 }
