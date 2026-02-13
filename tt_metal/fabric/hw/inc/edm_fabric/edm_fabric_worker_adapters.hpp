@@ -91,7 +91,6 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_y = conn->edm_noc_y;
             edm_buffer_base_addr = conn->edm_buffer_base_addr;
             num_buffers_per_channel = conn->num_buffers_per_channel;
-            edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
             edm_connection_handshake_l1_addr = get_stream_scratch_register_address<0>();
             edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
             buffer_size_bytes = conn->buffer_size_bytes;

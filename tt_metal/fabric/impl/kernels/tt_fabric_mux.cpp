@@ -48,9 +48,9 @@ namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, typename ConnectionTypePtr>
 void wait_for_static_connection_to_ready(
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionTypePtr>& worker_interface) {
     while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
         invalidate_l1_cache();
     }
@@ -58,10 +58,10 @@ void wait_for_static_connection_to_ready(
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, typename ConnectionTypePtr>
 void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionTypePtr>* worker_interface_ptr,
     bool& channel_connection_established,
     uint8_t channel_id,
     size_t buffer_size_bytes,
@@ -79,10 +79,10 @@ void setup_channel(
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
     connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
 
-    new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
+    new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionTypePtr>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
+        reinterpret_cast<ConnectionTypePtr>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
         tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
     sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
@@ -91,10 +91,10 @@ void setup_channel(
     channel_connection_established = false;
 }
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, typename ConnectionTypePtr>
 void forward_data(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionTypePtr>& worker_interface,
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
@@ -153,7 +153,7 @@ void kernel_main() {
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channels;
     std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_l1_ptr uint32_t*>,
         NUM_FULL_SIZE_CHANNELS>
         full_size_channel_worker_interfaces;
     std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
@@ -161,7 +161,7 @@ void kernel_main() {
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
         header_only_channels;
     std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL, volatile tt_l1_ptr uint32_t*>,
         NUM_HEADER_ONLY_CHANNELS>
         header_only_channel_worker_interfaces;
     std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
@@ -176,6 +176,31 @@ void kernel_main() {
     size_t connection_handshake_address = connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
+    // this approach stalls
+/*
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_reg_ptr uint32_t*>
+        full_size_channel_worker_interface_zero;
+
+    union {
+        uint32_t addr;
+        size_t uladdr;
+    } tmp;
+    tmp.addr = get_stream_scratch_register_address<0>();
+
+    setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
+        &full_size_channels[0],
+        &full_size_channel_worker_interface_zero,
+        full_size_channel_connection_established[0],
+        0,
+        BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
+        channel_base_address,
+        connection_info_address,
+        tmp.uladdr,
+        sender_flow_control_address,
+        StreamId{channel_stream_ids[0]});
+
+    connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
+*/
     for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
             &full_size_channels[i],
@@ -243,6 +268,16 @@ void kernel_main() {
 
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
+                // this approach stalls
+/*
+                forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
+                    full_size_channels[0],
+                    full_size_channel_worker_interface_zero,
+                    fabric_connection,
+                    full_size_channel_connection_established[0],
+                    StreamId{channel_stream_ids[0]},
+                    0);
+*/
                 for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
                     forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
                         full_size_channels[channel_id],
@@ -255,7 +290,7 @@ void kernel_main() {
             }
 
             for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
+                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL, volatile tt_l1_ptr uint32_t*>(
                     header_only_channels[channel_id],
                     header_only_channel_worker_interfaces[channel_id],
                     fabric_connection,
