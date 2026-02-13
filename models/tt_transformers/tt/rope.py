@@ -394,7 +394,6 @@ class RotarySetup(LightweightModule):
     ) -> None:
         super().__init__()
         self.use_qk_fused = use_qk_fused
-        self.model_name = model_name
         self.original_batch_size = batch_size
 
         # NOTE: If qk fused ops (rotary embedding + paged cache update) are used
