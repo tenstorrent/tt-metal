@@ -502,7 +502,7 @@ class Generator(WarmupForwardMixin):
 
         return tt_out_trace
 
-    def decode_forward(
+    def decode_forward_text(
         self,
         tokens,
         start_pos,
