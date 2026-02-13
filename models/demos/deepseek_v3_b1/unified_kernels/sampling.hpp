@@ -40,7 +40,7 @@ struct Sampling {
         uint32_t Stage2LocalSlotOffset,
         uint32_t MeshLocalSendSlotOffset,
         uint32_t SenderIdx>
-    struct CTArgs {
+    struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t num_senders = NumSenders;
@@ -64,7 +64,13 @@ struct Sampling {
         static constexpr uint32_t sender_idx = SenderIdx;
     };
 
-    struct Args {
+    template <uint32_t WinnerPageBytes, uint32_t LocalReadySemaphoreId>
+    struct WriterCTArgs {
+        static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
+        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+    };
+
+    struct ReaderArgs {
         uint32_t scores_addr;
         uint32_t indices_addr;
         uint32_t output_addr;
@@ -75,6 +81,16 @@ struct Sampling {
         uint32_t global_stage2_sem_addr;
         uint32_t gather_addr;
     };
+
+    struct WriterArgs {
+        uint32_t final_noc_x;
+        uint32_t final_noc_y;
+        uint32_t scratch_addr;
+    };
+
+    struct ComputeArgs {};
+
+    using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
 
 #if defined(COMPILE_FOR_BRISC)
     struct BriscMeshSendMetadata {
@@ -89,7 +105,7 @@ struct Sampling {
     template <typename CTArgs, bool IsActiveCore, bool IsFinalCore, bool IsMeshSenderCore>
     class Op {
     public:
-        void operator()(const Args& args) { impl(args); }
+        void operator()(const RTArgs& args) { impl(args); }
 
     private:
 #if defined(COMPILE_FOR_NCRISC)
@@ -236,7 +252,7 @@ struct Sampling {
         }
 #endif
 
-        void impl(const Args& args) {
+        void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             const uint32_t slot_offset = CTArgs::sender_idx * CTArgs::winner_page_bytes;
             const uint32_t gather_addr = args.gather_addr;

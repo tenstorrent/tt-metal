@@ -209,12 +209,16 @@ class SamplingOp:
             ("sampling_mesh_send_slot_offset", 0),
             ("sampling_mesh_local_send_slot_offset", 0),
         ]
+        brisc_named_compile_time_args = [
+            ("sampling_winner_page_bytes", winner_page_bytes),
+            ("sampling_local_ready_semaphore_id", 1),
+        ]
 
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
             core_ranges=all_cores,
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
-            brisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            brisc_named_compile_time_args=brisc_named_compile_time_args,
             ncrisc_common_runtime_args=[
                 int(scores_tensor.buffer_address()),
                 int(indices_tensor.buffer_address()),
@@ -226,13 +230,8 @@ class SamplingOp:
                 0,
             ],
             brisc_common_runtime_args=[
-                int(scores_tensor.buffer_address()),
-                int(indices_tensor.buffer_address()),
-                int(output_index_tensor.buffer_address()),
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).x),
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).y),
-                0,
-                0,
                 0,
             ],
             unified_compile_time_core_descriptors=[
@@ -491,6 +490,10 @@ class SamplingOp:
                         ),
                     ),
                 ]
+                brisc_named_compile_time_args = [
+                    ("sampling_winner_page_bytes", winner_page_bytes),
+                    ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
+                ]
 
                 # Mesh sender cores get sender metadata before fabric route args.
                 per_core_brisc_runtime_args = []
@@ -519,7 +522,7 @@ class SamplingOp:
                     kernel_source="models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
                     core_ranges=all_cores,
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
-                    brisc_named_compile_time_args=ncrisc_named_compile_time_args,
+                    brisc_named_compile_time_args=brisc_named_compile_time_args,
                     ncrisc_common_runtime_args=[
                         int(scores_tensor_device.buffer_address()),
                         int(indices_tensor_device.buffer_address()),
@@ -531,14 +534,9 @@ class SamplingOp:
                         global_stage2_sem_addr,
                     ],
                     brisc_common_runtime_args=[
-                        int(scores_tensor_device.buffer_address()),
-                        int(indices_tensor_device.buffer_address()),
-                        int(output_tensor_device.buffer_address()),
                         int(scores_tensor_device.device().worker_core_from_logical_core(final_core_coord).x),
                         int(scores_tensor_device.device().worker_core_from_logical_core(final_core_coord).y),
                         int(scratch_tensor_device.buffer_address()),
-                        global_sem_addr,
-                        global_stage2_sem_addr,
                     ],
                     unified_compile_time_core_descriptors=[
                         UnifiedCompileTimeCoreDescriptor(

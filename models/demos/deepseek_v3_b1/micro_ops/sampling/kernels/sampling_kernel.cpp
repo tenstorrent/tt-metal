@@ -19,7 +19,7 @@ struct Core {
 
 void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
-    using SamplingCTArgs = deepseek_b1_ops::Sampling::CTArgs<
+    using SamplingReaderCTArgs = deepseek_b1_ops::Sampling::ReaderCTArgs<
         get_named_compile_time_arg_val("sampling_num_values"),
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
         get_named_compile_time_arg_val("sampling_num_senders"),
@@ -43,7 +43,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_sender_idx")>;
 
     constexpr uint32_t gather_cb = get_named_compile_time_arg_val("sampling_gather_cb");
-    deepseek_b1_ops::Sampling::Args args{
+    deepseek_b1_ops::Sampling::ReaderArgs args{
         get_common_arg_val<uint32_t>(0),
         get_common_arg_val<uint32_t>(1),
         get_common_arg_val<uint32_t>(2),
@@ -55,47 +55,24 @@ void kernel_main() {
         get_write_ptr(gather_cb),
     };
 
-    deepseek_b1_ops::Sampling::Op<SamplingCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
-        sampling_op;
+    deepseek_b1_ops::Sampling::
+        Op<SamplingReaderCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
+            sampling_op;
     sampling_op(args);
 #elif defined(COMPILE_FOR_BRISC)
-    using SamplingCTArgs = deepseek_b1_ops::Sampling::CTArgs<
-        0,
+    using SamplingWriterCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
-        0,
-        0,
-        0,
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0>;
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id")>;
 
-    deepseek_b1_ops::Sampling::Args args{
-        0,
-        0,
-        0,
-        get_common_arg_val<uint32_t>(3),
-        get_common_arg_val<uint32_t>(4),
-        get_common_arg_val<uint32_t>(5),
-        0,
-        0,
-        0,
+    deepseek_b1_ops::Sampling::WriterArgs args{
+        get_common_arg_val<uint32_t>(0),
+        get_common_arg_val<uint32_t>(1),
+        get_common_arg_val<uint32_t>(2),
     };
 
-    deepseek_b1_ops::Sampling::Op<SamplingCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
-        sampling_op;
+    deepseek_b1_ops::Sampling::
+        Op<SamplingWriterCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
+            sampling_op;
     sampling_op(args);
 #elif defined(COMPILE_FOR_TRISC)
     // No-op for k=1 argmax fast path.
