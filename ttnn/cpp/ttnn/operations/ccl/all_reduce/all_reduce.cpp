@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteAllReduce::invoke(
+ttnn::Tensor all_reduce(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,

@@ -11,19 +11,18 @@
 namespace ttnn {
 namespace operations::ccl {
 
-struct ExecuteBroadcast {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const MeshCoordinate& sender_coord,
-        uint32_t num_links = 1,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-        std::optional<uint32_t> cluster_axis = std::nullopt,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
-};
+ttnn::Tensor broadcast(
+    const ttnn::Tensor& input_tensor,
+    const MeshCoordinate& sender_coord,
+    uint32_t num_links = 1,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
 
 }  // namespace operations::ccl
 
-constexpr auto broadcast = ttnn::register_operation<"ttnn::broadcast", ttnn::operations::ccl::ExecuteBroadcast>();
+// Export to ttnn namespace
+using operations::ccl::broadcast;
 
 }  // namespace ttnn

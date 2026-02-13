@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_reduce.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -50,29 +50,18 @@ void bind_all_reduce(nb::module_& mod) {
             [1, 1, 32, 256]
         )doc";
 
-    using OperationType = decltype(ttnn::all_reduce);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"all_reduce">(
         mod,
-        ttnn::all_reduce,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
-                return self(input_tensor, cluster_axis, subdevice_id, memory_config, num_links, topology);
-            },
+        ttnn::overload_t(
+            &ttnn::all_reduce,
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = nb::none(),
-        });
+            nb::arg("topology") = nb::none()));
 }
 
 }  // namespace ttnn::operations::ccl

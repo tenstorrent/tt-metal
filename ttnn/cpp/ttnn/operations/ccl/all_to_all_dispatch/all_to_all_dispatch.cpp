@@ -14,7 +14,7 @@
 
 namespace ttnn::operations::ccl {
 
-std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
+std::array<ttnn::Tensor, 2> all_to_all_dispatch(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,

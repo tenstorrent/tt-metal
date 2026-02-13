@@ -12,24 +12,22 @@
 namespace ttnn {
 namespace operations::ccl {
 
-struct ExecuteAllToAllCombine {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& expert_mapping_tensor,
-        const ttnn::Tensor& expert_metadata_tensor,
-        bool locally_reduced = true,
-        std::optional<uint32_t> num_links = std::nullopt,
-        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<uint32_t>& axis = std::nullopt,
-        const std::optional<uint32_t>& output_shard_dim = std::nullopt,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
-};
+ttnn::Tensor all_to_all_combine(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& expert_mapping_tensor,
+    const ttnn::Tensor& expert_metadata_tensor,
+    bool locally_reduced = true,
+    std::optional<uint32_t> num_links = std::nullopt,
+    std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<uint32_t>& axis = std::nullopt,
+    const std::optional<uint32_t>& output_shard_dim = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace operations::ccl
 
-constexpr auto all_to_all_combine =
-    ttnn::register_operation<"ttnn::all_to_all_combine", ttnn::operations::ccl::ExecuteAllToAllCombine>();
+// Export to ttnn namespace
+using operations::ccl::all_to_all_combine;
 
 }  // namespace ttnn

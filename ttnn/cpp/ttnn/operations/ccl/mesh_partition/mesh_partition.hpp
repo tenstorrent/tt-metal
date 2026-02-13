@@ -12,18 +12,15 @@
 namespace ttnn {
 namespace operations::ccl {
 
-struct ExecuteMeshPartition {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        int32_t dim,
-        std::optional<uint32_t> cluster_axis,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
-};
+ttnn::Tensor mesh_partition(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace operations::ccl
 
-constexpr auto mesh_partition =
-    ttnn::register_operation<"ttnn::mesh_partition", ttnn::operations::ccl::ExecuteMeshPartition>();  // namespace
-                                                                                                      // ttnn
+// Export to ttnn namespace
+using operations::ccl::mesh_partition;
 
 }  // namespace ttnn

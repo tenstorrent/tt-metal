@@ -14,7 +14,7 @@
 
 namespace ttnn::operations::ccl {
 
-std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
+std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,

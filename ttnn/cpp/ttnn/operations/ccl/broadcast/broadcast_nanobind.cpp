@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/broadcast/broadcast.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -18,41 +18,8 @@
 
 namespace ttnn::operations::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_broadcast(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const MeshCoordinate& sender_coord,
-               std::optional<uint32_t> cluster_axis,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const uint32_t num_links,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, subdevice_id);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("sender_coord"),
-            nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear)});
-}
-
-}  // namespace
-
 void bind_broadcast(nb::module_& mod) {
-    bind_broadcast(
-        mod,
-        ttnn::broadcast,
+    const auto* doc =
         R"doc(
         Performs a broadcast operation from a sender device to all other mesh devices across a cluster axis.
 
@@ -96,7 +63,21 @@ void bind_broadcast(nb::module_& mod) {
                             mesh_mapper=ttnn.create_mesh_mapper(mesh_device,mesh_mapper_config))
             >>> output = ttnn.broadcast(ttnn_tensor, sender_coord)
 
-        )doc");
+        )doc";
+
+    ttnn::bind_function<"broadcast">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::broadcast,
+            nb::arg("input_tensor"),
+            nb::arg("sender_coord"),
+            nb::kw_only(),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("num_links") = 1,
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear)));
 }
 
 }  // namespace ttnn::operations::ccl

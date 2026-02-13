@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteReduceScatter::invoke(
+ttnn::Tensor reduce_scatter(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
