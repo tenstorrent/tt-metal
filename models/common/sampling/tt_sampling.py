@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import sys
 
 import torch
 from loguru import logger
@@ -10,6 +11,16 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utils import LogProbsCalculator
+
+
+def is_power_of_2(n):
+    return n > 0 and (n & (n - 1)) == 0
+
+
+def upper_power_of_2(n: int) -> int:
+    if n <= 1:
+        return 1
+    return 1 << (n - 1).bit_length()
 
 
 class TTSampling(LightweightModule):
@@ -371,6 +382,17 @@ class TTSampling(LightweightModule):
 
         else:
             # Perform local top-k on each device
+            # apply padding to the input tensor if needed
+            # if number is not power of 2, pad to upper power of 2
+            # pad only last dimension with float::min value to upper_power_of_2
+            if not is_power_of_2(x_bf16.shape[-1]):
+                padded_value = upper_power_of_2(x_bf16.shape[-1])
+                x_bf16 = ttnn.pad(
+                    x_bf16,
+                    [(0, 0), (0, 0), (0, 0), (0, padded_value - x_bf16.shape[-1])],
+                    value=-sys.float_info.max,
+                    sub_core_grids=self.sub_core_grids,
+                )
             topk_values, topk_indices = ttnn.topk(
                 x_bf16,
                 k=self.max_top_k,

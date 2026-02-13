@@ -705,7 +705,30 @@ class TtTransformer(LightweightModule):
                 enable_performance_mode=self.enable_prefetcher_performance_mode,
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
+            if self.args.is_qwen:
+                buffer_mem_cfg = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        self.args.sub_core_grids,
+                        [32, 1024],
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                    ),
+                )
+                # move ccl persistent buffers to DRAM to free up L1 memory
+                ttnn.to_memory_config(self.tt_ccl.persistent_buffers[0], buffer_mem_cfg)
 
+                buffer_mem_cfg = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        self.args.sub_core_grids,
+                        [32, 512],
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                    ),
+                )
+
+                ttnn.to_memory_config(self.tt_ccl.persistent_buffers[1], buffer_mem_cfg)
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
@@ -724,6 +747,11 @@ class TtTransformer(LightweightModule):
             )
         # ttnn.deallocate(h)
         if mode == "decode":
+            if self.args.is_qwen:
+                pass
+                # move ccl persistent buffers to DRAM to free up L1 memory
+                # ttnn.to_memory_config(self.tt_ccl.persistent_buffers[0], ttnn.DRAM_MEMORY_CONFIG)
+                # ttnn.to_memory_config(self.tt_ccl.persistent_buffers[1], ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(garbage_tensor)
 
             # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
@@ -743,8 +771,10 @@ class TtTransformer(LightweightModule):
             x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
         )
         # if mode is decode and Qwen model
-        if mode == "decode" and self.args.is_qwen:
-            ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)
+        # if mode == "decode" and self.args.is_qwen:
+        #     print("to_memory_config")
+        #     ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)
+
         return lm_head_output
 
     def __del__(self):
