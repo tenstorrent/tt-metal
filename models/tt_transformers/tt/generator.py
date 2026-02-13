@@ -319,7 +319,7 @@ class Generator(WarmupForwardMixin):
 
         # we need this here becuase of tt-metal tests
         if warmup_prefill:
-            self.warmup_model_prefill(kv_cache, enable_trace)
+            self.warmup_model_prefill(kv_cache, enable_trace, False, False)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
