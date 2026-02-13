@@ -147,6 +147,38 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
             } else {
                 TT_THROW("Unsupported sharding scheme");
             }
+        } else {
+            const auto& nd_spec = input_tensor_a.nd_shard_spec().value();
+            uint32_t input_shard_width = nd_spec.shard_shape[-1];
+            uint32_t input_shard_height = nd_spec.shard_shape[-2];
+            uint32_t tile_width = input_tensor_a.tensor_spec().tile().get_width();
+            uint32_t tile_height = input_tensor_a.tensor_spec().tile().get_height();
+            TT_FATAL(
+                input_shard_width % tile_width == 0,
+                "Input shard width {} must be a multiple of tile width",
+                input_shard_width);
+            TT_FATAL(
+                input_shard_height % tile_height == 0,
+                "Input shard height {} must be a multiple of tile height",
+                input_shard_height);
+            if (operation_attributes.output_mem_config.is_sharded()) {
+                uint32_t output_dtype_size = input_tensor_a.element_size();
+                uint32_t output_shard_width;
+                if (operation_attributes.output_mem_config.shard_spec().has_value()) {
+                    output_shard_width = operation_attributes.output_mem_config.shard_spec().value().shape[1];
+                } else {
+                    output_shard_width = operation_attributes.output_mem_config.nd_shard_spec().value().shard_shape[-1];
+                }
+                uint32_t output_row_size_bytes = output_shard_width * output_dtype_size;
+                const auto& output_buffer_type = operation_attributes.output_mem_config.buffer_type();
+                uint32_t alignment_requirement =
+                    input_tensor_a.device()->allocator()->get_alignment(output_buffer_type);
+                TT_FATAL(
+                    output_row_size_bytes % alignment_requirement == 0,
+                    "Output shard row size {} bytes must be aligned to {} bytes buffer alignment requirement",
+                    output_row_size_bytes,
+                    alignment_requirement);
+            }
         }
     } else {
         TT_FATAL(

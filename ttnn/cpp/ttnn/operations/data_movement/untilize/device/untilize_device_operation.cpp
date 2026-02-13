@@ -66,7 +66,7 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     // If the input is interleaved and an entire row of tiles can't fit in a CB at once
     if (!tensor.is_sharded() && num_tiles_per_row > max_tiles_per_cb) {
         // If the output is also interleaved and the tensor is only a single tile high, we can
-        // parellize the work column wise. Otherwise we have to resort to the single core implementation,
+        // parallelize the work column wise. Otherwise we have to resort to the single core implementation,
         // as the current default multi core implementation processes an entire row of tiles at once.
         if (!output_is_sharded && num_tiles_per_col == 1) {
             return 0;
@@ -79,22 +79,6 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-
-namespace {
-uint32_t element_size_in_bytes(tt::tt_metal::DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16: return sizeof(bfloat16);
-        case DataType::FLOAT32: return sizeof(float);
-        case DataType::INT32: return sizeof(int32_t);
-        case DataType::UINT32: return sizeof(uint32_t);
-        case DataType::UINT16: return sizeof(uint16_t);
-        case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return 1;
-        default: TT_THROW("Unsupported data type");
-    }
-}
-}  // namespace
 
 void UntilizeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -174,9 +158,8 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         } else {
             output_shard_width = operation_attributes.output_mem_config.nd_shard_spec().value().shard_shape[-1];
         }
-        const auto output_dtype =
-            input_tensor_a.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.dtype();
-        const uint32_t output_element_size_in_bytes = element_size_in_bytes(output_dtype);
+
+        uint32_t output_element_size_in_bytes = input_tensor_a.element_size();
         const uint32_t output_row_size_bytes = output_shard_width * output_element_size_in_bytes;
         const uint32_t alignment_requirement = input_tensor_a.device()->allocator()->get_alignment(output_buffer_type);
         TT_FATAL(
