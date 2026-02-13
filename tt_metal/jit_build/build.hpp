@@ -16,12 +16,6 @@
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt::jit_build::utils {
-
-class FileGroupRenamer;
-
-}  // namespace tt::jit_build::utils
-
 namespace tt::tt_metal {
 
 static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
@@ -119,6 +113,7 @@ protected:
 
     vector_cache_aligned<std::string> srcs_;
     vector_cache_aligned<std::string> objs_;
+    vector_cache_aligned<std::string> temp_objs_;
 
     std::string extra_link_objs_;
 
@@ -131,16 +126,8 @@ protected:
     std::string default_linker_opt_level_;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
-    size_t compile(
-        const std::string& out_dir,
-        const JitBuildSettings* settings,
-        jit_build::utils::FileGroupRenamer& renamer) const;
-    void compile_one(
-        const std::string& out_dir,
-        const JitBuildSettings* settings,
-        const std::string& src,
-        const std::string& obj,
-        const std::string& obj_temp_path) const;
+    size_t compile(const std::string& out_dir, const JitBuildSettings* settings) const;
+    void compile_one(const std::string& out_dir, const JitBuildSettings* settings, size_t src_index) const;
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
