@@ -168,27 +168,13 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
-    std::thread t1;
-    std::thread t2;
-    if (fixture->IsSlowDispatch()) {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
-        t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
-    } else {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        fixture->RunProgram(sender_mesh_device, sender_workload, true);
-        fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
-    }
+    sender_workload.add_program(device_range, std::move(sender_program));
+    receiver_workload.add_program(device_range, std::move(receiver_program));
+    fixture->RunProgram(sender_mesh_device, sender_workload, true);
+    fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
 
     fixture->FinishCommands(sender_mesh_device);
     fixture->FinishCommands(receiver_mesh_device);
-
-    if (fixture->IsSlowDispatch()) {
-        t1.join();
-        t2.join();
-    }
 
     auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         receiver_device->id(),
