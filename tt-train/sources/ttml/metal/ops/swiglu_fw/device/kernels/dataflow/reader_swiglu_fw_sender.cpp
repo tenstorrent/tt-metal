@@ -67,11 +67,10 @@ void kernel_main() {
     for (uint32_t r = 0U; r < max_rows_for_sync; ++r) {
         // ---- Phase A: Mcast W1/W3 for all p_blocks × k_blocks ----
         for (uint32_t p_block_start = 0U; p_block_start < Wt; p_block_start += block_size) {
-            const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
+            const uint32_t p_block_size = std::min(block_size, Wt - p_block_start);
 
             for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
-                const uint32_t k_block_size =
-                    (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+                const uint32_t k_block_size = std::min(block_size, hidden_Wt - k_block_start);
                 const uint32_t weight_tile_start = p_block_start * hidden_Wt + k_block_start;
 
                 mcast_sender_read_batched_rows_and_send_loopback(
@@ -104,10 +103,9 @@ void kernel_main() {
 
         // ---- Phase C: Mcast W2 for all c_blocks × k_blocks ----
         for (uint32_t c_block_start = 0U; c_block_start < Wt; c_block_start += block_size) {
-            const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
+            const uint32_t c_block_size = std::min(block_size, Wt - c_block_start);
             for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
-                const uint32_t k_block_size =
-                    (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+                const uint32_t k_block_size = std::min(block_size, hidden_Wt - k_block_start);
 
                 // W2 in row-major CB layout for matmul_block compatibility
                 const uint32_t w2_first_row_start = k_block_start * Wt + c_block_start;

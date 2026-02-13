@@ -11,11 +11,25 @@
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 
+/**
+ * Pack a block of num_tiles from regs 0..num_tiles-1 into an already-reserved CB. No reserve or push.
+ * Call after tile_regs_commit() and tile_regs_wait(); releases at the end.
+ */
+inline void pack_no_push_block(uint32_t cb_idx, uint32_t num_tiles) {
+    pack_reconfig_data_format(cb_idx);
+    for (uint32_t i = 0U; i < num_tiles; ++i) {
+        pack_tile(i, cb_idx);
+    }
+    tile_regs_release();
+}
+
+/**
+ * Pack one tile from reg to cb, reserve+wait+pack+push.
+ * NOTE: Call after tile_regs_commit(). The order of commit and wait does not matter when adjacent
+ * (they affect different threads). Commit releases the lock for math so pack can start; wait
+ * ensures math is done. Prefer commit first, then wait.
+ */
 inline void pack_and_push(uint32_t reg, uint32_t cb) {
-    // NOTE:
-    // The order of commit and wait does not matter when adjacent, as they affect different threads.
-    // Commit releases the lock for math, letting pack start, while wait ensures math is done.
-    // Prefer commit first, then wait, so this function should be called after tile_regs_commit().
     constexpr uint32_t onetile = 1U;
     cb_reserve_back(cb, onetile);
     tile_regs_wait();
@@ -25,19 +39,38 @@ inline void pack_and_push(uint32_t reg, uint32_t cb) {
     cb_push_back(cb, onetile);
 }
 
+/**
+ * Pack a block of n tiles from consecutive DEST registers (0..block_size-1), reserve+wait+pack+push.
+ * NOTE: Call after tile_regs_commit(). The order of commit and wait does not matter when adjacent
+ * (they affect different threads). Commit releases the lock for math so pack can start; wait
+ * ensures math is done. Prefer commit first, then wait.
+ */
 inline void pack_and_push_block(uint32_t cb_output, uint32_t block_size) {
-    // NOTE:
-    // Packs multiple tiles (block_size) from consecutive registers to output circular buffer.
-    // Should be called after tile_regs_commit() for proper synchronization.
     cb_reserve_back(cb_output, block_size);
     tile_regs_wait();
-    pack_reconfig_data_format(cb_output);
-    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        pack_tile(block_idx, cb_output);
-    }
-    tile_regs_release();
+    pack_no_push_block(cb_output, block_size);
     cb_push_back(cb_output, block_size);
-};
+}
+
+/**
+ * Pack a block of tiles from consecutive DEST registers to a CB using L1 accumulation.
+ * Does NOT push to CB; caller must cb_push_back after all blocks are accumulated.
+ * Call after tile_regs_commit() and tile_regs_wait(); releases tile regs at the end.
+ *
+ * @param cb_idx Output circular buffer
+ * @param first_block true for the first block (zero accumulator), false to accumulate into existing CB data
+ * @param num_tiles Number of tiles to pack (consecutive registers 0..num_tiles-1)
+ * @param dst_start_index First output tile index in the reserved CB region
+ */
+inline void pack_l1_acc_block(uint32_t cb_idx, bool first_block, uint32_t num_tiles, uint32_t dst_start_index) {
+    pack_reconfig_data_format(cb_idx);
+    pack_reconfig_l1_acc(first_block ? 0U : 1U);
+    for (uint32_t k = 0U; k < num_tiles; ++k) {
+        pack_tile<true>(k, cb_idx, dst_start_index + k);
+    }
+    pack_reconfig_l1_acc(0U);
+    tile_regs_release();
+}
 
 inline void zero_dst_reg(const uint32_t i) {
     constexpr float zero = 0.0f;

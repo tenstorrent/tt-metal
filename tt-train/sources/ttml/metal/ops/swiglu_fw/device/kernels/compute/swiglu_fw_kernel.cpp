@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 
 #include "api/compute/cb_api.h"
@@ -15,6 +16,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 // ----------------------------------------------------------------------
 // SwiGLU Forward Compute Kernel with Packer L1 Accumulation
@@ -96,16 +98,7 @@ inline void mul_XW_accumulate_l1(
     tile_regs_commit();
     tile_regs_wait();
 
-    // Pack to final CB at correct k_block offset using L1 accumulation
-    pack_reconfig_data_format(cb_out_idx);
-    PACK((llk_pack_reconfig_l1_acc(first_p_block ? 0U : 1U)));
-    for (uint32_t k = 0U; k < block_size; ++k) {
-        pack_tile<true>(k, cb_out_idx, k_block_start + k);
-    }
-    // Disable L1 acc after packing (will be re-enabled on next call if needed)
-    PACK((llk_pack_reconfig_l1_acc(0U)));
-
-    tile_regs_release();
+    pack_l1_acc_block(cb_out_idx, first_p_block, block_size, k_block_start);
 }
 
 // ============================================================================
@@ -118,7 +111,7 @@ inline void compute_XW1_XW3_for_r() {
     cb_reserve_back(cb_xw3_idx, hidden_Wt_rounded_up);
 
     for (uint32_t p_block_start = 0U; p_block_start < Wt; p_block_start += block_size) {
-        const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
+        const uint32_t p_block_size = std::min(block_size, Wt - p_block_start);
         const bool first_p_block = (p_block_start == 0U);
 
         cb_wait_front(cb_input_idx, block_size);
@@ -170,55 +163,30 @@ inline void compute_M_for_r() {
     cb_wait_front(cb_xw3_idx, hidden_Wt_rounded_up);
 
     for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
-        const uint32_t k_block_size =
-            (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+        const uint32_t k_block_size = std::min(block_size, hidden_Wt - k_block_start);
 
-        // Batch: reserve full block of M tiles upfront
-        cb_reserve_back(cb_m_idx, block_size);
-
-        // Process valid tiles in pairs (2 tiles per acquire/commit)
         uint32_t k = 0U;
         for (; k + 1U < k_block_size; k += 2U) {
             tile_regs_acquire();
-
-            // Tile 0: uses REGs 0, 1, 2. Result in REG 0.
             compute_silu_tile(k_block_start + k, 0U);
-            // Tile 1: reuses REGs 1, 2 + REG 3. Result in REG 1.
             compute_silu_tile(k_block_start + k + 1U, 1U);
-
             tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_m_idx);
-            pack_tile(0U, cb_m_idx);  // M tile 0
-            pack_tile(1U, cb_m_idx);  // M tile 1
-            tile_regs_release();
+            pack_and_push_block(cb_m_idx, 2U);
         }
 
-        // Handle odd remaining tile (if k_block_size is odd)
         if (k < k_block_size) {
             tile_regs_acquire();
             compute_silu_tile(k_block_start + k, 0U);
             tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_m_idx);
-            pack_tile(0U, cb_m_idx);
-            tile_regs_release();
+            pack_and_push_block(cb_m_idx, 1U);
         }
 
-        // Pad to block_size alignment (garbage tiles, never read by matmul)
+        // Pad to block_size: pack garbage from regs 0..pad_count-1 (never read by matmul)
         if (k_block_size < block_size) {
             tile_regs_acquire();
             tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_m_idx);
-            for (uint32_t pad = 0U; pad < block_size - k_block_size; ++pad) {
-                pack_tile(0U, cb_m_idx);
-            }
-            tile_regs_release();
+            pack_and_push_block(cb_m_idx, block_size - k_block_size);
         }
-
-        // Always push block_size tiles (block alignment invariant)
-        cb_push_back(cb_m_idx, block_size);
     }
 
     cb_pop_front(cb_xw1_idx, hidden_Wt_rounded_up);
@@ -265,15 +233,7 @@ inline void mul_MW2_accumulate_Y_l1(
     tile_regs_commit();
     tile_regs_wait();
 
-    // Pack to cb_y using L1 accumulation
-    pack_reconfig_data_format(cb_y_idx);
-    PACK((llk_pack_reconfig_l1_acc(first_k_block ? 0U : 1U)));
-    for (uint32_t c = 0U; c < block_size; ++c) {
-        pack_tile<true>(c, cb_y_idx, c);
-    }
-    PACK((llk_pack_reconfig_l1_acc(0U)));
-
-    tile_regs_release();
+    pack_l1_acc_block(cb_y_idx, first_k_block, block_size, 0U);
 }
 
 // ============================================================================
@@ -306,8 +266,7 @@ void kernel_main() {
                 cb_reserve_back(cb_y_idx, block_size);
 
                 for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
-                    const uint32_t k_block_size =
-                        (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+                    const uint32_t k_block_size = std::min(block_size, hidden_Wt - k_block_start);
                     const bool first_k_block = (k_block_start == 0U);
 
                     mul_MW2_accumulate_Y_l1(k_block_start, k_block_size, first_k_block);
