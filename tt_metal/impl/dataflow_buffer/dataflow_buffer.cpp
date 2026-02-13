@@ -151,6 +151,8 @@ uint32_t DataflowBufferImpl::serialized_size() const {
 }
 
 std::vector<uint8_t> DataflowBufferImpl::serialize() const {
+    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
+
     std::vector<uint8_t> data;
     data.reserve(serialized_size());
 
@@ -169,15 +171,16 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     }
     init.num_entries_per_txn_id = this->num_entries_per_txn_id;
     init.num_entries_per_txn_id_per_tc = this->num_entries_per_txn_id_per_tc;
-    init.remapper_consumer_ids_mask = this->remapper_consumer_ids_mask;
+    init.padding = 0;
 
     log_info(
         tt::LogMetal,
-        "Serializing DFB {} with {} producers and {} consumers. risc_mask: 0x{:x}",
+        "Serializing DFB {} with {} producers and {} consumers. risc_mask: 0x{:x} use_remapper: {}",
         this->id,
         this->config.num_producers,
         this->config.num_consumers,
-        this->risc_mask);
+        this->risc_mask,
+        this->use_remapper);
 
     log_info(tt::LogMetal, "Entry size: {}", this->entry_size);
     log_info(tt::LogMetal, "Stride size: {}", this->stride_size);
@@ -195,7 +198,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
 
     // Write one dfb_initializer_per_risc_t per risc
     for (const auto& rc : risc_configs) {
-        log_info(tt::LogMetal, "New risc config");
+        log_info(tt::LogMetal, "New risc config (risc_id={}, is_producer={})", rc.risc_id, rc.is_producer);
         ::experimental::dfb_initializer_per_risc_t per_risc = {};
 
         // Copy per-risc arrays
@@ -210,15 +213,22 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         per_risc.num_tcs_to_rr = rc.config.num_tcs_to_rr;
         log_info(tt::LogMetal, "Num tcs to rr: {}", per_risc.num_tcs_to_rr);
         per_risc.flags.remapper_pair_index = static_cast<uint8_t>(rc.config.remapper_pair_index) & 0x3F;
-        per_risc.flags.remapper_en =
-            this->config.cap ==
-            ::experimental::AccessPattern::BLOCKED;  // TODO: update this when there is 1 consumer to not use remapper
-                                                     // and en when there are multiple dfbs on a core where any use
-                                                     // remapper
+        per_risc.flags.remapper_en = this->use_remapper;
         per_risc.flags.should_init_tc = rc.config.should_init_tc;
         per_risc.consumer_tcs = rc.config.consumer_tcs;
-        // remapper_consumer_ids_mask is now in dfb_initializer_t (shared), not per_risc
+        // Per-producer remapper fields
+        per_risc.remapper_consumer_ids_mask = rc.config.remapper_consumer_ids_mask;
+        per_risc.producer_client_type = rc.config.producer_client_type;
         log_info(tt::LogMetal, "Should init tc: {}", rc.config.should_init_tc);
+        log_info(tt::LogMetal, "Remapper en: {}", this->use_remapper);
+        if (this->use_remapper && rc.is_producer) {
+            log_info(
+                tt::LogMetal,
+                "Producer remapper: pair_idx={}, clientL={}, consumer_ids_mask=0x{:02x}",
+                rc.config.remapper_pair_index,
+                rc.config.producer_client_type,
+                rc.config.remapper_consumer_ids_mask);
+        }
 
         const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
         data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
@@ -334,7 +344,6 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     dfb->config = config;
 
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
-
     dfb->entry_size = config.entry_size;
 
     log_info(
@@ -346,6 +355,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         config.num_consumers,
         config.consumer_risc_mask);
 
+    // Calculate capacity and stride_size based on access pattern
     uint32_t capacity;
     switch (config.cap) {
         case ::experimental::AccessPattern::STRIDED:
@@ -371,6 +381,74 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     dfb->capacity = capacity;
     log_info(tt::LogMetal, "Capacity: {}", capacity);
 
+    // Store the DFB - TC/remapper allocation will happen in finalize_dataflow_buffer_configs()
+    dfb->configs_finalized = false;
+
+    this->dataflow_buffers_.push_back(dfb);
+    this->dataflow_buffer_by_id_.insert({dfb->id, dfb});
+
+    for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                CoreCoord logical_core(x, y);
+                per_core_num_dfbs_[logical_core]++;
+            }
+        }
+    }
+
+    this->local_dataflow_buffer_allocation_needed_ = true;
+
+    return dfb->id;
+}
+
+// Finalize DFB configurations - allocate TCs and remapper indices
+// This must be called after all add_dataflow_buffer calls are complete to determine whether remapper needs to be
+// enabled on the core
+void ProgramImpl::finalize_dataflow_buffer_configs() {
+    if (this->dataflow_buffers_.empty()) {
+        return;
+    }
+
+    // Group DFBs by core
+    std::unordered_map<CoreCoord, std::vector<std::shared_ptr<DataflowBufferImpl>>> dfbs_by_core;
+    for (auto& dfb : this->dataflow_buffers_) {
+        if (dfb->configs_finalized) {
+            continue;
+        }
+        CoreCoord core = dfb->core_ranges.ranges()[0].start_coord;
+        dfbs_by_core[core].push_back(dfb);
+    }
+
+    // Process each core's DFBs together
+    for (auto& [core, core_dfbs] : dfbs_by_core) {
+        bool core_needs_remapper = false;
+        for (const auto& dfb : core_dfbs) {
+            if (dfb->config.cap == ::experimental::AccessPattern::BLOCKED) {
+                core_needs_remapper = true;
+                break;
+            }
+        }
+
+        log_info(
+            tt::LogMetal,
+            "Finalizing {} DFBs on core ({}, {}), core_needs_remapper={}",
+            core_dfbs.size(),
+            core.x,
+            core.y,
+            core_needs_remapper);
+
+        // Allocate TCs and remapper configs for all DFBs on this core
+        for (auto& dfb : core_dfbs) {
+            finalize_single_dfb_config(dfb, core, core_needs_remapper);
+        }
+    }
+}
+
+// Finalize a single DFB's TC and remapper configuration
+void ProgramImpl::finalize_single_dfb_config(
+    std::shared_ptr<DataflowBufferImpl>& dfb, const CoreCoord& core, bool use_remapper) {
+    const auto& config = dfb->config;
+
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
 
@@ -386,8 +464,8 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     // Determine tensix_id based on which RISC in the pair is Tensix
-    // Key constraint: Tensix RISCs can only access TCs from their own tensix_id
-    // DM RISCs can access any TC
+    // Without remapper,Tensix RISCs can only access TCs from their own tensix_id
+    // DM RISCs can access any of the 64 TC available to them
     auto get_tensix_id_for_pair =
         [&](uint8_t producer_risc_id, uint8_t consumer_risc_id, uint8_t pair_counter) -> uint8_t {
         if (producer_risc_id >= 8) {
@@ -405,36 +483,49 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     std::vector<std::vector<TileCounterGroup>> tc_groups;  // [producer_idx][tc_slot]
     tc_groups.resize(producer_risc_ids.size());
 
-    // For BLOCKED mode, pre-allocate clientTypes for each consumer
-    // Constraint: producer's tensix_id cannot equal any consumer's tensix_id
-    // Each consumer gets a unique clientType (id_R)
-    // clientTypes map to tensix_id: tensix_id = clientType % 4
+    // For remapper mode, pre-allocate clientTypes for each consumer
+    // Also allocate producer clientTypes (clientL)
     std::vector<uint8_t> consumer_client_types;
-    uint8_t consumer_ids_mask = 0;  // Bitmask of used clientTypes
-    if (config.cap == ::experimental::AccessPattern::BLOCKED) {
-        ClientTypeAllocator client_type_allocator;
-        // Producer's tensix_id = first producer's risc_id % 4
-        uint8_t producer_tensix_id = producer_risc_ids[0] % 4;
+    std::vector<uint8_t> producer_client_types;
+    ClientTypeAllocator client_type_allocator;
 
+    if (use_remapper) {
+        // First allocate producer clientTypes (clientL)
+        for (size_t producer_idx = 0; producer_idx < producer_risc_ids.size(); producer_idx++) {
+            uint8_t producer_risc_id = producer_risc_ids[producer_idx];
+            // Producer clientType: based on producer's risc_id
+            uint8_t producer_client_type;
+            if (producer_risc_id >= 8) {
+                // Tensix producer: use NEO clientType (4-7)
+                producer_client_type = 4 + (producer_risc_id - 8);
+            } else {
+                // DM producer: use DM clientType (0-3), based on risc_id % 4
+                producer_client_type = producer_risc_id % 4;
+            }
+            producer_client_types.push_back(producer_client_type);
+            log_info(
+                tt::LogMetal,
+                "Remapper: Producer[{}] (risc_id={}) assigned clientL={}",
+                producer_idx,
+                producer_risc_id,
+                producer_client_type);
+        }
+
+        // Then allocate consumer clientTypes (clientR) - must differ from producer's clientL
+        uint8_t producer_tensix_id = producer_risc_ids[0] % 4;
         for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
             uint8_t consumer_risc_id = consumer_risc_ids[consumer_idx];
             uint8_t client_type = client_type_allocator.allocate_for_consumer(producer_tensix_id, consumer_risc_id);
             consumer_client_types.push_back(client_type);
-            // Set bit for this clientType in the mask
-            consumer_ids_mask |= (1u << client_type);
 
             log_info(
                 tt::LogMetal,
-                "BLOCKED: Consumer[{}] (risc_id={}) assigned clientType={} (id_R={}, tensix_id={})",
+                "Remapper: Consumer[{}] (risc_id={}) assigned clientR={} (tensix_id={})",
                 consumer_idx,
                 consumer_risc_id,
                 client_type,
-                client_type,
                 ClientTypeAllocator::get_tensix_id(client_type));
         }
-        // Store mask at DFB level (shared across all RISCs)
-        dfb->remapper_consumer_ids_mask = consumer_ids_mask;
-        log_info(tt::LogMetal, "BLOCKED: remapper_consumer_ids_mask=0x{:02x} (bitmask)", consumer_ids_mask);
     }
 
     // For each producer, allocate TC groups (one per TC slot)
@@ -447,26 +538,37 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
             if (config.cap == ::experimental::AccessPattern::STRIDED) {
                 // Determine which consumer(s) this producer TC slot pairs with
-                // Strided pairing: producer N pairs with consumers N, N+num_producers, N+2*num_producers, etc.
                 uint8_t consumer_idx = (producer_idx + tc_slot * producer_risc_ids.size()) % consumer_risc_ids.size();
 
-                // Determine tensix_id based on which RISC is Tensix
                 uint8_t producer_risc_id = producer_risc_ids[producer_idx];
                 uint8_t consumer_risc_id = consumer_risc_ids[consumer_idx];
                 uint8_t tensix_id = get_tensix_id_for_pair(producer_risc_id, consumer_risc_id, pair_counter++);
 
                 group.producer_tc = tile_counter_allocator_.allocate(tensix_id);
-                group.consumer_tcs.push_back(group.producer_tc);  // Shared TC for strided
+
+                if (use_remapper) {
+                    // With remapper: allocate separate consumer TC
+                    uint8_t consumer_tensix_id =
+                        ClientTypeAllocator::get_tensix_id(consumer_client_types[consumer_idx]);
+                    ::experimental::PackedTileCounter consumer_tc =
+                        tile_counter_allocator_.allocate(consumer_tensix_id);
+                    group.consumer_tcs.push_back(consumer_tc);
+                } else {
+                    // Without remapper: shared TC
+                    group.consumer_tcs.push_back(group.producer_tc);
+                }
 
                 log_info(
                     tt::LogMetal,
-                    "Strided: Producer[{}] (risc_id={}) TC[{}] (tensix_id={}) pairs with Consumer[{}] (risc_id={})",
+                    "Strided: Producer[{}] (risc_id={}) TC[{}] (tensix_id={}) pairs with Consumer[{}] (risc_id={}) "
+                    "use_remapper={}",
                     producer_idx,
                     producer_risc_id,
                     tc_slot,
                     tensix_id,
                     consumer_idx,
-                    consumer_risc_id);
+                    consumer_risc_id,
+                    use_remapper);
             } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
                 // Producer TC: use producer's risc_id % 4 as tensix_id
                 uint8_t producer_tensix_id = producer_risc_ids[producer_idx] % 4;
@@ -474,7 +576,6 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                 group.producer_tc = tile_counter_allocator_.allocate(producer_tensix_id);
 
                 // Allocate separate consumer TCs for Remapper 1-to-many mapping
-                // Each consumer's tensix_id is derived from their pre-allocated clientType
                 for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
                     uint8_t consumer_tensix_id =
                         ClientTypeAllocator::get_tensix_id(consumer_client_types[consumer_idx]);
@@ -497,7 +598,6 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     // Create producer risc_configs and assign TCs from groups
-    CoreCoord core = dfb->core_ranges.ranges()[0].start_coord;
     for (size_t producer_idx = 0; producer_idx < producer_risc_ids.size(); producer_idx++) {
         uint8_t risc_id = producer_risc_ids[producer_idx];
 
@@ -526,14 +626,41 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         }
         risc_config.config.num_tcs_to_rr = num_producer_tcs;
 
-        if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+        if (use_remapper) {
             risc_config.config.remapper_pair_index = remapper_index_allocator_.allocate(core);
+            risc_config.config.producer_client_type = producer_client_types[producer_idx];
+
+            // Build consumer_tcs packed and consumer_ids_mask for this producer
             const TileCounterGroup& group = tc_groups[producer_idx][0];
             uint32_t packed = 0;
-            for (size_t i = 0; i < group.consumer_tcs.size() && i < ::experimental::MAX_NUM_TILE_COUNTERS_TO_RR; i++) {
-                packed |= (::experimental::get_counter_id(group.consumer_tcs[i]) & 0x1F) << (i * 5);
+            uint8_t consumer_ids_mask = 0;
+
+            if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+                // BLOCKED: 1-to-many, all consumers
+                for (size_t i = 0; i < group.consumer_tcs.size() && i < ::experimental::MAX_NUM_TILE_COUNTERS_TO_RR;
+                     i++) {
+                    packed |= (::experimental::get_counter_id(group.consumer_tcs[i]) & 0x1F) << (i * 5);
+                    consumer_ids_mask |= (1u << consumer_client_types[i]);
+                }
+            } else {
+                // STRIDED via remapper: 1-to-1 per tc_slot
+                for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
+                    uint8_t consumer_idx = (producer_idx + tc * producer_risc_ids.size()) % consumer_risc_ids.size();
+                    packed |= (::experimental::get_counter_id(tc_groups[producer_idx][tc].consumer_tcs[0]) & 0x1F)
+                              << (tc * 5);
+                    consumer_ids_mask |= (1u << consumer_client_types[consumer_idx]);
+                }
             }
             risc_config.config.consumer_tcs = packed;
+            risc_config.config.remapper_consumer_ids_mask = consumer_ids_mask;
+
+            log_info(
+                tt::LogMetal,
+                "Producer[{}] remapper: pair_idx={}, clientL={}, consumer_ids_mask=0x{:02x}",
+                producer_idx,
+                risc_config.config.remapper_pair_index,
+                risc_config.config.producer_client_type,
+                risc_config.config.remapper_consumer_ids_mask);
         }
 
         dfb->risc_configs.push_back(risc_config);
@@ -569,31 +696,29 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
         for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
             if (config.cap == ::experimental::AccessPattern::STRIDED) {
-                // Strided pairing inverse: find which producer pairs with this consumer
-                // Producer pairing: consumer_idx = (producer_idx + tc_slot * num_producers) % num_consumers
                 uint8_t producer_idx;
                 uint8_t producer_tc_slot;
 
                 if (producer_risc_ids.size() > consumer_risc_ids.size()) {
-                    // More producers than consumers: each consumer pairs with multiple producers
-                    // The t-th producer pairing with consumer C is: C + t * num_consumers
                     producer_idx = consumer_idx + tc * consumer_risc_ids.size();
                     producer_tc_slot = 0;
                 } else if (consumer_risc_ids.size() > producer_risc_ids.size()) {
-                    // More consumers than producers: each producer pairs with multiple consumers
                     producer_idx = consumer_idx % producer_risc_ids.size();
                     producer_tc_slot = consumer_idx / producer_risc_ids.size();
                 } else {
-                    // Equal: 1:1 mapping
                     producer_idx = consumer_idx;
                     producer_tc_slot = tc;
                 }
 
-                risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][producer_tc_slot].producer_tc;
+                if (use_remapper) {
+                    // With remapper: consumer uses its own TC
+                    risc_config.config.packed_tile_counter[tc] =
+                        tc_groups[producer_idx][producer_tc_slot].consumer_tcs[0];
+                } else {
+                    // Without remapper: shared TC with producer
+                    risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][producer_tc_slot].producer_tc;
+                }
             } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
-                // For blocked mode, each consumer has num_producers TCs, one per producer
-                // The tc-th TC on this consumer pairs with the tc-th producer
-                // Consumer uses its own allocated TC from consumer_tcs, not the producer's TC
                 uint8_t producer_idx = tc;
                 uint8_t producer_tc_slot = 0;
                 risc_config.config.packed_tile_counter[tc] =
@@ -613,23 +738,10 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         dfb->risc_configs.push_back(risc_config);
     }
 
-    log_info(tt::LogMetal, "DFB {} risc_mask: 0x{:x}", dfb->id, dfb->risc_mask);
-
-    this->dataflow_buffers_.push_back(dfb);
-    this->dataflow_buffer_by_id_.insert({dfb->id, dfb});
-
-    for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
-        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                CoreCoord logical_core(x, y);
-                per_core_num_dfbs_[logical_core]++;
-            }
-        }
-    }
-
-    this->local_dataflow_buffer_allocation_needed_ = true;
-
-    return dfb->id;
+    dfb->configs_finalized = true;
+    dfb->use_remapper = use_remapper;
+    log_info(
+        tt::LogMetal, "DFB {} finalized risc_mask: 0x{:x} use_remapper: {}", dfb->id, dfb->risc_mask, use_remapper);
 }
 
 void ProgramImpl::invalidate_dataflow_buffer_allocation() {

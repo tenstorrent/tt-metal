@@ -44,12 +44,12 @@ void kernel_main() {
         DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
         // for blocked consumer each consumer reads each tile .. user kernel shouldn't have to think about this (tensor
         // accessor will abstract)
-        noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id});
+        // noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id});
         // DPRINT << "pfw" << ENDL();
         dfb.pop_front(1);
         // DPRINT << "pfd" << ENDL();
     }
     DPRINT << "CBW" << ENDL();
-    noc.async_write_barrier();
+    // noc.async_write_barrier();
     DPRINT << "CBWD" << ENDL();
 }

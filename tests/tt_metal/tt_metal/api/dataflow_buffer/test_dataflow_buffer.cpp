@@ -231,7 +231,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4S) {
     run_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4S) {
+TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4S) {  // Mismatching (hangs with noc)
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }

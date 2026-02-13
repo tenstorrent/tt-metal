@@ -290,6 +290,10 @@ public:
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
 
+    // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
+    // core require remapper being enabled
+    void finalize_dataflow_buffer_configs();
+
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
@@ -384,6 +388,12 @@ private:
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
+
+    // Helper function for finalize_dataflow_buffer_configs
+    void finalize_single_dfb_config(
+        std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>& dfb,
+        const CoreCoord& core,
+        bool use_remapper);
 
     std::vector<Semaphore> semaphores_;
 
