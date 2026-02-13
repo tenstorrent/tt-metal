@@ -187,4 +187,27 @@ ProgramDescriptor BernoulliNewDeviceOperation::ProgramFactory::create_descriptor
     return desc;
 }
 
+// ---------------------------------------------------------------
+// Called by the framework AFTER patching buffer addresses on cache hit.
+// Only updates the random seed in the compute kernel's runtime args.
+// ---------------------------------------------------------------
+void BernoulliNewDeviceOperation::ProgramFactory::override_runtime_arguments(
+    Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& output) {
+    auto grid = output.device()->compute_with_storage_grid_size();
+    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+        split_work_to_cores(grid, units_to_divide);
+    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+
+    // Compute kernel is index 2 (reader=0, writer=1, compute=2 per create_descriptor).
+    constexpr uint32_t compute_kernel_handle = 2;
+    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
+        auto& runtime_args = GetRuntimeArgs(program, compute_kernel_handle, cores[i]);
+        runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+    }
+}
+
 }  // namespace ttnn::operations::bernoulli_new
