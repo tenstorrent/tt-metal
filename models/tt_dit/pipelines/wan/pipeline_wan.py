@@ -597,7 +597,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
-        num_inference_steps: int = 50,
+        num_inference_steps: int = 40,
         guidance_scale: float = 3.0,
         guidance_scale_2: Optional[float] = 4.0,
         num_videos_per_prompt: Optional[int] = 1,
