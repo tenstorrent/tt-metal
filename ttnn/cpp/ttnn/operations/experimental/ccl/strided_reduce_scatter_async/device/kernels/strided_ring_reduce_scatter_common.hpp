@@ -12,6 +12,10 @@
  */
 
 FORCE_INLINE uint32_t wrap_slice_idx(const int32_t slice_idx, const bool direction, const uint32_t ring_size) {
+    /**
+     * Wrap the slice index to the range [0, ring_size)
+     * based on the direction of the ring.
+     */
     if (direction) {
         return slice_idx < 0 ? slice_idx + ring_size : slice_idx;
     } else {
@@ -21,6 +25,11 @@ FORCE_INLINE uint32_t wrap_slice_idx(const int32_t slice_idx, const bool directi
 
 FORCE_INLINE uint32_t get_effective_chunk_width_in_tiles(
     const uint32_t chunk_idx, const uint32_t chunk_width_in_tiles, const uint32_t mm_N_block_wt) {
+    /**
+     * Get the effective width of the chunk in tiles,
+     * given that it may end with a partial row at
+     * the end of the N-block.
+     */
     const uint32_t start_col = chunk_idx * chunk_width_in_tiles;
     const uint32_t remaining_width = mm_N_block_wt - start_col;
 
@@ -32,21 +41,33 @@ FORCE_INLINE void get_next_tile_coordinates(
     uint32_t& chunk_col_in_tiles,
     uint32_t& mm_core_idx,
     uint32_t advance_by_tiles,
-    const uint32_t chunk_piece_size,
+    const uint32_t subchunk_size,
     const uint32_t chunk_width_in_tiles,
     const uint32_t mm_block_unit_ht) {
-    // Optimized to avoid modulo operations.
-    // Note: chunk_piece_size == mm_block_unit_ht * chunk_width_in_tiles
-
-    if (advance_by_tiles >= chunk_piece_size) [[unlikely]] {
-        uint32_t move_by_pieces = advance_by_tiles / chunk_piece_size;
-        advance_by_tiles -= move_by_pieces * chunk_piece_size;
+    /**
+     * Update the within-chunk-piece coordinates of a tile
+     * (row and column within a chunk piece and the corresponding core index)
+     * when moving by 'advance_by_tiles' tiles.
+     *
+     * First, check if 'advance_by_tiles' is at least as large as a full chunk piece
+     * and update the core index accordingly.
+     * Then, check if remaining 'advance_by_tiles' is at least as large as a full row
+     * and update the row index and core index accordingly.
+     * Finally, move the column index by the remaining number of tiles, and
+     * update the other coordinates if needed.
+     *
+     * Optimized to avoid modulo operations.
+     * Note: subchunk_size == mm_block_unit_ht * chunk_width_in_tiles
+     */
+    if (advance_by_tiles >= subchunk_size) [[unlikely]] {
+        const uint32_t move_by_pieces = advance_by_tiles / subchunk_size;
+        advance_by_tiles -= move_by_pieces * subchunk_size;
         mm_core_idx += move_by_pieces;
     }
 
     if (advance_by_tiles >= chunk_width_in_tiles) {
-        uint32_t move_by_rows = advance_by_tiles / chunk_width_in_tiles;
-        uint32_t new_row = tile_row_in_mm_M_block + move_by_rows;
+        const uint32_t move_by_rows = advance_by_tiles / chunk_width_in_tiles;
+        const uint32_t new_row = tile_row_in_mm_M_block + move_by_rows;
         advance_by_tiles -= move_by_rows * chunk_width_in_tiles;
 
         if (new_row >= mm_block_unit_ht) {
@@ -57,9 +78,7 @@ FORCE_INLINE void get_next_tile_coordinates(
         }
     }
 
-    // 3. Handle Remaining Columns
     uint32_t new_col = chunk_col_in_tiles + advance_by_tiles;
-
     if (new_col >= chunk_width_in_tiles) {
         tile_row_in_mm_M_block += 1;
         new_col -= chunk_width_in_tiles;
@@ -73,20 +92,23 @@ FORCE_INLINE void get_next_tile_coordinates(
 }
 
 FORCE_INLINE uint32_t how_many_tiles_to_read_formula(
-    uint32_t tile_row_in_mm_M_block,
-    uint32_t chunk_col_in_tiles,
-    uint32_t mm_core_idx,
-    uint32_t advance_by_tiles,
-    uint32_t last_mm_core_idx,
-    uint32_t chunk_piece_size,
-    uint32_t chunk_width_in_tiles) {
+    const uint32_t tile_row_in_mm_M_block,
+    const uint32_t chunk_col_in_tiles,
+    const uint32_t mm_core_idx,
+    const uint32_t advance_by_tiles,
+    const uint32_t last_mm_core_idx,
+    const uint32_t subchunk_size,
+    const uint32_t chunk_width_in_tiles) {
+    /**
+     * Calculate the number of tiles to read from the current chunk piece.
+     */
     if (mm_core_idx > last_mm_core_idx) {
         return 0;
     }
-    uint32_t current_tile_offset = tile_row_in_mm_M_block * chunk_width_in_tiles + chunk_col_in_tiles;
-    uint32_t current_block_tiles_remaining = chunk_piece_size - current_tile_offset - 1;
-    uint32_t future_blocks_tiles = (last_mm_core_idx - mm_core_idx) * chunk_piece_size;
-    uint32_t all_tiles = current_block_tiles_remaining + future_blocks_tiles;
+    const uint32_t current_tile_offset = tile_row_in_mm_M_block * chunk_width_in_tiles + chunk_col_in_tiles;
+    const uint32_t current_block_tiles_remaining = subchunk_size - current_tile_offset - 1;
+    const uint32_t future_blocks_tiles = (last_mm_core_idx - mm_core_idx) * subchunk_size;
+    const uint32_t all_tiles = current_block_tiles_remaining + future_blocks_tiles;
     return 1 + all_tiles / advance_by_tiles;
 }
 

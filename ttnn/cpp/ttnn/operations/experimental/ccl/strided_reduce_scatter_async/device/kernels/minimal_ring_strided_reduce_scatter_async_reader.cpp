@@ -144,7 +144,7 @@ void kernel_main() {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
-                const uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
+                const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                 for (uint32_t i = 0; i < ring_size; i++) {
@@ -173,12 +173,13 @@ void kernel_main() {
                         uint32_t first_tile_row_in_mm_M_block = 0;
                         uint32_t first_chunk_col_in_tiles = 0;
                         uint32_t first_mm_core_idx = 0;
+                        // get the first tile coordinates for the current chunk piece
                         get_next_tile_coordinates(
                             first_tile_row_in_mm_M_block,
                             first_chunk_col_in_tiles,
                             first_mm_core_idx,
                             effective_worker_id,
-                            effective_chunk_piece_size,
+                            effective_subchunk_size,
                             effective_chunk_width_in_tiles,
                             mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(
@@ -187,7 +188,7 @@ void kernel_main() {
                             first_mm_core_idx,
                             effective_advance_by_tiles,
                             last_mm_core_idx,
-                            effective_chunk_piece_size,
+                            effective_subchunk_size,
                             effective_chunk_width_in_tiles);
 
                         while (tiles_to_read > 0) {
@@ -235,7 +236,7 @@ void kernel_main() {
                                     first_chunk_col_in_tiles,
                                     first_mm_core_idx,
                                     effective_advance_by_tiles,
-                                    effective_chunk_piece_size,
+                                    effective_subchunk_size,
                                     effective_chunk_width_in_tiles,
                                     mm_block_ht);
                             }

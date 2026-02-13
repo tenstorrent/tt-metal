@@ -86,13 +86,13 @@ void kernel_main() {
                         uint32_t first_mm_core_idx = 0;
                         uint32_t effective_chunk_width_in_tiles =
                             get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
-                        uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
+                        uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
                         get_next_tile_coordinates(
                             first_tile_row_in_mm_M_block,
                             first_chunk_col_in_tiles,
                             first_mm_core_idx,
                             effective_worker_id,
-                            effective_chunk_piece_size,
+                            effective_subchunk_size,
                             effective_chunk_width_in_tiles,
                             mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(
@@ -101,7 +101,7 @@ void kernel_main() {
                             first_mm_core_idx,
                             effective_advance_by_tiles,
                             last_mm_core_idx,
-                            effective_chunk_piece_size,
+                            effective_subchunk_size,
                             effective_chunk_width_in_tiles);
 
                         DPRINT << "tiles_to_read: " << tiles_to_read << ENDL();
