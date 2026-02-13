@@ -147,14 +147,15 @@ class T5Stack(Module):
         all_hidden_states.append(hidden_states)
 
         position_bias = None
+        if attention_mask is not None:
+            attention_mask = (attention_mask - 1.0) * float("inf")
 
         for layer in self.layers:
-            # Precompute position bias to preserve previous behaviour.If nit set for this layer, use the previous layer's position bias.
+            # Precompute position bias to preserve previous behaviour.If not set for this layer, use the previous layer's position bias.
             if layer.self_attn.use_relative_position_bias:
                 position_bias = layer.self_attn.relative_attention_bias(hidden_states.shape[-2])  # seq_length
 
                 if attention_mask is not None:
-                    attention_mask = (attention_mask - 1.0) * float("inf")
                     position_bias += attention_mask
 
             if position_bias is None:
