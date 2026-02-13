@@ -78,7 +78,7 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
         tt::div_up(output_shape[0] * output_shape[2], args.config.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
 
-    auto out_mem_config = input_tensor.memory_config();
+    const auto& out_mem_config = input_tensor.memory_config();
     auto padded_output_shape = output_shape;
     padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
     padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
