@@ -286,15 +286,15 @@ inline void llk_matmul_pack(
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         LLK_ASSERT((tile_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
-        std::uint32_t pack_tile_addr =
-            get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
-
         LLK_ASSERT(
             are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
                 pack_src_format[output_id],
                 pack_dst_format[output_id],
-                get_output_face_r_dim(output_id),
+                get_output_face_r_dim(output_id)),
             "");
+
+        std::uint32_t pack_tile_addr =
+            get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
     }
