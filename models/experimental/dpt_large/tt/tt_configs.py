@@ -132,6 +132,26 @@ def vit_block_config(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     return TTLayerConfig(grid=grid, math_fidelity=math, attn_fused_qkv=True, activation_fused=True)
 
 
+def _choose_tile_aligned_grid_y(*, seq_len_padded: int, max_grid_y: int, tile: int = 32) -> int:
+    """Pick a grid_y that yields a tile-aligned per-shard height for block-sharded tokens.
+
+    With row-major block sharding on [B,1,seq,C], the physical shard height is
+    proportional to seq/grid_y. TTNN requires shard dimensions to be multiples
+    of the tile size (32).
+    """
+    try:
+        seq_len_padded = int(seq_len_padded)
+        max_grid_y = max(1, int(max_grid_y))
+        tile = max(1, int(tile))
+    except Exception:
+        return int(max_grid_y) if max_grid_y else 1
+
+    for y in range(max_grid_y, 0, -1):
+        if (seq_len_padded % y) == 0 and ((seq_len_padded // y) % tile) == 0:
+            return int(y)
+    return int(max_grid_y)
+
+
 def cnn_block_config(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     if config.device.endswith("n300"):
         grid = (6, 6)
@@ -268,20 +288,15 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Pick an encoder grid that keeps the fused (B*seq) shard height tile-aligned.
-        # For DPT-Large 384: seq_len_padded=640. On an 8x8 device grid, block-sharding
-        # would yield shard height 80 which is not tile-aligned (32). Use 8x5 -> 128.
-        grid_x = 8
-        try:
-            TILE = 32
-            patch_count = config.image_size // config.patch_size
-            seq_len = patch_count * patch_count + 1
-            seq_len_padded = math.ceil(seq_len / 64) * 64
-            candidates = [y for y in range(8, 0, -1) if (seq_len_padded % y) == 0 and ((seq_len_padded // y) % TILE) == 0]
-            grid_y = candidates[0] if candidates else 8
-        except Exception:
-            grid_y = 8
-        grid = (grid_x, grid_y)
+        # Pick an encoder grid that keeps the shard height tile-aligned for the
+        # padded sequence length.
+        base = vit_block_config(config)
+        grid_x, max_grid_y = (int(base.grid[0]), int(base.grid[1]))
+        patch_count = int(config.image_size) // int(config.patch_size)
+        seq_len = patch_count * patch_count + 1
+        seq_len_padded = math.ceil(seq_len / 64) * 64
+        grid_y = _choose_tile_aligned_grid_y(seq_len_padded=seq_len_padded, max_grid_y=max_grid_y, tile=32)
+        grid = (int(grid_x), int(grid_y))
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
