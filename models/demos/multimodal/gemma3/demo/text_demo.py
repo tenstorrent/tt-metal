@@ -919,8 +919,11 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # Currently only supporting greedy decoding (temperature=0) on device
-        sampling_on_device = model[0]._supports_on_device_sampling
+        # Gemma3 vocab size is 262144, sampling is supported only where vocab_size/num_devices<=64k
+        # https://github.com/tenstorrent/tt-metal/issues/32249
+        # => Hardcode sampling to host for now
+        sampling_on_device = False
+
         if sampling_on_device:
             device_sampling_params = SamplingParams(
                 temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
