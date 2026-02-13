@@ -19,7 +19,7 @@ class WarmupForwardMixin:
     This class should be inherited by any generator class that needs to warm up
     the decode forward pass. It requires the following to be defined in the
     inheriting class:
-    - self.decode_forward(): method to perform decode forward pass
+    - self.decode_forward_text(): method to perform decode forward pass
     """
 
     def _create_sampling_params(self, can_sample_on_device, non_greedy_decoding_on_device, max_batch_size, mode):
