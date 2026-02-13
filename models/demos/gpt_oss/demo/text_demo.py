@@ -577,6 +577,13 @@ def test_gpt_oss_demo(
             # This gives ~4x speedup over sequential per-user prefill
             num_rows = mesh_device.shape[0]
             users_per_row_prefill = global_batch_size // num_rows
+            users_per_row_per_iter = 1  # Users each mesh row processes per prefill iteration
+            # Increasing above 1 requires model changes:
+            #   - attention/prefill.py: relax batch_size!=1 check, loop paged_fill_cache
+            #   - model.py:process_output_prefill_batched: extract multiple logits per row
+            assert users_per_row_prefill % users_per_row_per_iter == 0
+            num_prefill_iters = users_per_row_prefill // users_per_row_per_iter
+            users_per_iter = num_rows * users_per_row_per_iter  # Total users per iteration
             model_id = 0  # data_parallel=1, single model
 
             prefilled_token = torch.zeros(global_batch_size, dtype=torch.long)
@@ -602,6 +609,9 @@ def test_gpt_oss_demo(
                     )
                     fixed_get_last_token = -1
 
+                if users_per_row_per_iter > 1:
+                    fixed_get_last_token = -1  # Can't use get_last_token with batch>1
+
                 def _prepare_batch_host(user_indices):
                     """Prepare host-side tokens + page_table for a batch of users."""
                     tokens_list, pt_list, last_idxs = [], [], []
@@ -621,8 +631,11 @@ def test_gpt_oss_demo(
 
                 # --- Warmup (compilation) ---
                 logger.info("Starting traced row-parallel prefill warmup (compilation)...")
-                warmup_indices = [row * users_per_row_prefill for row in range(num_rows)]
+                warmup_indices = [
+                    row * users_per_row_prefill + u for row in range(num_rows) for u in range(users_per_row_per_iter)
+                ]
                 tokens_w, pt_w, last_w = _prepare_batch_host(warmup_indices)
+                tokens_w = tokens_w.reshape(num_rows, -1)  # [num_rows, N*S] for batch>1 concat
 
                 host_out = model[model_id].prepare_inputs_prefill(
                     tokens_w, page_table=pt_w, trace_enabled=True, batched_prefill=True
@@ -642,13 +655,22 @@ def test_gpt_oss_demo(
                     page_table=transformed[1],
                     get_last_token=fixed_get_last_token,
                     kv_cache=tt_kv_cache[model_id],
+                    batch_size=users_per_row_per_iter,
                 )
 
                 if fixed_get_last_token == -1:
-                    warmup_results = model[model_id].process_output_prefill_batched(tt_logits, last_w)
+                    warmup_results = model[model_id].process_output_prefill_batched(
+                        tt_logits,
+                        last_w,
+                        users_per_row=users_per_row_per_iter,
+                        seq_len_per_user=max_padded_len,
+                    )
                 else:
                     warmup_results = model[model_id].process_output_prefill_batched(
-                        tt_logits, [idx % 32 for idx in last_w]
+                        tt_logits,
+                        [idx % 32 for idx in last_w],
+                        users_per_row=users_per_row_per_iter,
+                        seq_len_per_user=max_padded_len,
                     )
                 for row, uid in enumerate(warmup_indices):
                     prefilled_token[uid] = torch.argmax(warmup_results[row].view(-1)).item()
@@ -664,8 +686,11 @@ def test_gpt_oss_demo(
 
                 # --- Trace capture ---
                 logger.info("Capturing prefill trace...")
-                iter0_indices = [row * users_per_row_prefill for row in range(num_rows)]
+                iter0_indices = [
+                    row * users_per_row_prefill + u for row in range(num_rows) for u in range(users_per_row_per_iter)
+                ]
                 tokens_0, pt_0, last_0 = _prepare_batch_host(iter0_indices)
+                tokens_0 = tokens_0.reshape(num_rows, -1)
                 host_out = model[model_id].prepare_inputs_prefill(
                     tokens_0, page_table=pt_0, trace_enabled=True, batched_prefill=True
                 )
@@ -691,18 +716,25 @@ def test_gpt_oss_demo(
                     page_table=trace_dev_inputs[1],
                     get_last_token=fixed_get_last_token,
                     kv_cache=tt_kv_cache[model_id],
+                    batch_size=users_per_row_per_iter,
                 )
                 ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
                 logger.info("Prefill trace captured")
 
                 # --- Execute trace for all iterations ---
                 logger.info(
-                    f"Starting traced row-parallel prefill ({users_per_row_prefill} iters for {global_batch_size} users)..."
+                    f"Starting traced row-parallel prefill ({num_prefill_iters} iters, "
+                    f"{users_per_row_per_iter} user/row/iter, {global_batch_size} users)..."
                 )
                 profiler.start(f"inference_prefill", iteration=batch_idx)
-                for iter_idx in range(users_per_row_prefill):
-                    user_indices = [row * users_per_row_prefill + iter_idx for row in range(num_rows)]
+                for iter_idx in range(num_prefill_iters):
+                    user_indices = [
+                        row * users_per_row_prefill + iter_idx * users_per_row_per_iter + u
+                        for row in range(num_rows)
+                        for u in range(users_per_row_per_iter)
+                    ]
                     tokens_i, pt_i, last_i = _prepare_batch_host(user_indices)
+                    tokens_i = tokens_i.reshape(num_rows, -1)
                     host_out = model[model_id].prepare_inputs_prefill(
                         tokens_i, page_table=pt_i, trace_enabled=True, batched_prefill=True
                     )
@@ -711,19 +743,27 @@ def test_gpt_oss_demo(
                     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
 
                     if fixed_get_last_token == -1:
-                        row_results = model[model_id].process_output_prefill_batched(tt_out_trace, last_i)
+                        row_results = model[model_id].process_output_prefill_batched(
+                            tt_out_trace,
+                            last_i,
+                            users_per_row=users_per_row_per_iter,
+                            seq_len_per_user=max_padded_len,
+                        )
                     else:
                         row_results = model[model_id].process_output_prefill_batched(
-                            tt_out_trace, [idx % 32 for idx in last_i]
+                            tt_out_trace,
+                            [idx % 32 for idx in last_i],
+                            users_per_row=users_per_row_per_iter,
+                            seq_len_per_user=max_padded_len,
                         )
                     for row, uid in enumerate(user_indices):
                         prefilled_token[uid] = torch.argmax(row_results[row].view(-1)).item()
                     if iter_idx % 8 == 0:
-                        logger.info(f"  Traced prefill batch {iter_idx+1}/{users_per_row_prefill}")
+                        logger.info(f"  Traced prefill batch {iter_idx+1}/{num_prefill_iters}")
                 profiler.end(f"inference_prefill", iteration=batch_idx)
 
                 ttnn.release_trace(mesh_device, trace_id)
-                logger.info(f"Traced row-parallel prefill finished ({users_per_row_prefill} iterations)")
+                logger.info(f"Traced row-parallel prefill finished ({num_prefill_iters} iterations)")
 
             else:
                 # === NON-TRACED BATCHED PREFILL ===
@@ -750,18 +790,22 @@ def test_gpt_oss_demo(
                         batch_page_tables.append(page_table[uid : uid + 1, :num_blocks_needed])
                         batch_last_token_idxs.append(prefill_len - 1)
 
-                    tokens_stacked = torch.cat(batch_tokens_list, dim=0)  # [num_rows, padded_len]
-                    page_table_stacked = torch.cat(batch_page_tables, dim=0)  # [num_rows, num_blocks]
+                    tokens_stacked = torch.cat(batch_tokens_list, dim=0)  # [total_users, padded_len]
+                    page_table_stacked = torch.cat(batch_page_tables, dim=0)  # [total_users, num_blocks]
+                    padded_len = tokens_stacked.shape[1]
+
+                    # Reshape tokens for batch>1: concatenate per-row users along seq dim
+                    tokens_for_model = tokens_stacked.reshape(num_rows, -1)  # [num_rows, N*padded_len]
 
                     (tokens_embd, rot_mats_global, rot_mats_local, page_table_tt, _) = model[
                         model_id
                     ].prepare_inputs_prefill(
-                        tokens_stacked,
+                        tokens_for_model,
                         page_table=page_table_stacked,
                         batched_prefill=True,
                     )
 
-                    get_last_token_val = (max(batch_last_token_idxs) // 32) * 32
+                    get_last_token_val = (max(batch_last_token_idxs) // 32) * 32 if users_per_row_per_iter == 1 else -1
                     tt_logits = model[model_id].ttnn_prefill_forward(
                         tokens_embd,
                         rot_mats_global=rot_mats_global,
@@ -770,17 +814,27 @@ def test_gpt_oss_demo(
                         page_table=page_table_tt,
                         get_last_token=get_last_token_val,
                         kv_cache=tt_kv_cache[model_id],
+                        batch_size=users_per_row_per_iter,
                     )
 
+                    if get_last_token_val == -1:
+                        adjusted_last_idxs = batch_last_token_idxs
+                    else:
+                        adjusted_last_idxs = [idx % 32 for idx in batch_last_token_idxs]
                     row_results = model[model_id].process_output_prefill_batched(
-                        tt_logits, [idx % 32 for idx in batch_last_token_idxs]
+                        tt_logits,
+                        adjusted_last_idxs,
+                        users_per_row=users_per_row_per_iter,
+                        seq_len_per_user=padded_len,
                     )
                     return row_results
 
                 # Warmup: compile with first batch
                 logger.info("Starting row-parallel prefill warmup...")
                 profiler.start(f"compile_prefill", iteration=batch_idx)
-                warmup_user_indices = [row * users_per_row_prefill for row in range(num_rows)]
+                warmup_user_indices = [
+                    row * users_per_row_prefill + u for row in range(num_rows) for u in range(users_per_row_per_iter)
+                ]
                 warmup_results = _run_batched_prefill_iter(0, warmup_user_indices)
                 for row, uid in enumerate(warmup_user_indices):
                     prefilled_token[uid] = torch.argmax(warmup_results[row].view(-1)).item()
@@ -796,18 +850,23 @@ def test_gpt_oss_demo(
 
                 # Real prefill
                 logger.info(
-                    f"Starting row-parallel batched prefill ({users_per_row_prefill} iters for {global_batch_size} users)..."
+                    f"Starting row-parallel batched prefill ({num_prefill_iters} iters, "
+                    f"{users_per_row_per_iter} user/row/iter, {global_batch_size} users)..."
                 )
                 profiler.start(f"inference_prefill", iteration=batch_idx)
-                for iter_idx in range(users_per_row_prefill):
-                    user_indices = [row * users_per_row_prefill + iter_idx for row in range(num_rows)]
+                for iter_idx in range(num_prefill_iters):
+                    user_indices = [
+                        row * users_per_row_prefill + iter_idx * users_per_row_per_iter + u
+                        for row in range(num_rows)
+                        for u in range(users_per_row_per_iter)
+                    ]
                     row_results = _run_batched_prefill_iter(iter_idx, user_indices)
                     for row, uid in enumerate(user_indices):
                         prefilled_token[uid] = torch.argmax(row_results[row].view(-1)).item()
                     if iter_idx % 8 == 0:
-                        logger.info(f"  Prefilled batch {iter_idx+1}/{users_per_row_prefill}")
+                        logger.info(f"  Prefilled batch {iter_idx+1}/{num_prefill_iters}")
                 profiler.end(f"inference_prefill", iteration=batch_idx)
-                logger.info(f"Row-parallel batched prefill finished ({users_per_row_prefill} iterations)")
+                logger.info(f"Row-parallel batched prefill finished ({num_prefill_iters} iterations)")
 
             logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
 
