@@ -132,6 +132,8 @@ class DRAMStreamingMatmul:
         mul_tensor: ttnn.Tensor = None,  # Optional tensor to multiply with matmul output (16x16 tiles)
         mm_out_tensor: ttnn.Tensor = None,  # Optional intermediate tensor for matmul output (1x32 tiles)
         scalar_tensor: ttnn.Tensor = None,  # Optional scalar tensor (16x16 tile) to multiply after mul
+        num_loop_iters: int = 1,  # Number of inner kernel loop iterations (for testing CB wrapping)
+        working_buf_tensor: ttnn.Tensor = None,  # Tensor-backed working buffer for CB1 (required when num_loop_iters > 1)
     ) -> ttnn.Tensor:
         """
         Execute simplified DRAM streaming matmul.
@@ -151,6 +153,14 @@ class DRAMStreamingMatmul:
         """
         enable_indexing = index_tensor is not None
         device = input_a.device()
+
+        # Validate that working_buf_tensor is provided when looping is enabled
+        if num_loop_iters > 1 and working_buf_tensor is None:
+            raise ValueError(
+                f"working_buf_tensor must be provided when num_loop_iters > 1 "
+                f"(got num_loop_iters={num_loop_iters}, working_buf_tensor=None). "
+                f"The kernel uses the working buffer address for CB1 boundary wrapping."
+            )
 
         # Get tiles
         in0_tile = input_a.get_tile()
@@ -262,18 +272,24 @@ class DRAMStreamingMatmul:
         # CB 0: in0 - BACKED BY INPUT TENSOR (replicated)
         cb0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(0, input_a)
 
-        # CB 1: in1 - working buffer for DRAM reads (K tiles double buffered)
-        cb1_format = ttnn.CBFormatDescriptor(
-            buffer_index=1,
-            data_format=in1_dtype,
-            page_size=in1_tile_size,
-            tile=in1_tile_desc,
-        )
-        cb1_descriptor = ttnn.CBDescriptor(
-            total_size=in1_CB_size,
-            core_ranges=compute_cores,
-            format_descriptors=[cb1_format],
-        )
+        # CB 1: in1 - working buffer for DRAM reads (K tiles triple buffered)
+        if working_buf_tensor is not None:
+            # Tensor-backed CB: address known at compile time (needed for looping)
+            cb1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(1, working_buf_tensor)
+            cb_in1_buf_addr = working_buf_tensor.buffer_address()
+        else:
+            cb1_format = ttnn.CBFormatDescriptor(
+                buffer_index=1,
+                data_format=in1_dtype,
+                page_size=in1_tile_size,
+                tile=in1_tile_desc,
+            )
+            cb1_descriptor = ttnn.CBDescriptor(
+                total_size=in1_CB_size,
+                core_ranges=compute_cores,
+                format_descriptors=[cb1_format],
+            )
+            cb_in1_buf_addr = 0
 
         cb_descriptors = [cb0_descriptor, cb1_descriptor]
 
@@ -442,6 +458,9 @@ class DRAMStreamingMatmul:
             ("dram_mm_mul_num_tiles", mul_num_tiles),
             # Scalar mul parameters (NCRISC sets up scalar source CB)
             ("dram_mm_cb_scalar_src", cb_id_scalar_src if enable_scalar_mul else 0),
+            # Loop parameters (for testing CB-boundary wrapping)
+            ("dram_mm_num_loop_iters", num_loop_iters),
+            ("dram_mm_cb_in1_buf_addr", cb_in1_buf_addr),
         ]
 
         # Named compile-time args for BRISC (no-op for DRAM streaming, handles mul)
@@ -455,6 +474,9 @@ class DRAMStreamingMatmul:
             # Scalar mul parameters
             ("dram_mm_cb_scalar", cb_id_scalar if enable_scalar_mul else 0),
             ("dram_mm_cb_scalar_src", cb_id_scalar_src if enable_scalar_mul else 0),
+            # Loop parameters
+            ("dram_mm_num_loop_iters", num_loop_iters),
+            ("dram_mm_cb_in1_buf_addr", cb_in1_buf_addr),
         ]
 
         # Named compile-time args for TRISC (compute)
@@ -477,6 +499,9 @@ class DRAMStreamingMatmul:
             # Scalar mul parameters
             ("dram_mm_cb_scalar", cb_id_scalar if enable_scalar_mul else 0),
             ("dram_mm_mul_fp32_dest_acc_en", 1),  # Use FP32 accumulation for mul
+            # Loop parameters
+            ("dram_mm_num_loop_iters", num_loop_iters),
+            ("dram_mm_cb_in1_buf_addr", cb_in1_buf_addr),
         ]
 
         # Unified kernel descriptor (same pattern as matmul)
@@ -524,6 +549,8 @@ class DRAMStreamingMatmul:
 
         # Execute
         io_tensors = [input_a, input_b, output_tensor]
+        if working_buf_tensor is not None:
+            io_tensors.append(working_buf_tensor)
         if enable_indexing:
             io_tensors.append(index_tensor)
         if enable_mul:
