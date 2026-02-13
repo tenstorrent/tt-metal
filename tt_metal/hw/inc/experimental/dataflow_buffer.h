@@ -82,10 +82,12 @@ public:
 #else
         uint8_t tensix_id = get_tensix_id(packed_tc);
         DPRINT << "wait_front: tensix_id: " << static_cast<uint32_t>(tensix_id)
+               << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)) << ENDL();
+        while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
+        DPRINT << "wait_front: tensix_id: " << static_cast<uint32_t>(tensix_id)
                << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
                << " tc_id: " << static_cast<uint32_t>(tc_id)
                << " occupancy: " << static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)) << ENDL();
-        while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
     }
 

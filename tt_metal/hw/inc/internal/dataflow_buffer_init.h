@@ -89,19 +89,20 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #ifndef COMPILE_FOR_TRISC
             // Configure remapper if needed (must be done before TC init)
             if (per_risc_ptr->flags.should_init_tc && per_risc_ptr->flags.remapper_en) {
-                if (risc_index == 0) {  // update this
+                if (risc_index == 0) {  // First RISC enables remapper globally
                     enable_remapper = true;
                 }
-                // remapper_consumer_ids_mask is a bitmask of clientTypes (id_R) for BLOCKED consumers
-                uint8_t remapper_consumer_ids_mask = init_ptr->remapper_consumer_ids_mask;
+                // Per-producer remapper fields: remapper_consumer_ids_mask and producer_client_type
+                uint8_t remapper_consumer_ids_mask = per_risc_ptr->remapper_consumer_ids_mask;
+                uint8_t producer_client_type = per_risc_ptr->producer_client_type;  // clientL for this producer
                 uint8_t num_clientRs = static_cast<uint8_t>(__builtin_popcount(remapper_consumer_ids_mask));
                 uint8_t clientR_valid_mask = (1u << num_clientRs) - 1;
                 g_remapper_configurator.set_pair_index(dfb_interface.remapper_pair_index);
-                DPRINT << "Setting clientL fields " << static_cast<uint32_t>(risc_index)
-                       << " id: " << static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0]))
+                DPRINT << "Setting clientL fields clientL=" << static_cast<uint32_t>(producer_client_type)
+                       << " tc: " << static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0]))
                        << " mask: " << static_cast<uint32_t>(clientR_valid_mask) << ENDL();
                 g_remapper_configurator.configure_clientL_all_fields(
-                    risc_index,                                            // id_L
+                    producer_client_type,                                  // id_L from per-RISC config
                     get_counter_id(per_risc_ptr->packed_tile_counter[0]),  // in SxB mode, producers have 1 TC
                     clientR_valid_mask,
                     1,  // is_producer
