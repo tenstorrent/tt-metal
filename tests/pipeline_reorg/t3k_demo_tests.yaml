@@ -66,14 +66,6 @@
   timeout: 10
   model-name: sd35_large
 
-- name: t3k_flux1-dev_tests
-  cmd: run_t3000_flux1_tests
-  sku: wh_llmbox
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  timeout: 10
-  model-name: flux1-dev
-
 - name: t3k_motif_tests
   cmd: run_t3000_motif_tests
   sku: wh_llmbox
