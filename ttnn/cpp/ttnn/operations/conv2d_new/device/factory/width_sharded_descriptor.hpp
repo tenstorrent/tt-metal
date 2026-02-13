@@ -6,54 +6,30 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/device_operation.hpp"
-#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
 namespace ttnn::prim::conv2d_new_detail {
 
-// MeshWorkloadFactoryConcept factory for width-sharded conv2d.
-// Uses ProgramDescriptor internally for clean declarative program construction,
-// while handling config tensor lifecycle and dynamic CB patching in the
-// mesh workload methods.
+// ProgramDescriptorFactoryConcept factory for width-sharded conv2d.
+//
+// Uses the optional prepare_resources hook to create the sliding window config
+// tensor (a device-side allocation).  The framework's DescriptorMeshWorkloadFactoryAdapter
+// handles all cache-hit dispatch: buffer address patching, dynamic CB patching,
+// and resource lifetime management.
 struct Conv2dWidthShardedDescriptorFactory {
-    struct AddressSlot {
-        uint32_t kernel_handle;
-        CoreCoord core;
-        uint32_t arg_index;
-        uint16_t buffer_id;
-    };
+    // Creates the sliding window config tensor (device-side allocation).
+    // Called once on cache miss; the returned DeviceStorage is kept alive across
+    // cache hits by the framework.
+    static tt::tt_metal::DeviceStorage prepare_resources(
+        const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& tensor_return_value);
 
-    struct CBSlot {
-        tt::tt_metal::CBHandle cb_handle;
-        uint16_t buffer_id;
-    };
-
-    struct shared_variables_t {
-        std::vector<AddressSlot> address_slots;
-        std::vector<CBSlot> cb_slots;
-        tt::tt_metal::DeviceStorage conv_reader_indices_storage;
-    };
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const Conv2dParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const Conv2dInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
-        const Conv2dParams& operation_attributes,
-        const Conv2dInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    // Internal: build the declarative program descriptor.
+    // Builds the declarative ProgramDescriptor.
+    // resources holds the config tensor buffer from prepare_resources.
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const Conv2dParams& operation_attributes,
         const Conv2dInputs& tensor_args,
         Tensor& output,
-        tt::tt_metal::Buffer* config_tensor_buffer);
+        tt::tt_metal::DeviceStorage& resources);
 };
 
 }  // namespace ttnn::prim::conv2d_new_detail
