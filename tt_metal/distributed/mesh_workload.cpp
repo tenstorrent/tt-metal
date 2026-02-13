@@ -73,9 +73,7 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
-    Inspector::mesh_workload_created(this);
-}
+MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) { Inspector::mesh_workload_created(this); }
 
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
@@ -343,8 +341,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     // Determine max kernel binary size across all programs
     this->max_program_kernels_sizeB_ = 0;
     for (auto& [_, program] : programs_) {
-        this->max_program_kernels_sizeB_ =
-            std::max(this->max_program_kernels_sizeB_, program.impl().kernel_bins_sizeB);
+        this->max_program_kernels_sizeB_ = std::max(this->max_program_kernels_sizeB_, program.impl().kernel_bins_sizeB);
     }
 
     set_finalized();

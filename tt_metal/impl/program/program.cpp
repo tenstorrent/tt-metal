@@ -1714,7 +1714,11 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
         state.offset = program_dispatch::finalize_rt_args(
-            this->get_kernels(index), this->get_kernel_groups(index), state.config_base_offset, index, state.rta_offset);
+            this->get_kernels(index),
+            this->get_kernel_groups(index),
+            state.config_base_offset,
+            index,
+            state.rta_offset);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
