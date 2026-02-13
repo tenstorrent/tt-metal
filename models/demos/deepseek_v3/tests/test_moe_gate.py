@@ -231,7 +231,9 @@ def test_forward_pass(
     weight_config = get_test_weight_config(
         MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=use_synthetic_weights
     )
+    import pdb
 
+    pdb.set_trace()
     # Generate appropriate config using utility function
     model_config = get_model_config(
         MoEGate, mode, hf_config, mesh_device, topk_fallback=topk_fallback, use_bitonic_sort=use_bitonic_sort
@@ -341,7 +343,7 @@ def test_forward_pass(
     "use_synthetic_weights",
     [True, False],  # Test both synthetic and downloaded weights
 )
-def test_forward_pass(
+def test_forward_pass_new_moe_gate(
     mode,
     seq_len,
     hf_config,
@@ -405,9 +407,12 @@ def test_forward_pass(
     reference_model.to(torch.bfloat16)
     reference_topk_indices, reference_topk_weights = reference_model(torch_input)
 
+    torch_input_new_moe_gate = torch.reshape(torch_input, (batch_size, seq_len, -1, 16, 16))
+
     # Convert input to TTNN
+    #
     tt_input = ttnn.from_torch(
-        torch_input.unsqueeze(1),
+        torch_input_new_moe_gate,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
         dtype=ttnn.bfloat16,
