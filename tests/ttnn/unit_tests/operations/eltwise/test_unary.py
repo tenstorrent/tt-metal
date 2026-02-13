@@ -384,7 +384,7 @@ def test_sigmoid(device, h, w, vector_mode, approx_mode, layout):
             return ttnn.sigmoid(
                 input_tensor,
                 vector_mode=vector_mode,
-                mode=ttnn.SigmoidMode.FastAndApproximate if fast_and_approximate_mode else ttnn.SigmoidMode.Accurate,
+                mode=ttnn.SigmoidMode.FastApproximate if fast_and_approximate_mode else ttnn.SigmoidMode.Accurate,
             )
 
     run_unary_with_approx_mode_test(

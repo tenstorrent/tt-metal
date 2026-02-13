@@ -607,7 +607,7 @@ def test_sigmoid_fruit(device, h, w, memory_type, shard_shape, vector_mode, appr
             return ttnn.sigmoid(
                 input_tensor,
                 vector_mode=vector_mode,
-                mode=ttnn.SigmoidMode.FastAndApproximate if fast_and_approximate_mode else ttnn.SigmoidMode.Accurate,
+                mode=ttnn.SigmoidMode.FastApproximate if fast_and_approximate_mode else ttnn.SigmoidMode.Accurate,
             )
 
     run_unary_with_aprox_mode_fruit_test(
