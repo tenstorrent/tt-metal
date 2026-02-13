@@ -90,7 +90,7 @@ static void RunTest(
                                 DataMovementConfig{
                                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                                     .noc = tt_metal::NOC::RISCV_0_default});
-                            risc = " brisc";
+                            risc = "BRISC";
                             break;
                         case 1:
                             assert_kernel = CreateKernel(
@@ -100,7 +100,7 @@ static void RunTest(
                                 DataMovementConfig{
                                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                                     .noc = tt_metal::NOC::RISCV_1_default});
-                            risc = "ncrisc";
+                            risc = "NCRISC";
                             break;
                         default: TT_THROW("Unsupported DM processor id {}", processor_id);
                     }
@@ -115,7 +115,7 @@ static void RunTest(
                         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                         logical_core,
                         ComputeConfig{.defines = {{fmt::format("TRISC{}", processor_id), "1"}}});
-                    risc = fmt::format("trisc{}", processor_id);
+                    risc = fmt::format("TRISC{}", processor_id);
                     break;
             }
             break;
