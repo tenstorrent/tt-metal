@@ -4,7 +4,6 @@
 
 import ttnn
 import pytest
-from models.common.utility_functions import skip_with_watcher
 from tests.sweep_framework.sweep_utils.adaptive_pool2d_common import run_adaptive_pool2d
 
 
@@ -51,7 +50,6 @@ failing_parameters = [
     "pool_type",
     ["max", "avg"],
 )
-@skip_with_watcher("Skipping with watcher enabled due to github issue #37097")
 def test_adaptive_pool2d(
     device,
     tensor_map,
@@ -94,7 +92,6 @@ def test_adaptive_pool2d(
     "pool_type",
     ["max", "avg"],
 )
-@skip_with_watcher("Skipping with watcher enabled due to github issue #37097")
 def test_adaptive_dram_pool2d(
     device,
     tensor_map,
