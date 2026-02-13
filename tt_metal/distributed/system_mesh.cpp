@@ -38,7 +38,7 @@ MeshContainer<MappedDevice> initialize_mapped_devices(const tt::tt_fabric::MeshI
     std::vector<MappedDevice> system_mesh_devices;
     system_mesh_devices.reserve(shape.mesh_size());
     for (int linear_index = 0; linear_index < shape.mesh_size(); ++linear_index) {
-        system_mesh_devices.push_back(MappedDevice{
+        system_mesh_devices.emplace_back(MappedDevice{
             .device_id = MaybeRemote<int>::remote(),
             .fabric_node_id = tt::tt_fabric::FabricNodeId(mesh_id, linear_index)});
     }

@@ -72,7 +72,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                     consecutive_it = consecutive_it + 1;
                 }
                 uint32_t stride_size = std::distance(it, last_it_consec) + 1;
-                ret_map[output_core].push_back(PageStride{
+                ret_map[output_core].emplace_back(PageStride{
                     .start_core = output_core,
                     .start_data = 0,
                     .stride_size = stride_size,
@@ -84,7 +84,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                 const auto start_core = it->value().first;
                 Stride stride = Stride{.core = {0, 0}, .data = 0};
                 if ((it + 1) == end) {
-                    ret_map[output_core].push_back(PageStride{
+                    ret_map[output_core].emplace_back(PageStride{
                         .start_core = start_core,
                         .start_data = it->value().second,
                         .stride_size = 1,
@@ -152,7 +152,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                         // diff data and diff core, not handled yet
                         else {
                             TT_ASSERT(it->has_value());
-                            ret_map[output_core].push_back(PageStride{
+                            ret_map[output_core].emplace_back(PageStride{
                                 .start_core = start_core,
                                 .start_data = it->value().second,
                                 .stride_size = stride_size,
@@ -212,7 +212,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                         }
                     }
                     TT_ASSERT(it->has_value());
-                    ret_map[output_core].push_back(PageStride{
+                    ret_map[output_core].emplace_back(PageStride{
                         .start_core = start_core,
                         .start_data = it->value().second,
                         .stride_size = stride_size,

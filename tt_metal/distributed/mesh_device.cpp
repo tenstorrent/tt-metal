@@ -643,6 +643,7 @@ MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_i
 
 DeviceIds MeshDeviceImpl::get_device_ids() const {
     DeviceIds device_ids;
+    device_ids.reserve(this->num_devices());
     for (auto* device : this->get_devices()) {
         device_ids.push_back(device->id());
     }

@@ -202,11 +202,15 @@ detail::ProgramImpl::ProgramImpl() :
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
     max_cbs_(MetalContext::instance().hal().get_arch_num_circular_buffers()),
     id(program_counter++) {
+    kernels_.reserve(programmable_core_count_);
+    grid_extent_.reserve(programmable_core_count_);
+    kernel_groups_.reserve(programmable_core_count_);
+    core_to_kernel_group_index_table_.reserve(programmable_core_count_);
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
-        kernels_.push_back({});
-        grid_extent_.push_back({});
-        kernel_groups_.push_back({});
-        core_to_kernel_group_index_table_.push_back({});
+        kernels_.emplace_back();
+        grid_extent_.emplace_back();
+        kernel_groups_.emplace_back();
+        core_to_kernel_group_index_table_.emplace_back();
     }
 
     TT_ASSERT(

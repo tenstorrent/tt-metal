@@ -363,7 +363,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
                 std::vector<CoreCoord> temp;
                 temp.reserve(num_cores_per_group);
                 for (uint32_t k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)(k + (i * num_cores_per_group)), (std::size_t)j});
+                    temp.emplace_back(CoreCoord{(std::size_t)(k + (i * num_cores_per_group)), (std::size_t)j});
                 }
                 core_coords2D.push_back(temp);
             }
@@ -374,7 +374,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
                 std::vector<CoreCoord> temp;
                 temp.reserve(num_cores_per_group);
                 for (uint32_t k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)j, (std::size_t)(k + (i * num_cores_per_group))});
+                    temp.emplace_back(CoreCoord{(std::size_t)j, (std::size_t)(k + (i * num_cores_per_group))});
                 }
                 core_coords2D.push_back(temp);
             }

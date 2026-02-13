@@ -366,6 +366,7 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
     auto cores = corerange_to_cores(all_cores, std::nullopt);
 
     std::vector<CoreRange> merge_core_ranges_vec;
+    merge_core_ranges_vec.reserve(cores_x);
     for (uint32_t x = 0; x < cores_x; ++x) {
         CoreCoord merge_core = {x, 0};
         merge_core_ranges_vec.push_back(CoreRange(merge_core, merge_core));

@@ -719,7 +719,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 for (uint32_t h = local_nh_start; h < local_nh_end; ++h) {
                     uint32_t q_count = local_q_end - local_q_start;
                     if (q_count > 0) {
-                        work.head_work.push_back(CoreHeadWork{
+                        work.head_work.emplace_back(CoreHeadWork{
                             .batch = b,
                             .head = h,
                             .q_chunk_start = local_q_start,
@@ -728,7 +728,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
                         uint32_t head_id = (b * NQH) + h;
                         if (head_id < head_segments.size()) {
-                            head_segments[head_id].push_back(HeadSegmentRef{
+                            head_segments[head_id].emplace_back(HeadSegmentRef{
                                 .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
                         }
                     }

@@ -693,7 +693,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
             uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
 
-            work.head_work.push_back(CoreHeadWork{
+            work.head_work.emplace_back(CoreHeadWork{
                 .batch = batch_idx,
                 .head = head_idx,
                 .q_chunk_start = q_chunk_idx,
@@ -703,7 +703,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             if (!head_segments.empty()) {
                 uint32_t head_id = (batch_idx * NH) + head_idx;
                 if (head_id < head_segments.size()) {
-                    head_segments[head_id].push_back(HeadSegmentRef{
+                    head_segments[head_id].emplace_back(HeadSegmentRef{
                         .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
                 }
             }
