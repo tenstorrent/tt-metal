@@ -502,10 +502,10 @@ void py_module(nb::module_& mod) {
     // Bind empty_like operation
     {
         const auto* doc = R"doc(
-        Creates a new tensor with the same shape as the given `reference`, but without initializing its values. The data type, layout, device, and memory configuration of the new tensor can be specified.
+        Creates a new tensor with the same shape as the given tensor, but without initializing its values. The data type, layout, device, and memory configuration of the new tensor can be specified.
 
         Args:
-            reference (ttnn.Tensor): The reference tensor whose shape will be used for the output tensor.
+            tensor (ttnn.Tensor): The tensor whose shape will be used for the output tensor.
 
         Keyword Args:
             dtype (ttnn.DataType, optional): The desired data type of the output tensor. Defaults to `ttnn.bfloat16`.
@@ -514,22 +514,22 @@ void py_module(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
 
         Returns:
-            ttnn.Tensor: The output uninitialized tensor with the same shape as the reference tensor.
+            ttnn.Tensor: The output uninitialized tensor with the same shape as the input tensor.
         )doc";
 
         ttnn::bind_function<"empty_like">(
             mod,
             doc,
             ttnn::overload_t(
-                [](const ttnn::Tensor& reference,
+                [](const ttnn::Tensor& tensor,
                    const std::optional<DataType>& dtype,
                    const std::optional<Layout>& layout,
                    const std::optional<MeshDevice*> device,
                    const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                    return ttnn::empty_like(reference, dtype, layout, nbh::rewrap_optional(device), memory_config);
+                    return ttnn::empty_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config);
                 },
                 nb::keep_alive<0, 5>(),
-                nb::arg("reference"),
+                nb::arg("tensor"),
                 nb::kw_only(),
                 nb::arg("dtype") = DataType::BFLOAT16,
                 nb::arg("layout") = Layout::ROW_MAJOR,
