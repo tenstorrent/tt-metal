@@ -321,6 +321,7 @@ def run_demo_whisper_for_conditional_generation_inference(
     use_trace: bool = True,
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
+    run_both_batch_sizes=False,
 ):
     torch.manual_seed(0)
     # instantiate model inference pipeline
@@ -338,57 +339,60 @@ def run_demo_whisper_for_conditional_generation_inference(
     # load data
     input_data = load_input_paths(input_path)
 
-    batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    total_inputs = num_inputs * batch_size
+    final_batch_size_per_device = [1, 2] if run_both_batch_sizes else [batch_size_per_device]
 
-    input_data = repeat_inputs_cyclically(input_data, total_inputs)
+    for batch_size_per_device in final_batch_size_per_device:
+        batch_size = batch_size_per_device * mesh_device.get_num_devices()
+        total_inputs = num_inputs * batch_size
 
-    total_ttft = 0
-    total_decode_throughput = 0
-    num_warmup_runs = 1
-    for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
-        current_batch_size = min(batch_size, total_inputs - i)
-        current_batch = []
-        for j in range(current_batch_size):
-            input_file_path = input_data[i + j]
-            logger.info(f"Input path: {input_file_path}")
-            samplerate, data = wavfile.read(input_file_path)
-            current_batch.append((samplerate, data))
+        input_data = repeat_inputs_cyclically(input_data, total_inputs)
 
-        # perform model inference
-        if stream:
-            # Handle streaming mode - iterate over generator
-            logger.info(f"Streaming mode enabled for conditional generation inference")
-            last_result = None
-            for result in model_pipeline(current_batch, stream=True, return_perf_metrics=True):
-                last_result = result
+        total_ttft = 0
+        total_decode_throughput = 0
+        num_warmup_runs = 1
+        for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
+            current_batch_size = min(batch_size, total_inputs - i)
+            current_batch = []
+            for j in range(current_batch_size):
+                input_file_path = input_data[i + j]
+                logger.info(f"Input path: {input_file_path}")
+                samplerate, data = wavfile.read(input_file_path)
+                current_batch.append((samplerate, data))
 
-            # Extract final metrics from last result
-            if last_result is not None:
-                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = last_result
-                print()  # New line after streaming
+            # perform model inference
+            if stream:
+                # Handle streaming mode - iterate over generator
+                logger.info(f"Streaming mode enabled for conditional generation inference")
+                last_result = None
+                for result in model_pipeline(current_batch, stream=True, return_perf_metrics=True):
+                    last_result = result
+
+                # Extract final metrics from last result
+                if last_result is not None:
+                    ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = last_result
+                    print()  # New line after streaming
+                else:
+                    # Fallback if no results
+                    ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = (
+                        [""] * current_batch_size,
+                        None,
+                        None,
+                        0.0,
+                        0.0,
+                        False,
+                    )
             else:
-                # Fallback if no results
-                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = (
-                    [""] * current_batch_size,
-                    None,
-                    None,
-                    0.0,
-                    0.0,
-                    False,
+                # Non-streaming mode
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = model_pipeline(
+                    current_batch, stream=False, return_perf_metrics=True
                 )
-        else:
-            # Non-streaming mode
-            ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = model_pipeline(
-                current_batch, stream=False, return_perf_metrics=True
-            )
 
-        if i >= num_warmup_runs:  # Exclude first compile run
-            total_ttft += ttft
-            total_decode_throughput += avg_decode_throughput
-        batch_start = i + 1
-        batch_end = i + current_batch_size
-        logger.info(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
+            if i >= num_warmup_runs:  # Exclude first compile run
+                total_ttft += ttft
+                total_decode_throughput += avg_decode_throughput
+            batch_start = i + 1
+            batch_end = i + current_batch_size
+            logger.info(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
     avg_ttft = total_ttft / (num_inputs - num_warmup_runs)
     avg_decode_throughput = total_decode_throughput / (num_inputs - num_warmup_runs)
     return avg_ttft, avg_decode_throughput
@@ -756,6 +760,11 @@ def test_demo_for_audio_classification_dataset(
     [False, True],
     ids=["single_params", "per_request_params"],
 )
+@pytest.mark.parametrize(
+    "run_both_batch_sizes",
+    [False, True],
+    ids=["single_batch_size", "both_batch_sizes"],
+)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(
     "device_params",
@@ -779,6 +788,7 @@ def test_demo_for_conditional_generation(
     stream,
     prompt,
     use_per_request_params,
+    run_both_batch_sizes,
     request,
 ):
     # Skip test in CI when using generate_kwargs
@@ -827,6 +837,7 @@ def test_demo_for_conditional_generation(
         prompt=prompt,
         batch_size_per_device=batch_size_per_device,
         stream=stream,
+        run_both_batch_sizes=run_both_batch_sizes,
     )
 
     if (
