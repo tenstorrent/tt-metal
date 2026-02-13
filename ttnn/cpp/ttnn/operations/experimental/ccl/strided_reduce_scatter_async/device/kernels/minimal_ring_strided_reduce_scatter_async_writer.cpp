@@ -264,6 +264,9 @@ void kernel_main() {
 
                 for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                     DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
+                    const uint32_t effective_chunk_width_in_tiles =
+                        get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
+                    const uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                     for (uint32_t i = 0; i < ring_size; i++) {
@@ -275,18 +278,13 @@ void kernel_main() {
                         const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
                         DPRINT << "actual_slice_idx: " << actual_slice_idx << ", m_block_iter: " << m_block_iter
                                << ", chunk_idx: " << chunk_idx << ENDL();
-                        uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
+                        const uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
 
                         for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
                             DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " started" << ENDL();
                             uint32_t first_tile_row_in_mm_M_block = 0;
                             uint32_t first_chunk_col_in_tiles = 0;
                             uint32_t first_mm_core_idx = 0;
-                            uint32_t global_tile_idx;
-                            uint32_t slice_tile_idx;
-                            uint32_t effective_chunk_width_in_tiles =
-                                get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
-                            uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
                             get_next_tile_coordinates(
                                 first_tile_row_in_mm_M_block,
                                 first_chunk_col_in_tiles,
@@ -322,7 +320,7 @@ void kernel_main() {
                                             : 1;
                                     tiles_remaining_in_step -= tiles_to_put_in_current_packet;
 
-                                    auto tile_indices = coordinates_to_tile_indices(
+                                    const auto tile_indices = coordinates_to_tile_indices(
                                         first_tile_row_in_mm_M_block,
                                         first_chunk_col_in_tiles,
                                         first_mm_core_idx,
@@ -336,8 +334,8 @@ void kernel_main() {
                                         actual_slice_idx,
                                         slice_Wt,
                                         input_tensor_Wt);
-                                    slice_tile_idx = tile_indices.slice;
-                                    global_tile_idx = tile_indices.global;
+                                    const uint32_t slice_tile_idx = tile_indices.slice;
+                                    const uint32_t global_tile_idx = tile_indices.global;
 
                                     get_next_tile_coordinates(
                                         first_tile_row_in_mm_M_block,
