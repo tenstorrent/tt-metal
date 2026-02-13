@@ -25,6 +25,7 @@
 #include "serialization/serializable.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "utils.hpp"
+#include "utils/memory_utils.hpp"
 
 using ttml::autograd::TensorPtr;
 
@@ -160,6 +161,10 @@ int main(int argc, char **argv) {
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
 
+    // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
+    // of model that doesn't fit in the memory of the device.
+    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
+
     initialize_device(enable_tp);
 
     // Load MNIST data
@@ -211,6 +216,9 @@ int main(int argc, char **argv) {
         model = ttml::models::mlp::create(config.mlp_config);
     }
 
+    // fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
+    ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
+
     const float learning_rate = config.learning_rate * (static_cast<float>(config.batch_size) / 128.F);
     const float momentum = config.momentum;
     const float weight_decay = config.weight_decay;
@@ -234,6 +242,8 @@ int main(int argc, char **argv) {
         }
     }
 
+    ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
+
     // evaluate model before training (sanity check to get reasonable accuracy
     // 1/num_targets)
     float accuracy_before_training = evaluate(test_dataloader, model, num_targets);
@@ -256,6 +266,13 @@ int main(int argc, char **argv) {
         return loss_float / static_cast<float>(loss_xtensors.size());
     };
 
+    bool is_everything_compiled = false;
+    auto memory_snapshot = [&is_everything_compiled](const std::string &name) {
+        if (!is_everything_compiled) {
+            ttml::utils::MemoryUsageTracker::snapshot(name);
+        }
+    };
+
     for (size_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         auto start_time = std::chrono::steady_clock::now();
         uint32_t num_steps_in_epoch = 0;
@@ -273,11 +290,21 @@ int main(int argc, char **argv) {
                 save_model(model, config, optimizer, model_name, optimizer_name);
             }
 
+            memory_snapshot("FORWARD_PASS");
             loss->backward();
+            memory_snapshot("BACKWARD_PASS");
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
             training_step++;
             num_steps_in_epoch++;
+
+            if (!is_everything_compiled) {
+                ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
+                is_everything_compiled = true;
+                ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
+                ttml::utils::MemoryUsageTracker::print_memory_usage();
+                ttml::utils::MemoryUsageTracker::clear();
+            }
         }
 
         auto end_time = std::chrono::steady_clock::now();

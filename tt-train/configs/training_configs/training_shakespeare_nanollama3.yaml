@@ -4,7 +4,7 @@ training_config:
   model_save_interval: 500
   batch_size: 64
   num_epochs: 1
-  max_steps: 5000
+  max_steps: 100
   learning_rate: 0.0003
   weight_decay: 0.01
   use_moreh_adamw: true

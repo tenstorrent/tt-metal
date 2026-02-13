@@ -10,6 +10,9 @@ import argparse
 import re
 import sys
 from typing import Dict, List, Optional, Tuple
+import csv
+import datetime
+from pathlib import Path
 
 try:
     import matplotlib.pyplot as plt
@@ -402,6 +405,15 @@ def analyze_memory_summary(
     return peak_breakdown
 
 
+def write_to_csv(filename_prefix: str, data: Dict[str, str]):
+    with open(f"{filename_prefix}.csv", "w", newline="") as csvfile:
+        fieldnames = data.keys()
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows([data])
+        print(f"\nWritten {filename_prefix}.csv")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Analyze memory usage from tt-train logs",
@@ -453,6 +465,12 @@ def main():
 
     parser.add_argument(
         "--title", type=str, help="Optional title for the visualization"
+    )
+
+    parser.add_argument(
+        "--generate_csv",
+        action="store_true",
+        help="Generate CSV of Peak Memory usage.",
     )
 
     parser.add_argument(
@@ -510,7 +528,7 @@ def main():
 
     # Analyze each summary
     visualization_data = []
-    for name, metrics, num_params in summaries:
+    for idx, (name, metrics, num_params) in enumerate(summaries):
         breakdown = analyze_memory_summary(
             name,
             metrics,
@@ -523,6 +541,8 @@ def main():
         )
         if breakdown:
             visualization_data.append((name, breakdown))
+            if args.generate_csv:
+                write_to_csv(f"{Path(args.logs).stem}_{idx}", breakdown)
 
     print(f"\n{'='*80}")
     print("Analysis complete")

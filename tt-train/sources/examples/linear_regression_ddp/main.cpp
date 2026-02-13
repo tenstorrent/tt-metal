@@ -21,6 +21,8 @@
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
+#include "utils/memory_utils.hpp"
+#include "utils/model_utils.hpp"
 
 using ttml::autograd::TensorPtr;
 
@@ -101,6 +103,11 @@ int main(int argc, char** argv) {
     };
 
     auto training_dataset = ttml::datasets::make_regression(training_params);
+
+    // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
+    // of model that doesn't fit in the memory of the device.
+    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
+
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
@@ -128,17 +135,28 @@ int main(int argc, char** argv) {
 
     auto model = ttml::models::linear_regression::create(num_features, num_targets);
 
+    ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
+    fmt::print("Number of parameters: {}\n", ttml::utils::get_number_of_parameters(model, pctx.is_tp_enabled()));
+
     float learning_rate = 0.1F * num_targets * (batch_size / 128.F);
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
 
+    ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
+
+    bool is_everything_compiled = false;
+    auto memory_snapshot = [&is_everything_compiled](const std::string& name) {
+        if (!is_everything_compiled) {
+            ttml::utils::MemoryUsageTracker::snapshot(name);
+        }
+    };
     int training_step = 0;
     const int num_epochs = 10;
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         for (const auto& [data, targets] : train_dataloader) {
             optimizer.zero_grad();
             auto output = (*model)(data);
-
+            memory_snapshot("FORWARD_PASS");
             auto loss = ttml::ops::mse_loss(output, targets);
             auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
             float mean_loss = 0.0F;
@@ -154,8 +172,16 @@ int main(int argc, char** argv) {
             // Synchronize gradients across DDP devices
             ttml::core::distributed::synchronize_gradients(model->parameters());
 
+            memory_snapshot("BACKWARD_PASS");
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
+            if (!is_everything_compiled) {
+                ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
+                is_everything_compiled = true;
+                ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
+                ttml::utils::MemoryUsageTracker::print_memory_usage();
+                ttml::utils::MemoryUsageTracker::clear();
+            }
         }
     }
 }
