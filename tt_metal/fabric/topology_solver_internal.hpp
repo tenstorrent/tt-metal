@@ -216,6 +216,7 @@ private:
      * Only called for candidates that passed hard constraint checks.
      * cost = -is_preferred * SOFT_WEIGHT
      *      - channel_match_count * SOFT_WEIGHT
+     *      - cardinal_connectivity_bonus (prefer nodes with better cross-group connectivity)
      *      + degree_gap * RUNTIME_WEIGHT
      */
     template <typename TargetNode, typename GlobalNode>
@@ -225,6 +226,7 @@ private:
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         const std::vector<int>& mapping,
+        const std::vector<bool>& used,
         ConnectionValidationMode validation_mode);
 
     /**
@@ -240,6 +242,19 @@ private:
         const std::vector<int>& mapping,
         const std::vector<bool>& used,
         ConnectionValidationMode validation_mode);
+
+    /**
+     * @brief Check cardinal constraints when assigning target_idx -> global_idx would complete
+     * both groups of a target cardinal constraint
+     *
+     * Returns false if any such constraint would be violated (early pruning in hard constraints).
+     */
+    template <typename TargetNode, typename GlobalNode>
+    static bool check_cardinal_constraint_if_complete(
+        size_t target_idx,
+        size_t global_idx,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const std::vector<int>& mapping);
 
     // Cost weights (ensure hard >> soft >> runtime)
     static constexpr int HARD_WEIGHT = 1000000;
