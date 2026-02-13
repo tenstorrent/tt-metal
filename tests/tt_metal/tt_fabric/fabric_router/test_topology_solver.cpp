@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <gtest/gtest.h>
@@ -10,7 +11,6 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
 #include "tt_metal/fabric/topology_solver_internal.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt-metalium/experimental/mock_device.hpp>

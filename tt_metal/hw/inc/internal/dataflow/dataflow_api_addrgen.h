@@ -283,7 +283,7 @@ struct InterleavedAddrGen {
     }
 
     FORCE_INLINE
-    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+    std::uint64_t get_noc_addr(const uint32_t id, const uintptr_t offset = 0, uint8_t noc = noc_index) const {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);

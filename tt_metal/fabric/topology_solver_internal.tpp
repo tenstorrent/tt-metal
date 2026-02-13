@@ -17,8 +17,10 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
-
-namespace tt::tt_fabric::detail {
+// topology_solver.hpp is included in topology_solver_internal.hpp before this file is included
+// so the types are already available via the include chain
+// Note: This file is included from topology_solver_internal.hpp which includes topology_solver.hpp
+// which opens namespace tt::tt_fabric::detail, so we're already in that namespace
 
 // Progress logging interval mask: log every 2^18 (262144) DFS calls
 // Using bit mask (2^18 - 1) to efficiently check if dfs_calls is divisible by 2^18
@@ -26,6 +28,8 @@ constexpr uint32_t PROGRESS_LOG_INTERVAL_MASK = (1u << 18) - 1;
 
 // DFS call limit to prevent excessive search for complex topologies
 constexpr size_t DFS_CALL_LIMIT = 1000000;  // 1 million calls
+
+namespace tt::tt_fabric::detail {
 
 template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(

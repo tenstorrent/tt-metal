@@ -108,9 +108,6 @@ struct Matmul {
             // ================================================================
             // TRISC (Compute)
             // ================================================================
-            constexpr uint32_t out_subblock_h = 1;
-            constexpr uint32_t out_subblock_w = 1;
-            constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
             constexpr uint32_t out_w = CTArgs::out_w;
             constexpr bool transpose = CTArgs::transpose;
             constexpr bool split_acc = true;

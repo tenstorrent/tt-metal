@@ -34,7 +34,8 @@ jobs:
         run: |
           # Owner mapping:
           # Pavle Petrovic (U08E1JCDVNX), Salar Hosseini Khorasgani (U08CEGF78ET) - Llama models
-          # Gongyu Wang (U07RY6B5FLJ) - Qwen models
+          # Gongyu Wang (U07RY6B5FLJ) - Qwen 2.5 VL models
+          # Sarva Sanjay (U08H31YMN4Q) - Qwen 3 VL models
           # Ambrose Ling (U08GELBB1AP) - BH tests
           # Tomasz Cheda (U091SNDA4TS) - Structured output tests
           # Radoica Draskic (U08BH66EXAL) - DP tests
@@ -59,7 +60,7 @@ jobs:
             {
               "name": "[WH-T3K] Qwen2.5-VL-72B-Instruct",
               "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 15,
               "benchmark-timeout": 10,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -117,16 +118,17 @@ jobs:
               "owner_id": "U091SNDA4TS"
             },
             {
-              "name": "[WH-GLX] Llama-8B DP=16",
+              "name": "[WH-GLX] Llama-8B DP=4",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 15,
               "benchmark-timeout": 5,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
-              "override-tt-config": "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
+              "override-tt-config": "{\"data_parallel\": 4, \"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\"}",
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": false,
+              "additional-server-args": "--max_num_seqs 128",
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08BH66EXAL"
             },
@@ -198,7 +200,7 @@ jobs:
             {
               "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 15,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -243,6 +245,21 @@ jobs:
               "multimodal": true,
               "additional-server-args": "--max_model_len 2048",
               "co-owner-1-id": "U07RY6B5FLJ"
+            },
+            {
+              "name": "[WH-T3K][v1] Qwen3-VL-32B-Instruct",
+              "model": "Qwen/Qwen3-VL-32B-Instruct",
+              "server-timeout": 10,
+              "benchmark-timeout": 10,
+              "runner-label": "config-t3000",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "T3K",
+              "tt-llama-text-ver": "tt_transformers",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+              "use-vllm-v1": true,
+              "structured-output": true,
+              "multimodal": true,
+              "co-owner-1-id": "U08H31YMN4Q"
             },
             {
               "name": "[BH-DB][v1] Llama-3.1-8B-Instruct with sampling-tests",
@@ -324,16 +341,16 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-GLX][v1] Llama-8B DP=16",
+              "name": "[WH-GLX][v1] Llama-8B DP=4",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 15,
               "benchmark-timeout": 5,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"decode_only\"}",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\"}",
               "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--data_parallel_size 16",
+              "additional-server-args": "--data_parallel_size 4",
               "use-vllm-v1": true,
               "structured-output": true,
               "multimodal": false,

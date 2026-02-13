@@ -162,6 +162,7 @@ file(
     GLOB_RECURSE TT_LLK_HEADERS
     third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
     third_party/tt_llk/tt_llk_blackhole/**/*.h
+    third_party/tt_llk/tt_llk_quasar/**/*.h
 )
 
 target_sources(

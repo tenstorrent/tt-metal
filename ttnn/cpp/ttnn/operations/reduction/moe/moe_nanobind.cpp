@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "moe.hpp"
 
 namespace ttnn::operations::reduction::detail {
@@ -65,28 +65,18 @@ void bind_reduction_moe_operation(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::moe);
-    bind_registered_operation(
+    ttnn::bind_function<"moe">(
         mod,
-        ttnn::moe,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& input_tensor,
-               const Tensor& expert_mask_tensor,
-               const Tensor& topk_mask_tensor,
-               uint16_t k,
-               const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::moe,
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_mask_tensor").noconvert(),
             nb::arg("topk_mask_tensor").noconvert(),
             nb::arg("k") = 32,
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::detail

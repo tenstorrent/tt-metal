@@ -244,6 +244,8 @@ tests/ttnn/**/operations/pool/ @tenstorrent/metalium-developers-convolutions @te
 tests/sweep_framework/ @stevendae @bbradelTT @ntarafdar @pavlejosipovic @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
+tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
+tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
 tests/nightly/t3000/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
 tests/nightly/tg/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
@@ -310,8 +312,8 @@ models/demos/t3000 @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @ppetrovicTT @tenstorrent/codeowner-bypass
 models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
-models/demos/qwen25_vl @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
-models/demos/qwen3_vl @ssanjayTT @tenstorrent/codeowner-bypass
+models/demos/qwen25_vl @gwangTT @ssanjayTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
+models/demos/qwen3_vl @ssanjayTT @gwangTT @tenstorrent/codeowner-bypass
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar @tenstorrent/codeowner-bypass
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
