@@ -103,7 +103,7 @@ class WarmupForwardMixin:
 
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
-            self.decode_forward_text(
+            self.decode_forward(
                 tokens=tokens,
                 start_pos=start_pos,
                 page_table=page_table,

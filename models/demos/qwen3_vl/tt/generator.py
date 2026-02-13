@@ -104,7 +104,7 @@ class Generator(WarmupForwardMixin):
         # convert to torch tensor
         self.model.rope_setup.rope_deltas = torch.tensor(rope_deltas_list)
 
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens,
         start_pos,

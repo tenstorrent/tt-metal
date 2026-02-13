@@ -676,7 +676,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 for gen_idx in range(decode_steps):
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
-                    logits = self.decode_forward_text(
+                    logits = self.decode_forward(
                         tokens=next_tokens,
                         positions=positions,
                         batch_size_per_row=self.batch_size_per_row,
@@ -909,7 +909,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         logger.info("Decode trace capture complete.")
         self._trace_id = trace_id
 
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens: torch.Tensor,
         start_pos: torch.Tensor,
