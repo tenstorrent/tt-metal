@@ -491,12 +491,26 @@ int SearchHeuristic::compute_candidate_cost(
     // (a) already-mapped nodes in the other group, (b) unused nodes (potential for other group)
     int cardinal_connectivity_bonus = 0;
     for (const auto& constraint : graph_data.target_cardinal_constraints) {
-        bool in_a =
-            std::find(constraint.group_a_indices.begin(), constraint.group_a_indices.end(), target_idx) !=
-            constraint.group_a_indices.end();
-        bool in_b =
-            std::find(constraint.group_b_indices.begin(), constraint.group_b_indices.end(), target_idx) !=
-            constraint.group_b_indices.end();
+        const auto& group_a = constraint.group_a_indices;
+        const auto& group_b = constraint.group_b_indices;
+        bool in_a = false;
+        bool in_b = false;
+        // Search the smaller group first to reduce average comparisons
+        if (group_a.size() <= group_b.size()) {
+            auto it_a = std::find(group_a.begin(), group_a.end(), target_idx);
+            if (it_a != group_a.end()) {
+                in_a = true;
+            } else {
+                in_b = std::find(group_b.begin(), group_b.end(), target_idx) != group_b.end();
+            }
+        } else {
+            auto it_b = std::find(group_b.begin(), group_b.end(), target_idx);
+            if (it_b != group_b.end()) {
+                in_b = true;
+            } else {
+                in_a = std::find(group_a.begin(), group_a.end(), target_idx) != group_a.end();
+            }
+        }
         if (!in_a && !in_b) {
             continue;
         }
@@ -513,14 +527,14 @@ int SearchHeuristic::compute_candidate_cost(
                 }
             }
         }
-        for (size_t j = 0; j < graph_data.n_global; ++j) {
-            if (used[j]) {
+        // Accumulate connectivity from global_idx to unused global nodes by iterating
+        // only over its existing connections instead of scanning all global nodes.
+        const auto& global_conn_map = graph_data.global_conn_count[global_idx];
+        for (const auto& [neighbor_global, conn_count] : global_conn_map) {
+            if (used[neighbor_global]) {
                 continue;
             }
-            auto it = graph_data.global_conn_count[global_idx].find(j);
-            if (it != graph_data.global_conn_count[global_idx].end()) {
-                conn_to_other += it->second;
-            }
+            conn_to_other += conn_count;
         }
         cardinal_connectivity_bonus += static_cast<int>(conn_to_other);
     }
@@ -639,12 +653,26 @@ int SearchHeuristic::compute_node_cost(
     // has more mapped members (enables earlier cardinal validation and pruning)
     size_t cardinal_readiness = 0;
     for (const auto& constraint : graph_data.target_cardinal_constraints) {
-        bool in_a =
-            std::find(constraint.group_a_indices.begin(), constraint.group_a_indices.end(), target_idx) !=
-            constraint.group_a_indices.end();
-        bool in_b =
-            std::find(constraint.group_b_indices.begin(), constraint.group_b_indices.end(), target_idx) !=
-            constraint.group_b_indices.end();
+        const auto& group_a = constraint.group_a_indices;
+        const auto& group_b = constraint.group_b_indices;
+        bool in_a = false;
+        bool in_b = false;
+        // Search the smaller group first to reduce average comparisons
+        if (group_a.size() <= group_b.size()) {
+            auto it_a = std::find(group_a.begin(), group_a.end(), target_idx);
+            if (it_a != group_a.end()) {
+                in_a = true;
+            } else {
+                in_b = std::find(group_b.begin(), group_b.end(), target_idx) != group_b.end();
+            }
+        } else {
+            auto it_b = std::find(group_b.begin(), group_b.end(), target_idx);
+            if (it_b != group_b.end()) {
+                in_b = true;
+            } else {
+                in_a = std::find(group_a.begin(), group_a.end(), target_idx) != group_a.end();
+            }
+        }
         if (!in_a && !in_b) {
             continue;
         }
