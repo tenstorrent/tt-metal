@@ -14,6 +14,51 @@
 #include "api/debug/dprint_pages.h"
 #endif
 
+template <bool B>
+struct IndexType;
+
+template <>
+struct IndexType<true> {
+    using type = uint32_t;
+};
+
+template <>
+struct IndexType<false> {
+    using type = uint16_t;
+};
+
+template <
+    typename IndexType,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    uint32_t fill_c,
+    uint32_t column_stride,
+    uint32_t row_stride,
+    bool is_large_kernel,
+    uint32_t sticks_per_chunk,
+    uint32_t in_idx_cb_id>
+void fill_indexes(uint32_t init_index) {
+    volatile tt_l1_ptr IndexType* idx_ptr =
+        reinterpret_cast<volatile tt_l1_ptr IndexType*>(get_write_ptr(in_idx_cb_id));
+    uint32_t kernel_idx = 0;
+
+    for (uint32_t h = 0; h < kernel_h; ++h) {
+        uint32_t hw = h * kernel_w;
+        for (uint32_t w = 0; w < kernel_w; ++w, ++hw) {
+            if (!is_large_kernel || hw < sticks_per_chunk) {
+                volatile tt_l1_ptr IndexType* base_ptr = &idx_ptr[hw * TILE_WIDTH];
+                IndexType index = static_cast<IndexType>(init_index + kernel_idx);
+
+                for (uint32_t c = 0; c < fill_c; ++c) {
+                    base_ptr[c] = index;
+                }
+            }
+            kernel_idx += column_stride;
+        }
+        kernel_idx += row_stride;
+    }
+}
+
 // Initialize indices and increment tiles for return_indices functionality
 template <
     uint32_t kernel_h,
@@ -81,43 +126,16 @@ ALWI void initialize_return_indices_data() {
 
     // initialize the index CB
     cb_reserve_back(in_idx_cb_id, 1);
-    uint32_t kernel_idx = 0;
-    volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(in_idx_cb_id));
-    if constexpr (indexes_32_bit) {
-        for (uint32_t h = 0; h < kernel_h; ++h) {
-            uint32_t hw_base = h * kernel_w;
-            for (uint32_t w = 0; w < kernel_w; ++w) {
-                uint32_t hw = hw_base + w;
-                if (!is_large_kernel || hw < sticks_per_chunk) {
-                    // only fill up to sticks_per_chunk for large kernels
-                    for (uint32_t c = 0; c < fill_c; ++c) {
-                        uint32_t index = init_index + kernel_idx;
-                        idx_ptr[hw * TILE_WIDTH + c] = index;
-                    }
-                }
-                kernel_idx += column_stride;
-            }
-            kernel_idx += row_stride;
-        }
-    } else {
-        volatile tt_l1_ptr uint16_t* idx_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(in_idx_cb_id));
-        for (uint32_t h = 0; h < kernel_h; ++h) {
-            uint16_t hw_base = h * kernel_w;
-            for (uint32_t w = 0; w < kernel_w; ++w) {
-                uint16_t hw = hw_base + w;
-                if (!is_large_kernel || hw < sticks_per_chunk) {
-                    // only fill up to sticks_per_chunk for large kernels
-                    for (uint32_t c = 0; c < fill_c; ++c) {
-                        uint16_t index = init_index + kernel_idx;
-                        idx_ptr[hw * TILE_WIDTH + c] = index;
-                    }
-                }
-                kernel_idx += dilation_w;
-            }
-            kernel_idx += dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
-        }
-    }
+    fill_indexes<
+        typename IndexType<indexes_32_bit>::type,
+        kernel_h,
+        kernel_w,
+        fill_c,
+        column_stride,
+        row_stride,
+        is_large_kernel,
+        sticks_per_chunk,
+        in_idx_cb_id>(init_index);
     cb_push_back(in_idx_cb_id, 1);
 
     // initialize the increment CBs
