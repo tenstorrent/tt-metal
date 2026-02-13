@@ -262,6 +262,7 @@ class DPTTTPipeline:
             return self.forward_pixel_values(pv_torch, normalize=normalize)
 
         t0 = time.perf_counter()
+        trace_exec_ms = None
         try:
             if requested_exec_mode == "trace_2cq":
                 # 2-CQ wiring: host->device copy on cq=1, trace execute on cq=0.
@@ -271,15 +272,19 @@ class DPTTTPipeline:
                 ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 1)
                 write_event = ttnn.record_event(self.backbone.tt_device, 1)
                 ttnn.wait_for_event(0, write_event)
+                t_exec = time.perf_counter()
                 ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=False)
                 # Record completion after enqueuing trace execution and wait for
                 # it before reading from the persistent trace output tensor.
                 completion_event = ttnn.record_event(self.backbone.tt_device, 0)
                 ttnn.wait_for_event(0, completion_event)
+                trace_exec_ms = (time.perf_counter() - t_exec) * 1000.0
                 self._trace_op_event = completion_event
             else:
                 ttnn.copy_host_to_device_tensor(tt_pixel_values_host, self._full_trace_input, 0)
+                t_exec = time.perf_counter()
                 ttnn.execute_trace(self.backbone.tt_device, self._full_trace_id, cq_id=0, blocking=True)
+                trace_exec_ms = (time.perf_counter() - t_exec) * 1000.0
         except Exception as exc:
             self._full_trace_unavailable_reason = str(exc)
             LOG.warning(
@@ -316,6 +321,8 @@ class DPTTTPipeline:
             "reassembly_ms": None,
             "fusion_head_ms": None,
             "normalize_ms": None,
+            # Wall-clock time spent waiting for trace execution to complete (excludes readback/normalize).
+            "trace_exec_ms": trace_exec_ms,
             "total_ms": total_ms,
             "fallback_counts": PERF_COUNTERS.snapshot(),
             "full_trace_unavailable_reason": self._full_trace_unavailable_reason,

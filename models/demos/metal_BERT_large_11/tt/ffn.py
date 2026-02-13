@@ -21,7 +21,7 @@ def feed_forward(
     device,
     model_config,
 ):
-    # Weights pre-transposed on host​. No on-the fly transpose of W.
+    # Weights pre-transposed on host. No on-the fly transpose of W.
     # activation = [1, 9, 384, 1024]
     # ff1_weighta = [1, 1, 1024, 4096]
     # output = [1, 9, 384, 4096]

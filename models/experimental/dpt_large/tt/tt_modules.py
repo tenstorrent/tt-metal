@@ -146,17 +146,36 @@ def _apply_attn_mask(attn_logits: torch.Tensor, attn_mask) -> torch.Tensor:
     return attn_logits + mask_torch
 
 
-def _ttnn_linear_with_optional_program_config(*, x, w, bias, dtype, memory_config, program_config):
-    """Call ttnn.linear with best-effort program_config plumbing across runtime versions."""
+def _ttnn_linear_with_optional_program_config(*, x, w, bias, dtype, memory_config, program_config, op_name: str = "unknown"):
+    """Call ttnn.linear with best-effort program_config plumbing across runtime versions.
+
+    In perf runs we want to surface when a program_config cannot be used, since
+    silently falling back to the default kernel changes both performance and
+    determinism.
+    """
+    try:
+        from .perf_counters import inc_program_config_fallback, strict_program_config_enabled
+    except Exception:  # pragma: no cover
+        inc_program_config_fallback = None
+        strict_program_config_enabled = lambda: False  # type: ignore
+
     if program_config is None:
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
     try:
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config, program_config=program_config)
     except TypeError:
         # Older ttnn builds may not expose program_config for this op.
+        if callable(inc_program_config_fallback):
+            inc_program_config_fallback(op=op_name, reason="kwarg_unsupported")
+        if strict_program_config_enabled():
+            raise
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
     except Exception:
         # Some runtimes accept the kwarg but can reject specific program configs at runtime.
+        if callable(inc_program_config_fallback):
+            inc_program_config_fallback(op=op_name, reason="runtime_rejected")
+        if strict_program_config_enabled():
+            raise
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
 
 
@@ -509,6 +528,7 @@ class TTAttention:
                 dtype=ttnn.bfloat16,
                 memory_config=memcfg,
                 program_config=qkv_pc,
+                op_name="attn_qkv",
             )
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
@@ -583,6 +603,7 @@ class TTAttention:
                 dtype=ttnn.bfloat16,
                 memory_config=memcfg,
                 program_config=proj_pc,
+                op_name="attn_proj",
             )
             # Back to [B, N, C]
             out = out_tt4
@@ -691,6 +712,7 @@ class TTMLP:
                 dtype=ttnn.bfloat16,
                 memory_config=memcfg,
                 program_config=ff1_pc,
+                op_name="mlp_ff1",
             )
             # If FF1 program config fuses GELU, skip the explicit GELU op.
             if not _program_config_fuses_activation(ff1_pc):
@@ -702,6 +724,7 @@ class TTMLP:
                 dtype=ttnn.bfloat16,
                 memory_config=memcfg,
                 program_config=ff2_pc,
+                op_name="mlp_ff2",
             )
             if reshardened and _ttnn_is_sharded(y2):
                 # Return interleaved so residual adds in the transformer block remain stable.

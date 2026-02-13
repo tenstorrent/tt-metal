@@ -32,21 +32,21 @@ TT Hardware is not fully IEEE compliant, however, some operations are following 
 ```
        Operation      |   Result
 -----------------------------------
-       ±Inf × ±Inf​    |    ±Inf​
-    ±finite × ±Inf​    |    ±Inf​
-        Inf + Inf​     |    +Inf​
-       -Inf – Inf​     |    –Inf​
+       ±Inf × ±Inf    |    ±Inf
+    ±finite × ±Inf    |    ±Inf
+        Inf + Inf     |    +Inf
+       -Inf – Inf     |    –Inf
 ```
 2. For SFPU ops:
 ```
        Operation      |   Result
 -----------------------------------
-       ±Inf × ±Inf​    |    ±Inf​
-    ±finite × ±Inf​    |    ±Inf​
-        Inf + Inf​     |    +Inf​
-       -Inf – Inf​     |    –Inf​
-          0 × Inf​     |     NaN
-       +Inf - Inf​     |     NaN
+       ±Inf × ±Inf    |    ±Inf
+    ±finite × ±Inf    |    ±Inf
+        Inf + Inf     |    +Inf
+       -Inf – Inf     |    –Inf
+          0 × Inf     |     NaN
+       +Inf - Inf     |     NaN
 ```
 
 The operations not listed in the tables above will treat `NaN`/`Inf` numbers just as any other ordinary number, therefore the result may or may not be a special number designated by the standard. However, Tensix compute hardware can detect if any of the result value have ever become one of the special numbers, thus providing the information to the programmer that one of those values has been "seen".

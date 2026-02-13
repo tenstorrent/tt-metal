@@ -13,7 +13,7 @@ from PIL import Image
 
 from ..tt.config import DPTLargeConfig
 from ..tt.fallback import DPTFallbackPipeline
-from ..tt.perf_counters import PERF_COUNTERS, reset_perf_counters
+from ..tt.perf_counters import PERF_COUNTERS, reset_perf_counters, set_strict_program_config
 
 
 def _collect_images(args) -> list[str]:
@@ -185,6 +185,9 @@ def main():
 
     use_tt = bool(args.tt_run)
     effective_dp, effective_batch_size = _resolve_dp_and_batch_size(args, use_tt=use_tt)
+    # When emitting perf JSON, do not silently drop TTNN program configs: failing
+    # fast makes performance issues observable and avoids non-deterministic results.
+    set_strict_program_config(bool(use_tt and args.dump_perf))
 
     config = DPTLargeConfig(
         image_size=args.image_size,
@@ -368,7 +371,7 @@ def main():
             perf["stage_breakdown_s"] = _stage_breakdown_to_seconds(perf["stage_breakdown_ms"])
         perf["fallback_counts"] = PERF_COUNTERS.snapshot()
 
-        if use_tt:
+        if use_tt and args.dump_perf:
             counts = perf["fallback_counts"]
             if int(counts.get("vit_backbone_fallback_count", 0)) != 0 or int(
                 counts.get("reassembly_readout_fallback_count", 0)
@@ -376,6 +379,8 @@ def main():
                 counts.get("upsample_host_fallback_count", 0)
             ) != 0:
                 raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
+            if int(counts.get("program_config_fallback_total", 0)) != 0:
+                raise RuntimeError(f"Unexpected TT program_config fallbacks in perf run: {counts}")
 
         if args.dump_depth:
             Path(args.dump_depth).parent.mkdir(parents=True, exist_ok=True)
