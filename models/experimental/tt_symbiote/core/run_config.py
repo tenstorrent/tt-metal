@@ -8,17 +8,17 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
-from torch.utils._pytree import tree_flatten, tree_map
+from torch.utils._pytree import tree_map
 from tracy import signpost
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.experimental.tt_symbiote.core.utils import (
     TORCH_TO_TTNN,
+    compare_fn_outputs,
     torch_dtype_to_ttnn_dtype,
     ttnn_dtype_to_torch_dtype,
 )
-from models.experimental.tt_symbiote.core.utils import compare_fn_outputs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
@@ -177,6 +177,7 @@ def copy_to_ttnn(func):
         if isinstance(e, TorchTTNNTensor) and e.elem is not None and e.ttnn_tensor is not None:
             res = TorchTTNNTensor(ttnn.from_torch(e.elem.clone()))
             res.ttnn_tensor = ttnn.to_layout(res.to_ttnn, e.ttnn_tensor.layout)
+            # TODO: copy memory config without erroring out.
             if e.ttnn_tensor.is_allocated() and e.ttnn_tensor.device() is not None:
                 res.ttnn_tensor = ttnn.to_device(res.to_ttnn, e.ttnn_tensor.device())
             return res
@@ -235,61 +236,12 @@ class DispatchManager:
     def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs):
         from models.experimental.tt_symbiote.core.torch_dispatcher import can_dispatch_to_torch, dispatch_to_torch
 
-        # Capture logical shape for im2col before unwrap (to_torch can make .shape physical/padded).
-        im2col_logical_shape = None
-        if func.name().startswith("aten::im2col") and len(torch_args) >= 5:
-            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
-            if isinstance(torch_args[0], TorchTTNNTensor) and torch_args[0].ttnn_tensor is not None:
-                im2col_logical_shape = tuple(int(i) for i in torch_args[0].ttnn_tensor.shape)
+        # no_dispatch is only needed if you use enable_python_mode.
+        # It prevents infinite recursion.
         with no_dispatch():
-            func_args, func_kwargs = tree_map(unwrap_to_torch(func), torch_args), tree_map(
-                unwrap_to_torch(func), torch_kwargs
-            )
-            # For im2col CPU fallback: input synced from device may have padded storage; copy to logical shape
-            # so downstream view(1, C, 196, 4) is valid. Prefer shape from TTNN tensor (captured above).
-            if func.name().startswith("aten::im2col") and len(torch_args) >= 5:
-                from math import isqrt
-
-                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
-                if isinstance(torch_args[0], TorchTTNNTensor) and isinstance(func_args[0], torch.Tensor):
-                    t = func_args[0]
-                    shp = (
-                        im2col_logical_shape
-                        if (im2col_logical_shape is not None and len(im2col_logical_shape) == 4)
-                        else torch_args[0].shape
-                    )
-                    if len(shp) == 4:
-                        N, C = int(shp[0]), int(shp[1])
-                        expected_in_numel = N * C * int(shp[2]) * int(shp[3])
-                        func_args = list(func_args)
-                        # Vision fallback: known padded buffer 2965872 with logical (1,1152,28,28)=903168.
-                        if t.numel() == 2965872 and N == 1 and C == 1152:
-                            func_args[0] = t.flatten()[:903168].clone().reshape(1, 1152, 28, 28)
-                        elif t.numel() > expected_in_numel:
-                            # Padded buffer: .shape is logical; copy first expected_in_numel elements.
-                            func_args[0] = (
-                                t.flatten()[:expected_in_numel].clone().reshape(N, C, int(shp[2]), int(shp[3]))
-                            )
-                        elif t.numel() < expected_in_numel:
-                            # Buffer smaller than .shape (e.g. .shape physical): use all elements, infer H*W.
-                            spatial = t.numel() // (N * C)
-                            if spatial > 0:
-                                H = isqrt(spatial)
-                                W = spatial // H
-                                if H * W == spatial and H > 0 and W > 0:
-                                    func_args[0] = t.flatten().clone().reshape(N, C, H, W)
-                                else:
-                                    func_args[0] = t.contiguous().clone()
-                            else:
-                                func_args[0] = t.contiguous().clone()
-                        else:
-                            func_args[0] = (
-                                t[: int(shp[0]), : int(shp[1]), : int(shp[2]), : int(shp[3])].contiguous().clone()
-                            )
-                        func_args = tuple(func_args)
-            # For aten::view: when tensor has padded numel (e.g. device im2col output) but view expects logical
+            func_args = tree_map(unwrap_to_torch(func), torch_args)
+            func_kwargs = tree_map(unwrap_to_torch(func), torch_kwargs)
+            # For aten::view: when tensor has padded numel (e.g. after im2col) but view expects logical
             # shape, trim to target_numel so reshape in torch_dispatcher.handle_view succeeds.
             if func.name() == "aten::view" and len(func_args) >= 2:
                 from functools import reduce
@@ -303,42 +255,30 @@ class DispatchManager:
                         func_args = list(func_args)
                         func_args[0] = t.flatten()[:target_numel].clone()
                         func_args = tuple(func_args)
-            # Avoid BFloat16 != float errors when one operand is from TTNN (bfloat16) and another is module param (float32)
-            target_dtype = _dtype_from_torch_args(func_args, func_kwargs)
-            if target_dtype is not None:
-
-                def _cast_to_dtype(e):
-                    if isinstance(e, torch.Tensor) and e.is_floating_point() and e.dtype != target_dtype:
-                        return e.to(target_dtype)
-                    return e
-
-                func_args = tree_map(_cast_to_dtype, func_args)
-                func_kwargs = tree_map(_cast_to_dtype, func_kwargs)
-            _record = os.environ.get("TT_SYMBIOTE_DISPATCH_TIMING", "0") == "1"
-            if _record:
-                begin = time.time()
-            func_res = (
-                dispatch_to_torch(func.name(), func_args, func_kwargs)
-                if can_dispatch_to_torch(func.name(), func_args, func_kwargs)
-                else func(*func_args, **func_kwargs)
+            begin = time.time()
+            if can_dispatch_to_torch(func.name(), func_args, func_kwargs):
+                func_res = dispatch_to_torch(func.name(), func_args, func_kwargs)
+            else:
+                func_res = func(*func_args, **func_kwargs)
+            end = time.time()
+            DispatchManager.record_timing(
+                "Torch",
+                (
+                    ""
+                    if DispatchManager.current_module_name is None
+                    else DispatchManager.current_module_name + f".{func.name()}"
+                ),
+                func.name(),
+                {},
+                end - begin,
             )
-            if _record:
-                end = time.time()
-                DispatchManager.record_timing(
-                    "Torch",
-                    (
-                        DispatchManager.current_module_name + f".{func.name()}"
-                        if DispatchManager.current_module_name
-                        else func.name()
-                    ),
-                    func.name(),
-                    {},
-                    end - begin,
-                )
-            return tree_map(wrap_from_torch, func_res)
+            rs = tree_map(wrap_from_torch, func_res)
+        return rs
 
     @staticmethod
     def record_timing(backend: str, module_name: str, func_name: str, attrs: dict, duration: float) -> None:
+        if backend not in DispatchManager.timings:
+            DispatchManager.timings[backend] = {}
         if "TimingEntries" not in DispatchManager.timings:
             DispatchManager.timings["TimingEntries"] = []
         DispatchManager.timings["TimingEntries"].append(
@@ -391,25 +331,27 @@ def set_device_wrap(device):
 def create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=False):
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    if isinstance(torch_output, (list, tuple)) and isinstance(ttnn_output, TorchTTNNTensor):
-        if len(torch_output) > 0 and isinstance(torch_output[0], TorchTTNNTensor):
-            torch_output[0].ttnn_tensor = ttnn_output.to_ttnn
-            if not assign_ttnn_to_torch:
-                torch_output[0].elem = None
-            return torch_output
-
     if isinstance(torch_output, TorchTTNNTensor) and isinstance(ttnn_output, TorchTTNNTensor):
+        assert len(torch_output.shape) == len(ttnn_output.shape) and all(
+            [s1 == s2 for s1, s2 in zip(torch_output.shape, ttnn_output.shape)]
+        ), "Mismatched output shapes between TTNN and Torch."
+        assert torch_output.elem is not None, "torch_output.elem is None, cannot assign to ttnn_output."
         torch_output.ttnn_tensor = ttnn_output.to_ttnn
         if not assign_ttnn_to_torch:
             torch_output.elem = None
-
     elif isinstance(torch_output, (list, tuple)) and isinstance(ttnn_output, (list, tuple)):
+        assert len(torch_output) == len(ttnn_output), "Mismatched output lengths between TTNN and Torch."
         for t_item, n_item in zip(torch_output, ttnn_output):
             if isinstance(t_item, TorchTTNNTensor) and isinstance(n_item, TorchTTNNTensor):
+                assert len(t_item.shape) == len(n_item.shape) and all(
+                    [s1 == s2 for s1, s2 in zip(t_item.shape, n_item.shape)]
+                ), "Mismatched output shapes between TTNN and Torch."
+                assert t_item.elem is not None, "t_item.elem is None, cannot assign to n_item."
                 t_item.ttnn_tensor = n_item.to_ttnn
                 if not assign_ttnn_to_torch:
                     t_item.elem = None
-
+    else:
+        print("Warning: Mismatched output types between TTNN and Torch in create_new_ttnn_tensors_using_torch_output.")
     return torch_output
 
 
@@ -448,35 +390,12 @@ def get_default_distributed_tensor_config(mesh_device=None, torch_tensor=None, m
     return state.tensor_config
 
 
-def _dtype_from_torch_args(args, kwds):
-    """Get the first floating-point tensor dtype from flattened args/kwds (TorchTTNNTensor or torch.Tensor)."""
-    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
-    flat, _ = tree_flatten((args, kwds))
-    for a in flat:
-        if isinstance(a, (TorchTTNNTensor, torch.Tensor)) and a.is_floating_point():
-            return a.dtype
-    return None
-
-
-def _cast_module_to_dtype(module, dtype):
-    """Cast module's floating parameters and buffers to dtype in-place (e.g. for torch fallback dtype match)."""
-    if dtype is None:
-        return
-    for p in module.parameters():
-        if p.is_floating_point():
-            p.data = p.data.to(dtype)
-    for b in module.buffers():
-        if b.is_floating_point():
-            b.data = b.data.to(dtype)
-
-
 class NormalRun:
     verbose = False
     signpost_mode = None
 
     def __new__(cls, *args, **kwargs):
-        raise TypeError("Cannot instantiate")
+        raise TypeError("This class cannot be instantiated")
 
     @staticmethod
     def new_instance(cls, elem, *args, **kwargs):
@@ -783,9 +702,6 @@ class DPLRunNoErrorProp(NormalRun):
     def module_run(self, *args, **kwds):
         from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
-        target_dtype = _dtype_from_torch_args(args, kwds)
-        if target_dtype is not None:
-            _cast_module_to_dtype(self.torch_layer, target_dtype)
         torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*args, **kwds))
         self.preprocess_weights()
         self.move_weights_to_device()
@@ -814,9 +730,6 @@ class SELRun(NormalRun):
         from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
         torch_args = tree_map(copy_to_torch(self.__class__.__name__), args)
-        target_dtype = _dtype_from_torch_args(torch_args, kwds)
-        if target_dtype is not None:
-            _cast_module_to_dtype(self.torch_layer, target_dtype)
         torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*torch_args, **kwds))
         self.preprocess_weights()
         self.move_weights_to_device()
@@ -1128,14 +1041,36 @@ _current_run_mode = None
 
 
 def set_run_mode(mode: str) -> None:
+    """Set the global run mode. Must be called before any tensor operations."""
     global _current_run_mode
+    assert (
+        _current_run_mode is None or _current_run_mode == mode
+    ), "Run mode has already been set and cannot be changed."
+    if mode not in _RUN_MODE_REGISTRY:
+        raise ValueError(f"Invalid run mode '{mode}'. Valid modes: {list(_RUN_MODE_REGISTRY.keys())}")
     _current_run_mode = mode
 
 
 def get_tensor_run_implementation():
+    # Environment variable takes precedence for backward compatibility
     global _current_run_mode
-    env_mode = os.environ.get("TT_SYMBIOTE_RUN_MODE", _current_run_mode or "NORMAL")
+    global _RUN_MODE_REGISTRY
+    env_mode = os.environ.get("TT_SYMBIOTE_RUN_MODE", _current_run_mode)
     signpost_mode = os.environ.get("TT_SYMBIOTE_SIGNPOST_MODE", None)
-    res = _RUN_MODE_REGISTRY[env_mode]
-    res.signpost_mode = signpost_mode
-    return res
+    if env_mode is None and _current_run_mode is None:
+        _current_run_mode = "NORMAL"
+    if env_mode != _current_run_mode and _current_run_mode is not None and env_mode is not None:
+        print(
+            f"Warning: Run mode from environment variable '{env_mode}' overrides the previously set run mode '{_current_run_mode}'."
+        )
+
+    if env_mode is None:
+        result = _RUN_MODE_REGISTRY[_current_run_mode]
+    else:
+        if env_mode not in _RUN_MODE_REGISTRY:
+            raise ValueError(
+                f"Invalid run mode '{env_mode}' from environment variable. Valid modes: {list(_RUN_MODE_REGISTRY.keys())}"
+            )
+        result = _RUN_MODE_REGISTRY[env_mode]
+    result.signpost_mode = signpost_mode
+    return result
