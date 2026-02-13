@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device management utilities for TTNN modules and tensor device preparation (e.g. GR00T)."""
+"""Device placement, tensor unwrapping, and torch-dispatch arg preparation for TTNN/Symbiote."""
 import operator
 import time
 from functools import reduce
@@ -19,7 +19,7 @@ class DeviceInit:
 
     @classmethod
     def init_state(cls, device):
-        """Initialize device state if not already initialized."""
+        """Initialize or return cached device state."""
         if device not in cls.DEVICE_TO_STATE_DICT:
             res = cls.init_state_impl(device)
             if res is not None:
@@ -29,33 +29,28 @@ class DeviceInit:
 
     @classmethod
     def init_state_impl(cls, device) -> DistributedConfig:
-        """Implementation-specific device state initialization."""
-        # Placeholder for actual device state initialization logic
+        """Override for custom device state; default returns DistributedConfig(device)."""
         return DistributedConfig(device)
 
 
 def _initialize_module_on_device(module: "TTNNModule", device, device_init=DeviceInit):
-    """Initialize a TTNN module on the specified device."""
+    """Place TTNN module on device and set distributed state if multi-device."""
     module.to_device(device)
     if device.get_num_devices() > 1:
         module.set_device_state(device_init.init_state(device))
 
 
 def set_device(obj, device, device_init=DeviceInit, **kwargs):
-    """Recursively set device for all TTNN modules in a model."""
+    """Set device for all TTNN modules in a model, recursively."""
     from models.experimental.tt_symbiote.core.module import TTNNModule
 
-    # Build module name mapping before recursion
     module_names = {}
     if isinstance(obj, nn.Module):
         module_names = {module: name for name, module in obj.named_modules()}
 
     def _set_device_recursive(current_obj, module_name=None):
         if isinstance(current_obj, nn.Module):
-            # Get the name for this module from the mapping
             name = module_names.get(current_obj, module_name or "")
-
-            # Register forward hook for this module
             if kwargs.get("register_forward_hook", True):
 
                 def timed_call(original_call, module_name, module_class):
@@ -134,7 +129,7 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
 
 
 def unwrap_ttnn(tensor):
-    """Recursively extracts the core tensor from TTNN or Symbiote wrappers."""
+    """Extract underlying tensor from TTNN/Symbiote wrappers."""
     if tensor is None:
         return None
     curr = tensor
@@ -144,10 +139,7 @@ def unwrap_ttnn(tensor):
 
 
 def assimilate_to_device(tensor, device):
-    """
-    Prepares tensors for GR00T inference by handling unwrapping,
-    complex-to-real conversion, and moving to the Tenstorrent device.
-    """
+    """Unwrap, convert complex→real if needed, and move tensor to device."""
     if tensor is None:
         return None
 
@@ -168,11 +160,7 @@ def assimilate_to_device(tensor, device):
 
 
 def prepare_args_for_torch_dispatch(func_name, func_args, func_kwargs):
-    """
-    Apply pre-dispatch transformations to func_args/func_kwargs.
-    E.g. for aten::view with padded tensors, trim to target_numel so reshape succeeds.
-    Returns (func_args, func_kwargs), possibly modified.
-    """
+    """Preprocess dispatch args (e.g. trim padded view buffers); returns (args, kwargs)."""
     if func_name != "aten::view" or len(func_args) < 2:
         return func_args, func_kwargs
 
@@ -185,13 +173,12 @@ def prepare_args_for_torch_dispatch(func_name, func_args, func_kwargs):
     if t.numel() <= target_numel or target_numel <= 0:
         return func_args, func_kwargs
 
-    # Padded buffer: trim to logical size so reshape in handle_view succeeds
     func_args = list(func_args)
     func_args[0] = t.flatten()[:target_numel].clone()
     return tuple(func_args), func_kwargs
 
 
 def handle_view(func, args, kwargs):
-    """Handle view operation: prepare args (e.g. trim padded tensors) then reshape."""
+    """Trim view args if padded, then reshape."""
     args, kwargs = prepare_args_for_torch_dispatch("aten::view", args, kwargs)
     return args[0].reshape(args[1])
