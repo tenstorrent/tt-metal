@@ -280,9 +280,9 @@ void RunTestOnCore(
     std::string expected;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
-    std::string risc_name = (is_eth_core) ? "erisc" : " brisc";
+    std::string risc_name = (is_eth_core) ? "erisc" : "BRISC";
     if (use_ncrisc) {
-        risc_name = "ncrisc";
+        risc_name = "NCRISC";
     }
     switch (feature) {
         case SanitizeNOCAddress:
