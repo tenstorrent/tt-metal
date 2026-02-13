@@ -860,20 +860,16 @@ class Generator(WarmupForwardMixin):
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)
-        sampling_params = self._create_sampling_params(
-            can_sample_on_device, non_greedy_decoding_on_device, None, mode="prefill"
+        self.warmup_prefill_traces(
+            tokens=None,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=None,
+            enable_trace=enable_trace,
+            sampling_params=None,
+            empty_slots=None,
+            tt_out_logits_all_users=None,
         )
-        for sampling_param in sampling_params:
-            self.warmup_prefill_traces(
-                tokens=None,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                prompt_lens=None,
-                enable_trace=enable_trace,
-                sampling_params=sampling_param,
-                empty_slots=None,
-                tt_out_logits_all_users=None,
-            )
 
     ## Destructor (used to delete ttnn trace if exists)
 
