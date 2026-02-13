@@ -32,7 +32,7 @@ run_t3000_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
-  llama70b=meta-llama/Llama-3.1-70B-Instruct
+  llama70b=meta-llama/Llama-3.3-70B-Instruct
   tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
 
   HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
