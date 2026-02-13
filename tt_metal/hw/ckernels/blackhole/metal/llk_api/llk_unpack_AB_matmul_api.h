@@ -41,7 +41,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     LLK_ASSERT(
-        is_unpacker_A_configured_correctly(
+        are_unpacker_AB_configured_correctly(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
             unpack_src_format[operandB_id],
