@@ -63,8 +63,7 @@ struct AllReduceSender {
         uint32_t remoteReceiverNocX,
         uint32_t remoteReceiverNocY,
         uint32_t dstNumHops,
-        uint32_t numConnections,
-        uint32_t usingPersistentBuffer>
+        uint32_t numConnections>
     struct WriterCTArgs {
         static constexpr uint32_t packet_header_cb_id = packetHeaderCbId;
         static constexpr uint32_t packet_cb_id = packetCbId;
@@ -78,7 +77,6 @@ struct AllReduceSender {
         static constexpr uint32_t remote_receiver_noc_y = remoteReceiverNocY;
         static constexpr uint32_t dst_num_hops = dstNumHops;
         static constexpr uint32_t num_connections = numConnections;
-        static constexpr bool using_persistent_buffer = usingPersistentBuffer;
     };
 
     // ========================================================================
@@ -147,12 +145,6 @@ struct AllReduceSender {
             auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
             fabric_set_unicast_route(fabric_connection, packet_header_ptr, 0);
             packet_header_ptr->to_chip_unicast(WriterCT::dst_num_hops);
-
-            // Wait for receiver to signal it is ready (if not using persistent buffer)
-            if constexpr (!WriterCT::using_persistent_buffer) {
-                noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.receive_semaphore_addr), 1);
-                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.receive_semaphore_addr), 0);
-            }
 
             cb_wait_front(WriterCT::packet_cb_id, WriterCT::input_num_tiles);
             uint32_t packet_base_addr = get_read_ptr(WriterCT::packet_cb_id);
