@@ -9,6 +9,7 @@ from typing import Sequence
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
+import models.experimental.ops.descriptors as descriptors
 import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.tt.ccl import CCL
@@ -1124,15 +1125,19 @@ class MLA1D(AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # Q Norm
-        # 1,1,32,1536, width sharded 8x2 [32,96]
-        tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
-        # 1,1,32,1536, width sharded 8x2 [32,96]
+        # Parallel Q and KV Norms
+        # Q: 1,1,32,1536, width sharded 8x2 [32,96]
+        # KV: 1,1,32,512 8x2 [32,32]
+        q_norm_desc = descriptors.rms_norm(tt_q, program_config=RMSNorm._get_pc(tt_q.memory_config()), **cfg["q_norm"])
+        kv_norm_desc = descriptors.rms_norm(
+            tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
+        )
+        results = composite.launch([q_norm_desc, kv_norm_desc])
+        tt_q = results[0][0]
+        tt_kv_nope = results[1][0]
+        # Q: 1,1,32,1536, width sharded 8x2 [32,96]
+        # KV: 1,1,32,512 8x2 [32,32]
 
-        # KV Norm
-        # 1,1,32,512 8x2 [32,32]
-        tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
-        # 1,1,32,512 8x2 [32,32]
         tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,1,32,512 L1 interleaved
 
