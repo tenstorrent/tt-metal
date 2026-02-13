@@ -63,16 +63,9 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         }
     }
 
-    const bool sharded = output.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
-
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_index, elems_per_page, page_size};
     std::map<std::string, std::string> writer_defines = reader_defines;
-    if (sharded) {
-        shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
-        writer_defines["SHARDED"] = "1";
-    } else {
-        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-    }
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateWriteKernel(
         program,
@@ -93,12 +86,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         // Create the reader compile time arguments
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)cb_index2, elems_per_page, page_size};
         std::map<std::string, std::string> reader_kernel_defines = reader_defines;
-        if (sharded) {
-            shard_builder::extend_sharding_compile_time_args(output, reader_compile_time_args);
-            reader_kernel_defines["SHARDED"] = "1";
-        } else {
-            tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
-        }
+        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
 
         // Create the reader kernel
         reader_id = CreateReadKernel(
@@ -126,24 +114,15 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
             uint32_t num_pages_per_reader = num_pages_per_core / 2;
             std::vector<uint32_t> reader_args = {
                 output.buffer()->address(), u.u32, num_pages_per_reader, reader_page_start};
-            if (sharded) {
-                shard_builder::extend_sharding_run_time_args(output, reader_args);
-            }
             SetRuntimeArgs(program, reader_id.value(), core, reader_args);
 
             uint32_t writer_page_start = reader_page_start + num_pages_per_reader;
             uint32_t num_pages_per_writer = num_pages_per_core - num_pages_per_reader;
             std::vector<uint32_t> writer_args = {
                 output.buffer()->address(), u.u32, num_pages_per_writer, writer_page_start};
-            if (sharded) {
-                shard_builder::extend_sharding_run_time_args(output, writer_args);
-            }
             SetRuntimeArgs(program, writer_id, core, writer_args);
         } else {
             std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_pages_per_core, page_offset};
-            if (sharded) {
-                shard_builder::extend_sharding_run_time_args(output, writer_args);
-            }
             SetRuntimeArgs(program, writer_id, core, writer_args);
         }
         page_offset += num_pages_per_core;

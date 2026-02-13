@@ -36,24 +36,8 @@ void kernel_main() {
     constexpr uint32_t elems_per_page = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
 
-#ifdef SHARDED
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(3),   // Memory layout
-        get_compile_time_arg_val(4),   // The number of sharding cores
-        get_compile_time_arg_val(5),   // The page size we offset each write to
-        get_compile_time_arg_val(6),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(7),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(8),   // pages_per_shard_x
-        get_compile_time_arg_val(9)>;  // pages_per_shard_y
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_idx));
-    experimental::ShardedAddrGen<tensor_shard_info> s = {
-        .bank_base_address = output_addr, .shard_array = mapping_table};
-#else
     constexpr auto dst_args = TensorAccessorArgs<3>();
     const auto s = TensorAccessor(dst_args, output_addr, page_size);
-#endif
 
     value val;
     val.u = fill_value;
@@ -86,7 +70,6 @@ void kernel_main() {
     }
 
     cb_push_back(cb_value, 1);
-
     cb_wait_front(cb_value, 1);
 
     uint32_t end_id = start_id + num_pages_per_core;
