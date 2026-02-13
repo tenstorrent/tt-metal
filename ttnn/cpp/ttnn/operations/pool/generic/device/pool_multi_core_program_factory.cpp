@@ -719,25 +719,24 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         stride_w,                                                                            // 34
         dilation_h,                                                                          // 35
         dilation_w,                                                                          // 36
-        (uint32_t)return_indices,                                                            // 37
-        pad_t,                                                                               // 38
-        pad_l,                                                                               // 39
+        pad_t,                                                                               // 37
+        pad_l,                                                                               // 38
+        (uint32_t)zero_pages,                                                                // 39
         right_inc,                                                                           // 40
         down_left_wrap_inc,                                                                  // 41
         up_left_wrap_inc,                                                                    // 42
-        (uint32_t)zero_pages,                                                                // 43
-        out_cb_id,                                                                           // 44
-        out_idx_cb_id,                                                                       // 45
-        intra_kernel_right_inc,                                                              // 46
-        intra_kernel_down_left_wrap_inc,                                                     // 47
-        intra_kernel_right_inc_cb_id,                                                        // 48
-        intra_kernel_down_left_wrap_inc_cb_id,                                               // 49
-        (uint32_t)indexes_32_bit,                                                            // 50
-        config_tensor_in_dram,                                                               // 51
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 52
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 53
-        reader_indices_storage.get_buffer()->address(),                                      // 54
-        reader_indices_storage.get_buffer()->page_size(),                                    // 55
+        intra_kernel_right_inc,                                                              // 43
+        intra_kernel_down_left_wrap_inc,                                                     // 44
+        out_cb_id,                                                                           // 45
+        out_idx_cb_id,                                                                       // 46
+        intra_kernel_right_inc_cb_id,                                                        // 47
+        intra_kernel_down_left_wrap_inc_cb_id,                                               // 48
+        (uint32_t)indexes_32_bit,                                                            // 49
+        config_tensor_in_dram,                                                               // 50
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 51
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 52
+        reader_indices_storage.get_buffer()->address(),                                      // 53
+        reader_indices_storage.get_buffer()->page_size(),                                    // 54
     };
 
     tt::tt_metal::TensorAccessorArgs(reader_indices_storage.get_buffer()).append_to(reader0_ct_args);
@@ -794,21 +793,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pre_tilize_cb_id,                       // 20
         is_output_tiled,                        // 21
         is_output_block_format,                 // 22
-        (uint32_t)return_indices,               // 23
-        stride_h,                               // 24
-        stride_w,                               // 25
-        in_h_padded,                            // 26
-        in_w_padded,                            // 27
-        eff_kernel_h,                           // 28
-        eff_kernel_w,                           // 29
-        pad_l,                                  // 30
-        intra_kernel_right_inc_cb_id,           // 31
-        intra_kernel_down_left_wrap_inc_cb_id,  // 32
-        compute_tmp_idx_cb_id,                  // 33
+        stride_h,                               // 23
+        stride_w,                               // 24
+        in_h_padded,                            // 25
+        in_w_padded,                            // 26
+        eff_kernel_h,                           // 27
+        eff_kernel_w,                           // 28
+        pad_l,                                  // 29
+        intra_kernel_right_inc_cb_id,           // 30
+        intra_kernel_down_left_wrap_inc_cb_id,  // 31
+        compute_tmp_idx_cb_id,                  // 32
+        clear_value_cb_id,                      // 33
         kernel_h,                               // 34
         kernel_w,                               // 35
-        clear_value_cb_id,                      // 36
-        (uint32_t)indexes_32_bit                // 37
+        (uint32_t)indexes_32_bit                // 36
     };
 
     // Get device arch for compute kernel config initialization
