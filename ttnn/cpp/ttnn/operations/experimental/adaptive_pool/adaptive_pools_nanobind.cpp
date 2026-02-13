@@ -5,18 +5,14 @@
 #include "adaptive_pools_nanobind.hpp"
 
 #include <array>
-#include <variant>
 #include <cstdint>
 #include <optional>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/adaptive_pool/adaptive_pools.hpp"
 
 namespace ttnn::operations::experimental::adaptive_pool {

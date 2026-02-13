@@ -11,7 +11,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "upsample.hpp"
 
@@ -68,7 +68,13 @@ void bind_upsample(nb::module_& mod) {
     ttnn::bind_function<"upsample">(
         mod,
         doc,
-        ttnn::overload_t(&ttnn::upsample, nb::arg("input_tensor"), nb::arg("scale_factor"), nb::kw_only(), nb::arg("mode") = "nearest", nb::arg("memory_config") = nb::none(), nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::upsample,
+        nb::arg("input_tensor"),
+        nb::arg("scale_factor"),
+        nb::kw_only(),
+        nb::arg("mode") = "nearest",
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace

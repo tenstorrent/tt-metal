@@ -12,7 +12,6 @@
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
-namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
 
 namespace ttnn {
 

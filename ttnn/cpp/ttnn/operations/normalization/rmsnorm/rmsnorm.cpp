@@ -12,8 +12,6 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
-
 namespace ttnn {
 
 DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch) {

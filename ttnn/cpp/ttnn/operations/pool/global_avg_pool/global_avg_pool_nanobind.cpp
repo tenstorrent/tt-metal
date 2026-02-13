@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 #include "ttnn/types.hpp"
 
@@ -41,7 +41,11 @@ void bind_global_avg_pool2d(nb::module_& mod) {
     ttnn::bind_function<"global_avg_pool2d">(
         mod,
         doc,
-        ttnn::overload_t(&ttnn::global_avg_pool2d, nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config") = nb::none(), nb::arg("dtype") = nb::none()));
+        &ttnn::global_avg_pool2d,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none());
 }
 
 }  // namespace

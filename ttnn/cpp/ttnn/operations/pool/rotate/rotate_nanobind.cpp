@@ -12,7 +12,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 
-#include <ttnn-nanobind/decorators.hpp>
+#include <ttnn-nanobind/bind_function.hpp>
 #include <ttnn/operations/pool/rotate/rotate.hpp>
 
 namespace ttnn::operations::rotate {
@@ -65,16 +65,15 @@ void bind_rotate(nb::module_& mod) {
     ttnn::bind_function<"rotate">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::rotate,
-            nb::arg("input_tensor"),
-            nb::arg("angle"),
-            nb::kw_only(),
-            nb::arg("center") = nb::none(),
-            nb::arg("fill") = 0.0f,
-            nb::arg("expand") = false,
-            nb::arg("interpolation_mode") = "nearest",
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::rotate,
+        nb::arg("input_tensor"),
+        nb::arg("angle"),
+        nb::kw_only(),
+        nb::arg("center") = nb::none(),
+        nb::arg("fill") = 0.0f,
+        nb::arg("expand") = false,
+        nb::arg("interpolation_mode") = "nearest",
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace

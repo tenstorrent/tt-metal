@@ -9,7 +9,6 @@
 #include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::operations::experimental::ccl {
-namespace detail {}  // namespace detail
 
 ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,

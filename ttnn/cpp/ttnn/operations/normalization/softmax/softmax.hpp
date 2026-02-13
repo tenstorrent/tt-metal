@@ -11,8 +11,6 @@
 
 #include <optional>
 
-namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
-
 namespace ttnn {
 
 /**

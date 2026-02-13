@@ -15,7 +15,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -102,28 +102,27 @@ void bind_max_pool2d_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
         )doc",
-        ttnn::overload_t(
-            &max_pool2d_nanobind_wrapper,
-            nb::arg("input_tensor"),
-            nb::arg("batch_size"),
-            nb::arg("input_h"),
-            nb::arg("input_w"),
-            nb::arg("channels"),
-            nb::arg("kernel_size"),
-            nb::arg("stride"),
-            nb::arg("padding"),
-            nb::arg("dilation"),
-            nb::arg("ceil_mode") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dram_slice_config") = nb::none(),
-            nb::arg("applied_shard_scheme") = nb::none(),
-            nb::arg("deallocate_input") = false,
-            nb::arg("reallocate_halo_output") = true,
-            nb::arg("return_indices") = false,
-            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR),
-            nb::arg("config_tensor_in_dram") = false});
+        &max_pool2d_nanobind_wrapper,
+        nb::arg("input_tensor"),
+        nb::arg("batch_size"),
+        nb::arg("input_h"),
+        nb::arg("input_w"),
+        nb::arg("channels"),
+        nb::arg("kernel_size"),
+        nb::arg("stride"),
+        nb::arg("padding"),
+        nb::arg("dilation"),
+        nb::arg("ceil_mode") = false,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dram_slice_config") = nb::none(),
+        nb::arg("applied_shard_scheme") = nb::none(),
+        nb::arg("deallocate_input") = false,
+        nb::arg("reallocate_halo_output") = true,
+        nb::arg("return_indices") = false,
+        nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+        nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR),
+        nb::arg("config_tensor_in_dram") = false);
 }
 
 void bind_avg_pool2d_operation(nb::module_& mod) {
@@ -159,29 +158,28 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
         )doc",
-        ttnn::overload_t(
-            &ttnn::avg_pool2d,
-            nb::arg("input_tensor"),
-            nb::arg("batch_size"),
-            nb::arg("input_h"),
-            nb::arg("input_w"),
-            nb::arg("channels"),
-            nb::arg("kernel_size"),
-            nb::arg("stride"),
-            nb::arg("padding"),
-            nb::arg("ceil_mode") = false,
-            nb::arg("count_include_pad") = true,
-            nb::arg("divisor_override") = nb::none(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dram_slice_config") = nb::none(),
-            nb::arg("applied_shard_scheme") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("deallocate_input") = false,
-            nb::arg("reallocate_halo_output") = true,
-            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR),
-            nb::arg("config_tensor_in_dram") = false});
+        &ttnn::avg_pool2d,
+        nb::arg("input_tensor"),
+        nb::arg("batch_size"),
+        nb::arg("input_h"),
+        nb::arg("input_w"),
+        nb::arg("channels"),
+        nb::arg("kernel_size"),
+        nb::arg("stride"),
+        nb::arg("padding"),
+        nb::arg("ceil_mode") = false,
+        nb::arg("count_include_pad") = true,
+        nb::arg("divisor_override") = nb::none(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dram_slice_config") = nb::none(),
+        nb::arg("applied_shard_scheme") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("deallocate_input") = false,
+        nb::arg("reallocate_halo_output") = true,
+        nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+        nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR),
+        nb::arg("config_tensor_in_dram") = false);
 }
 
 void py_module(nb::module_& mod) {

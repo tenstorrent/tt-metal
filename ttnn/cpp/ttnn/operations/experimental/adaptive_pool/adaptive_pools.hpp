@@ -3,15 +3,14 @@
 
 #pragma once
 
-#include "ttnn/core.hpp"
-#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <array>
+#include <cstdint>
+#include <optional>
 
-#include "ttnn/operations/pool/generic/device/pool_op.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::adaptive_pool {
 
