@@ -1,0 +1,368 @@
+# This file defines the test matrix for the Release pipeline.
+# These tests are specifically curated for release validation and are decoupled
+# from other pipelines to ensure stability and independent control.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run.
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   model-name: Optional model identifier for filtering via workflow_dispatch.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# ============================================================================
+# Single-card Wormhole tests (N150, N300)
+# ============================================================================
+
+# N150 Core models
+- name: llama3 N150 functional
+  cmd: run_llama3_func
+  skus:
+    wh_n150:
+      timeout: 25
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3
+
+- name: falcon7b N150 functional
+  cmd: run_falcon7b_func
+  skus:
+    wh_n150:
+      timeout: 20
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: falcon7b
+
+- name: resnet N150 functional
+  cmd: run_resnet_func
+  skus:
+    wh_n150:
+      timeout: 15
+  owner_id: U0837MYG788 # Marko Radosavljevic
+  team: models
+  model-name: resnet
+
+- name: vgg N150 functional
+  cmd: run_vgg_func
+  skus:
+    wh_n150:
+      timeout: 15
+  owner_id: U06Q7ESTFEV # Borys Bradel
+  team: models
+  model-name: vgg
+
+- name: bert N150 functional
+  cmd: run_bert_func
+  skus:
+    wh_n150:
+      timeout: 15
+  owner_id: U024A4EFV6U # Brian Liu
+  team: models
+  model-name: bert
+
+- name: stable_diffusion N150 functional
+  cmd: run_stable_diffusion_func
+  skus:
+    wh_n150:
+      timeout: 20
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: stable_diffusion
+
+- name: qwen25_vl N150 functional
+  cmd: run_qwen25_vl_perfunc
+  skus:
+    wh_n150:
+      timeout: 30
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  model-name: qwen25_vl
+
+# N150 CIv2 tests
+- name: segformer N150 functional
+  cmd: run_segformer_func
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U045U3DEKM4 # Mohamed Bahnas
+  team: models
+  model-name: segformer
+
+- name: vit N150 functional
+  cmd: run_vit_demo
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: models
+  model-name: vit
+
+# N300 Core models
+- name: llama3 N300 functional
+  cmd: run_llama3_func
+  skus:
+    wh_n300:
+      timeout: 25
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3
+
+- name: falcon7b N300 functional
+  cmd: run_falcon7b_func
+  skus:
+    wh_n300:
+      timeout: 20
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: falcon7b
+
+- name: resnet N300 functional
+  cmd: run_resnet_func
+  skus:
+    wh_n300:
+      timeout: 15
+  owner_id: U0837MYG788 # Marko Radosavljevic
+  team: models
+  model-name: resnet
+
+- name: bert N300 functional
+  cmd: run_bert_func
+  skus:
+    wh_n300:
+      timeout: 15
+  owner_id: U024A4EFV6U # Brian Liu
+  team: models
+  model-name: bert
+
+- name: ds_r1_qwen N300 functional
+  cmd: run_ds_r1_qwen_func
+  skus:
+    wh_n300_civ2:
+      timeout: 25
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  model-name: ds_r1_qwen
+
+# N300 Performance tests
+- name: mistral7b N300 performance
+  cmd: run_mistral7b_perf
+  skus:
+    wh_n300_perf:
+      timeout: 30
+  owner_id: U0896VBAKFC # Pratikkumar Prajapati
+  team: models
+  model-name: mistral7b
+
+- name: falcon7b N300 performance
+  cmd: run_falcon7b_perf
+  skus:
+    wh_n300_perf:
+      timeout: 25
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: falcon7b
+
+- name: whisper N300 performance
+  cmd: run_whisper_perf
+  skus:
+    wh_n300_perf:
+      timeout: 25
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: whisper
+
+- name: gemma3 N300 performance
+  cmd: run_gemma3_perf
+  skus:
+    wh_n300_perf:
+      timeout: 30
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  model-name: gemma3
+
+- name: qwen25_vl N300 performance
+  cmd: run_qwen25_vl_perfunc
+  skus:
+    wh_n300_perf:
+      timeout: 30
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  model-name: qwen25_vl
+
+# ============================================================================
+# T3000 Wormhole tests
+# ============================================================================
+
+- name: t3k_mixtral_tests
+  cmd: run_t3000_mixtral_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: mixtral
+
+- name: t3k_falcon40b_tests
+  cmd: run_t3000_falcon40b_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 25
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  model-name: falcon40b
+
+- name: t3k_llama3_tests
+  cmd: run_t3000_llama3_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 60
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: llama3
+
+- name: t3k_llama3_vision_tests
+  cmd: run_t3000_llama3_vision_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: llama3_vision
+
+- name: t3k_falcon7b_tests
+  cmd: run_t3000_falcon7b_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 25
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: falcon7b
+
+- name: t3k_llama2_70b_tests
+  cmd: run_t3000_llama2_70b_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 60
+  owner_id: U026P83QJ6H # Johanna Rock
+  team: models
+  model-name: llama2_70b
+
+# ============================================================================
+# Galaxy Wormhole tests
+# ============================================================================
+
+- name: Galaxy Llama3 demo tests
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
+  model-name: llama3
+  skus:
+    wh_galaxy:
+      timeout: 20
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+- name: Galaxy Llama3 8B data-parallel demo tests
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE=TG
+    pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000
+  model-name: llama3_8b_dp
+  skus:
+    wh_galaxy:
+      timeout: 20
+  owner_id: U08BH66EXAL # Radoica Draskic
+  team: models
+
+- name: Galaxy Falcon7b demo tests
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
+    pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/tg/falcon7b/demo_galaxy.py --timeout 600
+  model-name: falcon7b
+  skus:
+    wh_galaxy:
+      timeout: 15
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+
+# ============================================================================
+# Blackhole tests
+# ============================================================================
+
+# P150 Single-card tests
+- name: whisper P150 performance
+  cmd: |
+    pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  skus:
+    bh_p150_perf:
+      timeout: 70
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: whisper
+
+- name: llama3.1-8b P150 performance
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
+  skus:
+    bh_p150_perf:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.1-8b
+
+# LLMBox Multi-card tests
+- name: llama3.1-8b LLMBox performance batch-32
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
+  skus:
+    bh_llmbox:
+      timeout: 70
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: llama3.1-8b
+
+- name: llama3.1-8b LLMBox data-parallel performance
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4 --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.1-8b
+
+- name: llama3.3-70b LLMBox batch-32 performance
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.3-70b
+
+# LoudBox Multi-card tests
+- name: llama3.1-8b LoudBox data-parallel performance
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 8 --max_seq_len 131072 --timeout=600
+  skus:
+    bh_loudbox:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.1-8b
+
+# P300 Multi-card tests
+- name: llama3.1-8b P300 data-parallel performance
+  cmd: |
+    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072 --timeout=600
+  skus:
+    bh_p300:
+      timeout: 70
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.1-8b

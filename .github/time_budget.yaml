@@ -108,3 +108,13 @@ models:
   demo:
     wh_llmbox_perf: 1090
     wh_galaxy: 270
+    wh_n150: 500
+    wh_n150_civ2: 300
+    wh_n300: 600
+    wh_n300_civ2: 400
+    wh_n300_perf: 200
+    bh_p150: 250
+    bh_p150_perf: 250
+    bh_llmbox: 1200
+    bh_loudbox: 1200
+    bh_p300: 800
