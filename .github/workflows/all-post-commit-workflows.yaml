@@ -288,7 +288,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.tests-to-run.outputs.run-profiler-regression == 'true' && !inputs.enable-watcher && !inputs.enable-lightweight-kernel-asserts}}
+    if: ${{ needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
@@ -337,12 +337,3 @@ jobs:
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
-  # Enable ops-sanity workflow after issue:30675 resolved
-  # ops-sanity:
-  #   needs: build-artifact
-  #   secrets: inherit
-  #   uses: ./.github/workflows/ops-sanity.yaml
-  #   with:
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
