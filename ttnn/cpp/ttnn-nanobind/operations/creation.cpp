@@ -529,7 +529,7 @@ void py_module(nb::module_& mod) {
                     return ttnn::empty_like(reference, dtype, layout, nbh::rewrap_optional(device), memory_config);
                 },
                 nb::keep_alive<0, 5>(),
-                nb::arg("tensor"),
+                nb::arg("reference"),
                 nb::kw_only(),
                 nb::arg("dtype") = DataType::BFLOAT16,
                 nb::arg("layout") = Layout::ROW_MAJOR,
