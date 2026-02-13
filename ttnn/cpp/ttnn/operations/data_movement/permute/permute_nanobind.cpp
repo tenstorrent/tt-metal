@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include <ttnn-nanobind/decorators.hpp>
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "permute.hpp"
 
@@ -31,23 +31,25 @@ void bind_permute(nb::module_& mod) {
             List of ttnn.Tensor: the output tensor.
     )doc";
 
-    using OperationType = decltype(ttnn::permute);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"permute">(
         mod,
-        ttnn::permute,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int64_t>& dims,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               float pad_value = 0.0f) { return self(input_tensor, dims, memory_config, pad_value); },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::SmallVector<int64_t>&,
+                const std::optional<ttnn::MemoryConfig>&,
+                float>(&ttnn::permute),
             nb::arg("input_tensor").noconvert(),
             nb::arg("dims"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = 0.0f,
-        });
+            nb::arg("pad_value") = 0.0f),
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, const ttnn::SmallVector<int64_t>&, float>(&ttnn::permute),
+            nb::arg("input_tensor").noconvert(),
+            nb::arg("dims"),
+            nb::arg("pad_value") = 0.0f));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

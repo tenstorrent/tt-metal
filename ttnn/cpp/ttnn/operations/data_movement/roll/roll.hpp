@@ -6,19 +6,12 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct RollOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<int>& shifts,
-        const ttnn::SmallVector<int>& input_dims);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, int shifts);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, int shifts, int dim);
-};
+ttnn::Tensor roll(
+    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shifts, const ttnn::SmallVector<int>& input_dims);
 
-}  // namespace operations::data_movement
+ttnn::Tensor roll(const ttnn::Tensor& input_tensor, int shifts);
 
-constexpr auto roll = ttnn::register_operation<"ttnn::roll", ttnn::operations::data_movement::RollOperation>();
+ttnn::Tensor roll(const ttnn::Tensor& input_tensor, int shifts, int dim);
 
 }  // namespace ttnn

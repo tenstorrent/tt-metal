@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "transpose.hpp"
 
@@ -37,24 +37,28 @@ void bind_transpose(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor
         )doc";
 
-    using OperationType = decltype(ttnn::transpose);
-    ttnn::bind_registered_operation(
+    // Bind the free functions directly
+    ttnn::bind_function<"transpose">(
         mod,
-        ttnn::transpose,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int64_t dim1,
-               int64_t dim2,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               float pad_value = 0.0f) { return self(input_tensor, dim1, dim2, memory_config, pad_value); },
+
+        // Overload 1: with memory_config
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, int64_t, int64_t, const std::optional<ttnn::MemoryConfig>&, float>(
+                &ttnn::transpose),
             nb::arg("input_tensor"),
             nb::arg("dim1"),
             nb::arg("dim2"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = 0.0f,
-        });
+            nb::arg("pad_value") = 0.0f),
+
+        // Overload 2: without memory_config
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, int64_t, int64_t, float>(&ttnn::transpose),
+            nb::arg("input_tensor"),
+            nb::arg("dim1"),
+            nb::arg("dim2"),
+            nb::arg("pad_value") = 0.0f));
 }
 }  // namespace ttnn::operations::data_movement::detail

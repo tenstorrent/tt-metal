@@ -15,9 +15,7 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
-namespace ttnn::operations::data_movement {
-
-namespace detail {
+namespace ttnn::operations::data_movement::detail {
 
 static Tensor manual_insertion(
     const Tensor& input_tensor,
@@ -46,9 +44,12 @@ static Tensor manual_insertion(
     }
     return output;
 }
-}  // namespace detail
 
-ttnn::Tensor ReshapeOperation::invoke(
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+ttnn::Tensor reshape_on_device(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
@@ -80,7 +81,7 @@ ttnn::Tensor ReshapeOperation::invoke(
             "Input tensor dtype must be BFLOAT16 for this reshape operation but got {}",
             input_tensor.dtype());
 
-        return detail::manual_insertion(
+        return operations::data_movement::detail::manual_insertion(
             (tt::tt_metal::Tensor)input_tensor,
             logical_output_shape,
             padded_output_shape,
@@ -90,18 +91,31 @@ ttnn::Tensor ReshapeOperation::invoke(
     return ttnn::prim::reshape_on_device(input_tensor, logical_output_shape, padded_output_shape, output_mem_config);
 }
 
-ttnn::Tensor ReshapeOperation::invoke(
+ttnn::Tensor reshape_on_device(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
+    return reshape_on_device(input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
 }
 
-ttnn::Tensor ReshapeOperation::invoke(
+ttnn::Tensor reshape_on_device(
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(input_tensor, detail::infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
+    return reshape_on_device(
+        input_tensor,
+        operations::data_movement::detail::infer_dims_for_reshape(input_tensor, shape_vector),
+        memory_config_arg);
 }
 
-}  // namespace ttnn::operations::data_movement
+ttnn::Tensor reshape_on_device(
+    const ttnn::Tensor& input_tensor,
+    int W,
+    int Z,
+    int Y,
+    int X,
+    const std::optional<MemoryConfig>& memory_config_arg) {
+    return reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{W, Z, Y, X}, memory_config_arg);
+}
+
+}  // namespace ttnn

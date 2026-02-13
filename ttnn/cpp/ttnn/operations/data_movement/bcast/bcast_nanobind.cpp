@@ -9,14 +9,14 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace nb = nanobind;
 
 void bind_bcast(nb::module_& mod) {
-    const auto* doc =
+    const std::string doc =
         R"doc(
             Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
@@ -54,28 +54,18 @@ void bind_bcast(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::bcast);
-    bind_registered_operation(
+    ttnn::bind_function<"bcast">(
         mod,
-        ttnn::bcast,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               ttnn::BcastOpMath bcast_op,
-               ttnn::BcastOpDim bcast_dim,
-               const std::optional<Tensor>& output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, bcast_op, bcast_dim, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            &ttnn::bcast,
             nb::arg("input_a").noconvert(),
             nb::arg("input_b").noconvert(),
             nb::arg("math_op"),
             nb::arg("dim"),
             nb::kw_only(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

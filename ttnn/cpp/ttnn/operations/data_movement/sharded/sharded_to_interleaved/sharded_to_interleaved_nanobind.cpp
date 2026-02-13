@@ -8,7 +8,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "sharded_to_interleaved.hpp"
 #include "ttnn/types.hpp"
 
@@ -16,51 +16,34 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-namespace detail {
-
-template <typename data_movement_sharded_operation_t>
-void bind_sharded_to_interleaved(
-    nb::module_& mod, const data_movement_sharded_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_sharded_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType>& output_dtype) -> ttnn::Tensor {
-                return self(
-                    input_tensor, memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG), output_dtype);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_dtype") = nb::none(),
-        });
-}
-
-}  // namespace detail
-
 // TODO: Add more descriptions to the arguments
 void bind_sharded_to_interleaved(nb::module_& mod) {
-    detail::bind_sharded_to_interleaved(
-        mod,
-        ttnn::sharded_to_interleaved,
-        R"doc(
+    const auto* doc = R"doc(
         Converts a tensor from sharded to interleaved memory layout
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor
-            * :attr:`memory_config` (ttnn.MemoryConfig): Memory configuration for the operation, must be Interleaved.
+            input_tensor (ttnn.Tensor): input tensor
+            memory_config (ttnn.MemoryConfig): Memory configuration for the operation, must be Interleaved.
 
         Keyword Args:
-            * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            output_dtype (Optional[ttnn.DataType]): Output data type, defaults to same as input.
 
         Example:
 
             >>> interleaved_tensor = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
 
-        )doc");
+        )doc";
+
+    ttnn::bind_function<"sharded_to_interleaved">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, const MemoryConfig&, const std::optional<DataType>&>(
+                &ttnn::sharded_to_interleaved),
+            nb::arg("input_tensor").noconvert(),
+            nb::arg("memory_config"),
+            nb::kw_only(),
+            nb::arg("output_dtype") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement

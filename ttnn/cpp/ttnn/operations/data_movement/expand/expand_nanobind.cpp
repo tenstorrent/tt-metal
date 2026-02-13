@@ -9,35 +9,12 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 
 #include "expand.hpp"
 
 namespace ttnn::operations::data_movement {
-
-namespace {
-template <typename data_movement_operation_t>
-void bind_expand(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
-    ttnn::bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t>& output_shape,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, output_shape, memory_config);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("output_shape"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-        });
-}
-
-}  // namespace
 
 void bind_expand(nb::module_& mod) {
     const auto* doc =
@@ -58,7 +35,15 @@ void bind_expand(nb::module_& mod) {
 
         )doc";
 
-    bind_expand(mod, ttnn::expand, doc);
+    ttnn::bind_function<"expand">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::expand,
+            nb::arg("input_tensor"),
+            nb::arg("output_shape"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement

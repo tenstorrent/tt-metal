@@ -16,6 +16,7 @@
 
 #include "copy.hpp"
 #include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace {
 std::string get_binary_doc_string(
@@ -50,17 +51,13 @@ void bind_copy(nb::module_& mod) {
         "input_b",
         R"doc(Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
 
-    bind_registered_operation(
+    ttnn::bind_function<"copy">(
         mod,
-        ttnn::copy,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::copy)& self, const ttnn::Tensor& input_a, const ttnn::Tensor& input_b) {
-                return self(input_a, input_b);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, const ttnn::Tensor&>(&ttnn::copy),
             nb::arg("input_a").noconvert(),
-            nb::arg("input_b").noconvert(),
-        });
+            nb::arg("input_b").noconvert()));
 }
 
 void bind_assign(nb::module_& mod) {

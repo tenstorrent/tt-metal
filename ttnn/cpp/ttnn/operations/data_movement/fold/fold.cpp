@@ -328,16 +328,16 @@ static Tensor apply_halo_padding(
         .core_range_set = shard_spec.grid,
         .snap_to_tile = false};
 
-    ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
-    auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
+    ::ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
+    auto reshaped_tensor = reshape(input_tensor, new_shape);
 
     auto halo_output =
-        ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, reshaped_tensor.memory_config(), false);
+        ::ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, reshaped_tensor.memory_config(), false);
 
     // Reshape back to padded original dimensions
-    ttnn::Shape padded_shape(
+    ::ttnn::Shape padded_shape(
         {input_shape[0], input_shape[1] + pad_top + pad_bottom, input_shape[2] + pad_left + pad_right, input_shape[3]});
-    return ttnn::reshape(halo_output, padded_shape);
+    return reshape(halo_output, padded_shape);
 }
 
 // Each core needs to process multiple of (stride_h * input_width) rows to ensure that
@@ -378,7 +378,11 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
     return input;
 }
 
-Tensor FoldOperation::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+Tensor fold(
     const ttnn::Tensor& input_tensor_,
     uint32_t stride_h,
     uint32_t stride_w,
@@ -388,7 +392,7 @@ Tensor FoldOperation::invoke(
     const std::optional<CoreRangeSet>& core_grid,
     const std::optional<MemoryConfig>& override_memory_config) {
     // Extract padding values
-    const std::array<uint32_t, 6> padding_values = extract_padding_values(padding);
+    const std::array<uint32_t, 6> padding_values = operations::data_movement::extract_padding_values(padding);
     const uint32_t pad_top = padding_values[0];
     const uint32_t pad_bottom = padding_values[1];
     const uint32_t pad_left = padding_values[2];
@@ -407,8 +411,8 @@ Tensor FoldOperation::invoke(
     // Legacy transpose-based fold (TODO: remove when #29514 is solved)
     if (use_transpose_as_fold) {
         if (input_tensor.is_sharded()) {
-            validate_height_sharding(input_tensor);
-            return fold_with_transpose_sharded_(
+            operations::data_movement::validate_height_sharding(input_tensor);
+            return operations::data_movement::fold_with_transpose_sharded_(
                        input_tensor,
                        output_shape,
                        stride_h,
@@ -420,17 +424,20 @@ Tensor FoldOperation::invoke(
                        override_memory_config)
                 .at(0);
         }
-        return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w).at(0);
+        return operations::data_movement::fold_with_transpose_(
+                   input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w)
+            .at(0);
     }
     // Modern sharded tensor path
     if (input_tensor.memory_config().is_l1() && input_tensor.is_sharded()) {
-        validate_height_sharding(input_tensor);
+        operations::data_movement::validate_height_sharding(input_tensor);
 
         Tensor processed_tensor = input_tensor;
 
         // Apply H,W padding using halo if needed
         if (has_hw_padding) {
-            processed_tensor = apply_halo_padding(processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
+            processed_tensor = operations::data_movement::apply_halo_padding(
+                processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
         }
 
         // Apply channel padding separately if needed
@@ -442,17 +449,17 @@ Tensor FoldOperation::invoke(
                 static_cast<uint32_t>(current_shape[2]),
                 static_cast<uint32_t>(current_shape[3] + pad_c_front + pad_c_back)};
             processed_tensor =
-                ttnn::pad(processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
+                ::ttnn::pad(processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
         }
 
         // If processed tensor is tiled, convert to row-major.
         if (processed_tensor.layout() == Layout::TILE) {
-            processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+            processed_tensor = to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
         // Reshard if needed for optimal fold computation
-        processed_tensor = reshard_if_needed(processed_tensor, stride_h, stride_w);
+        processed_tensor = operations::data_movement::reshard_if_needed(processed_tensor, stride_h, stride_w);
 
-        return ttnn::prim::fold(processed_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
+        return ::ttnn::prim::fold(processed_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
     }
     // DRAM tensor path
     if (input_tensor.memory_config().is_dram()) {
@@ -460,13 +467,13 @@ Tensor FoldOperation::invoke(
 
         // Apply padding if needed
         if (has_hw_padding || has_c_padding) {
-            ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
+            ::ttnn::SmallVector<::ttnn::operations::data_movement::PadSpecDim> padding_spec;
             padding_spec.push_back({0, 0});                     // N dimension
             padding_spec.push_back({pad_top, pad_bottom});      // H dimension
             padding_spec.push_back({pad_left, pad_right});      // W dimension
             padding_spec.push_back({pad_c_front, pad_c_back});  // C dimension
 
-            processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
+            processed_tensor = ::ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
         }
 
         const auto shape = processed_tensor.logical_shape();
@@ -478,22 +485,22 @@ Tensor FoldOperation::invoke(
 
         // Convert to row-major for 32-channel aligned tensors for better performance
         if (in_channels % 32 == 0 && was_tiled) {
-            processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+            processed_tensor = to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
 
-        auto output_tensor = ttnn::prim::fold(processed_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
+        auto output_tensor = ::ttnn::prim::fold(processed_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
 
         // Reshape output if input was tiled
         if (was_tiled) {
-            const ttnn::Shape final_shape(
+            const ::ttnn::Shape final_shape(
                 {batch_size, input_height / stride_h, input_width / stride_w, in_channels * stride_h * stride_w});
-            return ttnn::reshape(output_tensor, final_shape);
+            return reshape(output_tensor, final_shape);
         }
 
         return output_tensor;
     }
     // Fallback case: interleaved tensor with symmetric padding
-    return ttnn::prim::fold(input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+    return ::ttnn::prim::fold(input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

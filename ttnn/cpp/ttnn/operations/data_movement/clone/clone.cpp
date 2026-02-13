@@ -6,13 +6,13 @@
 
 #include "device/clone_device_operation.hpp"
 
-namespace ttnn::operations::data_movement::clone {
+namespace ttnn {
 
-Tensor Clone::invoke(
+Tensor clone(
     const Tensor& input,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::clone(input, dtype, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::data_movement::clone
+}  // namespace ttnn

@@ -12,11 +12,15 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor CopyOperation::invoke(const Tensor& src_tensor, const Tensor& dst_tensor) {
+Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
     return ttnn::prim::copy(src_tensor, dst_tensor.memory_config(), dst_tensor.dtype(), std::make_optional(dst_tensor));
 }
+
+}  // namespace ttnn
+
+namespace ttnn::operations::data_movement {
 
 ttnn::Tensor AssignOperation::invoke(
     const Tensor& input,

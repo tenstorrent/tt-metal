@@ -9,11 +9,10 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct CopyOperation {
-    static ttnn::Tensor invoke(const Tensor& src_tensor, const Tensor& dst_tensor);
-};
+Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor);
+
+namespace operations::data_movement {
 
 struct AssignOperation {
     static ttnn::Tensor invoke(
@@ -32,7 +31,6 @@ struct AssignOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto copy = ttnn::register_operation<"ttnn::copy", ttnn::operations::data_movement::CopyOperation>();
 constexpr auto assign = ttnn::register_operation<"ttnn::assign", ttnn::operations::data_movement::AssignOperation>();
 
 }  // namespace ttnn
