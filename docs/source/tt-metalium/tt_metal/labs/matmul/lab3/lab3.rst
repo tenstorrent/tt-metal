@@ -1189,13 +1189,13 @@ Based on this, we can summarize the above line in the following table:
 +----------------------------+----------------------------+------------------------------------------------------------------+
 | ``K``                      | TRISC2 status              | In **K**\ ernel                                                  |
 +----------------------------+----------------------------+------------------------------------------------------------------+
-| ``rmsg:D0G\|BNT``          | Run message                | Device dispatch, ``NOC0``, Go state; BRISC/NCRISC/TRISCs enabled |
+| ``rmsg:D0G|BNT``           | Run message                | Device dispatch, ``NOC0``, Go state; BRISC/NCRISC/TRISCs enabled |
 +----------------------------+----------------------------+------------------------------------------------------------------+
 | ``h_id:  0``               | Host assigned ID           | Internal ID used for profiling                                   |
 +----------------------------+----------------------------+------------------------------------------------------------------+
 | ``smsg:GGGG``              | Subordinate message        | NCRISC, TRISC0, TRISC1, TRISC2 in **G**\ o state (running)       |
 +----------------------------+----------------------------+------------------------------------------------------------------+
-| ``k_ids: 5\|6\|7\|7\|7``   | Kernel IDs                 | BRISC=5, NCRISC=6, TRISC0/1/2=7                                  |
+| ``k_ids: 5| 6| 7| 7| 7``   | Kernel IDs                 | BRISC=5, NCRISC=6, TRISC0/1/2=7                                  |
 +----------------------------+----------------------------+------------------------------------------------------------------+
 
 Kernels are identified by their IDs (``k_ids``). The mapping from kernel ID to source file name for a given section
