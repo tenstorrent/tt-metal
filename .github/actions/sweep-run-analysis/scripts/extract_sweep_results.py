@@ -269,9 +269,9 @@ def get_models_tested(conn, current_run_id: int) -> list[str]:
 
 
 def main():
-    github_run_id = int(os.environ.get("GITHUB_RUN_ID", 0))
+    github_run_id = int(os.environ.get("SOURCE_GITHUB_RUN_ID", os.environ.get("GITHUB_RUN_ID", 0)))
     if not github_run_id:
-        print("ERROR: GITHUB_RUN_ID environment variable not set", file=sys.stderr)
+        print("ERROR: SOURCE_GITHUB_RUN_ID environment variable not set", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -281,7 +281,8 @@ def main():
         sys.exit(1)
 
     try:
-        # Get current run
+        # Get current run by source workflow run id.
+        # This must match the exact run pushed by ttnn-run-sweeps.
         current_run = get_current_run(conn, github_run_id)
         if not current_run:
             print(f"ERROR: No run found for github_pipeline_id={github_run_id}", file=sys.stderr)

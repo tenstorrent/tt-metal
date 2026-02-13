@@ -17,7 +17,7 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")  # Alternative: OAuth bot token
 SLACK_CHANNEL = os.environ.get("SLACK_CHANNEL", "")  # Required with bot token
 CONCLUSION = os.environ.get("CONCLUSION", "success")  # success, failure, cancelled
-GITHUB_RUN_ID = os.environ.get("GITHUB_RUN_ID", "")
+GITHUB_RUN_ID = os.environ.get("SOURCE_GITHUB_RUN_ID", os.environ.get("GITHUB_RUN_ID", ""))
 SUPERSET_BASE_URL = "https://superset.tenstorrent.com/superset/dashboard/lead-models-sweep-run/"
 GITHUB_ACTIONS_URL = f"https://github.com/tenstorrent/tt-metal/actions/runs/{GITHUB_RUN_ID}"
 

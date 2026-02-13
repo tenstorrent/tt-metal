@@ -32,6 +32,8 @@ jobs:
           RUN_TYPE=""
           RUN_ID=""
           CONCLUSION=""
+          SOURCE_GIT_SHA=""
+          SOURCE_GIT_BRANCH=""
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             # Manual trigger - always notify
@@ -42,6 +44,8 @@ jobs:
             WORKFLOW_INFO=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID} 2>/dev/null || echo "{}")
             CONCLUSION=$(echo "$WORKFLOW_INFO" | jq -r '.conclusion // "unknown"')
             RUN_NAME=$(echo "$WORKFLOW_INFO" | jq -r '.name // ""')
+            SOURCE_GIT_SHA=$(echo "$WORKFLOW_INFO" | jq -r '.head_sha // ""')
+            SOURCE_GIT_BRANCH=$(echo "$WORKFLOW_INFO" | jq -r '.head_branch // ""')
 
             # Determine run type from name
             if [[ "$RUN_NAME" == *"lead models"* ]] || [[ "$RUN_NAME" == *"Lead Models"* ]]; then
@@ -62,6 +66,8 @@ jobs:
             CONCLUSION="${{ github.event.workflow_run.conclusion }}"
             RUN_NAME="${{ github.event.workflow_run.name }}"
             EVENT_TYPE="${{ github.event.workflow_run.event }}"
+            SOURCE_GIT_SHA="${{ github.event.workflow_run.head_sha }}"
+            SOURCE_GIT_BRANCH="${{ github.event.workflow_run.head_branch }}"
 
             echo "Workflow run event: name='$RUN_NAME', event='$EVENT_TYPE', conclusion='$CONCLUSION'"
 
@@ -95,6 +101,8 @@ jobs:
           echo "run_type=$RUN_TYPE" >> $GITHUB_OUTPUT
           echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "conclusion=$CONCLUSION" >> $GITHUB_OUTPUT
+          echo "source_git_sha=$SOURCE_GIT_SHA" >> $GITHUB_OUTPUT
+          echo "source_git_branch=$SOURCE_GIT_BRANCH" >> $GITHUB_OUTPUT
 
           echo ""
           echo "=== Decision ==="
@@ -102,6 +110,8 @@ jobs:
           echo "Run type: $RUN_TYPE"
           echo "Run ID: $RUN_ID"
           echo "Conclusion: $CONCLUSION"
+          echo "Source Git SHA: ${SOURCE_GIT_SHA:-unknown}"
+          echo "Source Git Branch: ${SOURCE_GIT_BRANCH:-unknown}"
 
       - name: Run sweep analysis and notify
         if: steps.check.outputs.should_notify == 'true'
@@ -110,6 +120,8 @@ jobs:
           github-run-id: ${{ steps.check.outputs.run_id }}
           run-type: ${{ steps.check.outputs.run_type }}
           conclusion: ${{ steps.check.outputs.conclusion }}
+          source-git-sha: ${{ steps.check.outputs.source_git_sha }}
+          source-git-branch: ${{ steps.check.outputs.source_git_branch }}
           slack-webhook-url: ${{ secrets.SLACK_LEAD_MODEL_SWEEPS_WEBHOOK_URL }}
           database-url: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
 
