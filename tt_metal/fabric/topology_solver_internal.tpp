@@ -432,15 +432,18 @@ int SearchHeuristic::compute_candidate_cost(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     const std::vector<int>& mapping,
+    const std::vector<bool>& used,
     ConnectionValidationMode validation_mode) {
     // Cost formula (lower cost = better candidate):
     // cost = -is_preferred * SOFT_WEIGHT
     //      - channel_match_score (in relaxed mode only)
+    //      - cardinal_connectivity_bonus
     //      + degree_gap * RUNTIME_WEIGHT
     //
     // Where:
     // - is_preferred: whether this candidate satisfies preferred constraints
     // - channel_match_score: bonus for exact channel matches, penalty for mismatches (relaxed mode)
+    // - cardinal_connectivity_bonus: prefer global nodes with more connections to the "other" group
     // - degree_gap: difference between global and target node degrees (runtime optimization)
 
     // Check if preferred (fast index-based lookup)
@@ -483,6 +486,47 @@ int SearchHeuristic::compute_candidate_cost(
         }
     }
 
+    // Cardinal connectivity bonus: prefer global nodes with more cross-group connectivity
+    // For target nodes in cardinal constraints, prefer candidates with more connections to
+    // (a) already-mapped nodes in the other group, (b) unused nodes (potential for other group)
+    int cardinal_connectivity_bonus = 0;
+    for (const auto& constraint : graph_data.target_cardinal_constraints) {
+        bool in_a =
+            std::find(constraint.group_a_indices.begin(), constraint.group_a_indices.end(), target_idx) !=
+            constraint.group_a_indices.end();
+        bool in_b =
+            std::find(constraint.group_b_indices.begin(), constraint.group_b_indices.end(), target_idx) !=
+            constraint.group_b_indices.end();
+        if (!in_a && !in_b) {
+            continue;
+        }
+        const std::vector<size_t>& other_group =
+            in_a ? constraint.group_b_indices : constraint.group_a_indices;
+        size_t conn_to_other = 0;
+        for (size_t other_idx : other_group) {
+            int m = mapping[other_idx];
+            if (m != -1) {
+                size_t other_global = static_cast<size_t>(m);
+                auto it = graph_data.global_conn_count[global_idx].find(other_global);
+                if (it != graph_data.global_conn_count[global_idx].end()) {
+                    conn_to_other += it->second;
+                }
+            }
+        }
+        for (size_t j = 0; j < graph_data.n_global; ++j) {
+            if (used[j]) {
+                continue;
+            }
+            auto it = graph_data.global_conn_count[global_idx].find(j);
+            if (it != graph_data.global_conn_count[global_idx].end()) {
+                conn_to_other += it->second;
+            }
+        }
+        cardinal_connectivity_bonus += static_cast<int>(conn_to_other);
+    }
+    // Scale by RUNTIME_WEIGHT so it guides ordering without overwhelming degree_gap
+    cardinal_connectivity_bonus *= RUNTIME_WEIGHT;
+
     // Compute degree gap (runtime optimization)
     size_t target_deg = graph_data.target_deg[target_idx];
     size_t global_deg = graph_data.global_deg[global_idx];
@@ -498,6 +542,7 @@ int SearchHeuristic::compute_candidate_cost(
 
     // Cost = -is_preferred * SOFT_WEIGHT
     //      - channel_match_score
+    //      - cardinal_connectivity_bonus
     //      + degree_gap * RUNTIME_WEIGHT
     // Lower cost = better candidate
     int preferred_cost;
@@ -506,8 +551,8 @@ int SearchHeuristic::compute_candidate_cost(
     } else {
         preferred_cost = 0;
     }
-    return static_cast<int>(-preferred_cost - channel_match_score +
-                            degree_gap_cost);
+    return static_cast<int>(
+        -preferred_cost - channel_match_score - cardinal_connectivity_bonus + degree_gap_cost);
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -532,7 +577,8 @@ std::vector<size_t> SearchHeuristic::generate_ordered_candidates(
         }
 
         // Valid candidate - compute cost
-        int cost = compute_candidate_cost(target_idx, j, graph_data, constraint_data, mapping, validation_mode);
+        int cost = compute_candidate_cost(
+            target_idx, j, graph_data, constraint_data, mapping, used, validation_mode);
         candidates_with_cost.push_back({j, cost});
     }
 
@@ -589,12 +635,36 @@ int SearchHeuristic::compute_node_cost(
         }
     }
 
+    // Cardinal readiness: prioritize nodes in cardinal constraints where the other group
+    // has more mapped members (enables earlier cardinal validation and pruning)
+    size_t cardinal_readiness = 0;
+    for (const auto& constraint : graph_data.target_cardinal_constraints) {
+        bool in_a =
+            std::find(constraint.group_a_indices.begin(), constraint.group_a_indices.end(), target_idx) !=
+            constraint.group_a_indices.end();
+        bool in_b =
+            std::find(constraint.group_b_indices.begin(), constraint.group_b_indices.end(), target_idx) !=
+            constraint.group_b_indices.end();
+        if (!in_a && !in_b) {
+            continue;
+        }
+        const std::vector<size_t>& other_group =
+            in_a ? constraint.group_b_indices : constraint.group_a_indices;
+        for (size_t other_idx : other_group) {
+            if (mapping[other_idx] != -1) {
+                cardinal_readiness++;
+            }
+        }
+    }
+
     // Cost = (candidate_count * HARD_WEIGHT)
     //      - (preferred_count * SOFT_WEIGHT)
     //      - (mapped_neighbors * RUNTIME_WEIGHT)
+    //      - (cardinal_readiness * RUNTIME_WEIGHT)
     // Lower cost = more constrained = higher priority
-    return static_cast<int>(candidate_count * HARD_WEIGHT - preferred_count * SOFT_WEIGHT -
-                            mapped_neighbors * RUNTIME_WEIGHT);
+    return static_cast<int>(
+        candidate_count * HARD_WEIGHT - preferred_count * SOFT_WEIGHT -
+        mapped_neighbors * RUNTIME_WEIGHT - cardinal_readiness * RUNTIME_WEIGHT);
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -777,23 +847,53 @@ bool ConsistencyChecker::check_cardinal_constraints(
         size_t total_required = explicit_target + constraint.num_connections;
 
         // Count connections in global graph between mapped(group_a) and mapped(group_b)
+        // Includes explicit edges plus capacity from global cardinal constraints
         size_t connections_in_global = 0;
+        std::unordered_set<size_t> mapped_a_globals;
+        std::unordered_set<size_t> mapped_b_globals;
         for (size_t a_idx : constraint.group_a_indices) {
             int mapped_a = mapping[a_idx];
             if (mapped_a == -1) {
                 return false;  // Incomplete mapping
             }
-            size_t global_a = static_cast<size_t>(mapped_a);
-            for (size_t b_idx : constraint.group_b_indices) {
-                int mapped_b = mapping[b_idx];
-                if (mapped_b == -1) {
-                    return false;  // Incomplete mapping
-                }
-                size_t global_b = static_cast<size_t>(mapped_b);
+            mapped_a_globals.insert(static_cast<size_t>(mapped_a));
+        }
+        for (size_t b_idx : constraint.group_b_indices) {
+            int mapped_b = mapping[b_idx];
+            if (mapped_b == -1) {
+                return false;  // Incomplete mapping
+            }
+            mapped_b_globals.insert(static_cast<size_t>(mapped_b));
+        }
+
+        // Count explicit edges between mapped groups
+        for (size_t global_a : mapped_a_globals) {
+            for (size_t global_b : mapped_b_globals) {
                 auto it = graph_data.global_conn_count[global_a].find(global_b);
                 if (it != graph_data.global_conn_count[global_a].end()) {
                     connections_in_global += it->second;
                 }
+            }
+        }
+
+        // Add capacity from global cardinal constraints: when mapped groups are contained
+        // in a global cardinal's groups (a in P, b in Q or a in Q, b in P), add that capacity
+        for (const auto& g_constraint : graph_data.global_cardinal_constraints) {
+            auto in_set = [](const std::unordered_set<size_t>& vals, const std::vector<size_t>& idxs) {
+                std::unordered_set<size_t> id_set(idxs.begin(), idxs.end());
+                for (size_t v : vals) {
+                    if (id_set.find(v) == id_set.end()) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            bool a_in_p_b_in_q = in_set(mapped_a_globals, g_constraint.group_a_indices) &&
+                                in_set(mapped_b_globals, g_constraint.group_b_indices);
+            bool a_in_q_b_in_p = in_set(mapped_a_globals, g_constraint.group_b_indices) &&
+                                in_set(mapped_b_globals, g_constraint.group_a_indices);
+            if (a_in_p_b_in_q || a_in_q_b_in_p) {
+                connections_in_global += g_constraint.num_connections;
             }
         }
 
