@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Post-Decode: CCL Broadcast + Mcast + Matmul fused operation for LM head vocab projection.
+LM Head Sampling: CCL Broadcast + Mcast + Matmul fused operation for LM head vocab projection.
 
 In multi-device mode, CCL broadcasts input_tensor from the sender device to all devices,
 then on each device multicasts from the sender core to all cores in the device grid,
@@ -17,9 +17,9 @@ input_tensor is used directly.
 - output: [1, N_total] width-sharded across matmul cores as [1, N_per_core]
 
 CB Layout:
-- CB 0: mcast_src (input_tensor on sender core, tensor-backed)
-- CB 1: mcast_dst / matmul_in0 (all device grid cores, intermediate)
-- CB 2: matmul_in1 (vocab weights on matmul cores, tensor-backed)
+- CB 0:  mcast_src (input_tensor on sender core, tensor-backed)
+- CB 1:  mcast_dst / matmul_in0 (all device grid cores, intermediate)
+- CB 2:  matmul_in1 (vocab weights on matmul cores, tensor-backed)
 - CB 16: matmul_out (output on matmul cores, tensor-backed)
 - CB 30: bcast_pkt (CCL broadcast packet buffer, only in multi-device mode)
 """
@@ -33,9 +33,9 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 
 
-class PostDecode:
+class LMHeadSampling:
     """
-    Post-decode LM head vocab projection: CCL broadcast + mcast + matmul via ttnn.generic_op.
+    LM head sampling vocab projection: CCL broadcast + mcast + matmul via ttnn.generic_op.
 
     In multi-device mode, CCL broadcasts input_tensor from the sender device to all
     devices, then on each device the sender core multicasts to all device cores, and
@@ -72,7 +72,7 @@ class PostDecode:
         skip_ccl=False,
     ):
         """
-        Execute CCL broadcast + mcast + matmul operation using generic_op.
+        Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
 
         In multi-device mode, CCL broadcasts input_tensor from the sender device to all
         devices via the fabric, then on each device the sender core multicasts to all
@@ -473,7 +473,7 @@ class PostDecode:
                 # Unified kernel descriptor
                 # ================================================================
                 unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/post_decode/kernels/post_decode_kernel.cpp",
+                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/lm_head_sampling/kernels/lm_head_sampling_kernel.cpp",
                     core_ranges=all_cores,
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,

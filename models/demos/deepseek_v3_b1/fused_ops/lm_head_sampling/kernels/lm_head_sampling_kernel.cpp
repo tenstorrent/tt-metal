@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Post-Decode Unified Kernel: CCL Broadcast + Mcast + Matmul for LM Head Vocab Projection
+// LM Head Sampling Unified Kernel: CCL Broadcast + Mcast + Matmul for Vocab Projection
 //
 // Single .cpp compiled for all three RISC processors (NCRISC, BRISC, TRISC).
 // Compile-time role flags (is_input_core, is_mcast_receiver_core, is_matmul_core, skip_ccl)
@@ -21,7 +21,7 @@
 //           (reads mcast_src CB, NOC multicasts to all receiver cores)
 //   TRISC:  Matmul compute (reads in0 from mcast_dst CB, in1 from weights CB, writes to out CB)
 //
-// CB layout (see op.py PostDecode class for index definitions):
+// CB layout (see op.py LMHeadSampling class for index definitions):
 //   CB 0  (mcast_src):   Input tensor on sender core (tensor-backed).
 //                         In multi-device mode, backed by intermediate_tensor (CCL broadcast
 //                         destination). In single-device mode, backed by input_tensor directly.

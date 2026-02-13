@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN Post-Decode CCL Broadcast + Mcast + Matmul Op Test
+TTNN LM Head Sampling CCL Broadcast + Mcast + Matmul Op Test
 
 In multi-device mode: CCL broadcasts input_a [1, 7168] from sender device to all
 devices, then on each device the sender core multicasts to 101 matmul cores.
@@ -20,7 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_b1.fused_ops.post_decode.op import PostDecode
+from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 
 
 def create_fabric_router_config(max_payload_size):
@@ -50,7 +50,7 @@ def create_fabric_router_config(max_payload_size):
     ],
     indirect=True,
 )
-def test_post_decode(
+def test_lm_head_sampling(
     bh_2d_mesh_device,
     mesh_rows,
     mesh_cols,
@@ -61,7 +61,7 @@ def test_post_decode(
     secondary_cluster_axis,
     skip_ccl,
 ):
-    """Test CCL broadcast + mcast + matmul for post-decode vocab projection.
+    """Test CCL broadcast + mcast + matmul for LM head sampling vocab projection.
 
     Core layout (per device):
         (max_x, 9) = sender core (holds input_a, multicasts to matmul cores)
@@ -125,7 +125,7 @@ def test_post_decode(
 
     fp32_str = " (fp32 acc)" if use_fp32 else ""
     logger.info(
-        f"Testing post-decode{fp32_str} with shape [{M}, {K}] x [{K}, {N_total}] "
+        f"Testing LM head{fp32_str} with shape [{M}, {K}] x [{K}, {N_total}] "
         f"({num_matmul_cores} cores, {N_per_core} per core), in0=bfloat16, in1=bfloat8_b, "
         f"mesh={mesh_rows}x{mesh_cols}, skip_ccl={skip_ccl}"
     )
@@ -139,7 +139,7 @@ def test_post_decode(
     torch_b = torch.randn(vocab_shape, dtype=torch.bfloat16)
 
     # Compute reference output (all devices should produce same result)
-    torch_expected = PostDecode.golden(torch_a.float(), torch_b.float()).bfloat16()
+    torch_expected = LMHeadSampling.golden(torch_a.float(), torch_b.float()).bfloat16()
 
     # ========================================================================
     # Shard specs and memory configs
@@ -257,13 +257,13 @@ def test_post_decode(
     semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
 
     # ========================================================================
-    # Run post-decode operation
+    # Run LM head operation
     # ========================================================================
     logger.info(
-        f"Running post-decode{fp32_str} operation: "
+        f"Running LM head{fp32_str} operation: "
         f"sender=({sender_row},{sender_col}), mesh={mesh_rows}x{mesh_cols}, skip_ccl={skip_ccl}"
     )
-    ttnn_result = PostDecode.op(
+    ttnn_result = LMHeadSampling.op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
         ttnn_b,
@@ -304,7 +304,7 @@ def test_post_decode(
     submesh.clear_loaded_sub_device_manager()
 
     logger.info(
-        f"Post-decode{fp32_str} test passed! "
+        f"LM head{fp32_str} test passed! "
         f"({num_matmul_cores} cores, [{M}, {K}] x [{K}, {N_total}], "
         f"mesh={mesh_rows}x{mesh_cols}, skip_ccl={skip_ccl})"
     )
