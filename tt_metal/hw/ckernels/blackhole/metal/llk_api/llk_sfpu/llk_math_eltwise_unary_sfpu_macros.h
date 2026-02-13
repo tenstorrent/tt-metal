@@ -32,8 +32,8 @@
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, PARAM0, PARAM1)
 
 // For ops where init takes multiple template parameters (e.g., approximate, fast_approx, scale).
-#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, FAST_APPROX, SCALE) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROX>(INIT_CB<APPROX, FAST_APPROX, SCALE>)
+#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, FAST_APPROX, SCALE, CLAMP_NEGATIVE) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROX>(INIT_CB<APPROX, FAST_APPROX, SCALE, CLAMP_NEGATIVE>)
 
 // For the int32 comparison variants
 #define SFPU_COMP_INT32_KERNEL(OP, MODE, APPROXIMATE, ITERATIONS, DST_IDX, PARAM0) \
@@ -96,21 +96,29 @@
         ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1);
 
 // For ops with multiple template parameters and one runtime parameter (e.g., scale)
-#define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                                                                              \
-    FN,                                                                                                              \
-    APPROXIMATE,                                                                                                     \
-    FAST_APPROX,                                                                                                     \
-    IS_FP32_DEST_ACC_EN,                                                                                             \
-    SCALE_EN,                                                                                                        \
-    SKIP_POSITIVE_CHECK,                                                                                             \
-    ITERATIONS,                                                                                                      \
-    DST_IDX,                                                                                                         \
-    VECTOR_MODE,                                                                                                     \
-    SCALE)                                                                                                           \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                               \
-        ckernel::sfpu::FN<APPROXIMATE, FAST_APPROX, IS_FP32_DEST_ACC_EN, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>, \
-        DST_IDX,                                                                                                     \
-        VECTOR_MODE,                                                                                                 \
+#define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                \
+    FN,                                                \
+    APPROXIMATE,                                       \
+    FAST_APPROX,                                       \
+    IS_FP32_DEST_ACC_EN,                               \
+    SCALE_EN,                                          \
+    SKIP_POSITIVE_CHECK,                               \
+    CLAMP_NEGATIVE,                                    \
+    ITERATIONS,                                        \
+    DST_IDX,                                           \
+    VECTOR_MODE,                                       \
+    SCALE)                                             \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>( \
+        ckernel::sfpu::FN<                             \
+            APPROXIMATE,                               \
+            FAST_APPROX,                               \
+            IS_FP32_DEST_ACC_EN,                       \
+            SCALE_EN,                                  \
+            ITERATIONS,                                \
+            SKIP_POSITIVE_CHECK,                       \
+            CLAMP_NEGATIVE>,                           \
+        DST_IDX,                                       \
+        VECTOR_MODE,                                   \
         SCALE)
 
 // For kernels with one template parameter and one extra runtime argument.

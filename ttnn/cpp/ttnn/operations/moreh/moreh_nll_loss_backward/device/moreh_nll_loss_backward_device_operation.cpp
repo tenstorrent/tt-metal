@@ -82,11 +82,6 @@ void MorehNllLossBackwardDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(attributes, tensor_args);
 }
 
-void MorehNllLossBackwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
 MorehNllLossBackwardDeviceOperation::spec_return_value_t MorehNllLossBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad_tensor.has_value()) {

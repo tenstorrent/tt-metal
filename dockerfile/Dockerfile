@@ -200,6 +200,14 @@ RUN if [ "$UBUNTU_VERSION" != "24.04" ]; then \
 COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Configure SSH for MPI multihost jobs readiness
+RUN adduser --uid 1001 --shell /bin/bash user
+RUN usermod -aG sudo user
+RUN echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
+
+RUN mkdir -p /run/sshd
+RUN echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 #############################################################

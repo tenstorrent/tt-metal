@@ -16,11 +16,6 @@ FastReduceNCDeviceOperation::program_factory_t FastReduceNCDeviceOperation::sele
     return FastReduceNCProgramFactory{};
 }
 
-void FastReduceNCDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;

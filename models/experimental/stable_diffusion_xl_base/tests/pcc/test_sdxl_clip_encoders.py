@@ -121,7 +121,7 @@ def test_clip_encoder(
     )
 
     tt_clip = CLIPEncoder(config, mesh_device, ccl_manager, parallel_config, eos_token_id)
-    tt_clip.load_state_dict(hf_model.state_dict())
+    tt_clip.load_torch_state_dict(hf_model.state_dict())
     logger.info(f"text encoder creation time: {time.time() - start_time}")
 
     # cannot use randn tensor, since HF tokenizer appends a specific eos token syntax
