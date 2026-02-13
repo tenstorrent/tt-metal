@@ -101,7 +101,7 @@ models:
   unit:
     wh_llmbox: 287
   integration:
-    wh_llmbox: 422
+    wh_llmbox: 432
   perf:
     wh_llmbox: 685
     wh_galaxy: 260
