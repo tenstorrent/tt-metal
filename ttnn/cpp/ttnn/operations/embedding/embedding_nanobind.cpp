@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/embedding/embedding.hpp"
 
@@ -37,31 +37,11 @@ void py_module(nb::module_& mod) {
             ttnn.Tensor: the output tensor of layout == layout or layout of the weights tensor.
         )doc";
 
-    using OperationType = decltype(ttnn::embedding);
-    bind_registered_operation(
+    ttnn::bind_function<"embedding">(
         mod,
-        ttnn::embedding,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight,
-               const std::optional<int>& padding_idx,
-               const std::optional<ttnn::Layout>& layout,
-               ttnn::prim::EmbeddingsType embeddings_type,
-               const std::optional<const DataType> dtype,
-               std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(
-                    input_tensor,
-                    weight,
-                    padding_idx,
-                    layout,
-                    embeddings_type,
-                    dtype,
-                    memory_config,
-                    optional_output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::embedding,
             nb::arg("input_tensor").noconvert(),
             nb::arg("weight").noconvert(),
             nb::kw_only(),
@@ -70,7 +50,7 @@ void py_module(nb::module_& mod) {
             nb::arg("embeddings_type").noconvert() = nb::cast(ttnn::prim::EmbeddingsType::GENERIC),
             nb::arg("dtype").noconvert() = nb::none(),
             nb::arg("output_tensor").noconvert() = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::embedding
