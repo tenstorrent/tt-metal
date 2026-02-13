@@ -491,7 +491,8 @@ class RelativePositionEmbeddings(Module):
         self.weight = Parameter(
             total_shape=[config.relative_attention_num_buckets, config.num_heads],
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
+            mesh_axes=[None, self.parallel_config.tensor_parallel.mesh_axis],
+            device=self.mesh_device,
         )
 
         # If we are using max sequence length. We can just precompute. This seems to be the same for all subset of the max. We can also discard it if we want to save memory.
@@ -510,25 +511,22 @@ class RelativePositionEmbeddings(Module):
                 The relative position bias
         """
         if self.relative_bias_cache is None or self.relative_bias_cache.shape[2] != seq_length:
-            self.relative_bias_cache = _compute_relative_position_bias(
+            position_ids = _compute_relative_position_bias(
                 seq_length=seq_length,
                 device=self.mesh_device,
                 relative_attention_num_buckets=self.config.relative_attention_num_buckets,
                 relative_attention_max_distance=self.config.relative_attention_max_distance,
-                relative_attention_bias=self.weight.data,
-                parallel_config=self.parallel_config,
             )
+            r = ttnn.embedding(position_ids, self.weight.data, layout=ttnn.TILE_LAYOUT)
+            self.relative_bias_cache = ttnn.unsqueeze(ttnn.permute(r, (2, 0, 1)), 0)
         return self.relative_bias_cache
 
 
-# TODO: Migrate to ttnn. Not an issue now as we use precomputed results.
 def _compute_relative_position_bias(
     seq_length: int,
     device: ttnn.Device,
     relative_attention_num_buckets: int,
     relative_attention_max_distance: int,
-    relative_attention_bias: ttnn.Tensor,
-    parallel_config: EncoderParallelConfig,
 ) -> ttnn.Tensor:
     context_position = torch.arange(seq_length)[:, None]
     memory_position = torch.arange(seq_length)[None, :]
@@ -540,18 +538,6 @@ def _compute_relative_position_bias(
         max_distance=relative_attention_max_distance,
     )
 
-    relative_attention_bias = ttnn.get_device_tensors(relative_attention_bias)[0]
-    torch_relative_attention_bias = ttnn.to_torch(relative_attention_bias)
-    output = torch.nn.functional.embedding(relative_position_bucket, torch_relative_attention_bias)
-    output = output.permute([2, 0, 1]).unsqueeze(0)
-    output = output[:, :, -seq_length:, :]
-
-    shard_dims = [None, None]
-    shard_dims[parallel_config.tensor_parallel.mesh_axis] = -3
     return ttnn.from_torch(
-        output,
-        device=device,
-        dtype=relative_attention_bias.get_dtype(),
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
+        relative_position_bucket, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device)
     )
