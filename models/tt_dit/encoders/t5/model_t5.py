@@ -540,5 +540,8 @@ def _compute_relative_position_bias(
     )
 
     return ttnn.from_torch(
-        relative_position_bucket, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device)
+        relative_position_bucket,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
