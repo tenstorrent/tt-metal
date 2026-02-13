@@ -124,6 +124,8 @@ DataFormat get_single_unpack_dst_format(
         dst_format = unpack_conditional_dst_format;
     } else if (is_bfp_format(src_format)) {
         dst_format = is_exp_b_format(src_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
+    } else if (src_format == DataFormat::UInt8) {
+        dst_format = DataFormat::Int8;
     }
 
     return dst_format;
