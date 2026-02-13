@@ -52,13 +52,6 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
           0 /*relu_treshold*/,
           false /*tilize*/>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false /*untilize*/>(ocb)));
-#else
-    UNPACK((llk_unpack_hw_configure(icb0, icb1)));
-    MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<true, true, false>(icb0, icb1)));
-    PACK((llk_pack_init<p_pacr::PACK0>(ocb)));
-    PACK((llk_pack_hw_configure_disaggregated<p_pacr::PACK0>(ocb)));
-    // PACK((llk_pack_dest_init<DST_ACCUM_MODE, false /*untilize*/>(ocb)));
 #endif
 }
 

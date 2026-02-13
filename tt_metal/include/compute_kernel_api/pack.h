@@ -62,7 +62,7 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 #ifndef ARCH_QUASAR
     PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, false>(ifrom_dst, icb, output_tile_index)));
 #else
-    PACK((llk_pack<out_of_order_output, p_pacr::PACK0>(ifrom_dst, icb, output_tile_index)));
+    PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 #endif
 }
 

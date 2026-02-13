@@ -150,6 +150,7 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) {
  */
 // clang-format on
 ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
+#ifndef ARCH_QUASAR
     uint32_t address = 0;
 
     UNPACK({
@@ -166,6 +167,9 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
     PACK(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return address;
+#else
+    return 0;
+#endif
 }
 
 // clang-format off
@@ -183,6 +187,7 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
  */
 // clang-format on
 ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t element_offset) {
+#ifndef ARCH_QUASAR
     uint32_t value = 0;
 
     UNPACK({
@@ -201,6 +206,9 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
     PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return value;
+#else
+    return 0;
+#endif
 }
 
 }  // namespace ckernel

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,4 +17,8 @@ inline const std::uint32_t get_output_num_faces(const std::uint32_t output_id) {
 
 inline const std::uint32_t get_output_face_r_dim(const std::uint32_t output_id) {
     return static_cast<std::uint32_t>(pack_tile_face_r_dim[output_id]);
+}
+
+inline const std::uint32_t get_output_narrow_tile(const std::uint32_t output_id) {
+    return static_cast<std::uint32_t>(pack_narrow_tile[output_id]);
 }

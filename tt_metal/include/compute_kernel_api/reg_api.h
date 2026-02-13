@@ -27,11 +27,8 @@ namespace ckernel {
  */
 [[deprecated("Use tile_regs_acquire() instead")]]
 ALWI void acquire_dst() {
-#ifndef ARCH_QUASAR
     MATH((llk_math_wait_for_dest_available()));
-
     PACK((llk_packer_wait_for_math_done()));
-#endif
 }
 
 // new APIs, TODO: migrate all kernels to these
@@ -40,27 +37,15 @@ ALWI void acquire_dst() {
  * Acquire an exclusive lock on the DST register for the MATH thread.
  * This register is an array of 16 tiles of 32x32 elements each.
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
- *
- * On Quasar, this function is a no-op.
  */
-ALWI void tile_regs_acquire() {
-#ifndef ARCH_QUASAR
-    MATH((llk_math_wait_for_dest_available()));
-#endif
-}
+ALWI void tile_regs_acquire() { MATH((llk_math_wait_for_dest_available())); }
 
 /**
  * Acquire an exclusive lock on the DST register for the PACK thread.
  * It waits for the MATH thread to commit the DST register.
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
- *
- * On Quasar, this function is a no-op.
  */
-ALWI void tile_regs_wait() {
-#ifndef ARCH_QUASAR
-    PACK((llk_packer_wait_for_math_done()));
-#endif
-}
+ALWI void tile_regs_wait() { PACK((llk_packer_wait_for_math_done())); }
 
 /**
  * @deprecated This function is deprecated, please use `tile_regs_release()` instead.
@@ -79,11 +64,10 @@ ALWI void tile_regs_wait() {
 ALWI void release_dst() {
 #ifndef ARCH_QUASAR
     MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
 #else
-    MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));   //Can also be SFPU!!!!!!
-    PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));
+    MATH((llk_math_dest_section_done()));
 #endif
+    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
 }
 
 // new APIs, TODO: migrate all kernels to these
@@ -95,19 +79,13 @@ ALWI void tile_regs_commit() {
 #ifndef ARCH_QUASAR
     MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
 #else
-    MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));  // Can also be SFPU!!!!!!
+    MATH((llk_math_dest_section_done()));
 #endif
 }
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
  */
-ALWI void tile_regs_release() {
-#ifndef ARCH_QUASAR
-    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
-#else
-    PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));
-#endif
-}
+ALWI void tile_regs_release() { PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>())); }
 
 }  // namespace ckernel
