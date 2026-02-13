@@ -109,8 +109,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");

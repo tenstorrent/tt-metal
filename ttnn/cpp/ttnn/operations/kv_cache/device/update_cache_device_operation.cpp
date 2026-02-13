@@ -108,12 +108,6 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape()[-2],
             cache_tensor.padded_shape()[-2]);
     } else if (args.op_type == UpdateCacheOpType::UPDATE) {
-        if (input_tensor.device()->arch() == tt::ARCH::GRAYSKULL) {
-            TT_FATAL(
-                cache_tensor.dtype() == DataType::BFLOAT16,
-                "#12931: Update Cache currently produces non-deterministic output on GS when converting data types for "
-                "cache tensor");
-        }
         if (input_tensor.is_sharded()) {
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
@@ -152,11 +146,6 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             TT_FATAL(args.batch_offset == 0, "Batch offset must be 0 when cache tensor batch size >= 32");
         }
     }
-}
-
-void UpdateKVCacheOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 TensorSpec UpdateKVCacheOperation::compute_output_specs(

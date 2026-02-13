@@ -98,7 +98,9 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     const bool in0_block_sharded = in0_memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool in0_height_sharded = in0_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool in0_is_sharded = in0_block_sharded || in0_height_sharded;
-    const bool in1_is_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool in1_is_width_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool in1_is_height_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
@@ -319,9 +321,16 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
 
     uint32_t num_dram_banks = 0;
     uint32_t per_core_N_storage = 0;
+    uint32_t batches_per_bank = 0;
     if (in1_is_sharded and in1_is_dram) {
         num_dram_banks = device->num_dram_channels();
-        per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+        if (in1_is_width_sharded) {
+            per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+        } else {
+            // Height sharded: batches are distributed across DRAM banks
+            uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_height();
+            batches_per_bank = in1_shard_height_in_tiles / K;
+        }
     }
 
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
@@ -471,8 +480,14 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     }
 
     if (in1_is_sharded and in1_is_dram) {
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in1_single_tile_size);
+        if (in1_is_width_sharded) {
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in1_single_tile_size);
+        } else {
+            // Height sharded: pass tiles per batch and batches per bank
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)(K * N));  // KtNt per batch (tiles)
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)batches_per_bank);
+        }
     }
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -577,7 +592,11 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     }
     if (in1_is_sharded) {
         if (in1_is_dram) {
-            mm_kernel_in1_sender_writer_defines["IN1_DRAM_SHARDED"] = "1";
+            if (in1_is_width_sharded) {
+                mm_kernel_in1_sender_writer_defines["IN1_DRAM_WIDTH_SHARDED"] = "1";
+            } else {
+                mm_kernel_in1_sender_writer_defines["IN1_DRAM_HEIGHT_SHARDED"] = "1";
+            }
         } else {
             mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
         }
@@ -1180,66 +1199,71 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 }
 
                 if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
-                    uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
-                    vc = vc == 3 ? 0 : vc + 1;
-                    mm_in1_sender_writer_args.push_back(vc);
+                    if (in1_is_width_sharded) {
+                        uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
+                        vc = vc == 3 ? 0 : vc + 1;
+                        mm_in1_sender_writer_args.push_back(vc);
 
-                    uint32_t num_iter = 0;  // iterate how many banks, till fill the current worker block
+                        uint32_t num_iter = 0;  // iterate how many banks, till fill the current worker block
 
-                    if (curr_storage_core < num_dram_banks) {
-                        num_iter++;
-
-                        worker_core_stride = per_core_N_storage - storage_core_stride;
-
-                        mm_in1_sender_writer_args.push_back(
-                            storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
-                        mm_in1_sender_writer_args.push_back(
-                            worker_core_stride * in1_single_tile_size);          // per_core_N_dram_bytes
-                        mm_in1_sender_writer_args.push_back(curr_storage_core);  // current_dram_bank_id
-
-                        log_debug(
-                            tt::LogOp,
-                            "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
-                            curr_worker_core,
-                            worker_core_stride,
-                            curr_storage_core,
-                            storage_core_stride);
-
-                        curr_storage_core += (storage_core_stride + worker_core_stride) / per_core_N_storage;
-                        storage_core_stride = (storage_core_stride + worker_core_stride) % per_core_N_storage;
-
-                        uint32_t curr_worker_core_old = curr_worker_core;
-                        if (worker_core_stride >= per_core_N) {
-                            curr_worker_core += 1;
-                        }
-
-                        while (curr_worker_core <= curr_worker_core_old and curr_storage_core < num_dram_banks) {
+                        if (curr_storage_core < num_dram_banks) {
                             num_iter++;
 
-                            uint32_t stride = worker_core_stride + per_core_N_storage;
-                            stride = std::min(stride, per_core_N);
+                            worker_core_stride = per_core_N_storage - storage_core_stride;
 
                             mm_in1_sender_writer_args.push_back(
-                                (stride - worker_core_stride) * in1_single_tile_size);  // per_core_N_dram_bytes
-                            mm_in1_sender_writer_args.push_back(curr_storage_core);     // current_dram_bank_id
+                                storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
+                            mm_in1_sender_writer_args.push_back(
+                                worker_core_stride * in1_single_tile_size);          // per_core_N_dram_bytes
+                            mm_in1_sender_writer_args.push_back(curr_storage_core);  // current_dram_bank_id
 
                             log_debug(
                                 tt::LogOp,
                                 "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
                                 curr_worker_core,
-                                (stride - worker_core_stride),
+                                worker_core_stride,
                                 curr_storage_core,
                                 storage_core_stride);
 
-                            if (stride >= per_core_N) {
+                            curr_storage_core += (storage_core_stride + worker_core_stride) / per_core_N_storage;
+                            storage_core_stride = (storage_core_stride + worker_core_stride) % per_core_N_storage;
+
+                            uint32_t curr_worker_core_old = curr_worker_core;
+                            if (worker_core_stride >= per_core_N) {
                                 curr_worker_core += 1;
                             }
-                            storage_core_stride = (stride - worker_core_stride) % per_core_N_storage;
-                            curr_storage_core += (stride - worker_core_stride) / per_core_N_storage;
-                            worker_core_stride = stride;
+
+                            while (curr_worker_core <= curr_worker_core_old and curr_storage_core < num_dram_banks) {
+                                num_iter++;
+
+                                uint32_t stride = worker_core_stride + per_core_N_storage;
+                                stride = std::min(stride, per_core_N);
+
+                                mm_in1_sender_writer_args.push_back(
+                                    (stride - worker_core_stride) * in1_single_tile_size);  // per_core_N_dram_bytes
+                                mm_in1_sender_writer_args.push_back(curr_storage_core);     // current_dram_bank_id
+
+                                log_debug(
+                                    tt::LogOp,
+                                    "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
+                                    curr_worker_core,
+                                    (stride - worker_core_stride),
+                                    curr_storage_core,
+                                    storage_core_stride);
+
+                                if (stride >= per_core_N) {
+                                    curr_worker_core += 1;
+                                }
+                                storage_core_stride = (stride - worker_core_stride) % per_core_N_storage;
+                                curr_storage_core += (stride - worker_core_stride) / per_core_N_storage;
+                                worker_core_stride = stride;
+                            }
                         }
+                        mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + num_iter_index, num_iter);
+                    } else {
+                        // Height sharded: no additional runtime args needed
+                        // (bank/offset computed from compile-time args + batch index)
                     }
-                    mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + num_iter_index, num_iter);
                 }
                 if (fuse_op) {
                     if (fused_op_signaler->is_all_gather()) {

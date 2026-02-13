@@ -6,7 +6,9 @@
 
 #include <cstdint>
 #include "core_config.h"
+#ifndef ARCH_QUASAR
 #include "ckernel_globals.h"
+#endif
 #include "internal/tensix_functions.h"
 #include "internal/risc_attribs.h"
 #include "api/compile_time_args.h"

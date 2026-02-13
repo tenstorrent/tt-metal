@@ -986,6 +986,8 @@ uint32_t MeshDeviceImpl::num_worker_cores(HalProgrammableCoreType core_type, Sub
 // Bank and memory management methods
 int MeshDeviceImpl::num_dram_channels() const { return reference_device()->num_dram_channels(); }
 
+int MeshDeviceImpl::get_clock_rate_mhz() const { return reference_device()->get_clock_rate_mhz(); }
+
 CoreCoord MeshDeviceImpl::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(this->get_devices(), [dram_channel](const auto* device) {
         return device->logical_core_from_dram_channel(dram_channel);
@@ -1058,6 +1060,13 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
         (uint32_t)cq_id,
         *trace_id);
     this->mark_allocations_safe();
+
+    // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
+    auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
+    if (trace_region_size == 0) {
+        this->allocator_impl()->begin_dram_high_water_mark_tracking();
+    }
+
     // Create an empty trace buffer here. This will get initialized in end_trace
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     TT_FATAL(
@@ -1087,7 +1096,18 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
         active_sub_device_manager->id());
     this->mesh_command_queues_[cq_id]->record_end();
 
-    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
+    // End DRAM high water mark tracking if trace_region_size is 0 (dynamic allocation mode)
+    auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
+    DeviceAddr dram_allocation_high_water_mark = 0;
+    DeviceAddr dram_deletion_high_water_mark = 0;
+    if (trace_region_size == 0) {
+        this->allocator_impl()->end_dram_high_water_mark_tracking();
+        dram_allocation_high_water_mark = this->allocator_impl()->get_dram_allocation_high_water_mark();
+        dram_deletion_high_water_mark = this->allocator_impl()->get_dram_deletion_high_water_mark();
+    }
+
+    MeshTrace::populate_mesh_buffer(
+        *(mesh_command_queues_[cq_id]), trace_buffer, dram_allocation_high_water_mark, dram_deletion_high_water_mark);
     this->mark_allocations_unsafe();
 }
 
@@ -1189,10 +1209,6 @@ bool MeshDeviceImpl::compile_fabric() {
 void MeshDeviceImpl::configure_fabric() {
     TT_THROW("configure_fabric() is not supported on MeshDevice - use individual devices instead");
     reference_device()->configure_fabric();
-}
-void MeshDeviceImpl::init_fabric() {
-    TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_fabric();
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
@@ -1325,6 +1341,7 @@ bool MeshDevice::is_initialized() const { return pimpl_->is_initialized(); }
 int MeshDevice::num_dram_channels() const { return pimpl_->num_dram_channels(); }
 uint32_t MeshDevice::l1_size_per_core() const { return pimpl_->l1_size_per_core(); }
 uint32_t MeshDevice::dram_size_per_channel() const { return pimpl_->dram_size_per_channel(); }
+int MeshDevice::get_clock_rate_mhz() const { return pimpl_->get_clock_rate_mhz(); }
 CoreCoord MeshDevice::grid_size() const { return pimpl_->grid_size(); }
 CoreCoord MeshDevice::logical_grid_size() const { return pimpl_->logical_grid_size(); }
 CoreCoord MeshDevice::dram_grid_size() const { return pimpl_->dram_grid_size(); }
@@ -1442,7 +1459,6 @@ void MeshDevice::init_command_queue_host() { pimpl_->init_command_queue_host(); 
 void MeshDevice::init_command_queue_device() { pimpl_->init_command_queue_device(); }
 bool MeshDevice::compile_fabric() { return pimpl_->compile_fabric(); }
 void MeshDevice::configure_fabric() { pimpl_->configure_fabric(); }
-void MeshDevice::init_fabric() { pimpl_->init_fabric(); }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }

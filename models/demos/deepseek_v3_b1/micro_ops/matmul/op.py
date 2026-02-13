@@ -29,19 +29,35 @@ class MatmulSingleCore:
     where N is up to 4 tiles (128 elements).
     """
 
+    # Fused activation enum values (must match matmul.hpp FusedActivation enum)
+    ACTIVATION_NONE = 0
+    ACTIVATION_SIGMOID = 1
+    ACTIVATION_SILU = 2
+
     @staticmethod
-    def golden(input_a, input_b):
+    def golden(input_a, input_b, fused_activation=None):
         """
         PyTorch reference implementation of matmul for validation.
 
         Args:
             input_a: Input tensor A (torch.Tensor) [M, K]
             input_b: Input tensor B (torch.Tensor) [K, N]
+            fused_activation: Optional activation ("sigmoid" or None)
 
         Returns:
             Output tensor [M, N]
         """
-        return input_a @ input_b
+        import torch
+
+        result = input_a @ input_b
+        if fused_activation is not None:
+            if fused_activation.lower() == "sigmoid":
+                result = torch.sigmoid(result)
+            elif fused_activation.lower() == "silu":
+                result = torch.nn.functional.silu(result)
+            else:
+                raise ValueError(f"Unknown activation: {fused_activation}")
+        return result
 
     @staticmethod
     def op(
@@ -49,6 +65,8 @@ class MatmulSingleCore:
         input_b,
         output_tensor,
         fp32_dest_acc_en=False,
+        transpose=False,
+        fused_activation=None,
     ):
         """
         Execute single-core matmul operation using generic_op.
@@ -58,6 +76,8 @@ class MatmulSingleCore:
             input_b: Input tensor B [K, N] in L1 (N up to 4 tiles)
             output_tensor: Pre-allocated output tensor [1, N]
             fp32_dest_acc_en: Whether to enable FP32 accumulation
+            transpose: Whether to transpose input B
+            fused_activation: Optional fused activation ("sigmoid", "silu", or None)
 
         Returns:
             Output tensor with matmul result
@@ -73,7 +93,10 @@ class MatmulSingleCore:
         assert (
             a_shape[1] % in0_tile.tile_shape[1] == 0
         ), f"K ({a_shape[1]}) must be divisible by tile_width ({in0_tile.tile_shape[1]})"
-        assert a_shape[1] == b_shape[0], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[0]})"
+        if transpose:
+            assert a_shape[1] == b_shape[1], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[1]})"
+        else:
+            assert a_shape[1] == b_shape[0], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[0]})"
         num_tiles_k = a_shape[1] // in0_tile.tile_shape[1]
 
         # Some basic shape checks on output
@@ -112,6 +135,16 @@ class MatmulSingleCore:
             ("matmul_out_w", out_w),
         ]
 
+        # Determine fused activation value
+        if fused_activation is None:
+            fused_activation_val = MatmulSingleCore.ACTIVATION_NONE
+        elif fused_activation.lower() == "sigmoid":
+            fused_activation_val = MatmulSingleCore.ACTIVATION_SIGMOID
+        elif fused_activation.lower() == "silu":
+            fused_activation_val = MatmulSingleCore.ACTIVATION_SILU
+        else:
+            raise ValueError(f"Unknown activation: {fused_activation}. Supported: 'sigmoid', 'silu', or None")
+
         # Named compile-time args for TRISC
         trisc_named_compile_time_args = [
             ("matmul_in0", in0_cb),
@@ -119,6 +152,8 @@ class MatmulSingleCore:
             ("matmul_out", out_cb),
             ("matmul_k_num_tiles", num_tiles_k),
             ("matmul_out_w", out_w),
+            ("matmul_transpose", transpose),
+            ("matmul_fused_activation", fused_activation_val),
         ]
 
         # Unified kernel descriptor

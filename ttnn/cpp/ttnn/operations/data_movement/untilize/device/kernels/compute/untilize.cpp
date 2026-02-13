@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/untilize.h"
 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);

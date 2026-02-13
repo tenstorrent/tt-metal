@@ -1,10 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """
 TTTv2-style MLP module for 1D-topology devices: N150 (1x1), N300 (1x2), T3K (1x8).
 
-Single unified MLPNonTG class with separate forward methods:
+Single unified MLP1D class with separate forward methods:
   - decode_forward(): For decode mode
   - prefill_forward(): For prefill mode
   - forward(x, mode): Dispatcher that calls the appropriate method
@@ -24,9 +24,17 @@ from typing import Callable, Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
+from models.common.modules.tt_ccl import (
+    CCL_CHUNKS_PER_SYNC,
+    CCL_NUM_BUFFERS_PER_CHANNEL,
+    CCL_NUM_WORKERS_PER_LINK,
+    TT_CCL,
+    default_topology,
+    get_tt_ccl,
+)
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim, pad_dim_to_size
 from models.common.utility_functions import is_blackhole
+from models.tt_transformers.tt.common import Mode
 
 # =============================================================================
 # Top-level config dataclass
@@ -170,6 +178,7 @@ class MLP1D(LightweightModule):
         return instance
 
     def load_device_weights(self):
+        """Materialize LazyWeights onto device. Called automatically on first forward; idempotent."""
         if self._device_weights_loaded:
             return
 
@@ -371,9 +380,9 @@ class MLP1D(LightweightModule):
             memory_config=w2_out.memory_config(),
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=cfg.topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
         w2_out.deallocate(True)
         return reduced
@@ -405,9 +414,9 @@ class MLP1D(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=cfg.topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
         w2_out.deallocate(True)
         return reduced
@@ -476,10 +485,10 @@ class MLP1D(LightweightModule):
         )
 
         # Get decode program configs from model_config
-        decode_w1_w3_prg_config = model_config.get("DECODE_MLP_W1_W3_PRG_CONFIG")
-        decode_w2_prg_config = model_config.get("DECODE_MLP_W2_PRG_CONFIG")
-        decode_mlp2_input_memcfg = model_config.get("SHARDED_MLP2_INPUT_MEMCFG")
-        decode_residual_memcfg = model_config.get("DECODE_RESIDUAL_MEMCFG")
+        decode_w1_w3_prg_config = args.get_mlp_ff1_3_prg_config(Mode.DECODE, None, None)
+        decode_w2_prg_config = args.get_mlp_ff2_prg_config(Mode.DECODE, None, None)
+        decode_mlp2_input_memcfg = args.get_mlp_binary_mult_mem_config(Mode.DECODE)
+        decode_residual_memcfg = args.get_mlp_output_mem_config(Mode.DECODE, None)
 
         # Compute memory configs for weights
         num_devices = mesh_device.get_num_devices()
@@ -581,25 +590,6 @@ class MLP1D(LightweightModule):
 
 
 # =============================================================================
-# Topology auto-detection helper
-# =============================================================================
-
-
-# todo)) work with the CCL team to find opportunity to simplify this --> e.g., build into TTNN APIs?
-def _default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
-    """Auto-detect CCL topology based on cluster type and device count."""
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
-        return ttnn.Topology.Ring
-    elif num_devices > 1:
-        return ttnn.Topology.Linear
-    return None
-
-
-# =============================================================================
 # Config helper functions (adapted from TTTv1 model_config.py)
 # =============================================================================
 
@@ -615,7 +605,7 @@ def _find_largest_divisor(n: int, max_divisor: int = 8) -> int:
 def _find_grid(n_tiles: int, max_rows: int = 8, max_cols: int = 8) -> tuple[int, int]:
     """Find grid dimensions (rows, cols) that evenly divide n_tiles."""
     max_cores = max_rows * max_cols
-    target = 32
+    target = max_cores // 2  # prefer half the grid for balanced utilization
     possible_cores = [k for k in range(1, max_cores + 1) if n_tiles % k == 0]
     possible_cores.sort(key=lambda x: abs(x - target))
 
@@ -792,7 +782,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     # Auto-detect topology
     topology = config.topology
     if config.topology is None:
-        topology = _default_topology(mesh_device)
+        topology = default_topology(mesh_device)
         to_set["topology"] = topology
 
     # --- Phase 2: Derived fields ---
@@ -836,7 +826,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
 
     if config.decode_input_memcfg is None:
         to_set["decode_input_memcfg"] = ttnn.create_sharded_memory_config(
-            (tile_padded_batch_rows, dim // mlp_core_grid.num_cores),  # Shard shape> 1 shard per core
+            (tile_padded_batch_rows, dim // mlp_core_grid.num_cores),  # Shard shape: 1 shard per core
             mlp_core_grid,
             ttnn.ShardStrategy.WIDTH,
             ttnn.ShardOrientation.ROW_MAJOR,
@@ -882,6 +872,11 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
 
     # --- Phase 4: Prefill program configs ---
 
+    # DRAM shard grid width: on Wormhole always 8 (despite 12 physical DRAM cores);
+    # on Blackhole use actual DRAM grid width (7 for P100, 8 for P150).
+    # Matching per_core_N to this width avoids silent PCC issues on P100.
+    dram_shard_grid_width = 8 if not is_blackhole() else mesh_device.dram_grid_size().x
+
     if config.prefill_input_memcfg is None:
         to_set["prefill_input_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
 
@@ -889,7 +884,6 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
         prefill_rows = 8
         prefill_mlp_grid_size = _find_prefill_grid(prefill_rows, dim // tile_size)
         n_w1_w3 = padded_hidden_dim // num_devices
-        dram_shard_grid_width = 8
 
         @lru_cache
         def w1_w3_prg_config(seq_len: int):
@@ -905,7 +899,6 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
 
     if config.prefill_w2_prg_config is None:
         n_w2 = dim
-        dram_shard_grid_width = 8
         prefill_rows = 8
         grid_size = _find_prefill_grid(prefill_rows, padded_hidden_dim // tile_size)
 

@@ -12,8 +12,8 @@ on:
         required: false
         default: true
         type: boolean
-      glx_4x_multihost:
-        description: 'Run Galaxy 4x multi-host job (timeshare)'
+      glx_4x_unit_tests:
+        description: 'Run Galaxy 4x unit tests'
         required: false
         default: false
         type: boolean
@@ -171,7 +171,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
-    if: ${{ github.event.inputs.glx_4x_multihost == 'true' || github.event.schedule == '0 4 * * *' }}
+    if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
@@ -199,9 +199,10 @@ jobs:
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
-      - name: Run tests on multiple hosts
+      - name: Run quad galaxy unit tests
+        if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 160
+        timeout-minutes: 30
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -219,6 +220,5 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
             ./tests/scripts/multihost/setup_shared_venv.sh
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests
