@@ -38,15 +38,13 @@ pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py
 ```
 _Note: Original FPS: 234_
 
-### Performant Demo with Trace+2CQ
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `370` FPS :
+- For `640x640`, end-2-end perf is `372` FPS :
   ```
   pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
 
 ### Demo with Trace+2CQ
-
 #### Single Device (BS=1)
 ##### Custom Images:
 - Use the following command to run demo for `640x640` resolution :

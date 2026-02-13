@@ -98,14 +98,14 @@ pytest --disable-warnings models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::tes
   _Note: Original FPS: 74_
 
 #### Multi Device (DP=2, N300):
-- For `320x320`, end-2-end perf is `254` FPS
+- For `320x320`, end-2-end perf is `274` FPS
   ```
-  pytest --disable-warnings models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-resolution0-254-1-DataType.BFLOAT16-DataType.BFLOAT16-device_params0]
+  pytest --disable-warnings models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-resolution0-274-1-DataType.BFLOAT16-DataType.BFLOAT16-device_params0]
   ```
 
-- For `640x640`, end-2-end perf is `136` FPS
+- For `640x640`, end-2-end perf is `145` FPS
   ```
-  pytest --disable-warnings models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-resolution1-136-1-DataType.BFLOAT16-DataType.BFLOAT16-device_params0]
+  pytest --disable-warnings models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-resolution1-144-1-DataType.BFLOAT16-DataType.BFLOAT16-device_params0]
   ```
   _Note: Original FPS: 123_
 

@@ -38,7 +38,7 @@ pytest --disable-warnings models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s
   ```
 
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `177` FPS.
+- For `640x640`, end-2-end perf is `191` FPS.
   ```bash
   pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_e2e_performant.py::test_perf_yolov8s_world_dp
   ```

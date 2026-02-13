@@ -38,10 +38,11 @@ _Note: Original FPS: 95_
 
 ### Performant Demo with Trace+2CQ
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `158` FPS :
+- For `640x640`, end-2-end perf is `160` FPS :
   ```
   pytest --disable-warnings models/demos/yolov11m/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
+_Note: Original FPS: 157_
 
 ### Demo with Trace+2CQ
 Note: Output images will be saved in the `models/demos/yolov11m/demo/runs` folder.

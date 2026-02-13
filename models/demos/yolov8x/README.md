@@ -38,7 +38,7 @@ pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_y
   _Note: Original FPS: 66_
 
 ### Multi Device (DP=2, n300):
-- For `640x640`, end-2-end perf is `113.4` FPS:
+- For `640x640`, end-2-end perf is `120` FPS:
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant_dp
   ```

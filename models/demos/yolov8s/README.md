@@ -40,7 +40,7 @@ pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py
 _Note: Original FPS: 215_
 
 #### Multi Device (DP=2, n300):
-- end-2-end perf is `348` FPS
+- end-2-end perf is `387` FPS
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_dp_inference[wormhole_b0-1-device_params0]
 ```

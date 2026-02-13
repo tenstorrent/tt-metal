@@ -40,7 +40,7 @@ pytest --disable-warnings models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py:
   ```
 
 #### Multi Device (DP=2, n300):
-- For `640x640`, end-2-end perf is `89` FPS.
+- For `640x640`, end-2-end perf is `90` FPS.
 
   ```bash
   pytest --disable-warnings models/demos/yolov10x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
