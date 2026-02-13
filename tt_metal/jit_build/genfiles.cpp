@@ -20,6 +20,7 @@
 #include <regex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -247,7 +248,7 @@ namespace {
 
 template <std::ranges::range Range>
 void emit_formats_array(
-    std::ostream& out, const std::string& array_type, const std::string& array_name, int array_size, const Range& arr) {
+    std::ostream& out, std::string_view array_type, std::string_view array_name, int array_size, const Range& arr) {
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "{} {}[{}] = {{\n    {}\n}};\n",
@@ -259,8 +260,8 @@ void emit_formats_array(
 
 void emit_formats_array(
     std::ostream& out,
-    const std::string& array_type,
-    const std::string& array_name,
+    std::string_view array_type,
+    std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
     auto as_int = [](DataFormat f) { return static_cast<int>(f); };
